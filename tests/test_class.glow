@@ -1,0 +1,12 @@
+class Person:
+    func set_name(n):
+        self.name = n
+    end
+    func greet():
+        show "Hello, I am " + self.name
+    end
+end
+
+p = Person()
+p.set_name("Alice")
+p.greet()

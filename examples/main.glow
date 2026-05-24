@@ -1,0 +1,5 @@
+import "lib.glow"
+
+show "Current Library:", lib_name
+result = lib_add(10, 20)
+show "10 + 20 =", result

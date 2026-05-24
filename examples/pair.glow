@@ -1,0 +1,6 @@
+person = {"name": "Glow", "role": "Lang"}
+
+for each key, value in person:
+    print key
+    print value
+end

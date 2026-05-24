@@ -1,0 +1,7 @@
+ready
+let name = "Anshumali"
+let greet = "Hello "
+print greet + name
+let age = 21
+print age
+stop

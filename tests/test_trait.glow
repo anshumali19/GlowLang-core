@@ -1,0 +1,16 @@
+trait Drawable:
+    func draw():
+        show "Drawing from trait..."
+    end
+end
+
+class Square:
+    use Drawable
+    func hi():
+        show "Square hi"
+    end
+end
+
+s = Square()
+s.draw()
+s.hi()

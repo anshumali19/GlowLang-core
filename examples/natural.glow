@@ -1,0 +1,57 @@
+/* GlowLang Natural Library - Concise Edition */
+
+func root(n):
+    return sqrt(n)
+end
+
+func dist(n):
+    return abs(n)
+end
+
+func rem(n, d):
+    return n % d
+end
+
+func even(n):
+    when rem(n, 2) == 0:
+        return true
+    otherwise:
+        return false
+    end
+end
+
+func odd(n):
+    return not even(n)
+end
+
+func avg(list):
+    let total = 0
+    let n = len(list)
+    for each item in list:
+        total += item
+    end
+    when n == 0:
+        return 0
+    end
+    return total / n
+end
+
+func apply(task, list):
+    let res = []
+    for each item in list:
+        append(res, task(item))
+    end
+    return res
+end
+
+func keep(test, list):
+    let res = []
+    for each item in list:
+        when test(item):
+            append(res, item)
+        end
+    end
+    return res
+end
+
+show "Natural lib loaded."

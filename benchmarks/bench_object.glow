@@ -1,0 +1,22 @@
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+    func move(dx, dy):
+        self.x = self.x + dx
+        self.y = self.y + dy
+    end
+end
+
+p = Point()
+p.init(0, 0)
+
+i = 0
+while i < 1000000:
+    p.move(1, 1)
+    i = i + 1
+end
+
+show p.x
+show p.y

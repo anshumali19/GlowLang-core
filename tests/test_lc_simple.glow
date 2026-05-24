@@ -1,0 +1,4 @@
+# Simple list comp test
+nums = [1, 2, 3]
+result = [x for each x in nums]
+show result

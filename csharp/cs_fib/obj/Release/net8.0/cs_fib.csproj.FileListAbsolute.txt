@@ -1,0 +1,14 @@
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/bin/Release/net8.0/cs_fib
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/bin/Release/net8.0/cs_fib.deps.json
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/bin/Release/net8.0/cs_fib.runtimeconfig.json
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/bin/Release/net8.0/cs_fib.dll
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/bin/Release/net8.0/cs_fib.pdb
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.GeneratedMSBuildEditorConfig.editorconfig
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.AssemblyInfoInputs.cache
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.AssemblyInfo.cs
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.csproj.CoreCompileInputs.cache
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.dll
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/refint/cs_fib.dll
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.pdb
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/cs_fib.genruntimeconfig.cache
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/Release/net8.0/ref/cs_fib.dll

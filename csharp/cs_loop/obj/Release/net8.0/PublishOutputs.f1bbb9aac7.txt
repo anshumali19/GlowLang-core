@@ -1,0 +1,5 @@
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_loop/bin/cs_loop
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_loop/bin/cs_loop.dll
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_loop/bin/cs_loop.deps.json
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_loop/bin/cs_loop.runtimeconfig.json
+/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_loop/bin/cs_loop.pdb

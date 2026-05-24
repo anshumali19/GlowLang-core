@@ -1,0 +1,4 @@
+person = {"name": "Glow", "age": 2}
+print person["name"]
+print person["age"]
+print type(person)

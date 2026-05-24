@@ -1,0 +1,18 @@
+# Test list comprehensions
+nums = [1, 2, 3, 4, 5]
+
+# Simple comprehension: double each number
+doubled = [x * 2 for each x in nums]
+show doubled
+
+# With filter: only even numbers
+evens = [x for each x in nums when x % 2 == 0]
+show evens
+
+# Range comprehension
+squares = [x * x for each x in range(5)]
+show squares
+
+# String comprehension
+chars = [c for each c in "hello"]
+show chars

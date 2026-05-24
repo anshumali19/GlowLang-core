@@ -1,0 +1,15 @@
+/* Ackermann function - pure recursion stress test
+   A(3, 11) = 16381 */
+
+func ack(m, n):
+    when m == 0:
+        return n + 1
+    eif n == 0:
+        return ack(m - 1, 1)
+    eif true:
+        return ack(m - 1, ack(m, n - 1))
+    end
+end
+
+result = ack(3, 11)
+show result

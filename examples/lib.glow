@@ -1,0 +1,6 @@
+func lib_add(a, b):
+    return a + b
+end
+
+lib_name = "Math Library"
+show "Library loaded!"

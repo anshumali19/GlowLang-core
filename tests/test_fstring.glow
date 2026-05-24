@@ -1,0 +1,18 @@
+# Test f-strings
+name = "World"
+age = 25
+pi = 3.14159
+is_true = true
+
+show f"Hello, {name}!"
+show f"{name} is {age} years old"
+show f"Pi is approximately {pi}"
+show f"Is it true? {is_true}"
+
+# Simple f-string
+show f"No variables here"
+
+# Math expressions would need full parser - for now just variables
+x = 10
+y = 20
+show f"x = {x}, y = {y}"

@@ -1,0 +1,2 @@
+add = lambda(x, y): x + y
+show add(1, 2)

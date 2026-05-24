@@ -1,0 +1,10 @@
+nums = range(5)
+i = 0
+sum = 0
+
+while i < len(nums):
+    sum = sum + nums[i]
+    i = i + 1
+end
+
+print sum

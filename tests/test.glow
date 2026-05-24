@@ -1,0 +1,24 @@
+x = 10
+y = 20
+print x + y
+
+text = "Glow"
+print text
+print text[0]
+print text[1]
+
+nums = [10, 20, 30]
+print nums
+print nums[0]
+print nums[1]
+print nums[2]
+
+i = 0
+while i < 3:
+print nums[i]
+i = i + 1
+end
+
+if x < y:
+print "if works"
+end

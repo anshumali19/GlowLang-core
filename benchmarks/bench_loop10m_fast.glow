@@ -1,0 +1,11 @@
+func test_loop():
+    let i = 0
+    let total = 0
+    while i < 10000000:
+        total = total + i
+        i = i + 1
+    end
+    print total
+end
+
+test_loop()

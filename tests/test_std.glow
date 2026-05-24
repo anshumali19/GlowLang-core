@@ -1,0 +1,7 @@
+show "Testing os.time(): "
+t = os.time()
+show t
+show "System info:"
+os.system("uname -a")
+show "Exiting with code 42..."
+os.exit(42)

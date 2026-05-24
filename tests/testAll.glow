@@ -1,0 +1,52 @@
+x = 2
+y = 5
+text = "Glow"
+nums = [10, 20, 30]
+
+print "=== BASIC ==="
+print x + y
+print text
+print text[0]
+print nums
+print nums[1]
+
+print "=== BUILTINS ==="
+print len(text)
+print len(nums)
+print range(5)
+
+print "=== WHILE + RANGE ==="
+i = 0
+r = range(5)
+while i < len(r):
+    print r[i]
+    i = i + 1
+end
+
+print "=== NESTED WHILE ==="
+i = 0
+while i < 2:
+    j = 0
+    while j < 3:
+        print nums[j]
+        j = j + 1
+    end
+    i = i + 1
+end
+
+print "=== IF ==="
+if x < y:
+    print "outer if"
+    if x < 3:
+        print "nested if"
+    end
+end
+
+print "=== MIXED NESTING ==="
+i = 0
+while i < 3:
+    if i < len(text):
+        print text[i]
+    end
+    i = i + 1
+end

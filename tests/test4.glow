@@ -1,0 +1,3 @@
+print type(10)
+print type("Glow")
+print type(range(5))

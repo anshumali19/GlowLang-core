@@ -1,0 +1,9 @@
+if not fs.exists("test_dir"):
+    fs.mkdir("test_dir")
+    show "Created test_dir"
+end
+files = fs.list(".")
+show "Files in current dir:"
+show files
+fs.remove("test_dir")
+show "Removed test_dir"

@@ -1,0 +1,5 @@
+data = {"name": "Alice", "age": 30}
+s = json.stringify(data)
+show "JSON: " + s
+parsed = json.parse(s)
+show "Parsed Name: " + parsed.name

@@ -1,0 +1,6 @@
+nums = [10, 20, 30]
+
+for each index, item in nums:
+    print index
+    print item
+end

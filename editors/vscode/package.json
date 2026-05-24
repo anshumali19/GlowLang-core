@@ -1,0 +1,43 @@
+{
+    "name": "glowlang-vscode",
+    "displayName": "GlowLang",
+    "description": "Visual Studio Code extension for the GlowLang programming language",
+    "version": "0.1.0",
+    "publisher": "glowlang",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:glow"
+    ],
+    "dependencies": {
+        "vscode-languageclient": "^8.0.2"
+    },
+    "contributes": {
+        "configuration": {
+            "title": "GlowLang",
+            "properties": {
+                "glowlang.path": {
+                    "type": "string",
+                    "default": "glowlang",
+                    "description": "Path to the glowlang executable"
+                }
+            }
+        },
+        "languages": [{
+            "id": "glow",
+            "aliases": ["Glow", "glow"],
+            "extensions": [".glow"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "glow",
+            "scopeName": "source.glow",
+            "path": "./syntaxes/glow.tmLanguage.json"
+        }]
+    }
+}

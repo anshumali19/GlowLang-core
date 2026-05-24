@@ -1,0 +1,7 @@
+ready
+method greet
+print 100
+stop
+
+call greet
+stop

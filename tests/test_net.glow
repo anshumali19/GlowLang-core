@@ -1,0 +1,5 @@
+server = net.listen(8081)
+show "Listening on 8081..."
+# This is a blocking call, so for testing we'll just close it
+net.close(server)
+show "Success"

@@ -1,0 +1,11 @@
+for each x in [1,2,3,4,5,6]:
+    if x < 3:
+        skip
+    end
+
+    print x
+
+    if x > 4:
+        stop
+    end
+end

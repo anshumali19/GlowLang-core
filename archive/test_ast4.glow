@@ -1,0 +1,7 @@
+ready
+method square x
+return x * x
+stop
+
+print call square 5
+stop

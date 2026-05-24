@@ -1,0 +1,20 @@
+func task(name, n):
+    i = 0
+    while i < n:
+        show "Thread " + name + ": " + i
+        i = i + 1
+    end
+end
+
+spawn task("A", 3)
+spawn task("B", 3)
+show "Main finished spawning threads."
+
+# Give threads some time to finish before main exits
+# (We don't have join yet, so we use a sleep placeholder)
+# Actually, I'll use a loop to wait.
+i = 0
+while i < 1000000:
+    i = i + 1
+end
+show "Main exiting."

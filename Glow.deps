@@ -1,0 +1,3 @@
+"https://raw.githubusercontent.com/curl/curl/master/README" ".glow_pkg/README"
+"https://fake.com/fib.glow" "examples/fib.glow"
+"file:///etc/hosts" ".glow_pkg/hosts"

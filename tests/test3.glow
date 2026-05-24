@@ -1,0 +1,7 @@
+nums = range(5)
+i = 0
+
+while i < len(nums):
+    print nums[i]
+    i = i + 1
+end

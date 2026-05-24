@@ -1,0 +1,44 @@
+let x = 5
+let y = 5
+let z = 10
+
+when x is y:
+    show "x is y"
+end
+
+when x is not z:
+    show "x is not z"
+end
+
+let my_list = [1, 2, 3, 4, 5]
+when 3 is in my_list:
+    show "3 is in my_list"
+end
+
+when 10 is not in my_list:
+    show "10 is not in my_list"
+end
+
+show "Testing string membership:"
+when "c" is in "abcde":
+    show "'c' is in 'abcde'"
+end
+
+when "z" is not in "abcde":
+    show "'z' is not in 'abcde'"
+end
+
+show "Testing dict membership:"
+let my_dict = {"name": "Glow", "version": 2}
+when "name" is in my_dict:
+    show "'name' is in my_dict"
+end
+
+when "author" is not in my_dict:
+    show "'author' is not in my_dict"
+end
+
+show "Looping from 1 to 5:"
+every i in from 1 to 5:
+    show i
+end

@@ -1,0 +1,3 @@
+for each ch in "Glow":
+    print ch
+end

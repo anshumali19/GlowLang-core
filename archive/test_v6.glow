@@ -1,0 +1,4 @@
+ready
+method greet "Hello Anshumali"
+call greet
+stop

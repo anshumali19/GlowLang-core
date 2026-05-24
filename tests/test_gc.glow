@@ -1,0 +1,15 @@
+func test_gc():
+    let i = 0
+    let last_l = []
+    while i < 100000:
+        let s = "string " + i
+        let l = [1, 2, 3, i]
+        if i % 1000 == 0:
+            show "Iteration " + i
+        end
+        i = i + 1
+    end
+end
+
+test_gc()
+show "GC Test Passed"

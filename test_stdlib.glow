@@ -1,0 +1,2 @@
+show os.time()
+os.exit(0)

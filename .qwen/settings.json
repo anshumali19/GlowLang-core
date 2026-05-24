@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flex *)",
+      "Bash(bison *)",
+      "Bash(gcc *)",
+      "Bash(./glowlang *)",
+      "Bash(rm *)"
+    ]
+  },
+  "$version": 3
+}

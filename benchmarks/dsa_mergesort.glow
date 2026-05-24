@@ -1,0 +1,86 @@
+/* Merge Sort */
+
+func mergeSort(arr, left, right):
+    when left >= right:
+        return arr
+    end
+
+    mid = (left + right) / 2
+    arr = mergeSort(arr, left, mid)
+    arr = mergeSort(arr, mid + 1, right)
+    arr = merge(arr, left, mid, right)
+    return arr
+end
+
+func merge(arr, left, mid, right):
+    n1 = mid - left + 1
+    n2 = right - mid
+
+    L = []
+    R = []
+
+    i = 0
+    while i < n1:
+        L = L + [0]
+        i = i + 1
+    end
+
+    i = 0
+    while i < n2:
+        R = R + [0]
+        i = i + 1
+    end
+
+    i = 0
+    while i < n1:
+        L[i] = arr[left + i]
+        i = i + 1
+    end
+
+    j = 0
+    while j < n2:
+        R[j] = arr[mid + 1 + j]
+        j = j + 1
+    end
+
+    i = 0
+    j = 0
+    k = left
+    while i < n1 and j < n2:
+        when L[i] <= R[j]:
+            arr[k] = L[i]
+            i = i + 1
+        eif true:
+            arr[k] = R[j]
+            j = j + 1
+        end
+        k = k + 1
+    end
+
+    while i < n1:
+        arr[k] = L[i]
+        i = i + 1
+        k = k + 1
+    end
+
+    while j < n2:
+        arr[k] = R[j]
+        j = j + 1
+        k = k + 1
+    end
+
+    return arr
+end
+
+/* Generate worst-case reverse sorted array */
+n = 500
+data = []
+i = n
+while i > 0:
+    data = data + [i]
+    i = i - 1
+end
+
+data = mergeSort(data, 0, n - 1)
+show data[0]
+show data[n - 1]

@@ -1,0 +1,35 @@
+# Test try-catch-throw
+try:
+    show "In try block"
+    throw "Oops, something went wrong!"
+    show "This should not be shown"
+catch e:
+    show "Caught exception:", e
+end
+
+show "After try-catch"
+
+# Test nested try-catch
+try:
+    try:
+        show "In nested try"
+        throw "Nested error"
+    catch e1:
+        show "Caught nested:", e1
+        throw "Propagated error"
+    end
+catch e2:
+    show "Caught outer:", e2
+end
+
+# Test exception in function
+func test_func():
+    show "In test_func"
+    throw "Error from function"
+end
+
+try:
+    test_func()
+catch e3:
+    show "Caught from function:", e3
+end

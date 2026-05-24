@@ -1,0 +1,46 @@
+/* N-Queens: Count solutions for N=12 */
+
+func solve(board, col, n):
+    when col >= n:
+        return 1
+    end
+
+    count = 0
+    row = 0
+    while row < n:
+        when isSafe(board, row, col, n):
+            board[row] = col
+            count = count + solve(board, col + 1, n)
+        end
+        row = row + 1
+    end
+    return count
+end
+
+func isSafe(board, row, col, n):
+    i = 0
+    while i < col:
+        when board[i] == row:
+            return false
+        end
+        when board[i] - i == row - col:
+            return false
+        end
+        when board[i] + i == row + col:
+            return false
+        end
+        i = i + 1
+    end
+    return true
+end
+
+n = 8
+board = []
+i = 0
+while i < n:
+    append(board, 0)
+    i = i + 1
+end
+
+result = solve(board, 0, n)
+show result

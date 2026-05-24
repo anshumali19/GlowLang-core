@@ -1,0 +1,7 @@
+text = "Glow"
+i = len(text) - 1
+
+while i > -1:
+    print text[i]
+    i = i - 1
+end

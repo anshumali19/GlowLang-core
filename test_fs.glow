@@ -1,0 +1,33 @@
+if not fs.exists("temp_dir"):
+    fs.mkdir("temp_dir")
+end
+
+if fs.exists("temp_dir"):
+    show "Directory created: temp_dir"
+else
+    show "Failed to create directory: temp_dir"
+end
+
+# Test list
+show "Files in current directory:"
+show fs.list(".")
+
+# Test size
+show "Size of README.md:"
+show fs.size("README.md")
+
+# Test remove
+# Create a dummy file
+os.system("touch dummy_file")
+if fs.exists("dummy_file"):
+    show "dummy_file exists, removing it"
+    fs.remove("dummy_file")
+    if not fs.exists("dummy_file"):
+        show "dummy_file successfully removed"
+    else
+        show "failed to remove dummy_file"
+    end
+end
+
+# Clean up
+os.system("rmdir temp_dir")

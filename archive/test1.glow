@@ -1,0 +1,5 @@
+ready
+let salary = 50000
+let bonus = 10000
+print salary + bonus
+stop

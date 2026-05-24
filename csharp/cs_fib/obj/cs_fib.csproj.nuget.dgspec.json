@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "restore": {
+    "/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/cs_fib.csproj": {}
+  },
+  "projects": {
+    "/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/cs_fib.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/cs_fib.csproj",
+        "projectName": "cs_fib",
+        "projectPath": "/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/cs_fib.csproj",
+        "packagesPath": "/home/anshumali/.nuget/packages/",
+        "outputPath": "/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_fib/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/home/anshumali/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.125/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}
