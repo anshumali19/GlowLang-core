@@ -1,0 +1,5 @@
+show 1 + 2
+show "Hello, World!"
+show 10
+a = 5
+show a + 10

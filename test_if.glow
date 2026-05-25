@@ -1,0 +1,26 @@
+a = 10
+when a < 5:
+    show "a is small"
+eif a < 15:
+    show "a is medium"
+otherwise:
+    show "a is large"
+end
+
+a = 20
+when a < 5:
+    show "a is small"
+eif a < 15:
+    show "a is medium"
+otherwise:
+    show "a is large"
+end
+
+a = 3
+when a < 5:
+    show "a is small"
+eif a < 15:
+    show "a is medium"
+otherwise:
+    show "a is large"
+end

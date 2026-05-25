@@ -17,13 +17,11 @@ static void ensure_intern_init(void) {
 
 const char *intern_string(const char *s) {
     ensure_intern_init();
-    if (!s || !*s) return "";
     unsigned int h = 5381;
-    const char *p = s;
-    while (*p) h = ((h << 5) + h) + (unsigned char)*p++;
-    unsigned int idx = h % INTERN_TABLE_SIZE;
-
-    unsigned int start = idx;
+    for (int i = 0; s[i]; i++) h = ((h << 5) + h) + s[i];
+    unsigned int start = h % INTERN_TABLE_SIZE;
+    unsigned int idx = start;
+    
     do {
         if (!intern_table[idx]) {
             char *dup = strdup(s);
@@ -96,21 +94,11 @@ int line_num = 1;
 "throw"                { return THROW; }
 "import"               { return IMPORT; }
 "class"                { return CLASS; }
-"model"                { return CLASS; }
-"blueprint"            { return CLASS; }
 "trait"                { return TRAIT; }
-"ability"              { return TRAIT; }
-"behavior"             { return TRAIT; }
 "extends"              { return EXTENDS; }
-"like"                 { return EXTENDS; }
 "use"                  { return USE; }
-"can"                  { return USE; }
 "spawn"                { return SPAWN; }
-"start"                { return SPAWN; }
-"action"               { return FUNC; }
-"task"                 { return FUNC; }
-"routine"              { return FUNC; }
-
+"end"                  { return END; }
 
 "+="                   { return PLUS_ASSIGN; }
 "-="                   { return MINUS_ASSIGN; }
@@ -154,7 +142,7 @@ int line_num = 1;
 
 \"\"\"([^\"]|\"([^\"]|\"[^\"]))*\"\"\" {
     /* Triple-quoted string: """...""" */
-    int len = yyleng - 6; /* remove """ at start and end */
+    int len = yyleng - 6;
     char *out = malloc(len + 1);
     strncpy(out, yytext + 3, len);
     out[len] = '\0';
@@ -163,13 +151,11 @@ int line_num = 1;
     return STRING;
 }
 
-f\"([^\"]|\\.)*\" {
-    /* F-string: f"hello {name}" - pass raw content to parser */
-    /* Skip the leading f" and trailing " */
-    char *raw = strdup(yytext + 2);
-    raw[strlen(raw) - 1] = '\0';
-    yylval.str_val = intern_string(raw);
-    free(raw);
+f\"([^"\\]|\\.)*\" {
+    /* Simple f-string for now */
+    char *out = strdup(yytext + 2);
+    out[strlen(out)-1] = '\0';
+    yylval.str_val = intern_string(out);
     return FSTRING;
 }
 
@@ -209,7 +195,7 @@ f\"([^\"]|\\.)*\" {
 \n                     { line_num++; return NEWLINE; }
 [ \t\r]+               ;
 
-#[^\n]*                ;
+"#".*                  ;
 
 "/*"                   { BEGIN(COMMENT); }
 <COMMENT>"*/"          { BEGIN(INITIAL); }
