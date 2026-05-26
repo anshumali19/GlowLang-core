@@ -28,4 +28,4 @@ GlowLang started as a research project to create a "Natural Language" systems pr
 GlowLang 1.0 is now a complete ecosystem for systems engineering, combining the readability of English with the power of C and the speed of a native JIT.
 
 ---
-*Created by Gemini CLI*
+
