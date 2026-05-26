@@ -1,31 +1,45 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
 
-int isSafe(int *board, int row, int col, int n) {
-    int i;
-    for (i = 0; i < col; i++) {
-        if (board[i] == row) return 0;
-        if (board[i] - i == row - col) return 0;
-        if (board[i] + i == row + col) return 0;
+typedef struct {
+    int n;
+    int count;
+} NQueens;
+
+int is_safe(int *board, int row, int col) {
+    for (int i = 0; i < row; i++) {
+        if (board[i] == col || abs(board[i] - col) == abs(i - row))
+            return 0;
     }
     return 1;
 }
 
-int solve(int *board, int col, int n) {
-    if (col >= n) return 1;
-    int count = 0, row;
-    for (row = 0; row < n; row++) {
-        if (isSafe(board, row, col, n)) {
+void backtrack(NQueens *nq, int *board, int row) {
+    if (row == nq->n) {
+        nq->count++;
+        return;
+    }
+    for (int col = 0; col < nq->n; col++) {
+        if (is_safe(board, row, col)) {
             board[row] = col;
-            count += solve(board, col + 1, n);
+            backtrack(nq, board, row + 1);
+            board[row] = -1;
         }
     }
-    return count;
 }
 
 int main() {
-    int n = 8;
-    int board[12] = {0};
-    int result = solve(board, 0, n);
-    printf("%d\n", result);
+    int n = 11;
+    NQueens nq = {n, 0};
+    int *board = malloc(sizeof(int) * n);
+    for(int i=0; i<n; i++) board[i] = -1;
+    
+    clock_t start = clock();
+    backtrack(&nq, board, 0);
+    clock_t end = clock();
+    
+    printf("N-Queens (%d): %d found in %.4fs\n", n, nq.count, (double)(end - start) / CLOCKS_PER_SEC);
     return 0;
 }

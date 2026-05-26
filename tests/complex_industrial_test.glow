@@ -1,0 +1,67 @@
+blueprint StressTester:
+    can init():
+        self.tests_run = 0
+    end
+    can run_all():
+        show "--- Starting Industrial Stress Test ---"
+        self.test_jit()
+        show "   after jit: ", self.tests_run
+        self.test_concurrency()
+        show "   after concurrency: ", self.tests_run
+        self.test_exceptions()
+        show "   after exceptions: ", self.tests_run
+        self.test_oop()
+        show "   after oop: ", self.tests_run
+        self.test_stdlib()
+        show "--- Stress Test Complete ---"
+        show "Final tests_run: ", self.tests_run
+    end
+    can test_jit():
+        show "[1/5] Testing JIT..."
+        let i = 0
+        while i < 100000:
+            i = i + 1
+        end
+        self.tests_run = self.tests_run + 1
+    end
+    can test_concurrency():
+        show "[2/5] Testing Concurrency..."
+        func worker(id):
+            show "   worker ", id
+        end
+        spawn worker(1)
+        self.tests_run = self.tests_run + 1
+    end
+    can test_exceptions():
+        show "[3/5] Testing Exceptions..."
+        try:
+            throw "err"
+        catch e:
+            show "   caught: ", e
+        end
+        self.tests_run = self.tests_run + 1
+    end
+    can test_oop():
+        show "[4/5] Testing OOP..."
+        class C:
+            can log(m):
+                show "   log: ", m
+            end
+            can go():
+                self.log("ok")
+            end
+        end
+        let c = C()
+        c.go()
+        self.tests_run = self.tests_run + 1
+    end
+    can test_stdlib():
+        show "[5/5] Testing StdLib..."
+        let s = http.listen(8083)
+        http.close(s)
+        self.tests_run = self.tests_run + 1
+    end
+end
+let tester = StressTester()
+tester.init()
+tester.run_all()

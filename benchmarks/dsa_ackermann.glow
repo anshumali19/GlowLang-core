@@ -1,15 +1,17 @@
-/* Ackermann function - pure recursion stress test
-   A(3, 11) = 16381 */
-
 func ack(m, n):
-    when m == 0:
+    if m == 0:
         return n + 1
-    eif n == 0:
-        return ack(m - 1, 1)
-    eif true:
-        return ack(m - 1, ack(m, n - 1))
     end
+    if n == 0:
+        return ack(m - 1, 1)
+    end
+    return ack(m - 1, ack(m, n - 1))
 end
 
-result = ack(3, 11)
-show result
+let m = 3
+let n = 7
+let start = os.time()
+let result = ack(m, n)
+let t_finish = os.time()
+show "Ackermann(", m, ",", n, "): ", result
+show "Time: ", t_finish - start

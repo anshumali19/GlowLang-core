@@ -1,0 +1,34 @@
+blueprint StressTester:
+    can init():
+        self.tests_run = 0
+        show "Init tests_run: ", self.tests_run
+    end
+    can run_all():
+        show "Running test_jit..."
+        self.test_jit()
+        show "tests_run after jit: ", self.tests_run
+        show "Running test_concurrency..."
+        self.test_concurrency()
+        show "tests_run after concurrency: ", self.tests_run
+    end
+    can test_jit():
+        let i = 0
+        while i < 10:
+            i = i + 1
+        end
+        self.tests_run = self.tests_run + 1
+        show "   jit incremented tests_run to: ", self.tests_run
+    end
+    can test_concurrency():
+        action worker(id):
+            show "   worker ", id
+        end
+        spawn worker(1)
+        self.tests_run = self.tests_run + 1
+        show "   concurrency incremented tests_run to: ", self.tests_run
+    end
+end
+let tester = StressTester()
+tester.init()
+tester.run_all()
+show "Final tests_run: ", tester.tests_run

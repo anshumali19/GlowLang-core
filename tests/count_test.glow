@@ -1,0 +1,36 @@
+blueprint StressTester:
+    can init():
+        self.tests_run = 0
+    end
+    can run_all():
+        self.test_jit()
+        self.test_concurrency()
+        self.test_exceptions()
+        self.test_oop()
+        self.test_stdlib()
+        show "Final tests_run: ", self.tests_run
+    end
+    can test_jit():
+        self.tests_run = self.tests_run + 1
+        show "   jit done, tests_run: ", self.tests_run
+    end
+    can test_concurrency():
+        self.tests_run = self.tests_run + 1
+        show "   concurrency done, tests_run: ", self.tests_run
+    end
+    can test_exceptions():
+        self.tests_run = self.tests_run + 1
+        show "   exceptions done, tests_run: ", self.tests_run
+    end
+    can test_oop():
+        self.tests_run = self.tests_run + 1
+        show "   oop done, tests_run: ", self.tests_run
+    end
+    can test_stdlib():
+        self.tests_run = self.tests_run + 1
+        show "   stdlib done, tests_run: ", self.tests_run
+    end
+end
+let t = StressTester()
+t.init()
+t.run_all()

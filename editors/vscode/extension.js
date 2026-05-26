@@ -5,13 +5,15 @@ const path = require('path');
 let client;
 
 function activate(context) {
-    const serverPath = vscode.workspace.getConfiguration('glowlang').get('path') || 'glowlang';
-    
+    let serverPath = vscode.workspace.getConfiguration('glowlang').get('path');
+    if (!serverPath) {
+        serverPath = path.join(context.extensionPath, '../../bin/glowlang');
+    }
+
     const serverOptions = {
         run: { command: serverPath, args: ['--lsp'] },
         debug: { command: serverPath, args: ['--lsp'] }
     };
-
     const clientOptions = {
         documentSelector: [{ scheme: 'file', language: 'glow' }],
         synchronize: {

@@ -77,6 +77,8 @@ int line_num = 1;
 "from"                 { return FROM; }
 "to"                   { return TO; }
 "func"                 { return FUNC; }
+"action"               { return FUNC; }
+"can"                  { return FUNC; }
 "lambda"               { return LAMBDA; }
 "let"                  { return LET; }
 "return"               { return RETURN; }
@@ -94,9 +96,9 @@ int line_num = 1;
 "throw"                { return THROW; }
 "import"               { return IMPORT; }
 "class"                { return CLASS; }
+"blueprint"            { return CLASS; }
 "Blueprint"            { return CLASS; }
 "trait"                { return TRAIT; }
-"can"                  { return TRAIT; }
 "extends"              { return EXTENDS; }
 "use"                  { return USE; }
 "spawn"                { return SPAWN; }
@@ -142,8 +144,8 @@ int line_num = 1;
     return INT_LIT;
 }
 
-\"\"\"([^\"]|\"([^\"]|\"[^\"]))*\"\"\" {
-    /* Triple-quoted string: """...""" */
+\"\"\"[^\"]*\"\"\" {
+    /* Simple triple-quoted string */
     int len = yyleng - 6;
     char *out = malloc(len + 1);
     strncpy(out, yytext + 3, len);

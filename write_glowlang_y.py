@@ -24,6 +24,7 @@ p1 = r"""%code requires {
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include "glowlang.h"
+#include "lsp.h"
 
 /* VM State */
 static __thread Value *vm_stack = NULL;
@@ -171,8 +172,15 @@ static void* thread_wrapper(void *arg) {
         else if (ot == OBJ_BOUND_METHOD) { BoundMethod *bm = AS_BOUND_METHOD(td->callee); fe = bm->method; var_set("self", bm->instance); }
     }
     if (fe && fe->body) {
+        int total = fe->param_count + fe->local_count;
+        Value *saved = total > 0 ? malloc(sizeof(Value)*total) : NULL;
+        for(int i=0; i<fe->param_count; i++) saved[i] = var_get(fe->params[i]);
+        for(int i=0; i<fe->local_count; i++) saved[fe->param_count+i] = var_get(fe->local_names[i]);
         for (int i=0; i<fe->param_count && i<td->argc; i++) var_set(fe->params[i], td->args[i]);
         run_bytecode(fe->body, 0);
+        for(int i=0; i<fe->param_count; i++) var_set(fe->params[i], saved[i]);
+        for(int i=0; i<fe->local_count; i++) var_set(fe->local_names[i], saved[fe->param_count+i]);
+        if(saved) free(saved);
     }
     free(td->args); free(td); 
     pthread_mutex_unlock(&glow_gil);
@@ -184,7 +192,7 @@ p2 = r"""
 /* GC */
 static GCObject *gc_objects = NULL;
 static size_t gc_allocated = 0;
-static size_t gc_threshold = 1024 * 1024;
+static size_t gc_threshold = 128 * 1024 * 1024;
 static void gc_mark_object(GCObject *obj) {
     if (!obj || obj->marked) return;
     obj->marked = 1;
@@ -224,8 +232,6 @@ static void gc_collect(void) {
             gc_allocated -= unmarked->sz; free(unmarked);
         } else { (*p)->marked = 0; p = &((*p)->next); }
     }
-    gc_threshold = gc_allocated * 2;
-    if (gc_threshold < 16 * 1024 * 1024) gc_threshold = 16 * 1024 * 1024;
 }
 static void* gc_alloc(size_t sz, ObjType type) {
     pthread_mutex_lock(&gc_mutex);
@@ -288,9 +294,7 @@ static Node* newShowNode(Node **is, int c) { Node *n = node_new(NODE_SHOW); n->p
 static Node* newExprStmtNode(Node *e) { Node *n = node_new(NODE_EXPR_STMT); n->left = e; return n; }
 static Node* newCallExprNode(Node *e, Node **as, int c) { Node *n = node_new(NODE_CALL_EXPR); n->left = e; n->call_args = as; n->call_arg_count = c; return n; }
 static Node* newIndexAssignNode(Node *c, Node *i, Node *v) { Node *n = node_new(NODE_INDEX_ASSIGN); n->left = c; n->right = i; n->third = v; return n; }
-"""
 
-p3 = r"""
 /* Compiler */
 static Bytecode *compiling_bc = NULL;
 static Class *last_compiling_class = NULL;
@@ -301,8 +305,25 @@ static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
 }
 static Bytecode* bc_new() { Bytecode *bc = calloc(1, sizeof(Bytecode)); bc->capacity = 1024; bc->code = calloc(bc->capacity, sizeof(Instruction)); return bc; }
 
+static void func_add_local(FuncEntry *fe, const char *name) {
+    if (!fe || !name) return;
+    for (int i=0; i<fe->local_count; i++) if (strcmp(fe->local_names[i], name) == 0) return;
+    for (int i=0; i<fe->param_count; i++) if (strcmp(fe->params[i], name) == 0) return;
+    if (fe->local_count >= fe->local_capacity) {
+        fe->local_capacity = (fe->local_capacity == 0) ? 8 : fe->local_capacity * 2;
+        fe->local_names = realloc(fe->local_names, sizeof(char*) * fe->local_capacity);
+    }
+    fe->local_names[fe->local_count++] = (char*)name;
+}
+static FuncEntry *compiling_func = NULL;
+
 void compile(Node *n) {
     if (!n) return;
+    if (compiling_func && n->name) {
+        if (n->type == NODE_VAR || n->type == NODE_ASSIGN || n->type == NODE_LET) {
+            func_add_local(compiling_func, n->name);
+        }
+    }
     switch (n->type) {
         case NODE_INT_LIT: bc_emit(compiling_bc, OP_CONST_INT, AS_INT(n->value), 0); break;
         case NODE_FLOAT_LIT: { Value *v = malloc(sizeof(Value)); *v = n->value; bc_emit(compiling_bc, OP_CONST_FLOAT, 0, (intptr_t)v); break; }
@@ -327,7 +348,10 @@ void compile(Node *n) {
         case NODE_SHOW: for (int i=0; i<n->print_count; i++) compile(n->print_items[i]); bc_emit(compiling_bc, OP_SHOW, n->print_count, 0); break;
         case NODE_FUNC_DEF: {
             FuncEntry *fe = func_table_add(n->name); fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new();
-            Bytecode *p = compiling_bc; compiling_bc = fe->body; compile(n->left); bc_emit(compiling_bc, OP_RETURN, 0, 0); compiling_bc = p;
+            Bytecode *p = compiling_bc; compiling_bc = fe->body; 
+            FuncEntry *pf = compiling_func; compiling_func = fe;
+            compile(n->left); bc_emit(compiling_bc, OP_RETURN, 0, 0); 
+            compiling_bc = p; compiling_func = pf;
             bc_emit(compiling_bc, (last_compiling_class || last_compiling_trait) ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)n->name); break;
         }
         case NODE_CLASS: {
@@ -439,13 +463,11 @@ postfix: primary | postfix '.' ID { $$ = node_new(NODE_INDEX); $$->left = $1; $$
 primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr_list ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = $2.nodes; $$->element_count = $2.count; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; };
 
 %%
+"""
 
-typedef struct {
-    uint8_t *code;
-    size_t size;
-    size_t capacity;
-} JITBuffer;
-
+p4 = r"""
+/* JIT */
+typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 static void jit_emit_byte(JITBuffer *buf, uint8_t b) { if (buf->size < buf->capacity) buf->code[buf->size++] = b; }
 static void jit_emit_u32(JITBuffer *buf, uint32_t v) { if (buf->size + 4 <= buf->capacity) { memcpy(buf->code + buf->size, &v, 4); buf->size += 4; } }
 static void jit_emit_u64(JITBuffer *buf, uint64_t v) { if (buf->size + 8 <= buf->capacity) { memcpy(buf->code + buf->size, &v, 8); buf->size += 8; } }
@@ -454,111 +476,54 @@ static void emit_push_rax(JITBuffer *buf) { jit_emit_byte(buf, 0x4b); jit_emit_b
 static void emit_pop_rax(JITBuffer *buf) { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xcd); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x04); jit_emit_byte(buf, 0xec); }
 static void emit_pop_r10(JITBuffer *buf) { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xcd); jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x14); jit_emit_byte(buf, 0xec); }
 
-static void jit_compile(Bytecode *bc);
-
 static void jit_compile(Bytecode *bc) {
     if (bc->jit_code || bc->jit_failed) return;
-    size_t size = 65536;
-    uint8_t *code = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    size_t size = 65536; uint8_t *code = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (code == MAP_FAILED) { bc->jit_failed = 1; return; }
     JITBuffer buf = {code, 0, size};
-    
-    // Prologue: save callee-saved registers
     jit_emit_byte(&buf, 0x55); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe5);
     jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x54); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x55); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x56); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x57); 
-    
-    // Move stack pointers to r12 and r14, set r13 to dereferenced sp_ptr
     jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xfc); jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xf6);
-    jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x63); jit_emit_byte(&buf, 0x2e); // movsxd r13, dword ptr [r14]
-    
+    jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x63); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0x00);
     uint32_t *offsets = calloc(bc->count + 1, sizeof(uint32_t)); int *jump_patches = calloc(bc->count, sizeof(int));
     for (int i = 0; i < bc->count; i++) {
         offsets[i] = buf.size; Instruction *pc = &bc->code[i];
         switch (pc->op) {
             case OP_CONST_INT: emit_mov_rax_imm64(&buf, value_int(pc->arg)); emit_push_rax(&buf); break;
-            case OP_CONST_BOOL: emit_mov_rax_imm64(&buf, value_bool(pc->arg)); emit_push_rax(&buf); break;
             case OP_LOAD_VAR: 
             case OP_STORE_VAR: {
                 if (!pc->cache_val) {
-                    const char *name = (const char*)pc->ptr;
-                    unsigned int h = hash_str(name) % VAR_TABLE_SIZE;
-                    unsigned int idx = h;
-                    Value *vptr = NULL;
-                    do {
-                        if (!var_table[idx].used || strcmp(var_table[idx].name, name) == 0) {
-                            if (!var_table[idx].used) { var_table[idx].used = 1; var_table[idx].name = name; var_table[idx].value = value_none(); }
-                            vptr = &var_table[idx].value; break;
-                        }
-                        idx = (idx + 1) % VAR_TABLE_SIZE;
-                    } while (idx != h);
-                    pc->cache_key = (void*)name;
+                    const char *name = (const char*)pc->ptr; unsigned int h = hash_str(name) % VAR_TABLE_SIZE; unsigned int idx = h; Value *vptr = NULL;
+                    do { if (!var_table[idx].used || strcmp(var_table[idx].name, name) == 0) { if (!var_table[idx].used) { var_table[idx].used = 1; var_table[idx].name = name; var_table[idx].value = value_none(); } vptr = &var_table[idx].value; break; } idx = (idx + 1) % VAR_TABLE_SIZE; } while (idx != h);
                     pc->cache_val = (intptr_t)vptr;
                 }
-                if (pc->op == OP_LOAD_VAR) {
-                    emit_mov_rax_imm64(&buf, pc->cache_val); 
-                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x00); 
-                    emit_push_rax(&buf); 
-                } else {
-                    emit_pop_rax(&buf);
-                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xba); jit_emit_u64(&buf, pc->cache_val); 
-                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x02); 
-                }
+                if (pc->op == OP_LOAD_VAR) { emit_mov_rax_imm64(&buf, pc->cache_val); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x00); emit_push_rax(&buf); }
+                else { emit_pop_rax(&buf); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xba); jit_emit_u64(&buf, pc->cache_val); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x02); }
                 break;
             }
-            case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: {
+            case OP_ADD: case OP_SUB: case OP_MUL: {
                 emit_pop_r10(&buf); emit_pop_rax(&buf);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL); 
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); 
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xca); 
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xca); 
                 if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xd0); }
                 else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xd0); }
                 else if (pc->op == OP_MUL) { jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc2); }
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); 
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x7FF8000000000000ULL);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); 
-                emit_push_rax(&buf); break;
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x7FF8000000000000ULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_push_rax(&buf); break;
             }
-            case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ: {
+            case OP_LT: case OP_EQ: {
                 emit_pop_r10(&buf); emit_pop_rax(&buf);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x10);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x10);
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xe2); jit_emit_byte(&buf, 0x10);
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xfa); jit_emit_byte(&buf, 0x10);
                 jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xd0);
-                uint8_t setcc = 0;
-                if (pc->op == OP_LT) setcc = 0x9c; else if (pc->op == OP_GT) setcc = 0x9f;
-                else if (pc->op == OP_LTE) setcc = 0x9e; else if (pc->op == OP_GTE) setcc = 0x9d;
-                else if (pc->op == OP_EQ) setcc = 0x94; else if (pc->op == OP_NEQ) setcc = 0x95;
+                uint8_t setcc = (pc->op == OP_LT) ? 0x9c : 0x94;
                 jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, setcc); jit_emit_byte(&buf, 0xc0);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc0);
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xbb); jit_emit_u64(&buf, 0x7FFA000000000000ULL);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd8);
-                emit_push_rax(&buf); break;
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xbb); jit_emit_u64(&buf, 0x7FFA000000000000ULL); jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd8); emit_push_rax(&buf); break;
             }
             case OP_JUMP: jit_emit_byte(&buf, 0xe9); jump_patches[i] = buf.size; jit_emit_u32(&buf, 0); break;
             case OP_JUMP_IF_FALSE: {
-                emit_pop_rax(&buf);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); 
-                emit_mov_rax_imm64(&buf, (uintptr_t)value_truthy);
-                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0); 
-                jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); 
-                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jump_patches[i] = buf.size; jit_emit_u32(&buf, 0); 
-                break;
+                emit_pop_rax(&buf); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); emit_mov_rax_imm64(&buf, (uintptr_t)value_truthy); jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jump_patches[i] = buf.size; jit_emit_u32(&buf, 0); break;
             }
             case OP_RETURN: {
-                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xed); 
-                jit_emit_byte(&buf, 0x74); jit_emit_byte(&buf, 9); 
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xcd); 
-                jit_emit_byte(&buf, 0x4b); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x04); jit_emit_byte(&buf, 0xec); 
-                jit_emit_byte(&buf, 0xeb); jit_emit_byte(&buf, 10); 
-                emit_mov_rax_imm64(&buf, value_none()); 
-                
-                // Epilogue target
-                jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x2e); 
-                jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5f); 
-                jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5e); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5d); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5c); jit_emit_byte(&buf, 0x5d); 
-                jit_emit_byte(&buf, 0xc3); break;
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xed); jit_emit_byte(&buf, 0x74); jit_emit_byte(&buf, 9); jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xcd); jit_emit_byte(&buf, 0x4b); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x04); jit_emit_byte(&buf, 0xec); jit_emit_byte(&buf, 0xeb); jit_emit_byte(&buf, 10); emit_mov_rax_imm64(&buf, value_none()); 
+                jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0x00); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5f); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5e); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5d); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5c); jit_emit_byte(&buf, 0x5d); jit_emit_byte(&buf, 0xc3); break;
             }
             default: bc->jit_failed = 1; munmap(code, size); free(offsets); free(jump_patches); return;
         }
@@ -572,7 +537,7 @@ static Class *vm_last_class = NULL;
 static Trait *vm_last_trait = NULL;
 
 static Value run_bytecode(Bytecode *bc, int base_tsp) {
-    if (bc->count > 0 && !bc->jit_code && !bc->jit_failed) { bc->code[0].exec_count++; if (bc->code[0].exec_count >= 1000) jit_compile(bc); }
+    if (bc->count > 0 && !bc->jit_code && !bc->jit_failed) { bc->code[0].exec_count++; if (bc->code[0].exec_count >= 1000000) jit_compile(bc); }
     if (bc->jit_code) { typedef Value (*JitFunc)(Value *stack, int *sp_ptr); return ((JitFunc)bc->jit_code)(vm_stack, &sp); }
     Instruction *pc = bc->code;
     static void* dt[] = {
@@ -611,59 +576,21 @@ static Value run_bytecode(Bytecode *bc, int base_tsp) {
         &&l_OP_SET_PROPERTY,
         &&l_OP_SPAWN
     };
-
 #define DISPATCH() goto *dt[pc->op]
     DISPATCH();
-
     l_OP_CONST_INT: PUSH(value_int(pc->arg)); pc++; DISPATCH();
     l_OP_CONST_FLOAT: PUSH(*(Value*)pc->ptr); pc++; DISPATCH();
     l_OP_CONST_STRING: PUSH(value_string_copy((const char*)pc->ptr)); pc++; DISPATCH();
     l_OP_CONST_BOOL: PUSH(value_bool(pc->arg)); pc++; DISPATCH();
     l_OP_LOAD_VAR: {
         const char *name = (const char*)pc->ptr;
-        unsigned int h = hash_str(name) % VAR_TABLE_SIZE;
-        unsigned int idx = h;
-        Value *vptr = NULL;
-        do {
-            if (!var_table[idx].used || strcmp(var_table[idx].name, name) == 0) {
-                if (!var_table[idx].used) { var_table[idx].used = 1; var_table[idx].name = name; var_table[idx].value = value_none(); }
-                vptr = &var_table[idx].value; break;
-            }
-            idx = (idx + 1) % VAR_TABLE_SIZE;
-        } while (idx != h);
-        pc->cache_key = (void*)pc->ptr; pc->cache_val = (intptr_t)vptr;
-        Value v = *vptr;
-        if (GET_TYPE(v) == VAL_NONE) { FuncEntry *fe = func_get(name); if (fe) v = bound_method_new(value_none(), fe); }
+        unsigned int h = hash_str(name) % VAR_TABLE_SIZE; unsigned int idx = h; Value *vptr = NULL;
+        do { if (!var_table[idx].used || strcmp(var_table[idx].name, name) == 0) { if (!var_table[idx].used) { var_table[idx].used = 1; var_table[idx].name = name; var_table[idx].value = value_none(); } vptr = &var_table[idx].value; break; } idx = (idx + 1) % VAR_TABLE_SIZE; } while (idx != h);
+        Value v = *vptr; if (GET_TYPE(v) == VAL_NONE) { FuncEntry *fe = func_get(name); if (fe) v = bound_method_new(value_none(), fe); }
         PUSH(v); pc++; DISPATCH();
     }
-    l_OP_STORE_VAR: {
-        const char *name = (const char*)pc->ptr;
-        unsigned int h = hash_str(name) % VAR_TABLE_SIZE;
-        unsigned int idx = h;
-        Value *vptr = NULL;
-        do {
-            if (!var_table[idx].used || strcmp(var_table[idx].name, name) == 0) {
-                if (!var_table[idx].used) { var_table[idx].used = 1; var_table[idx].name = name; }
-                vptr = &var_table[idx].value; break;
-            }
-            idx = (idx + 1) % VAR_TABLE_SIZE;
-        } while (idx != h);
-        pc->cache_key = (void*)pc->ptr; pc->cache_val = (intptr_t)vptr;
-        *vptr = POP(); pc++; DISPATCH();
-    }
-    l_OP_ADD: {
-        Value b = POP(); Value a = POP();
-        if (__builtin_expect(GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT, 1)) {
-            PUSH(value_int(AS_INT(a) + AS_INT(b)));
-        } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
-            char buf1[64], buf2[64]; const char *s1, *s2;
-            if (GET_TYPE(a) == VAL_STRING) s1 = AS_STRING(a); else if(GET_TYPE(a)==VAL_INT) sprintf(buf1, "%ld", (long)AS_INT(a)), s1 = buf1; else s1="none";
-            if (GET_TYPE(b) == VAL_STRING) s2 = AS_STRING(b); else if(GET_TYPE(b)==VAL_INT) sprintf(buf2, "%ld", (long)AS_INT(b)), s2 = buf2; else s2="none";
-            char *res = malloc(strlen(s1) + strlen(s2) + 1); strcpy(res, s1); strcat(res, s2);
-            PUSH(value_string_copy(res)); free(res);
-        } else PUSH(value_float(((GET_TYPE(a)==VAL_INT)?(double)AS_INT(a):AS_FLOAT(a)) + ((GET_TYPE(b)==VAL_INT)?(double)AS_INT(b):AS_FLOAT(b))));
-        pc++; DISPATCH();
-    }
+    l_OP_STORE_VAR: { var_set((const char*)pc->ptr, POP()); pc++; DISPATCH(); }
+    l_OP_ADD: { Value b = POP(), a = POP(); if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) PUSH(value_int(AS_INT(a) + AS_INT(b))); else PUSH(value_float(AS_FLOAT(a) + AS_FLOAT(b))); pc++; DISPATCH(); }
     l_OP_SUB: { Value b = POP(), a = POP(); PUSH(value_int(AS_INT(a) - AS_INT(b))); pc++; DISPATCH(); }
     l_OP_MUL: { Value b = POP(), a = POP(); PUSH(value_int(AS_INT(a) * AS_INT(b))); pc++; DISPATCH(); }
     l_OP_DIV: { Value b = POP(), a = POP(); PUSH(value_int(AS_INT(a) / AS_INT(b))); pc++; DISPATCH(); }
@@ -683,21 +610,23 @@ static Value run_bytecode(Bytecode *bc, int base_tsp) {
     l_OP_JUMP: { pc = bc->code + pc->arg; DISPATCH(); }
     l_OP_JUMP_IF_FALSE: { Value v = POP(); if(!value_truthy(v)) pc = bc->code + pc->arg; else pc++; DISPATCH(); }
     l_OP_JUMP_IF_TRUE: { Value v = POP(); if(value_truthy(v)) pc = bc->code + pc->arg; else pc++; DISPATCH(); }
-    l_OP_SHOW: { int n = pc->arg; for (int i=0; i<n; i++) { print_value(vm_stack[sp-n+i]); if(i<n-1) printf(" "); } printf("\n"); fflush(stdout); sp-=n; pc++; DISPATCH(); }
-    l_OP_FUNC_DEF: pc++; DISPATCH();
     l_OP_CALL: {
-        int ac = pc->arg; const char *n = (const char*)pc->ptr; FuncEntry *fe = func_get(n);
+        int ac = pc->arg; FuncEntry *fe = func_get((const char*)pc->ptr);
         if (fe && fe->body) {
-            int pc_cnt = fe->param_count; Value *saved = pc_cnt > 0 ? malloc(sizeof(Value)*pc_cnt) : NULL;
-            for(int i=0; i<pc_cnt; i++) { saved[i] = var_get(fe->params[i]); if(i<ac) var_set(fe->params[i], vm_stack[sp-ac+i]); }
+            int total = fe->param_count + fe->local_count; Value *saved = total > 0 ? malloc(sizeof(Value)*total) : NULL;
+            for(int i=0; i<fe->param_count; i++) saved[i] = var_get(fe->params[i]);
+            for(int i=0; i<fe->local_count; i++) saved[fe->param_count+i] = var_get(fe->local_names[i]);
+            for(int i=0; i<fe->param_count && i<ac; i++) var_set(fe->params[i], vm_stack[sp-ac+i]);
             sp -= ac; Value res = run_bytecode(fe->body, tsp);
-            for(int i=0; i<pc_cnt; i++) var_set(fe->params[i], saved[i]);
+            for(int i=0; i<fe->param_count; i++) var_set(fe->params[i], saved[i]);
+            for(int i=0; i<fe->local_count; i++) var_set(fe->local_names[i], saved[fe->param_count+i]);
             if(saved) free(saved); if(has_exception) { PUSH(pending_exception); goto l_OP_THROW; } PUSH(res);
-        } else { sp -= ac; PUSH(value_none()); }
-        pc++; DISPATCH();
+        } else { sp -= ac; PUSH(value_none()); } pc++; DISPATCH();
     }
     l_OP_RETURN: return sp > 0 ? POP() : value_none();
     l_OP_POP: if(sp > 0) POP(); pc++; DISPATCH();
+    l_OP_SHOW: { int n = pc->arg; for (int i=0; i<n; i++) { print_value(vm_stack[sp-n+i]); if(i<n-1) printf(" "); } printf("\n"); sp-=n; pc++; DISPATCH(); }
+    l_OP_STORE_LET: { var_set((const char*)pc->ptr, POP()); pc++; DISPATCH(); }
     l_OP_TRY_START: try_stack[tsp++] = (TryHandler){ pc->arg, sp }; pc++; DISPATCH();
     l_OP_TRY_END: tsp--; pc++; DISPATCH();
     l_OP_THROW: {
@@ -710,13 +639,10 @@ static Value run_bytecode(Bytecode *bc, int base_tsp) {
         if (pc->arg == 1) { Value pv = POP(); if (GET_TYPE(pv) == VAL_OBJECT && (pv & MASK_PAYLOAD)) p = AS_CLASS(pv); }
         Value c = value_class(class_new(n, p)); var_set(n, c); vm_last_class = AS_CLASS(c); pc++; DISPATCH();
     }
-    l_OP_TRAIT_DEF: { const char *n = (const char*)pc->ptr; Value t = value_trait(trait_new(n)); var_set(n, t); vm_last_trait = AS_TRAIT(t); pc++; DISPATCH(); }
-    l_OP_USE_TRAIT: {
-        Value tv = var_get((const char*)pc->ptr);
-        if (GET_TYPE(tv) == VAL_OBJECT && (tv & MASK_PAYLOAD) && GET_OBJ_TYPE(tv) == OBJ_TRAIT && vm_last_class) {
-            Trait *t = AS_TRAIT(tv);
-            for (int i=0; i<t->methods->size; i++) dict_set(vm_last_class->methods, t->methods->keys[i], t->methods->values[i]);
-        }
+    l_OP_METHOD_DEF: {
+        FuncEntry *fe = func_get((const char*)pc->ptr);
+        if(vm_last_class) dict_set(vm_last_class->methods, fe->name, bound_method_new(value_none(), fe));
+        else if(vm_last_trait) dict_set(vm_last_trait->methods, fe->name, bound_method_new(value_none(), fe));
         pc++; DISPATCH();
     }
     l_OP_GET_PROPERTY: {
@@ -729,21 +655,14 @@ static Value run_bytecode(Bytecode *bc, int base_tsp) {
                     v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
                 PUSH(v);
             } else PUSH(value_none());
-        } else if(GET_TYPE(o)==VAL_DICT) {
-            PUSH(dict_get(AS_DICT(o), n));
-        } else PUSH(value_none());
-        pc++; DISPATCH();
+        } else if(GET_TYPE(o)==VAL_DICT) PUSH(dict_get(AS_DICT(o), n));
+        else PUSH(value_none()); pc++; DISPATCH();
     }
     l_OP_SET_PROPERTY: {
-        const char *n = (const char*)pc->ptr; Value o = POP(); Value v = vm_stack[sp-1];
+        const char *n = (const char*)pc->ptr; Value o = POP(); Value v = POP();
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) instance_set(AS_INSTANCE(o), n, v);
         else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
         pc++; DISPATCH();
-    }
-    l_OP_SPAWN: {
-        int ac = pc->arg; Value callee = POP(); ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac; td->args = malloc(sizeof(Value)*ac);
-        for(int i=0; i<ac; i++) td->args[ac-1-i] = POP();
-        pthread_t t; pthread_create(&t, NULL, thread_wrapper, td); pthread_detach(t); pc++; DISPATCH();
     }
     l_OP_CALL_VALUE: {
         int ac = pc->arg; Value callee = POP();
@@ -753,35 +672,36 @@ static Value run_bytecode(Bytecode *bc, int base_tsp) {
             else if(ot==OBJ_BOUND_METHOD) {
                 BoundMethod *bm = AS_BOUND_METHOD(callee); Value s = var_get("self"); var_set("self", bm->instance);
                 if(bm->method && bm->method->body) {
-                    int pc_cnt = bm->method->param_count; Value *saved = pc_cnt > 0 ? malloc(sizeof(Value)*pc_cnt) : NULL;
-                    for(int i=0; i<pc_cnt; i++) { saved[i] = var_get(bm->method->params[i]); if(i<ac) var_set(bm->method->params[i], vm_stack[sp-ac+i]); }
-                    sp -= ac; Value res = run_bytecode(bm->method->body, tsp);
-                    for(int i=0; i<pc_cnt; i++) var_set(bm->method->params[i], saved[i]);
+                    FuncEntry *mfe = bm->method; int total = mfe->param_count + mfe->local_count; Value *saved = total > 0 ? malloc(sizeof(Value)*total) : NULL;
+                    for(int i=0; i<mfe->param_count; i++) saved[i] = var_get(mfe->params[i]);
+                    for(int i=0; i<mfe->local_count; i++) saved[mfe->param_count+i] = var_get(mfe->local_names[i]);
+                    for(int i=0; i<mfe->param_count && i<ac; i++) var_set(mfe->params[i], vm_stack[sp-ac+i]);
+                    sp -= ac; Value res = run_bytecode(mfe->body, tsp);
+                    for(int i=0; i<mfe->param_count; i++) var_set(mfe->params[i], saved[i]);
+                    for(int i=0; i<mfe->local_count; i++) var_set(mfe->local_names[i], saved[mfe->param_count+i]);
                     if(saved) free(saved); if(has_exception) { PUSH(pending_exception); var_set("self", s); goto l_OP_THROW; } PUSH(res);
-                } else { sp -= ac; PUSH(value_none()); }
-                var_set("self", s);
+                } else { sp -= ac; PUSH(value_none()); } var_set("self", s);
             }
-            else if(ot==OBJ_NATIVE_FUNC) { NativeFunc *nf = AS_NATIVE_FUNC(callee); Value res = nf->func(ac, &vm_stack[sp-ac]); sp-=ac; PUSH(res); }
+            else if(ot==OBJ_NATIVE_FUNC) { Value res = AS_NATIVE_FUNC(callee)->func(ac, &vm_stack[sp-ac]); sp-=ac; PUSH(res); }
             else PUSH(value_none());
-        } else PUSH(value_none());
-        pc++; DISPATCH();
+        } else PUSH(value_none()); pc++; DISPATCH();
     }
     l_OP_LIST_LITERAL: { int n = pc->arg; List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, vm_stack[sp-n+i]); sp-=n; PUSH(value_list(l)); pc++; DISPATCH(); }
     l_OP_INDEX: { Value i = POP(), o = POP(); if(GET_TYPE(o)==VAL_LIST && GET_TYPE(i)==VAL_INT) { int idx = AS_INT(i); if(idx>=0 && idx<AS_LIST(o)->size) PUSH(AS_LIST(o)->items[idx]); else PUSH(value_none()); } else PUSH(value_none()); pc++; DISPATCH(); }
-    l_OP_STORE_INDEX: { Value i = POP(), o = POP(), v = vm_stack[sp-1]; if(GET_TYPE(o)==VAL_LIST && GET_TYPE(i)==VAL_INT) { int idx = AS_INT(i); if(idx>=0 && idx<AS_LIST(o)->size) AS_LIST(o)->items[idx] = v; } pc++; DISPATCH(); }
-    l_OP_METHOD_DEF: {
-        const char *n = (const char*)pc->ptr; FuncEntry *fe = func_get(n);
-        if(vm_last_class) dict_set(vm_last_class->methods, n, bound_method_new(value_none(), fe));
-        else if(vm_last_trait) dict_set(vm_last_trait->methods, n, bound_method_new(value_none(), fe));
-        pc++; DISPATCH();
-    }
-    l_OP_LEN: { Value v = POP(); if(GET_TYPE(v)==VAL_STRING) PUSH(value_int(strlen(AS_STRING(v)))); else if(GET_TYPE(v)==VAL_LIST) PUSH(value_int(AS_LIST(v)->size)); else PUSH(value_int(0)); pc++; DISPATCH(); }
+    l_OP_STORE_INDEX: { Value i = POP(), o = POP(), v = POP(); if(GET_TYPE(o)==VAL_LIST && GET_TYPE(i)==VAL_INT) { int idx = AS_INT(i); if(idx>=0 && idx<AS_LIST(o)->size) AS_LIST(o)->items[idx] = v; } pc++; DISPATCH(); }
     l_OP_RANGE: { int n = AS_INT(POP()); List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, value_int(i)); PUSH(value_list(l)); pc++; DISPATCH(); }
-    l_OP_STOP: return value_none(); l_OP_SKIP: pc++; DISPATCH();
-    l_OP_TYPE: pc++; DISPATCH(); l_OP_APPEND: pc++; DISPATCH(); l_OP_INPUT: pc++; DISPATCH(); l_OP_WRITE: pc++; DISPATCH(); l_OP_DICT_LITERAL: pc++; DISPATCH(); l_OP_SLICE: pc++; DISPATCH(); l_OP_FOR_EACH: pc++; DISPATCH(); l_OP_FOR_EACH_PAIR: pc++; DISPATCH(); l_OP_PUSH_SCOPE: pc++; DISPATCH(); l_OP_POP_SCOPE: pc++; DISPATCH(); l_OP_STORE_LET: var_set((const char*)pc->ptr, POP()); pc++; DISPATCH(); l_OP_LOAD_LOCAL: pc++; DISPATCH(); l_OP_STORE_LOCAL: pc++; DISPATCH(); l_OP_DICT_KEYS: pc++; DISPATCH(); l_OP_DICT_VALUES: pc++; DISPATCH(); l_OP_DICT_HAS: pc++; DISPATCH(); l_OP_DICT_REMOVE: pc++; DISPATCH(); l_OP_DICT_MERGE: pc++; DISPATCH(); l_OP_MATH_ABS: pc++; DISPATCH(); l_OP_MATH_MIN: pc++; DISPATCH(); l_OP_MATH_MAX: pc++; DISPATCH(); l_OP_MATH_ROUND: pc++; DISPATCH(); l_OP_MATH_FLOOR: pc++; DISPATCH(); l_OP_MATH_CEIL: pc++; DISPATCH(); l_OP_MATH_SQRT: pc++; DISPATCH(); l_OP_STR_UPPER: pc++; DISPATCH(); l_OP_STR_LOWER: pc++; DISPATCH(); l_OP_STR_TRIM: pc++; DISPATCH(); l_OP_STR_FIND: pc++; DISPATCH(); l_OP_STR_REPLACE: pc++; DISPATCH(); l_OP_STR_STARTSWITH: pc++; DISPATCH(); l_OP_STR_ENDSWITH: pc++; DISPATCH(); l_OP_STR_SPLIT: pc++; DISPATCH(); l_OP_LIST_PUSH: pc++; DISPATCH(); l_OP_LIST_POP: pc++; DISPATCH(); l_OP_LIST_INSERT: pc++; DISPATCH(); l_OP_LIST_REMOVE: pc++; DISPATCH(); l_OP_LIST_CONTAINS: pc++; DISPATCH(); l_OP_LIST_SORT: pc++; DISPATCH(); l_OP_LIST_REVERSE: pc++; DISPATCH(); l_OP_FILE_READ: pc++; DISPATCH(); l_OP_FILE_WRITE: pc++; DISPATCH(); l_OP_FILE_APPEND: pc++; DISPATCH(); l_OP_FSTRING: pc++; DISPATCH(); l_OP_LIST_COMP: pc++; DISPATCH(); l_OP_LAMBDA: pc++; DISPATCH(); l_OP_SIDX: pc++; DISPATCH();
-    return sp > 0 ? POP() : value_none();
+    l_OP_STOP: return value_none();
+    l_OP_SKIP: pc++; DISPATCH();
+    l_OP_TRAIT_DEF: { const char *n = (const char*)pc->ptr; Value t = value_trait(trait_new(n)); var_set(n, t); vm_last_trait = AS_TRAIT(t); pc++; DISPATCH(); }
+    l_OP_USE_TRAIT: { Value tv = var_get((const char*)pc->ptr); if (GET_TYPE(tv) == VAL_OBJECT && (tv & MASK_PAYLOAD) && GET_OBJ_TYPE(tv) == OBJ_TRAIT && vm_last_class) { Trait *t = AS_TRAIT(tv); for (int i=0; i<t->methods->size; i++) dict_set(vm_last_class->methods, t->methods->keys[i], t->methods->values[i]); } pc++; DISPATCH(); }
+    l_OP_SPAWN: { int ac = pc->arg; Value callee = POP(); ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac; td->args = malloc(sizeof(Value)*ac); for(int i=0; i<ac; i++) td->args[ac-1-i] = POP(); pthread_t t; pthread_create(&t, NULL, thread_wrapper, td); pthread_detach(t); pc++; DISPATCH(); }
+    l_OP_LEN: { Value v = POP(); if(GET_TYPE(v)==VAL_STRING) PUSH(value_int(strlen(AS_STRING(v)))); else if(GET_TYPE(v)==VAL_LIST) PUSH(value_int(AS_LIST(v)->size)); else PUSH(value_int(0)); pc++; DISPATCH(); }
+    l_OP_TYPE: pc++; DISPATCH(); l_OP_APPEND: pc++; DISPATCH(); l_OP_INPUT: pc++; DISPATCH(); l_OP_WRITE: pc++; DISPATCH(); l_OP_DICT_LITERAL: pc++; DISPATCH(); l_OP_SLICE: pc++; DISPATCH(); l_OP_FOR_EACH: pc++; DISPATCH(); l_OP_FOR_EACH_PAIR: pc++; DISPATCH(); l_OP_PUSH_SCOPE: pc++; DISPATCH(); l_OP_POP_SCOPE: pc++; DISPATCH(); l_OP_LOAD_LOCAL: pc++; DISPATCH(); l_OP_STORE_LOCAL: pc++; DISPATCH(); l_OP_DICT_KEYS: pc++; DISPATCH(); l_OP_DICT_VALUES: pc++; DISPATCH(); l_OP_DICT_HAS: pc++; DISPATCH(); l_OP_DICT_REMOVE: pc++; DISPATCH(); l_OP_DICT_MERGE: pc++; DISPATCH(); l_OP_MATH_ABS: pc++; DISPATCH(); l_OP_MATH_MIN: pc++; DISPATCH(); l_OP_MATH_MAX: pc++; DISPATCH(); l_OP_MATH_ROUND: pc++; DISPATCH(); l_OP_MATH_FLOOR: pc++; DISPATCH(); l_OP_MATH_CEIL: pc++; DISPATCH(); l_OP_MATH_SQRT: pc++; DISPATCH(); l_OP_STR_UPPER: pc++; DISPATCH(); l_OP_STR_LOWER: pc++; DISPATCH(); l_OP_STR_TRIM: pc++; DISPATCH(); l_OP_STR_FIND: pc++; DISPATCH(); l_OP_STR_REPLACE: pc++; DISPATCH(); l_OP_STR_STARTSWITH: pc++; DISPATCH(); l_OP_STR_ENDSWITH: pc++; DISPATCH(); l_OP_STR_SPLIT: pc++; DISPATCH(); l_OP_LIST_PUSH: pc++; DISPATCH(); l_OP_LIST_POP: pc++; DISPATCH(); l_OP_LIST_INSERT: pc++; DISPATCH(); l_OP_LIST_REMOVE: pc++; DISPATCH(); l_OP_LIST_CONTAINS: pc++; DISPATCH(); l_OP_LIST_SORT: pc++; DISPATCH(); l_OP_LIST_REVERSE: pc++; DISPATCH(); l_OP_FILE_READ: pc++; DISPATCH(); l_OP_FILE_WRITE: pc++; DISPATCH(); l_OP_FILE_APPEND: pc++; DISPATCH(); l_OP_FSTRING: pc++; DISPATCH(); l_OP_LIST_COMP: pc++; DISPATCH(); l_OP_LAMBDA: pc++; DISPATCH();
+    return value_none();
 }
+"""
 
+p5 = r"""
 void print_value(Value v) {
     if (v == 0) { printf("none"); return; }
     if ((v & MASK_NAN) != MASK_NAN) { printf("%g", AS_FLOAT(v)); return; }
@@ -799,10 +719,17 @@ void print_value(Value v) {
     } else printf("none");
 }
 
+GlowError *glow_errors = NULL; int glow_error_count = 0; static int glow_error_capacity = 0;
+void glow_clear_errors(void) { for (int i = 0; i < glow_error_count; i++) if(glow_errors[i].message) free(glow_errors[i].message); glow_error_count = 0; }
+void glow_add_error(int line, const char *msg) {
+    if (glow_error_count >= glow_error_capacity) { glow_error_capacity = (glow_error_capacity == 0) ? 8 : glow_error_capacity * 2; glow_errors = realloc(glow_errors, sizeof(GlowError) * glow_error_capacity); }
+    glow_errors[glow_error_count].line = line; glow_errors[glow_error_count].message = strdup(msg); glow_error_count++;
+}
+
 static Value native_len(int argc, Value *args) { if (argc < 1) return value_int(0); Value v = args[0]; if (GET_TYPE(v) == VAL_STRING) return value_int(strlen(AS_STRING(v))); if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size); return value_int(0); }
 static Value native_range(int argc, Value *args) { int n = (argc > 0) ? (int)AS_INT(args[0]) : 0; List *l = list_new(n); for (int i = 0; i < n; i++) list_push(l, value_int(i)); return value_list(l); }
 static Value os_exit(int argc, Value *args) { exit(argc > 0 ? AS_INT(args[0]) : 0); return value_none(); }
-static Value os_time(int argc, Value *args) { return value_float((double)time(NULL)); }
+static Value os_time(int argc, Value *args) { struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
 static SSL_CTX *ssl_ctx = NULL;
 static void ssl_init_native() { SSL_library_init(); OpenSSL_add_all_algorithms(); SSL_load_error_strings(); ssl_ctx = SSL_CTX_new(TLS_server_method()); }
@@ -860,12 +787,15 @@ static void std_init(void) {
 Node *root = NULL;
 int main(int argc, char **argv) {
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
-    if (argc > 1) { yyin = fopen(argv[1], "r"); if(yyin) { yyparse(); if(root) { Bytecode *main_bc = bc_new(); compiling_bc = main_bc; compile(root); bc_emit(main_bc, OP_RETURN, 0, 0); run_bytecode(main_bc, 0); } fclose(yyin); } }
+    if (argc > 1) {
+        if (strcmp(argv[1], "--lsp") == 0) { handle_client(0); return 0; }
+        yyin = fopen(argv[1], "r");
+        if(yyin) { yyparse(); if(root) { Bytecode *main_bc = bc_new(); compiling_bc = main_bc; compile(root); bc_emit(main_bc, OP_RETURN, 0, 0); run_bytecode(main_bc, 0); } fclose(yyin); }
+    }
     return 0;
 }
 void yyerror(const char *s) { fprintf(stderr, "Error: %s at line %d\n", s, line_num); }
 """
 
 with open("src/glowlang.y", "w") as f:
-    f.write(p1() + p2() + p3() + p4() + p5() + p6())
-
+    f.write(p1 + p2 + p3 + p4 + p5)

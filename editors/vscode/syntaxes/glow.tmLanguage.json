@@ -12,12 +12,6 @@
             "include": "#keywords"
         },
         {
-            "include": "#numbers"
-        },
-        {
-            "include": "#functions"
-        },
-        {
             "include": "#constants"
         }
     ],
@@ -25,8 +19,12 @@
         "comments": {
             "patterns": [
                 {
+                    "name": "comment.line.double-slash.glow",
+                    "match": "//.*"
+                },
+                {
                     "name": "comment.line.number-sign.glow",
-                    "match": "#.*$"
+                    "match": "#.*"
                 },
                 {
                     "name": "comment.block.glow",
@@ -37,32 +35,6 @@
         },
         "strings": {
             "patterns": [
-                {
-                    "name": "string.quoted.triple.glow",
-                    "begin": "\"\"\"",
-                    "end": "\"\"\""
-                },
-                {
-                    "name": "string.quoted.double.fstring.glow",
-                    "begin": "f\"",
-                    "end": "\"",
-                    "patterns": [
-                        {
-                            "name": "constant.character.escape.glow",
-                            "match": "\\\\."
-                        },
-                        {
-                            "name": "variable.interpolation.glow",
-                            "begin": "{",
-                            "end": "}",
-                            "patterns": [
-                                {
-                                    "include": "$self"
-                                }
-                            ]
-                        }
-                    ]
-                },
                 {
                     "name": "string.quoted.double.glow",
                     "begin": "\"",
@@ -80,40 +52,24 @@
             "patterns": [
                 {
                     "name": "keyword.control.glow",
-                    "match": "\\b(when|if|eif|otherwise|while|until|repeat|times|for|every|each|in|is|is not|from|to|func|lambda|let|return|stop|break|skip|continue|try|catch|throw|import|end)\\b"
+                    "match": "\\b(when|if|eif|otherwise|while|until|repeat|times|for|every|each|in|is\\s+not|is|from|to|func|action|can|lambda|let|return|stop|break|skip|continue|try|catch|throw|import|class|blueprint|Blueprint|trait|extends|use|spawn|end)\\b"
                 },
                 {
                     "name": "keyword.other.glow",
                     "match": "\\b(show|print|write|input|ask)\\b"
-                },
-                {
-                    "name": "keyword.operator.logical.glow",
-                    "match": "\\b(and|or|not)\\b"
-                }
-            ]
-        },
-        "numbers": {
-            "patterns": [
-                {
-                    "name": "constant.numeric.float.glow",
-                    "match": "\\b[0-9]+\\.[0-9]+\\b"
-                },
-                {
-                    "name": "constant.numeric.integer.glow",
-                    "match": "\\b[0-9]+\\b"
                 }
             ]
         },
         "constants": {
             "patterns": [
                 {
+                    "name": "constant.numeric.glow",
+                    "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+                },
+                {
                     "name": "constant.language.glow",
-                    "match": "\\b(true|false|none)\\b"
-                }
-            ]
-        },
-        "functions": {
-            "patterns": [
+                    "match": "\\b(true|false|none|null)\\b"
+                },
                 {
                     "name": "entity.name.function.glow",
                     "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*\\()"

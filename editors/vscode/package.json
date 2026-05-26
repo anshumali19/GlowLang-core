@@ -1,8 +1,8 @@
 {
     "name": "glowlang-vscode",
-    "displayName": "GlowLang",
-    "description": "Visual Studio Code extension for the GlowLang programming language",
-    "version": "0.1.0",
+    "displayName": "GlowLang 4.0",
+    "description": "Industrial-grade VS Code support for GlowLang 4.0 (JIT & Native Networking)",
+    "version": "1.0.0",
     "publisher": "glowlang",
     "engines": {
         "vscode": "^1.75.0"

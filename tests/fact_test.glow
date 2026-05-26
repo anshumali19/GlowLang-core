@@ -1,0 +1,7 @@
+func f(n):
+ when n == 0:
+  return 1
+ end
+ return n * f(n - 1)
+end
+show f(5)

@@ -1,46 +1,65 @@
-/* N-Queens: Count solutions for N=12 */
-
-func solve(board, col, n):
-    when col >= n:
-        return 1
+blueprint NQueens:
+    can init(n):
+        self.n = n
+        self.count = 0
+        show "Inited N to: ", self.n
     end
 
-    count = 0
-    row = 0
-    while row < n:
-        when isSafe(board, row, col, n):
-            board[row] = col
-            count = count + solve(board, col + 1, n)
+    can solve():
+        show "Solving for N: ", self.n
+        let board = range(self.n)
+        let i = 0
+        while i < self.n:
+            board[i] = 0 - 1
+            i = i + 1
         end
-        row = row + 1
+        show "Initial board: ", board
+        self.backtrack(board, 0)
+        return self.count
     end
-    return count
-end
 
-func isSafe(board, row, col, n):
-    i = 0
-    while i < col:
-        when board[i] == row:
-            return false
+    can backtrack(board, row):
+        if row == self.n:
+            self.count = self.count + 1
+            return 0
         end
-        when board[i] - i == row - col:
-            return false
+
+        let col = 0
+        while col < self.n:
+            if self.is_safe(board, row, col):
+                board[row] = col
+                self.backtrack(board, row + 1)
+                board[row] = 0 - 1
+            end
+            col = col + 1
         end
-        when board[i] + i == row + col:
-            return false
-        end
-        i = i + 1
     end
-    return true
+
+    can is_safe(board, row, col):
+        let i = 0
+        while i < row:
+            let b = board[i]
+            if b == col:
+                return false
+            end
+            let diff = col - b
+            if diff < 0:
+                diff = 0 - diff
+            end
+            if diff == (row - i):
+                return false
+            end
+            i = i + 1
+        end
+        return true
+    end
 end
 
-n = 8
-board = []
-i = 0
-while i < n:
-    append(board, 0)
-    i = i + 1
-end
-
-result = solve(board, 0, n)
-show result
+let n = 8
+let start = os.time()
+let nq = NQueens()
+nq.init(n)
+let solutions = nq.solve()
+let t_finish = os.time()
+show "Solutions: ", solutions
+show "Time: ", t_finish - start

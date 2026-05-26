@@ -1,38 +1,50 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"time"
+)
 
-func isSafe(board []int, row, col, n int) bool {
-	for i := 0; i < col; i++ {
-		if board[i] == row {
-			return false
-		}
-		if board[i]-i == row-col {
-			return false
-		}
-		if board[i]+i == row+col {
+type NQueens struct {
+	n     int
+	count int
+}
+
+func isSafe(board []int, row, col int) bool {
+	for i := 0; i < row; i++ {
+		if board[i] == col || math.Abs(float64(board[i]-col)) == math.Abs(float64(i-row)) {
 			return false
 		}
 	}
 	return true
 }
 
-func solve(board []int, col, n int) int {
-	if col >= n {
-		return 1
+func (nq *NQueens) backtrack(board []int, row int) {
+	if row == nq.n {
+		nq.count++
+		return
 	}
-	count := 0
-	for row := 0; row < n; row++ {
-		if isSafe(board, row, col, n) {
+	for col := 0; col < nq.n; col++ {
+		if isSafe(board, row, col) {
 			board[row] = col
-			count += solve(board, col+1, n)
+			nq.backtrack(board, row+1)
+			board[row] = -1
 		}
 	}
-	return count
 }
 
 func main() {
-	n := 12
+	n := 11
+	nq := &NQueens{n: n}
 	board := make([]int, n)
-	fmt.Println(solve(board, 0, n))
+	for i := range board {
+		board[i] = -1
+	}
+
+	start := time.Now()
+	nq.backtrack(board, 0)
+	elapsed := time.Since(start)
+
+	fmt.Printf("N-Queens (%d): %d found in %.4fs\n", n, nq.count, elapsed.Seconds())
 }

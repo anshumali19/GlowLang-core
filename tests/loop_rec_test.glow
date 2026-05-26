@@ -1,0 +1,12 @@
+let g = 2
+func f():
+ let i = 0
+ while i < g:
+  show "i=", i
+  when i < 1:
+   f()
+  end
+  i = i + 1
+ end
+end
+f()

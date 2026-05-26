@@ -1,8 +1,8 @@
-# GlowLang 4.0 - Industrial Readiness Status
+# GlowLang 1.0 - Industrial Readiness Status
 
 ## Status: 99% Industry Ready
 
-GlowLang 4.0 is now a complete, high-performance systems language with native support for x86-64 machine code and industrial networking.
+GlowLang 1.0 is now a complete, high-performance systems language with native support for x86-64 machine code and industrial networking.
 
 ### Breakthrough Accomplishments
 1.  **x86-64 Tier-1 JIT**: Custom JIT compiler providing **14x faster** execution than Python 3.10.
