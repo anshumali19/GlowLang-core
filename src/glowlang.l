@@ -94,7 +94,9 @@ int line_num = 1;
 "throw"                { return THROW; }
 "import"               { return IMPORT; }
 "class"                { return CLASS; }
+"Blueprint"            { return CLASS; }
 "trait"                { return TRAIT; }
+"can"                  { return TRAIT; }
 "extends"              { return EXTENDS; }
 "use"                  { return USE; }
 "spawn"                { return SPAWN; }

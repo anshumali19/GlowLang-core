@@ -11,10 +11,5 @@ spawn task("B", 3)
 show "Main finished spawning threads."
 
 # Give threads some time to finish before main exits
-# (We don't have join yet, so we use a sleep placeholder)
-# Actually, I'll use a loop to wait.
-i = 0
-while i < 1000000:
-    i = i + 1
-end
+os.sleep(1000)
 show "Main exiting."

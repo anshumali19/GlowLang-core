@@ -1,0 +1,1979 @@
+Terminals unused in grammar
+
+    FSTRING
+    WRITE
+    UNTIL
+    REPEAT
+    FOR
+    EACH
+    IN
+    LAMBDA
+    RETURN
+    STOP
+    SKIP
+    TIMES_KW
+    INPUT_KW
+    IS
+    IS_NOT
+    FROM
+    TO
+    PLUS_ASSIGN
+    MINUS_ASSIGN
+    MUL_ASSIGN
+    DIV_ASSIGN
+    MOD_ASSIGN
+    NEQ
+    LT
+    GT
+    LTE
+    GTE
+    MOD
+    POW
+    AND_OP
+    OR_OP
+    NOT_OP
+
+
+Grammar
+
+    0 $accept: program $end
+
+    1 program: lines
+
+    2 lines: lines NEWLINE stmt
+    3      | lines NEWLINE
+    4      | stmt
+    5      | IMPORT STRING
+    6      | ε
+
+    7 stmt: postfix ASSIGN expr
+    8     | LET ID ASSIGN expr
+    9     | FUNC ID '(' param_list ')' COLON NEWLINE lines END
+   10     | FUNC ID '(' ')' COLON NEWLINE lines END
+   11     | CLASS ID COLON NEWLINE lines END
+   12     | CLASS ID EXTENDS ID COLON NEWLINE lines END
+   13     | TRAIT ID COLON NEWLINE lines END
+   14     | USE ID
+   15     | WHEN condition COLON NEWLINE lines eif_chain otherwise_part END
+   16     | WHILE condition COLON NEWLINE lines END
+   17     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END
+   18     | THROW expr
+   19     | SPAWN postfix '(' opt_arg_list ')'
+   20     | SHOW expr_list
+   21     | expr
+
+   22 condition: expr
+
+   23 eif_chain: ε
+   24          | EIF condition COLON NEWLINE lines eif_chain
+
+   25 otherwise_part: ε
+   26               | OTHERWISE COLON NEWLINE lines
+
+   27 expr_list: expr
+   28          | expr_list COMMA expr
+
+   29 arg_list: expr_list
+
+   30 opt_arg_list: ε
+   31             | arg_list
+
+   32 param_list: ID
+   33           | param_list COMMA ID
+
+   34 expr: term
+   35     | expr PLUS term
+   36     | expr MINUS term
+   37     | expr EQ term
+
+   38 term: postfix
+   39     | term MUL postfix
+   40     | term DIV postfix
+
+   41 postfix: primary
+   42        | postfix '.' ID
+   43        | postfix '(' opt_arg_list ')'
+   44        | postfix '[' expr ']'
+
+   45 primary: ID
+   46        | INT_LIT
+   47        | STRING
+   48        | FLOAT_LIT
+   49        | TRUE_KW
+   50        | FALSE_KW
+   51        | '(' expr ')'
+   52        | '[' expr_list ']'
+   53        | '[' ']'
+
+
+Terminals, with rules where they appear
+
+    $end (0) 0
+    '(' (40) 9 10 19 43 51
+    ')' (41) 9 10 19 43 51
+    '.' (46) 42
+    '[' (91) 44 52 53
+    ']' (93) 44 52 53
+    error (256)
+    INT_LIT <int_val> (258) 46
+    FLOAT_LIT <float_val> (259) 48
+    ID <str_val> (260) 8 9 10 11 12 13 14 17 32 33 42 45
+    STRING <str_val> (261) 5 47
+    FSTRING <str_val> (262)
+    SHOW (263) 20
+    WRITE (264)
+    WHEN (265) 15
+    EIF (266) 24
+    OTHERWISE (267) 26
+    WHILE (268) 16
+    UNTIL (269)
+    REPEAT (270)
+    FOR (271)
+    EACH (272)
+    IN (273)
+    FUNC (274) 9 10
+    LAMBDA (275)
+    RETURN (276)
+    STOP (277)
+    SKIP (278)
+    END (279) 9 10 11 12 13 15 16 17
+    LET (280) 8
+    TRY (281) 17
+    CATCH (282) 17
+    THROW (283) 18
+    IMPORT (284) 5
+    CLASS (285) 11 12
+    TRAIT (286) 13
+    EXTENDS (287) 12
+    USE (288) 14
+    SPAWN (289) 19
+    TRUE_KW (290) 49
+    FALSE_KW (291) 50
+    TIMES_KW (292)
+    INPUT_KW (293)
+    IS (294)
+    IS_NOT (295)
+    FROM (296)
+    TO (297)
+    NEWLINE (298) 2 3 9 10 11 12 13 15 16 17 24 26
+    COMMA (299) 28 33
+    ASSIGN (300) 7 8
+    PLUS_ASSIGN (301)
+    MINUS_ASSIGN (302)
+    MUL_ASSIGN (303)
+    DIV_ASSIGN (304)
+    MOD_ASSIGN (305)
+    EQ (306) 37
+    NEQ (307)
+    LT (308)
+    GT (309)
+    LTE (310)
+    GTE (311)
+    PLUS (312) 35
+    MINUS (313) 36
+    MUL (314) 39
+    DIV (315) 40
+    MOD (316)
+    POW (317)
+    COLON (318) 9 10 11 12 13 15 16 17 24 26
+    AND_OP (319)
+    OR_OP (320)
+    NOT_OP (321)
+
+
+Nonterminals, with rules where they appear
+
+    $accept (72)
+        on left: 0
+    program <node> (73)
+        on left: 1
+        on right: 0
+    lines <node> (74)
+        on left: 2 3 4 5 6
+        on right: 1 2 3 9 10 11 12 13 15 16 17 24 26
+    stmt <node> (75)
+        on left: 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21
+        on right: 2 4
+    condition <node> (76)
+        on left: 22
+        on right: 15 16 24
+    eif_chain <node> (77)
+        on left: 23 24
+        on right: 15 24
+    otherwise_part <node> (78)
+        on left: 25 26
+        on right: 15
+    expr_list <node_list> (79)
+        on left: 27 28
+        on right: 20 28 29 52
+    arg_list <node_list> (80)
+        on left: 29
+        on right: 31
+    opt_arg_list <node_list> (81)
+        on left: 30 31
+        on right: 19 43
+    param_list <str_list> (82)
+        on left: 32 33
+        on right: 9 33
+    expr <node> (83)
+        on left: 34 35 36 37
+        on right: 7 8 18 21 22 27 28 35 36 37 44 51
+    term <node> (84)
+        on left: 38 39 40
+        on right: 34 35 36 37 39 40
+    postfix <node> (85)
+        on left: 41 42 43 44
+        on right: 7 19 38 39 40 42 43 44
+    primary <node> (86)
+        on left: 45 46 47 48 49 50 51 52 53
+        on right: 41
+
+
+State 0
+
+    0 $accept: • program $end
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    program  go to state 21
+    lines    go to state 22
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 1
+
+   46 primary: INT_LIT •
+
+    $default  reduce using rule 46 (primary)
+
+
+State 2
+
+   48 primary: FLOAT_LIT •
+
+    $default  reduce using rule 48 (primary)
+
+
+State 3
+
+   45 primary: ID •
+
+    $default  reduce using rule 45 (primary)
+
+
+State 4
+
+   47 primary: STRING •
+
+    $default  reduce using rule 47 (primary)
+
+
+State 5
+
+   20 stmt: SHOW • expr_list
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr_list  go to state 28
+    expr       go to state 29
+    term       go to state 25
+    postfix    go to state 30
+    primary    go to state 27
+
+
+State 6
+
+   15 stmt: WHEN • condition COLON NEWLINE lines eif_chain otherwise_part END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    condition  go to state 31
+    expr       go to state 32
+    term       go to state 25
+    postfix    go to state 30
+    primary    go to state 27
+
+
+State 7
+
+   16 stmt: WHILE • condition COLON NEWLINE lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    condition  go to state 33
+    expr       go to state 32
+    term       go to state 25
+    postfix    go to state 30
+    primary    go to state 27
+
+
+State 8
+
+    9 stmt: FUNC • ID '(' param_list ')' COLON NEWLINE lines END
+   10     | FUNC • ID '(' ')' COLON NEWLINE lines END
+
+    ID  shift, and go to state 34
+
+
+State 9
+
+    8 stmt: LET • ID ASSIGN expr
+
+    ID  shift, and go to state 35
+
+
+State 10
+
+   17 stmt: TRY • COLON NEWLINE lines CATCH ID COLON NEWLINE lines END
+
+    COLON  shift, and go to state 36
+
+
+State 11
+
+   18 stmt: THROW • expr
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 37
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 12
+
+    5 lines: IMPORT • STRING
+
+    STRING  shift, and go to state 38
+
+
+State 13
+
+   11 stmt: CLASS • ID COLON NEWLINE lines END
+   12     | CLASS • ID EXTENDS ID COLON NEWLINE lines END
+
+    ID  shift, and go to state 39
+
+
+State 14
+
+   13 stmt: TRAIT • ID COLON NEWLINE lines END
+
+    ID  shift, and go to state 40
+
+
+State 15
+
+   14 stmt: USE • ID
+
+    ID  shift, and go to state 41
+
+
+State 16
+
+   19 stmt: SPAWN • postfix '(' opt_arg_list ')'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    postfix  go to state 42
+    primary  go to state 27
+
+
+State 17
+
+   49 primary: TRUE_KW •
+
+    $default  reduce using rule 49 (primary)
+
+
+State 18
+
+   50 primary: FALSE_KW •
+
+    $default  reduce using rule 50 (primary)
+
+
+State 19
+
+   51 primary: '(' • expr ')'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 43
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 20
+
+   52 primary: '[' • expr_list ']'
+   53        | '[' • ']'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+    ']'        shift, and go to state 44
+
+    expr_list  go to state 45
+    expr       go to state 29
+    term       go to state 25
+    postfix    go to state 30
+    primary    go to state 27
+
+
+State 21
+
+    0 $accept: program • $end
+
+    $end  shift, and go to state 46
+
+
+State 22
+
+    1 program: lines •
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+
+    NEWLINE  shift, and go to state 47
+
+    $default  reduce using rule 1 (program)
+
+
+State 23
+
+    4 lines: stmt •
+
+    $default  reduce using rule 4 (lines)
+
+
+State 24
+
+   21 stmt: expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 21 (stmt)
+
+
+State 25
+
+   34 expr: term •
+   39 term: term • MUL postfix
+   40     | term • DIV postfix
+
+    MUL  shift, and go to state 51
+    DIV  shift, and go to state 52
+
+    $default  reduce using rule 34 (expr)
+
+
+State 26
+
+    7 stmt: postfix • ASSIGN expr
+   38 term: postfix •
+   42 postfix: postfix • '.' ID
+   43        | postfix • '(' opt_arg_list ')'
+   44        | postfix • '[' expr ']'
+
+    ASSIGN  shift, and go to state 53
+    '('     shift, and go to state 54
+    '.'     shift, and go to state 55
+    '['     shift, and go to state 56
+
+    $default  reduce using rule 38 (term)
+
+
+State 27
+
+   41 postfix: primary •
+
+    $default  reduce using rule 41 (postfix)
+
+
+State 28
+
+   20 stmt: SHOW expr_list •
+   28 expr_list: expr_list • COMMA expr
+
+    COMMA  shift, and go to state 57
+
+    $default  reduce using rule 20 (stmt)
+
+
+State 29
+
+   27 expr_list: expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 27 (expr_list)
+
+
+State 30
+
+   38 term: postfix •
+   42 postfix: postfix • '.' ID
+   43        | postfix • '(' opt_arg_list ')'
+   44        | postfix • '[' expr ']'
+
+    '('  shift, and go to state 54
+    '.'  shift, and go to state 55
+    '['  shift, and go to state 56
+
+    $default  reduce using rule 38 (term)
+
+
+State 31
+
+   15 stmt: WHEN condition • COLON NEWLINE lines eif_chain otherwise_part END
+
+    COLON  shift, and go to state 58
+
+
+State 32
+
+   22 condition: expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 22 (condition)
+
+
+State 33
+
+   16 stmt: WHILE condition • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 59
+
+
+State 34
+
+    9 stmt: FUNC ID • '(' param_list ')' COLON NEWLINE lines END
+   10     | FUNC ID • '(' ')' COLON NEWLINE lines END
+
+    '('  shift, and go to state 60
+
+
+State 35
+
+    8 stmt: LET ID • ASSIGN expr
+
+    ASSIGN  shift, and go to state 61
+
+
+State 36
+
+   17 stmt: TRY COLON • NEWLINE lines CATCH ID COLON NEWLINE lines END
+
+    NEWLINE  shift, and go to state 62
+
+
+State 37
+
+   18 stmt: THROW expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 18 (stmt)
+
+
+State 38
+
+    5 lines: IMPORT STRING •
+
+    $default  reduce using rule 5 (lines)
+
+
+State 39
+
+   11 stmt: CLASS ID • COLON NEWLINE lines END
+   12     | CLASS ID • EXTENDS ID COLON NEWLINE lines END
+
+    EXTENDS  shift, and go to state 63
+    COLON    shift, and go to state 64
+
+
+State 40
+
+   13 stmt: TRAIT ID • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 65
+
+
+State 41
+
+   14 stmt: USE ID •
+
+    $default  reduce using rule 14 (stmt)
+
+
+State 42
+
+   19 stmt: SPAWN postfix • '(' opt_arg_list ')'
+   42 postfix: postfix • '.' ID
+   43        | postfix • '(' opt_arg_list ')'
+   44        | postfix • '[' expr ']'
+
+    '('  shift, and go to state 66
+    '.'  shift, and go to state 55
+    '['  shift, and go to state 56
+
+
+State 43
+
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+   51 primary: '(' expr • ')'
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+    ')'    shift, and go to state 67
+
+
+State 44
+
+   53 primary: '[' ']' •
+
+    $default  reduce using rule 53 (primary)
+
+
+State 45
+
+   28 expr_list: expr_list • COMMA expr
+   52 primary: '[' expr_list • ']'
+
+    COMMA  shift, and go to state 57
+    ']'    shift, and go to state 68
+
+
+State 46
+
+    0 $accept: program $end •
+
+    $default  accept
+
+
+State 47
+
+    2 lines: lines NEWLINE • stmt
+    3      | lines NEWLINE •
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 3 (lines)
+
+    stmt     go to state 69
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 48
+
+   37 expr: expr EQ • term
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    term     go to state 70
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 49
+
+   35 expr: expr PLUS • term
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    term     go to state 71
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 50
+
+   36 expr: expr MINUS • term
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    term     go to state 72
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 51
+
+   39 term: term MUL • postfix
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    postfix  go to state 73
+    primary  go to state 27
+
+
+State 52
+
+   40 term: term DIV • postfix
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    postfix  go to state 74
+    primary  go to state 27
+
+
+State 53
+
+    7 stmt: postfix ASSIGN • expr
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 75
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 54
+
+   43 postfix: postfix '(' • opt_arg_list ')'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 30 (opt_arg_list)
+
+    expr_list     go to state 76
+    arg_list      go to state 77
+    opt_arg_list  go to state 78
+    expr          go to state 29
+    term          go to state 25
+    postfix       go to state 30
+    primary       go to state 27
+
+
+State 55
+
+   42 postfix: postfix '.' • ID
+
+    ID  shift, and go to state 79
+
+
+State 56
+
+   44 postfix: postfix '[' • expr ']'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 80
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 57
+
+   28 expr_list: expr_list COMMA • expr
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 81
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 58
+
+   15 stmt: WHEN condition COLON • NEWLINE lines eif_chain otherwise_part END
+
+    NEWLINE  shift, and go to state 82
+
+
+State 59
+
+   16 stmt: WHILE condition COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 83
+
+
+State 60
+
+    9 stmt: FUNC ID '(' • param_list ')' COLON NEWLINE lines END
+   10     | FUNC ID '(' • ')' COLON NEWLINE lines END
+
+    ID   shift, and go to state 84
+    ')'  shift, and go to state 85
+
+    param_list  go to state 86
+
+
+State 61
+
+    8 stmt: LET ID ASSIGN • expr
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    expr     go to state 87
+    term     go to state 25
+    postfix  go to state 30
+    primary  go to state 27
+
+
+State 62
+
+   17 stmt: TRY COLON NEWLINE • lines CATCH ID COLON NEWLINE lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 88
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 63
+
+   12 stmt: CLASS ID EXTENDS • ID COLON NEWLINE lines END
+
+    ID  shift, and go to state 89
+
+
+State 64
+
+   11 stmt: CLASS ID COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 90
+
+
+State 65
+
+   13 stmt: TRAIT ID COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 91
+
+
+State 66
+
+   19 stmt: SPAWN postfix '(' • opt_arg_list ')'
+   43 postfix: postfix '(' • opt_arg_list ')'
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 30 (opt_arg_list)
+
+    expr_list     go to state 76
+    arg_list      go to state 77
+    opt_arg_list  go to state 92
+    expr          go to state 29
+    term          go to state 25
+    postfix       go to state 30
+    primary       go to state 27
+
+
+State 67
+
+   51 primary: '(' expr ')' •
+
+    $default  reduce using rule 51 (primary)
+
+
+State 68
+
+   52 primary: '[' expr_list ']' •
+
+    $default  reduce using rule 52 (primary)
+
+
+State 69
+
+    2 lines: lines NEWLINE stmt •
+
+    $default  reduce using rule 2 (lines)
+
+
+State 70
+
+   37 expr: expr EQ term •
+   39 term: term • MUL postfix
+   40     | term • DIV postfix
+
+    MUL  shift, and go to state 51
+    DIV  shift, and go to state 52
+
+    $default  reduce using rule 37 (expr)
+
+
+State 71
+
+   35 expr: expr PLUS term •
+   39 term: term • MUL postfix
+   40     | term • DIV postfix
+
+    MUL  shift, and go to state 51
+    DIV  shift, and go to state 52
+
+    $default  reduce using rule 35 (expr)
+
+
+State 72
+
+   36 expr: expr MINUS term •
+   39 term: term • MUL postfix
+   40     | term • DIV postfix
+
+    MUL  shift, and go to state 51
+    DIV  shift, and go to state 52
+
+    $default  reduce using rule 36 (expr)
+
+
+State 73
+
+   39 term: term MUL postfix •
+   42 postfix: postfix • '.' ID
+   43        | postfix • '(' opt_arg_list ')'
+   44        | postfix • '[' expr ']'
+
+    '('  shift, and go to state 54
+    '.'  shift, and go to state 55
+    '['  shift, and go to state 56
+
+    $default  reduce using rule 39 (term)
+
+
+State 74
+
+   40 term: term DIV postfix •
+   42 postfix: postfix • '.' ID
+   43        | postfix • '(' opt_arg_list ')'
+   44        | postfix • '[' expr ']'
+
+    '('  shift, and go to state 54
+    '.'  shift, and go to state 55
+    '['  shift, and go to state 56
+
+    $default  reduce using rule 40 (term)
+
+
+State 75
+
+    7 stmt: postfix ASSIGN expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 7 (stmt)
+
+
+State 76
+
+   28 expr_list: expr_list • COMMA expr
+   29 arg_list: expr_list •
+
+    COMMA  shift, and go to state 57
+
+    $default  reduce using rule 29 (arg_list)
+
+
+State 77
+
+   31 opt_arg_list: arg_list •
+
+    $default  reduce using rule 31 (opt_arg_list)
+
+
+State 78
+
+   43 postfix: postfix '(' opt_arg_list • ')'
+
+    ')'  shift, and go to state 93
+
+
+State 79
+
+   42 postfix: postfix '.' ID •
+
+    $default  reduce using rule 42 (postfix)
+
+
+State 80
+
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+   44 postfix: postfix '[' expr • ']'
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+    ']'    shift, and go to state 94
+
+
+State 81
+
+   28 expr_list: expr_list COMMA expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 28 (expr_list)
+
+
+State 82
+
+   15 stmt: WHEN condition COLON NEWLINE • lines eif_chain otherwise_part END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 95
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 83
+
+   16 stmt: WHILE condition COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 96
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 84
+
+   32 param_list: ID •
+
+    $default  reduce using rule 32 (param_list)
+
+
+State 85
+
+   10 stmt: FUNC ID '(' ')' • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 97
+
+
+State 86
+
+    9 stmt: FUNC ID '(' param_list • ')' COLON NEWLINE lines END
+   33 param_list: param_list • COMMA ID
+
+    COMMA  shift, and go to state 98
+    ')'    shift, and go to state 99
+
+
+State 87
+
+    8 stmt: LET ID ASSIGN expr •
+   35 expr: expr • PLUS term
+   36     | expr • MINUS term
+   37     | expr • EQ term
+
+    EQ     shift, and go to state 48
+    PLUS   shift, and go to state 49
+    MINUS  shift, and go to state 50
+
+    $default  reduce using rule 8 (stmt)
+
+
+State 88
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   17 stmt: TRY COLON NEWLINE lines • CATCH ID COLON NEWLINE lines END
+
+    CATCH    shift, and go to state 100
+    NEWLINE  shift, and go to state 47
+
+
+State 89
+
+   12 stmt: CLASS ID EXTENDS ID • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 101
+
+
+State 90
+
+   11 stmt: CLASS ID COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 102
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 91
+
+   13 stmt: TRAIT ID COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 103
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 92
+
+   19 stmt: SPAWN postfix '(' opt_arg_list • ')'
+   43 postfix: postfix '(' opt_arg_list • ')'
+
+    ')'  shift, and go to state 104
+
+
+State 93
+
+   43 postfix: postfix '(' opt_arg_list ')' •
+
+    $default  reduce using rule 43 (postfix)
+
+
+State 94
+
+   44 postfix: postfix '[' expr ']' •
+
+    $default  reduce using rule 44 (postfix)
+
+
+State 95
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   15 stmt: WHEN condition COLON NEWLINE lines • eif_chain otherwise_part END
+
+    EIF      shift, and go to state 105
+    NEWLINE  shift, and go to state 47
+
+    $default  reduce using rule 23 (eif_chain)
+
+    eif_chain  go to state 106
+
+
+State 96
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   16 stmt: WHILE condition COLON NEWLINE lines • END
+
+    END      shift, and go to state 107
+    NEWLINE  shift, and go to state 47
+
+
+State 97
+
+   10 stmt: FUNC ID '(' ')' COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 108
+
+
+State 98
+
+   33 param_list: param_list COMMA • ID
+
+    ID  shift, and go to state 109
+
+
+State 99
+
+    9 stmt: FUNC ID '(' param_list ')' • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 110
+
+
+State 100
+
+   17 stmt: TRY COLON NEWLINE lines CATCH • ID COLON NEWLINE lines END
+
+    ID  shift, and go to state 111
+
+
+State 101
+
+   12 stmt: CLASS ID EXTENDS ID COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 112
+
+
+State 102
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   11 stmt: CLASS ID COLON NEWLINE lines • END
+
+    END      shift, and go to state 113
+    NEWLINE  shift, and go to state 47
+
+
+State 103
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   13 stmt: TRAIT ID COLON NEWLINE lines • END
+
+    END      shift, and go to state 114
+    NEWLINE  shift, and go to state 47
+
+
+State 104
+
+   19 stmt: SPAWN postfix '(' opt_arg_list ')' •
+   43 postfix: postfix '(' opt_arg_list ')' •
+
+    '('       reduce using rule 43 (postfix)
+    '.'       reduce using rule 43 (postfix)
+    '['       reduce using rule 43 (postfix)
+    $default  reduce using rule 19 (stmt)
+
+
+State 105
+
+   24 eif_chain: EIF • condition COLON NEWLINE lines eif_chain
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    condition  go to state 115
+    expr       go to state 32
+    term       go to state 25
+    postfix    go to state 30
+    primary    go to state 27
+
+
+State 106
+
+   15 stmt: WHEN condition COLON NEWLINE lines eif_chain • otherwise_part END
+
+    OTHERWISE  shift, and go to state 116
+
+    $default  reduce using rule 25 (otherwise_part)
+
+    otherwise_part  go to state 117
+
+
+State 107
+
+   16 stmt: WHILE condition COLON NEWLINE lines END •
+
+    $default  reduce using rule 16 (stmt)
+
+
+State 108
+
+   10 stmt: FUNC ID '(' ')' COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 118
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 109
+
+   33 param_list: param_list COMMA ID •
+
+    $default  reduce using rule 33 (param_list)
+
+
+State 110
+
+    9 stmt: FUNC ID '(' param_list ')' COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 119
+
+
+State 111
+
+   17 stmt: TRY COLON NEWLINE lines CATCH ID • COLON NEWLINE lines END
+
+    COLON  shift, and go to state 120
+
+
+State 112
+
+   12 stmt: CLASS ID EXTENDS ID COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 121
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 113
+
+   11 stmt: CLASS ID COLON NEWLINE lines END •
+
+    $default  reduce using rule 11 (stmt)
+
+
+State 114
+
+   13 stmt: TRAIT ID COLON NEWLINE lines END •
+
+    $default  reduce using rule 13 (stmt)
+
+
+State 115
+
+   24 eif_chain: EIF condition • COLON NEWLINE lines eif_chain
+
+    COLON  shift, and go to state 122
+
+
+State 116
+
+   26 otherwise_part: OTHERWISE • COLON NEWLINE lines
+
+    COLON  shift, and go to state 123
+
+
+State 117
+
+   15 stmt: WHEN condition COLON NEWLINE lines eif_chain otherwise_part • END
+
+    END  shift, and go to state 124
+
+
+State 118
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   10 stmt: FUNC ID '(' ')' COLON NEWLINE lines • END
+
+    END      shift, and go to state 125
+    NEWLINE  shift, and go to state 47
+
+
+State 119
+
+    9 stmt: FUNC ID '(' param_list ')' COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 126
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 120
+
+   17 stmt: TRY COLON NEWLINE lines CATCH ID COLON • NEWLINE lines END
+
+    NEWLINE  shift, and go to state 127
+
+
+State 121
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   12 stmt: CLASS ID EXTENDS ID COLON NEWLINE lines • END
+
+    END      shift, and go to state 128
+    NEWLINE  shift, and go to state 47
+
+
+State 122
+
+   24 eif_chain: EIF condition COLON • NEWLINE lines eif_chain
+
+    NEWLINE  shift, and go to state 129
+
+
+State 123
+
+   26 otherwise_part: OTHERWISE COLON • NEWLINE lines
+
+    NEWLINE  shift, and go to state 130
+
+
+State 124
+
+   15 stmt: WHEN condition COLON NEWLINE lines eif_chain otherwise_part END •
+
+    $default  reduce using rule 15 (stmt)
+
+
+State 125
+
+   10 stmt: FUNC ID '(' ')' COLON NEWLINE lines END •
+
+    $default  reduce using rule 10 (stmt)
+
+
+State 126
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+    9 stmt: FUNC ID '(' param_list ')' COLON NEWLINE lines • END
+
+    END      shift, and go to state 131
+    NEWLINE  shift, and go to state 47
+
+
+State 127
+
+   17 stmt: TRY COLON NEWLINE lines CATCH ID COLON NEWLINE • lines END
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 132
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 128
+
+   12 stmt: CLASS ID EXTENDS ID COLON NEWLINE lines END •
+
+    $default  reduce using rule 12 (stmt)
+
+
+State 129
+
+   24 eif_chain: EIF condition COLON NEWLINE • lines eif_chain
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 133
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 130
+
+   26 otherwise_part: OTHERWISE COLON NEWLINE • lines
+
+    INT_LIT    shift, and go to state 1
+    FLOAT_LIT  shift, and go to state 2
+    ID         shift, and go to state 3
+    STRING     shift, and go to state 4
+    SHOW       shift, and go to state 5
+    WHEN       shift, and go to state 6
+    WHILE      shift, and go to state 7
+    FUNC       shift, and go to state 8
+    LET        shift, and go to state 9
+    TRY        shift, and go to state 10
+    THROW      shift, and go to state 11
+    IMPORT     shift, and go to state 12
+    CLASS      shift, and go to state 13
+    TRAIT      shift, and go to state 14
+    USE        shift, and go to state 15
+    SPAWN      shift, and go to state 16
+    TRUE_KW    shift, and go to state 17
+    FALSE_KW   shift, and go to state 18
+    '('        shift, and go to state 19
+    '['        shift, and go to state 20
+
+    $default  reduce using rule 6 (lines)
+
+    lines    go to state 134
+    stmt     go to state 23
+    expr     go to state 24
+    term     go to state 25
+    postfix  go to state 26
+    primary  go to state 27
+
+
+State 131
+
+    9 stmt: FUNC ID '(' param_list ')' COLON NEWLINE lines END •
+
+    $default  reduce using rule 9 (stmt)
+
+
+State 132
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   17 stmt: TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines • END
+
+    END      shift, and go to state 135
+    NEWLINE  shift, and go to state 47
+
+
+State 133
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   24 eif_chain: EIF condition COLON NEWLINE lines • eif_chain
+
+    EIF      shift, and go to state 105
+    NEWLINE  shift, and go to state 47
+
+    $default  reduce using rule 23 (eif_chain)
+
+    eif_chain  go to state 136
+
+
+State 134
+
+    2 lines: lines • NEWLINE stmt
+    3      | lines • NEWLINE
+   26 otherwise_part: OTHERWISE COLON NEWLINE lines •
+
+    NEWLINE  shift, and go to state 47
+
+    $default  reduce using rule 26 (otherwise_part)
+
+
+State 135
+
+   17 stmt: TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END •
+
+    $default  reduce using rule 17 (stmt)
+
+
+State 136
+
+   24 eif_chain: EIF condition COLON NEWLINE lines eif_chain •
+
+    $default  reduce using rule 24 (eif_chain)

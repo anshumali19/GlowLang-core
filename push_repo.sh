@@ -1,12 +1,13 @@
 #!/bin/bash
-PAT="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"
+PAT="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"
 USER="anshumali19"
-REPO_NAME="GlowLang"
+REPO_URL="https://github.com/anshumali19/GlowLang.git"
 
-# Create the repo via API
-curl -s -u "$USER:$PAT" https://api.github.com/user/repos -d "{\"name\":\"$REPO_NAME\", \"description\":\"GlowLang 4.0 - High-performance, natural-language systems programming language\", \"private\":false}" > /dev/null
+echo "Setting up remote and pushing to $REPO_URL..."
 
 git branch -M main
 git remote remove origin 2>/dev/null
-git remote add origin "https://$USER:$PAT@github.com/$USER/$REPO_NAME.git"
-git push -u origin main
+# Use the NEW PAT for authentication in the URL
+git remote add origin "https://$USER:$PAT@github.com/anshumali19/GlowLang.git"
+
+git push -u origin main --force

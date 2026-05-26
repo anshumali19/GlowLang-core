@@ -1,0 +1,12 @@
+func loop_only():
+    let i = 0
+    let total = 0
+    while i < 10000000:
+        total = total + i
+        i = i + 1
+    end
+    return total
+end
+
+let res1 = loop_only()
+show res1

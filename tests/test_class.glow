@@ -1,3 +1,4 @@
+show "Starting test"
 class Person:
     func set_name(n):
         self.name = n

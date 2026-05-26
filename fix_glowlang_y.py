@@ -1,65 +1,70 @@
+
 import re
 
-with open("src/glowlang.y", "r") as f:
-    text = f.read()
+with open('src/glowlang.y', 'r') as f:
+    content = f.read()
 
-# 1. Add forward declarations if missing
-fw_decls = """
-static void print_value(Value v);
-static Value run_bytecode(Bytecode *bc, int base_offset);
-static void jit_compile(Bytecode *bc);
-extern void lsp_run_socket(int port);
-"""
-if "static void print_value(Value v);" not in text:
-    text = text.replace("/* Forward declarations (functions call each other recursively) */", 
-                        "/* Forward declarations (functions call each other recursively) */\n" + fw_decls)
+# 1. Restore Grammar
+# Add RETURN, STOP, SKIP, FOR EACH to stmt rule
+stmt_match = re.search(r'(stmt:.*?)(;)', content, re.DOTALL)
+if stmt_match:
+    stmt_body = stmt_match.group(1)
+    if 'RETURN' not in stmt_body:
+        stmt_body += '\n    | RETURN expr { $$ = newReturnNode($2); }'
+    if 'STOP' not in stmt_body:
+        stmt_body += '\n    | STOP { $$ = node_new(NODE_STOP); }'
+    if 'SKIP' not in stmt_body:
+        stmt_body += '\n    | SKIP { $$ = node_new(NODE_SKIP); }'
+    if 'FOR EACH' not in stmt_body:
+        stmt_body += '\n    | FOR EACH ID IN expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }'
+    
+    content = content.replace(stmt_match.group(0), stmt_body + ';')
 
-# 2. Add print_value implementation if missing entirely
-print_val_impl = """
-static void print_value(Value v) {
-    if (v == 0) { printf("none"); return; }
-    ValueType t = GET_TYPE(v);
-    if (t == VAL_INT) printf("%ld", (long)AS_INT(v));
-    else if (t == VAL_FLOAT) printf("%g", AS_FLOAT(v));
-    else if (t == VAL_BOOL) printf("%s", AS_BOOL(v) ? "true" : "false");
-    else if (t == VAL_STRING) printf("%s", AS_STRING(v));
-    else if (t == VAL_OBJECT) {
-        if (!(v & MASK_PAYLOAD)) { printf("none"); return; }
-        ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_CLASS) printf("<class %s>", AS_CLASS(v)->name);
-        else if (ot == OBJ_TRAIT) printf("<trait %s>", AS_TRAIT(v)->name);
-        else if (ot == OBJ_INSTANCE) printf("<instance of %s>", AS_INSTANCE(v)->klass->name);
-        else if (ot == OBJ_BOUND_METHOD) printf("<bound method %s>", AS_BOUND_METHOD(v)->method->name);
-        else if (ot == OBJ_NATIVE_FUNC) printf("<native function %s>", AS_NATIVE_FUNC(v)->name);
-        else printf("<object>");
-    }
-    else if (t == VAL_LIST) {
-        printf("[");
-        for (int j = 0; j < AS_LIST(v)->size; j++) {
-            print_value(AS_LIST(v)->items[j]);
-            if (j < AS_LIST(v)->size - 1) printf(", ");
-        }
-        printf("]");
-    }
-}
-"""
+# 2. Fix JIT return value
+# The interpreter part is already correct: l_OP_RETURN: return sp > 0 ? POP() : value_none();
+# But let's check JIT OP_RETURN offsets
+content = re.sub(
+    r'case OP_RETURN:\s+jit_emit_byte\(&buf, 0x4d\); jit_emit_byte\(&buf, 0x85\); jit_emit_byte\(&buf, 0xed\); // test r13, r13\s+jit_emit_byte\(&buf, 0x74\); jit_emit_byte\(&buf, 13\); // jz return_none',
+    'case OP_RETURN:\n                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xed); // test r13, r13\n                jit_emit_byte(&buf, 0x74); jit_emit_byte(&buf, 9); // jz return_none',
+    content
+)
 
-if "static void print_value(Value v)" not in text:
-    # Insert right before val_to_str
-    text = text.replace("static char *val_to_str(Value v) {", print_val_impl + "\nstatic char *val_to_str(Value v) {")
+# 3. JIT Robustness (already handled by default case, but let's ensure it's there)
+# It is already there in the file I read.
 
-# 3. Find duplicate thread_worker and remove the first one
-parts = text.split("static void* thread_worker(void *arg) {")
-if len(parts) > 2:
-    # We have duplicates.
-    # The first implementation is usually the broken one at the top.
-    # We'll piece it back together by removing the first body.
-    # Find the end of the first body (a closing brace '}')
-    first_body_end = parts[1].find("}\n") + 2
-    text = parts[0] + parts[1][first_body_end:] + "static void* thread_worker(void *arg) {" + parts[2]
+# 4. NaN Boxing Fix for OP_ADD, OP_SUB, OP_MUL, OP_DIV
+nan_boxing_logic = """            case OP_ADD:
+            case OP_SUB:
+            case OP_MUL:
+            case OP_DIV: {
+                emit_pop_rbx(&buf); emit_pop_rax(&buf);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL); // mov rcx, mask
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); // and rax, rcx
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xcb); // and rbx, rcx
+                if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xd8); }
+                else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xd8); }
+                else if (pc->op == OP_MUL) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc3); }
+                else if (pc->op == OP_DIV) { 
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x10); 
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x10);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xe3); jit_emit_byte(&buf, 0x10);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xfb); jit_emit_byte(&buf, 0x10);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x99); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xf7); jit_emit_byte(&buf, 0xfb); 
+                }
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x0000FFFFFFFFFFFFULL);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xc8); // and rax, rcx
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xb9); jit_emit_u64(&buf, 0x7FF8000000000000ULL);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); // or rax, rcx
+                emit_push_rax(&buf);
+                break;
+            }"""
 
-# 4. Remove duplicate CallFrame and ThreadData definitions if they appear inside the grammar rules.
-# They shouldn't be there.
-# Let's write the modified text back.
-with open("src/glowlang.y", "w") as f:
-    f.write(text)
+content = re.sub(
+    r'case OP_ADD:.*?break;\s+}',
+    nan_boxing_logic,
+    content,
+    flags=re.DOTALL
+)
+
+with open('src/glowlang.y', 'w') as f:
+    f.write(content)
