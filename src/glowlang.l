@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define INTERN_TABLE_SIZE 4096
+#define INTERN_TABLE_SIZE 65536
 static char *intern_table[INTERN_TABLE_SIZE];
 static int intern_initialized = 0;
 
@@ -15,16 +15,26 @@ static void ensure_intern_init(void) {
     }
 }
 
+static char *arena_strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *dup = arena_alloc(len);
+    memcpy(dup, s, len);
+    return dup;
+}
+
 const char *intern_string(const char *s) {
     ensure_intern_init();
-    unsigned int h = 5381;
-    for (int i = 0; s[i]; i++) h = ((h << 5) + h) + s[i];
+    unsigned int h = 2166136261u;
+    for (int i = 0; s[i]; i++) {
+        h ^= (unsigned char)s[i];
+        h *= 16777619;
+    }
     unsigned int start = h % INTERN_TABLE_SIZE;
     unsigned int idx = start;
     
     do {
         if (!intern_table[idx]) {
-            char *dup = strdup(s);
+            char *dup = arena_strdup(s);
             intern_table[idx] = dup;
             return (const char *)dup;
         }
@@ -33,13 +43,12 @@ const char *intern_string(const char *s) {
         idx = (idx + 1) % INTERN_TABLE_SIZE;
     } while (idx != start);
 
-    return strdup(s);
+    return arena_strdup(s);
 }
 
 void intern_cleanup(void) {
-    for (int i = 0; i < INTERN_TABLE_SIZE; i++) {
-        if (intern_table[i]) { free(intern_table[i]); intern_table[i] = NULL; }
-    }
+    /* Handled by arena_free_all() now */
+    memset(intern_table, 0, sizeof(intern_table));
     intern_initialized = 0;
 }
 
@@ -62,6 +71,7 @@ int line_num = 1;
 "if"                   { return WHEN; }
 "eif"                  { return EIF; }
 "otherwise"            { return OTHERWISE; }
+"else"                 { return OTHERWISE; }
 "while"                { return WHILE; }
 "until"                { return UNTIL; }
 "repeat"               { return REPEAT; }
@@ -199,6 +209,7 @@ f\"([^"\\]|\\.)*\" {
 \n                     { line_num++; return NEWLINE; }
 [ \t\r]+               ;
 
+"//".*                 ;
 "#".*                  ;
 
 "/*"                   { BEGIN(COMMENT); }

@@ -1,4 +1,5 @@
 func f(n):
+ show "f called with", n
  when n == 0:
   return 1
  end

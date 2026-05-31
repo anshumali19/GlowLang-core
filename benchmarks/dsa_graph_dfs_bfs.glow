@@ -1,0 +1,67 @@
+/* Graph DFS & BFS */
+func len2(arr):
+    let count = 0
+    for a in arr: count = count + 1 end
+    return count
+end
+
+func BFS(graph, V, start):
+    let visited = range(V)
+    let i = 0
+    while i < V: visited[i] = false i = i + 1 end
+    
+    let queue = [start]
+    visited[start] = true
+    
+    let head = 0
+    while head < len2(queue):
+        let u = queue[head]
+        head = head + 1
+        show "BFS visited ", u
+        
+        let v = 0
+        let row = graph[u]
+        while v < V:
+            if row[v] == 1:
+                if visited[v] == false:
+                    visited[v] = true
+                    queue = queue + [v]
+                end
+            end
+            v = v + 1
+        end
+    end
+end
+
+func DFSUtil(graph, V, v, visited):
+    visited[v] = true
+    show "DFS visited ", v
+    let i = 0
+    let row = graph[v]
+    while i < V:
+        if row[i] == 1:
+            if visited[i] == false:
+                DFSUtil(graph, V, i, visited)
+            end
+        end
+        i = i + 1
+    end
+end
+
+func DFS(graph, V, start):
+    let visited = range(V)
+    let i = 0
+    while i < V: visited[i] = false i = i + 1 end
+    DFSUtil(graph, V, start, visited)
+end
+
+let graph = [
+    [0, 1, 1, 0],
+    [0, 0, 1, 0],
+    [1, 0, 0, 1],
+    [0, 0, 0, 1]
+]
+show "BFS:"
+BFS(graph, 4, 2)
+show "DFS:"
+DFS(graph, 4, 2)

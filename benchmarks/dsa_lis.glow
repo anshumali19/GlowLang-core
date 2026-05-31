@@ -1,0 +1,34 @@
+/* Longest Increasing Subsequence */
+func max(a, b):
+    if a > b: return a end
+    return b
+end
+
+func lis(arr, n):
+    let dp = range(n)
+    let i = 0
+    while i < n: dp[i] = 1 i = i + 1 end
+    
+    i = 1
+    while i < n:
+        let j = 0
+        while j < i:
+            if arr[i] > arr[j]:
+                dp[i] = max(dp[i], dp[j] + 1)
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    
+    let ans = 0
+    i = 0
+    while i < n:
+        if dp[i] > ans: ans = dp[i] end
+        i = i + 1
+    end
+    return ans
+end
+
+let arr = [10, 22, 9, 33, 21, 50, 41, 60]
+show lis(arr, 8)

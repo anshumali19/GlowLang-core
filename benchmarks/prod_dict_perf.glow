@@ -1,0 +1,40 @@
+/* Production Dictionary & Hash Performance Test */
+
+func bench_dict(n):
+    show "Benchmarking Dictionary: ", n, " operations"
+    let d = {}
+    let i = 0
+    
+    
+    while i < n:
+        let key = "key-" + i
+        d[key] = i
+        i = i + 1
+    end
+    
+    
+    i = 0
+    let sum = 0
+    while i < n:
+        let key = "key-" + i
+        sum = sum + d[key]
+        i = i + 1
+    end
+    
+    
+    i = 0
+    while i < n:
+        if i % 2 == 0:
+            let key = "key-" + i
+            d[key] = 0
+        end
+        i = i + 1
+    end
+    
+    show "Sum verify: ", sum
+end
+
+let start = os.time()
+bench_dict(50000)
+let end_time = os.time()
+show "Elapsed: ", end_time - start

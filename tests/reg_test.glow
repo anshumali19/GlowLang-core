@@ -1,0 +1,22 @@
+func test(n):
+    let a = n
+    if n > 0:
+        test(n-1)
+    end
+    if a != n:
+        show "CORRUPTION! n:", n, "a:", a
+    end
+end
+func loop_test(m):
+    let i = 0
+    while i < m:
+        let val = i
+        test(5)
+        if val != i:
+            show "LOOP CORRUPTION! i:", i, "val:", val
+        end
+        i = i + 1
+    end
+end
+loop_test(100)
+show "Done"

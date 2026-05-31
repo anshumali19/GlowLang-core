@@ -1,0 +1,9 @@
+let start_t = os.time()
+let i = 0
+while i < 10000000:
+    i = i + 1
+end
+let end_t = os.time()
+show "Start:", start_t
+show "End:", end_t
+show "Diff:", end_t - start_t

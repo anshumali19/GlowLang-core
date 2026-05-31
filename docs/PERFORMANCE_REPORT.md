@@ -1,6 +1,6 @@
-# GlowLang 1.0: Industrial Performance Report
+# GlowLang: Industrial Performance Report
 
-GlowLang 1.0 is a next-generation systems language combining Natural Language syntax with hardware-aware performance. This report compares GlowLang 1.0 (with Tier-1 JIT) against industry giants.
+GlowLang is a next-generation systems language combining Natural Language syntax with hardware-aware performance. This report compares GlowLang (with Tier-1 JIT) against industry giants.
 
 ## 1. N-Queens (N=11)
 N-Queens is a complex recursive backtracking algorithm that tests function call overhead, list indexing, and conditional logic.
@@ -10,11 +10,11 @@ N-Queens is a complex recursive backtracking algorithm that tests function call 
 | C (O3)   | 0.0136s           | 30.1x          |
 | C++ (O3) | 0.0138s           | 29.3x          |
 | Go       | 0.0213s           | 19.2x          |
-| **GlowLang 1.0 (JIT)** | **0.031s** (est) | **13.0x** |
+| **GlowLang (JIT)** | **0.031s** (est) | **13.0x** |
 | C# (Mono)| 0.045s (est)      | 9.0x           |
 | Python 3.10 | 0.4046s        | 1x             |
 
-**Verdict**: GlowLang 1.0 JIT performs within 2.5x of native C and is over **13x faster than Python**.
+**Verdict**: GlowLang JIT performs within 2.5x of native C and is over **13x faster than Python**.
 
 ## 2. Recursive Performance (Ackermann 3, 7)
 Ackermann function tests deep recursion and stack frame management.
@@ -22,15 +22,15 @@ Ackermann function tests deep recursion and stack frame management.
 | Language | Execution Time (s) | Result |
 |----------|-------------------|--------|
 | C        | < 0.001s          | 1021   |
-| **GlowLang 1.0** | **0.002s** | 1021   |
+| **GlowLang** | **0.002s** | 1021   |
 | Python   | 0.015s            | 1021   |
 
 ## 3. Hot Loop (10M Iterations)
 | Language | Execution Time (s) | Speedup |
 |----------|-------------------|---------|
 | Python 3.10 | 0.589s | 1x |
-| GlowLang 1.0 (Interp) | 0.158s | 3.7x |
-| **GlowLang 1.0 (JIT)** | **0.042s** | **14x** |
+| GlowLang (Interp) | 0.158s | 3.7x |
+| **GlowLang (JIT)** | **0.042s** | **14x** |
 
 ---
 
@@ -48,4 +48,4 @@ We have resolved the issues with syntax highlighting and LSP connectivity.
 3.  Open a `.glow` file. You should now see full syntax highlighting for `blueprint`, `can`, `action`, etc.
 
 ---
-*GlowLang 1.0: The impossible made natural.*
+*GlowLang: The impossible made natural.*

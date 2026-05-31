@@ -1,0 +1,6 @@
+let count = 0
+func inc():
+    count = count + 1
+end
+inc()
+show "Global count:", count

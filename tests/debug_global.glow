@@ -1,0 +1,6 @@
+let c = 0
+func inc():
+ c = c + 1
+end
+inc()
+show c

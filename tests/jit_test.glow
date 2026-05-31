@@ -1,0 +1,10 @@
+func loop(m):
+    let i = 0
+    let sum = 0
+    while i < m:
+        sum = sum + 1
+        i = i + 1
+    end
+    return sum
+end
+show "First:", loop(2000000)

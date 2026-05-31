@@ -1,0 +1,15 @@
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/bin/Debug/net8.0/CSharpBench
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/bin/Debug/net8.0/CSharpBench.deps.json
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/bin/Debug/net8.0/CSharpBench.runtimeconfig.json
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/bin/Debug/net8.0/CSharpBench.dll
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/bin/Debug/net8.0/CSharpBench.pdb
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.GeneratedMSBuildEditorConfig.editorconfig
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.AssemblyInfoInputs.cache
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.AssemblyInfo.cs
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.csproj.CoreCompileInputs.cache
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.sourcelink.json
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.dll
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/refint/CSharpBench.dll
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.pdb
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/CSharpBench.genruntimeconfig.cache
+/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/obj/Debug/net8.0/ref/CSharpBench.dll

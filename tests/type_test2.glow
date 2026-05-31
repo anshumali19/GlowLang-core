@@ -1,0 +1,3 @@
+let l = [1]
+let t = type(l)
+show "t:", t

@@ -1,0 +1,5 @@
+let l = [1, 2, 3, 4, 5]
+let res = [x * 2 for each x in l]
+show "Doubled:", res
+let even = [x for each x in l when x % 2 == 0]
+show "Evens:", even

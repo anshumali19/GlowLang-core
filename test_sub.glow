@@ -1,0 +1,3 @@
+let start_t = 5.5
+let end_t = 6.5
+show end_t - start_t

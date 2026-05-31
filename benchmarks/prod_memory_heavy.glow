@@ -1,0 +1,39 @@
+/* Production Memory Usage Benchmark - GlowLang */
+
+func create_large_list(size):
+    let l = range(size)
+    let i = 0
+    while i < size:
+        l[i] = i * 1.5
+        i = i + 1
+    end
+    return l
+end
+
+func create_large_dict(size):
+    let d = {}
+    let i = 0
+    while i < size:
+        let key = "key" + i
+        d[key] = i * 2.5
+        i = i + 1
+    end
+    return d
+end
+
+func measure_memory_growth(steps, size_per_step):
+    show "Starting Memory Growth Analysis: ", steps, " steps of ", size_per_step, " elements"
+    let history = range(steps)
+    let s = 0
+    while s < steps:
+        let start = os.time()
+        history[s] = create_large_list(size_per_step)
+        let end_time = os.time()
+        show "Step ", s, " (Total elements approx ", (s + 1) * size_per_step, ") time: ", end_time - start, "s"
+        s = s + 1
+    end
+    show "Memory Growth Analysis Complete"
+end
+
+measure_memory_growth(10, 100000)
+

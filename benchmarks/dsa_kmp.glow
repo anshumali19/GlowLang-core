@@ -1,0 +1,54 @@
+/* KMP String Matching */
+func computeLPSArray(pat, M, lps):
+    let length = 0
+    lps[0] = 0
+    let i = 1
+    while i < M:
+        if pat[i] == pat[length]:
+            length = length + 1
+            lps[i] = length
+            i = i + 1
+        end
+        if pat[i] != pat[length]:
+            if length != 0:
+                length = lps[length - 1]
+            end
+            if length == 0:
+                lps[i] = 0
+                i = i + 1
+            end
+        end
+    end
+end
+
+func KMPSearch(pat, txt, M, N):
+    let lps = range(M)
+    computeLPSArray(pat, M, lps)
+    
+    let i = 0
+    let j = 0
+    while i < N:
+        if pat[j] == txt[i]:
+            j = j + 1
+            i = i + 1
+        end
+        if j == M:
+            show "Found pattern at index ", i - j
+            j = lps[j - 1]
+        end
+        if i < N:
+            if pat[j] != txt[i]:
+                if j != 0:
+                    j = lps[j - 1]
+                end
+                if j == 0:
+                    i = i + 1
+                end
+            end
+        end
+    end
+end
+
+let txt = [65, 66, 65, 66, 68, 65, 66, 65, 67, 68, 65, 66, 65, 66, 67]
+let pat = [65, 66, 65, 66, 67]
+KMPSearch(pat, txt, 5, 15)

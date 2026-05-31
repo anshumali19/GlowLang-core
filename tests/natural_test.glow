@@ -1,0 +1,15 @@
+blueprint Counter:
+    action init(val):
+        self.val = val
+    end
+    action inc():
+        self.val = self.val + 1
+    end
+end
+let c = Counter(10)
+show "c is:", type(c)
+show "c has methods:", type(c.inc)
+c.init(10)
+show "c.val after manual init:", c.val
+c.inc()
+show "c.val after inc:", c.val

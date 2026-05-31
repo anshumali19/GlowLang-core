@@ -1,0 +1,48 @@
+/* Production Throughput Benchmark - GlowLang */
+
+func compute_pi(iterations):
+    let i = 0
+    let pi = 0.0
+    let divisor = 1.0
+    let sign = 1.0
+    
+    while i < iterations:
+        pi = pi + (sign * (4.0 / divisor))
+        divisor = divisor + 2.0
+        sign = sign * (0.0 - 1.0)
+        i = i + 1
+    end
+    return pi
+end
+
+func matrix_multiply_sim(size):
+    let i = 0
+    let total = 0.0
+    while i < size:
+        let j = 0
+        while j < size:
+            let k = 0
+            while k < size:
+                total = total + (i * j * k) * 0.0001
+                k = k + 1
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    return total
+end
+
+show "Starting Throughput Benchmark"
+
+let start_pi = os.time()
+let pi_val = compute_pi(1000000)
+let end_pi = os.time()
+show "Pi calculation (1M iterations): ", end_pi - start_pi, "s (Result: ", pi_val, ")"
+
+let start_mat = os.time()
+let mat_val = matrix_multiply_sim(200)
+let end_mat = os.time()
+show "Matrix multiply sim (200x200x200): ", end_mat - start_mat, "s (Result: ", mat_val, ")"
+
+show "Throughput Benchmark Complete"

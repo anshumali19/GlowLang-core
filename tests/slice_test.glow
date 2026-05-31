@@ -1,0 +1,7 @@
+let s = "Industrial"
+show "s[0:4]:", s[0:4]
+show "s[4:]:", s[4:]
+show "s[:4]:", s[:4]
+show "s[:]:", s[:]
+let l = [1, 2, 3, 4]
+show "l[1:3]:", l[1:3]

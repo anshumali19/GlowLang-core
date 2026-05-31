@@ -1,0 +1,8 @@
+func f():
+    show "First f"
+end
+f()
+func f():
+    show "Second f"
+end
+f()

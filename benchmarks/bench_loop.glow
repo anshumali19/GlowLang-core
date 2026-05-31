@@ -6,4 +6,4 @@ while i < 100000:
     i = i + 1
 end
 
-print total
+show total

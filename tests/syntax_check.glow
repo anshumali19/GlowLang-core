@@ -1,0 +1,39 @@
+blueprint Animal:
+    action speak():
+        show "Animal speaks"
+    end
+end
+
+trait Flyer:
+    can fly():
+        show "I am flying!"
+    end
+end
+
+blueprint Bird extends Animal:
+    use Flyer
+    action speak():
+        show "Bird chirps"
+    end
+end
+
+let b = Bird()
+b.speak()
+b.fly()
+
+if b is Bird:
+    show "b is a Bird (using 'is' as '==')"
+end
+
+if true:
+    show "if works"
+end
+
+let x = 10
+if x is 10:
+    show "x is 10"
+end
+
+if x is not 20:
+    show "x is not 20"
+end

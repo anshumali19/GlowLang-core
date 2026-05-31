@@ -1,0 +1,32 @@
+/* Segment Tree for Range Sum Query */
+func build(arr, tree, node, start, endx):
+    if start == endx:
+        tree[node] = arr[start]
+        return 0
+    end
+    let mid = (start + endx) / 2
+    build(arr, tree, 2 * node, start, mid)
+    build(arr, tree, 2 * node + 1, mid + 1, endx)
+    tree[node] = tree[2 * node] + tree[2 * node + 1]
+    return 0
+end
+
+func query(tree, node, start, endx, l, r):
+    if r < start: return 0 end
+    if endx < l: return 0 end
+    if l <= start:
+        if endx <= r:
+            return tree[node]
+        end
+    end
+    let mid = (start + endx) / 2
+    let p1 = query(tree, 2 * node, start, mid, l, r)
+    let p2 = query(tree, 2 * node + 1, mid + 1, endx, l, r)
+    return p1 + p2
+end
+
+let arr = [1, 3, 5, 7, 9, 11]
+let n = 6
+let tree = range(4 * n)
+build(arr, tree, 1, 0, n - 1)
+show query(tree, 1, 0, n - 1, 1, 3)

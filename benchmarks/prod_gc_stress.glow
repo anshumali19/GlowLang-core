@@ -1,0 +1,38 @@
+/* Production GC Stress Test - GlowLang */
+
+class Node:
+    func init(v):
+        self.val = v
+        self.left = 0
+        self.right = 0
+    end
+end
+
+func create_object_tree(depth):
+    when depth <= 0:
+        return 0
+    end
+    
+    let n = Node()
+    n.init(depth)
+    n.left = create_object_tree(depth - 1)
+    n.right = create_object_tree(depth - 1)
+    return n
+end
+
+func stress_gc(iterations, depth):
+    show "Starting GC Stress Test: ", iterations, " iterations, depth ", depth
+    let i = 0
+    let root_hold = create_object_tree(depth) 
+    
+    while i < iterations:
+        let temp = create_object_tree(depth - 2)
+        i = i + 1
+    end
+    show "GC Stress Test Complete"
+end
+
+let start = os.time()
+stress_gc(100, 10)
+let end_time = os.time()
+show "Total Time: ", end_time - start

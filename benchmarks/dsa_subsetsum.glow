@@ -1,0 +1,28 @@
+/* Subset Sum Problem */
+func isSubsetSum(set, n, sum):
+    let subset = range(sum + 1)
+    let i = 0
+    while i <= sum:
+        subset[i] = false
+        i = i + 1
+    end
+    
+    subset[0] = true
+    
+    i = 0
+    while i < n:
+        let j = sum
+        while j >= set[i]:
+            if subset[j - set[i]] == true:
+                subset[j] = true
+            end
+            j = j - 1
+        end
+        i = i + 1
+    end
+    return subset[sum]
+end
+
+let set = [3, 34, 4, 12, 5, 2]
+let sum = 9
+show isSubsetSum(set, 6, sum)
