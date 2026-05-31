@@ -174,5 +174,42 @@ void optimize_bytecode(Bytecode *bc) {
         }
     }
     
+    // Pass 4: Loop Auto-Vectorization
+    for (int i = 0; i < bc->count - 12; i++) {
+        Instruction *lt = &bc->code[i];
+        if (lt->op == OP_LTE || lt->op == OP_LT) {
+            Instruction *jf = &bc->code[i+1];
+            if (jf->op == OP_JUMP_IF_FALSE) {
+                int exit_pc = jf->arg;
+                // Pattern for res[i] = a[i] + b[i]
+                // 4: LOAD_VAR (i) -> r_idx
+                // 34: INDEX (a, r_idx) -> r_a
+                // 4: LOAD_VAR (i) -> r_idx2
+                // 34: INDEX (b, r_idx2) -> r_b
+                // 6: ADD (r_a, r_b) -> r_res
+                // 36: STORE_INDEX (res, r_idx, r_res)
+                
+                if (bc->code[i+2].op == OP_LOAD_VAR && 
+                    bc->code[i+3].op == OP_INDEX &&
+                    bc->code[i+4].op == OP_LOAD_VAR &&
+                    bc->code[i+5].op == OP_INDEX &&
+                    bc->code[i+6].op == OP_ADD &&
+                    bc->code[i+7].op == OP_STORE_INDEX) {
+                    
+                    // Match!
+                    jf->op = OP_SIMD_ADD;
+                    jf->r0 = bc->code[i+7].r0; // target collection
+                    jf->r1 = bc->code[i+3].r1; // a collection
+                    jf->r2 = bc->code[i+5].r1; // b collection
+                    
+                    // Cleanup loop body
+                    for (int k = i+2; k < exit_pc && k < bc->count - 1; k++) {
+                        if (bc->code[k].op != OP_JUMP) bc->code[k].op = OP_NOP;
+                    }
+                }
+            }
+        }
+    }
+    
     free(is_jump_target);
 }
