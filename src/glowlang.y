@@ -64,11 +64,15 @@ FuncEntry* func_get(const char *name);
 static Instance* instance_new(Class *k);
 static Value bound_method_new(Value instance, FuncEntry *method);
 
-Value jit_call_helper(FuncEntry *fe, int argc, Value *args) {
+Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
     if (fe && fe->body) {
         TypeSignature sig = compute_signature(args, fe->param_count);
         void *jit = func_get_specialization(fe, sig);
         if (jit && jit != (void*)1) {
+            if (pc) {
+                pc->cache[0].key = (void*)sig;
+                pc->cache[0].val = (intptr_t)jit;
+            }
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
             return ((JITFunc)jit)(args, &deopt_pc);
@@ -78,16 +82,60 @@ Value jit_call_helper(FuncEntry *fe, int argc, Value *args) {
     return value_none();
 }
 
-Value jit_call_helper_name(const char *name, int argc, Value *args) {
+Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
     FuncEntry *fe = func_get(name);
-    if (fe) return jit_call_helper(fe, argc, args);
+    if (fe) return jit_call_helper(fe, argc, args, pc);
     Value v = var_get(name);
-    if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
-        ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(v)));
-        if (ot == OBJ_NATIVE_FUNC) return AS_NATIVE_FUNC(v)->func(argc, args);
+    return jit_call_helper_val(v, argc, args, pc);
+}
+
+Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
+    if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(callee);
+        if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(callee)));
+        if (ot == OBJ_BOUND_METHOD) {
+            BoundMethod *bm = AS_BOUND_METHOD(callee);
+            return jit_call_helper(bm->method, argc, args, pc);
+        }
+        if (ot == OBJ_CLOSURE) {
+            Closure *c = AS_CLOSURE(callee);
+            if (c->body) return run_bytecode(c->body, NULL, c, (int)(args - vm_stack));
+        }
+        if (ot == OBJ_NATIVE_FUNC) return AS_NATIVE_FUNC(callee)->func(argc, args);
     }
     return value_none();
+}
+
+Value packed_array_get_jit(Value v_pa, Value v_idx) {
+    if (GET_TYPE(v_pa) != VAL_OBJECT || GET_OBJ_TYPE(v_pa) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *pa = AS_PACKED_ARRAY(v_pa);
+    int idx = (int)AS_INT(v_idx);
+    if (idx < 0 || idx >= pa->size) return value_none();
+    if (pa->type == PACKED_INT64) return value_int(((int64_t*)pa->data)[idx]);
+    return value_float(((double*)pa->data)[idx]);
+}
+
+void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val) {
+    if (GET_TYPE(v_pa) != VAL_OBJECT || GET_OBJ_TYPE(v_pa) != OBJ_PACKED_ARRAY) return;
+    PackedArray *pa = AS_PACKED_ARRAY(v_pa);
+    int idx = (int)AS_INT(v_idx);
+    if (idx < 0 || idx >= pa->size) return;
+    if (pa->type == PACKED_INT64) ((int64_t*)pa->data)[idx] = AS_INT(v_val);
+    else ((double*)pa->data)[idx] = AS_FLOAT(v_val);
+}
+
+void simd_add_helper(Value v_a, Value v_b, Value v_target) {
+    PackedArray *pa = AS_PACKED_ARRAY(v_a), *pb = AS_PACKED_ARRAY(v_b), *pt = AS_PACKED_ARRAY(v_target);
+    int size = pa->size;
+    if (pa->type == PACKED_FLOAT64) {
+        double *da = (double*)pa->data, *db = (double*)pb->data, *dt = (double*)pt->data;
+        #pragma GCC ivdep
+        for (int i=0; i<size; i++) dt[i] = da[i] + db[i];
+    } else {
+        int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *it = (int64_t*)pt->data;
+        #pragma GCC ivdep
+        for (int i=0; i<size; i++) it[i] = ia[i] + ib[i];
+    }
 }
 
 double val_to_double(Value v) {
@@ -1823,6 +1871,11 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 R(pc->r0) = value_packed(res);
             } else R(pc->r0) = value_none();
         } else R(pc->r0) = value_none();
+        pc++; DISPATCH();
+    }
+    l_OP_SIMD_ADD: {
+        Value a = R(pc->r1), b = R(pc->r2), target = R(pc->r0);
+        simd_add_helper(a, b, target);
         pc++; DISPATCH();
     }
     l_OP_NOP: pc++; DISPATCH();
