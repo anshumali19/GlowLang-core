@@ -122,6 +122,8 @@ static inline Value value_bound_method(BoundMethod *bm) { return make_value(VAL_
 static inline Value value_native_func(NativeFunc *nf) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)nf); }
 static inline Value value_none(void) { return make_value(VAL_NONE, 0); }
 
+typedef uint64_t TypeSignature;
+
 typedef struct GlobalTable {
     const char **names;
     Value *values;
@@ -132,8 +134,13 @@ typedef struct GlobalTable {
 extern GlobalTable global_table;
 int global_get_slot(const char *name);
 
-extern Value jit_call_helper(FuncEntry *fe, int argc, Value *args);
-extern Value jit_call_helper_name(const char *name, int argc, Value *args);
+extern TypeSignature compute_signature(Value *regs, int count);
+extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
+extern Value jit_call_helper_name(const char *name, int argc, Value *args, struct Instruction *pc);
+extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
+extern Value packed_array_get_jit(Value v_pa, Value v_idx);
+extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
+extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
 extern Value value_from_double(double d);
 
 /* ================================================================
@@ -238,7 +245,8 @@ typedef enum {
     OP_NOP,
     OP_TRACE_ENTER,
     OP_PACKED_ADD,
-    OP_PACKED_SUB
+    OP_PACKED_SUB,
+    OP_SIMD_ADD
 } OpCode;
 
 typedef struct {
