@@ -1,0 +1,14 @@
+func bench(n):
+    let i = 0
+    let sum = 0
+    while i < n:
+        sum = sum + 1
+        i = i + 1
+    end
+    return sum
+end
+
+let start = os.time()
+bench(200000)
+let end_time = os.time()
+show "200k Iterations Time: ", end_time - start

@@ -1,0 +1,47 @@
+/* Binary Search Tree */
+blueprint Node:
+    can init(v):
+        self.v = v
+        self.left = 0
+        self.right = 0
+    end
+end
+
+blueprint BST:
+    can init():
+        self.root = 0
+    end
+    can insert(node, v):
+        if node == 0:
+            let n = Node()
+            n.init(v)
+            return n
+        end
+        if v < node.v:
+            node.left = self.insert(node.left, v)
+        end
+        if v > node.v:
+            node.right = self.insert(node.right, v)
+        end
+        return node
+    end
+    can search(node, v):
+        if node == 0:
+            return false
+        end
+        if node.v == v:
+            return true
+        end
+        if v < node.v:
+            return self.search(node.left, v)
+        end
+        return self.search(node.right, v)
+    end
+end
+let tree = BST()
+tree.init()
+tree.root = tree.insert(tree.root, 10)
+tree.root = tree.insert(tree.root, 5)
+tree.root = tree.insert(tree.root, 15)
+show tree.search(tree.root, 5)
+show tree.search(tree.root, 20)

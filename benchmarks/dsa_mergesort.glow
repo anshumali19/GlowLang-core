@@ -73,7 +73,7 @@ func merge(arr, left, mid, right):
 end
 
 /* Generate worst-case reverse sorted array */
-n = 500
+n = 50
 data = []
 i = n
 while i > 0:

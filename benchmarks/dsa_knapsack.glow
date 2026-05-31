@@ -1,0 +1,29 @@
+/* Knapsack Problem DP */
+func max(a, b):
+    if a > b: return a end
+    return b
+end
+
+func knapsack(W, wt, val, n):
+    let dp = range(W + 1)
+    let i = 0
+    while i <= W:
+        dp[i] = 0
+        i = i + 1
+    end
+    
+    let j = 0
+    while j < n:
+        let w = W
+        while w >= wt[j]:
+            dp[w] = max(dp[w], dp[w - wt[j]] + val[j])
+            w = w - 1
+        end
+        j = j + 1
+    end
+    return dp[W]
+end
+
+let val = [60, 100, 120]
+let wt = [10, 20, 30]
+show knapsack(50, wt, val, 3)

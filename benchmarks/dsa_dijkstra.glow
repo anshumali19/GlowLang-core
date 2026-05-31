@@ -1,0 +1,64 @@
+/* Dijkstra Shortest Path */
+func dijkstra(graph, V, src):
+    let dist = range(V)
+    let sptSet = range(V)
+    let i = 0
+    while i < V:
+        dist[i] = 999999
+        sptSet[i] = 0
+        i = i + 1
+    end
+    dist[src] = 0
+    
+    let count = 0
+    while count < V - 1:
+        let u = minDistance(dist, sptSet, V)
+        sptSet[u] = 1
+        
+        let v = 0
+        let row = graph[u]
+        while v < V:
+            if sptSet[v] == 0:
+                if row[v] != 0:
+                    if dist[u] != 999999:
+                        if dist[u] + row[v] < dist[v]:
+                            dist[v] = dist[u] + row[v]
+                        end
+                    end
+                end
+            end
+            v = v + 1
+        end
+        count = count + 1
+    end
+    return dist
+end
+
+func minDistance(dist, sptSet, V):
+    let min_val = 999999
+    let min_index = 0 - 1
+    let v = 0
+    while v < V:
+        if sptSet[v] == 0:
+            if dist[v] <= min_val:
+                min_val = dist[v]
+                min_index = v
+            end
+        end
+        v = v + 1
+    end
+    return min_index
+end
+
+let graph = [
+    [0, 4, 0, 0, 0, 0, 0, 8, 0],
+    [4, 0, 8, 0, 0, 0, 0, 11, 0],
+    [0, 8, 0, 7, 0, 4, 0, 0, 2],
+    [0, 0, 7, 0, 9, 14, 0, 0, 0],
+    [0, 0, 0, 9, 0, 10, 0, 0, 0],
+    [0, 0, 4, 14, 10, 0, 2, 0, 0],
+    [0, 0, 0, 0, 0, 2, 0, 1, 6],
+    [8, 11, 0, 0, 0, 0, 1, 0, 7],
+    [0, 0, 2, 0, 0, 0, 6, 7, 0]
+]
+show dijkstra(graph, 9, 0)

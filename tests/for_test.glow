@@ -1,0 +1,4 @@
+let l = [10, 20, 30]
+for each x in l:
+    show "x:", x
+end

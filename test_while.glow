@@ -1,0 +1,11 @@
+func run_loop():
+    let i = 0
+    let n1 = 1
+    show "start"
+    while i < n1:
+        show "i =", i
+        i = i + 1
+    end
+    show "end"
+end
+run_loop()

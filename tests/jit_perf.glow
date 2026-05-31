@@ -1,0 +1,7 @@
+func loop(m):
+    let i = 0
+    while i < m:
+        i = i + 1
+    end
+end
+loop(10000000)

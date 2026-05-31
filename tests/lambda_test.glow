@@ -1,0 +1,4 @@
+let g = func(x):
+    return x + 10
+end
+show "g(5):", g(5)

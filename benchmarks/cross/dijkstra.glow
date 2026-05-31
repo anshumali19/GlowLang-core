@@ -1,0 +1,64 @@
+
+// Dijkstra Cross-Bench (1000 nodes)
+func minDistance(dist, sptSet, V):
+    let min = 999999
+    let min_index = 0 - 1
+    let v = 0
+    while v < V:
+        if sptSet[v] == false and dist[v] <= min:
+            min = dist[v]
+            min_index = v
+        end
+        v = v + 1
+    end
+    return min_index
+end
+
+func dijkstra(graph, src, V):
+    let dist = range(V)
+    let sptSet = range(V)
+    let i = 0
+    while i < V:
+        dist[i] = 999999
+        sptSet[i] = false
+        i = i + 1
+    end
+    dist[src] = 0
+    
+    let count = 0
+    while count < V - 1:
+        let u = minDistance(dist, sptSet, V)
+        if u == 0 - 1:
+            break
+        end
+        sptSet[u] = true
+        let v = 0
+        while v < V:
+            if sptSet[v] == false and graph[u][v] != 0 and dist[u] != 999999 and dist[u] + graph[u][v] < dist[v]:
+                dist[v] = dist[u] + graph[u][v]
+            end
+            v = v + 1
+        end
+        count = count + 1
+    end
+end
+
+let V = 1000
+let graph = range(V)
+let i = 0
+while i < V:
+    graph[i] = range(V)
+    let j = 0
+    while j < V:
+        if i == j:
+            graph[i][j] = 0
+        otherwise:
+            graph[i][j] = (i * j + 1) % 100
+        end
+        j = j + 1
+    end
+    i = i + 1
+end
+
+dijkstra(graph, 0, V)
+print "Done"

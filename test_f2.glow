@@ -1,0 +1,4 @@
+func f(a):
+  return a
+end
+print f(42)

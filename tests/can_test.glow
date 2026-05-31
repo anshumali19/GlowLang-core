@@ -1,0 +1,7 @@
+blueprint Dog:
+    can bark():
+        show "Woof!"
+    end
+end
+let d = Dog()
+d.bark()

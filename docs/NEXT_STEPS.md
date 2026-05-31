@@ -1,4 +1,4 @@
-# GlowLang 2.0 - Roadmap & Next Steps
+# GlowLang - Roadmap & Next Steps
 
 ## Current Status
 - [x] **Phase 1-3: Fast-Glow VM** (Direct Threading, NaN Boxing, Index-based locals).

@@ -1,0 +1,9 @@
+func outer(x):
+    let a = x
+    func inner(y):
+        let b = y
+        return a + b
+    end
+    return inner(10)
+end
+show "outer(5) =", outer(5)

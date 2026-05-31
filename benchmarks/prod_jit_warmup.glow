@@ -1,0 +1,30 @@
+/* Production JIT Warmup Benchmark - GlowLang */
+
+func fast_task(n):
+    let i = 0
+    let res = 0
+    while i < n:
+        res = res + i
+        i = i + 1
+    end
+    return res
+end
+
+func measure_warmup(batches, batch_size):
+    show "Starting JIT Warmup Analysis: ", batches, " batches of ", batch_size, " calls"
+    let b = 0
+    while b < batches:
+        let start = os.time()
+        let i = 0
+        while i < batch_size:
+            fast_task(100)
+            i = i + 1
+        end
+        let end_time = os.time()
+        show "Batch ", b, " time: ", (end_time - start) * 1000, "ms"
+        b = b + 1
+    end
+    show "JIT Warmup Analysis Complete"
+end
+
+measure_warmup(20, 1000)
