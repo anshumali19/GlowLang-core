@@ -1,0 +1,15 @@
+
+// Fibonacci Cross-Bench
+func fib(n):
+    if n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+i = 0
+total = 0
+while i < 30:
+    total = total + fib(i)
+    i = i + 1
+end
+print total

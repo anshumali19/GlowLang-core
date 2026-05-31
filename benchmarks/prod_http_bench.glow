@@ -1,0 +1,27 @@
+/* High Concurrency HTTP Server Benchmark */
+
+func handle_client(client):
+    let request = client.read()
+    // Minimal HTTP response
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!"
+    client.write(response)
+    client.close()
+end
+
+func start_server(port):
+    show "Starting HTTP Server on port ", port
+    let server = http.listen(port)
+    when server == 0:
+        show "Failed to bind to port"
+        return 0
+    end
+    
+    while 1:
+        let client = server.accept()
+        when client != 0:
+            spawn handle_client(client)
+        end
+    end
+end
+
+start_server(8080)

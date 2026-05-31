@@ -1,0 +1,21 @@
+func hot_loop(n):
+    let i = 0
+    let sum = 0
+    while i < n:
+        sum = sum + i
+        i = i + 1
+    end
+    return sum
+end
+
+# Warmup
+let k = 0
+while k < 110:
+    hot_loop(10)
+    k = k + 1
+end
+
+let start = os.time()
+hot_loop(100000000) # 100M
+let end_time = os.time()
+show "JIT Peak Speed (100M iterations): ", end_time - start, " s"

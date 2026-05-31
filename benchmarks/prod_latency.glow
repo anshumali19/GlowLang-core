@@ -1,0 +1,32 @@
+/* Production Tail Latency Benchmark - GlowLang */
+
+func small_task():
+    let i = 0
+    let a = 0
+    while i < 1000:
+        a = a + i
+        i = i + 1
+    end
+end
+
+func measure_latency(iterations):
+    show "Measuring Latency for ", iterations, " tasks"
+    let i = 0
+    while i < iterations:
+        let t1 = os.time()
+        small_task()
+        let t2 = os.time()
+        
+        # We only show if it takes longer than expected to identify outliers
+        # (Assuming small_task is very fast)
+        let diff = (t2 - t1) * 1000
+        when diff > 1.0: # Show outliers > 1ms
+            show "Outlier at iteration ", i, ": ", diff, "ms"
+        end
+        
+        i = i + 1
+    end
+    show "Latency Measurement Complete"
+end
+
+measure_latency(10000)

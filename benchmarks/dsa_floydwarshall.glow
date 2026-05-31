@@ -1,0 +1,44 @@
+/* Floyd-Warshall Algorithm */
+func floydWarshall(graph, V):
+    let dist = range(V)
+    let i = 0
+    while i < V:
+        let row = range(V)
+        let orig_row = graph[i]
+        let j = 0
+        while j < V:
+            row[j] = orig_row[j]
+            j = j + 1
+        end
+        dist[i] = row
+        i = i + 1
+    end
+    
+    let k = 0
+    while k < V:
+        i = 0
+        while i < V:
+            let j = 0
+            while j < V:
+                let dist_i = dist[i]
+                let dist_k = dist[k]
+                if dist_i[k] + dist_k[j] < dist_i[j]:
+                    dist_i[j] = dist_i[k] + dist_k[j]
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        k = k + 1
+    end
+    return dist
+end
+
+let INF = 999999
+let graph = [
+    [0, 5, INF, 10],
+    [INF, 0, 3, INF],
+    [INF, INF, 0, 1],
+    [INF, INF, INF, 0]
+]
+show floydWarshall(graph, 4)

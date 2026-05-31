@@ -1,0 +1,33 @@
+/* Production Multicore Scaling Benchmark - GlowLang */
+
+func worker(id, iterations):
+    let i = 0
+    let res = 0.0
+    while i < iterations:
+        res = res + (i * 0.0001)
+        i = i + 1
+    end
+    show "Worker ", id, " finished"
+end
+
+func run_parallel(num_threads, iterations):
+    show "Spawning ", num_threads, " workers with ", iterations, " iterations each"
+    let t = 0
+    while t < num_threads:
+        spawn worker(t, iterations)
+        t = t + 1
+    end
+    
+    # Main thread work to keep the process alive while workers run
+    # This is a proxy for waiting since no join() is available.
+    let i = 0
+    while i < iterations * 2:
+        i = i + 1
+    end
+    show "Main thread work complete"
+end
+
+let start = os.time()
+run_parallel(4, 1000000)
+let end_time = os.time()
+show "Approximate Parallel Execution Time: ", end_time - start, "s"

@@ -1,0 +1,55 @@
+/* Trie Prefix Tree */
+blueprint TrieNode:
+    can init():
+        self.children = range(26)
+        let i = 0
+        while i < 26:
+            self.children[i] = 0
+            i = i + 1
+        end
+        self.isEndOfWord = false
+    end
+end
+
+blueprint Trie:
+    can init():
+        self.root = TrieNode()
+        self.root.init()
+    end
+    can insert(word, length):
+        let pCrawl = self.root
+        let i = 0
+        while i < length:
+            let index = word[i] - 97
+            let children = pCrawl.children
+            if children[index] == 0:
+                let newNode = TrieNode()
+                newNode.init()
+                children[index] = newNode
+            end
+            pCrawl = children[index]
+            i = i + 1
+        end
+        pCrawl.isEndOfWord = true
+    end
+    can search(word, length):
+        let pCrawl = self.root
+        let i = 0
+        while i < length:
+            let index = word[i] - 97
+            let children = pCrawl.children
+            if children[index] == 0:
+                return false
+            end
+            pCrawl = children[index]
+            i = i + 1
+        end
+        return pCrawl.isEndOfWord
+    end
+end
+
+let t = Trie()
+t.init()
+let word1 = [97, 112, 112, 108, 101] /* apple */
+t.insert(word1, 5)
+show t.search(word1, 5)

@@ -1,0 +1,8 @@
+func sum(n):
+    if n == 0:
+        return 0
+    end
+    let current = n
+    return current + sum(n-1)
+end
+show "sum(5) =", sum(5)

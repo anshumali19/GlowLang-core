@@ -1,0 +1,57 @@
+/* Production Data-Oriented Simulation (ECS-like) */
+
+class Entity:
+    func init(id, x, y, vx, vy):
+        self.id = id
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+    end
+    
+    func update():
+        self.x = self.x + self.vx
+        self.y = self.y + self.vy
+        
+        when self.x > 1000:
+            self.vx = 0 - self.vx
+        end
+        when self.x < 0:
+            self.vx = 0 - self.vx
+        end
+        when self.y > 1000:
+            self.vy = 0 - self.vy
+        end
+        when self.y < 0:
+            self.vy = 0 - self.vy
+        end
+    end
+end
+
+func run_simulation(entity_count, steps):
+    show "Running ECS Simulation: ", entity_count, " entities, ", steps, " steps"
+    let entities = []
+    let i = 0
+    while i < entity_count:
+        let e = Entity()
+        e.init(i, i % 1000, (i * 7) % 1000, 1, 1)
+        entities = entities + [e]
+        i = i + 1
+    end
+    
+    let s = 0
+    while s < steps:
+        let j = 0
+        while j < entity_count:
+            entities[j].update()
+            j = j + 1
+        end
+        s = s + 1
+    end
+    show "Simulation Complete"
+end
+
+let start = os.time()
+run_simulation(1000, 500)
+let end_time = os.time()
+show "Total Time: ", end_time - start

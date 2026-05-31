@@ -1,0 +1,49 @@
+/* Rabin-Karp String Matching */
+func search(pat, txt, q, d, M, N):
+    let p = 0
+    let t = 0
+    let h = 1
+    let i = 0
+    let j = 0
+
+    i = 0
+    while i < M - 1:
+        h = (h * d) % q
+        i = i + 1
+    end
+
+    i = 0
+    while i < M:
+        p = (d * p + pat[i]) % q
+        t = (d * t + txt[i]) % q
+        i = i + 1
+    end
+
+    i = 0
+    while i <= N - M:
+        if p == t:
+            let match = true
+            j = 0
+            while j < M:
+                if txt[i + j] != pat[j]:
+                    match = false
+                end
+                j = j + 1
+            end
+            if match == true:
+                show "Pattern found at index ", i
+            end
+        end
+        if i < N - M:
+            t = (d * (t - txt[i] * h) + txt[i + M]) % q
+            if t < 0:
+                t = t + q
+            end
+        end
+        i = i + 1
+    end
+end
+
+let txt = [71, 69, 69, 75, 83, 32, 70, 79, 82, 32, 71, 69, 69, 75, 83]
+let pat = [71, 69, 69, 75, 83]
+search(pat, txt, 101, 256, 5, 15)

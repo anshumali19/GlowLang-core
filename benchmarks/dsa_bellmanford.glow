@@ -1,0 +1,41 @@
+/* Bellman-Ford Algorithm */
+func bellmanFord(edges, V, E, src):
+    let dist = range(V)
+    let i = 0
+    while i < V:
+        dist[i] = 999999
+        i = i + 1
+    end
+    dist[src] = 0
+    
+    i = 1
+    while i < V:
+        let j = 0
+        while j < E:
+            let edge = edges[j]
+            let u = edge[0]
+            let v = edge[1]
+            let weight = edge[2]
+            if dist[u] != 999999:
+                if dist[u] + weight < dist[v]:
+                    dist[v] = dist[u] + weight
+                end
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    return dist
+end
+
+let edges = [
+    [0, 1, -1],
+    [0, 2, 4],
+    [1, 2, 3],
+    [1, 3, 2],
+    [1, 4, 2],
+    [3, 2, 5],
+    [3, 1, 1],
+    [4, 3, -3]
+]
+show bellmanFord(edges, 5, 8, 0)
