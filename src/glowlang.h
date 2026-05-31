@@ -6,17 +6,18 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "arena.h"
 
 /* ================================================================
  *  VALUE TYPES
  * ================================================================ */
 typedef enum {
-    VAL_INT=0, VAL_FLOAT=1, VAL_BOOL=2, VAL_STRING=3, VAL_LIST=4, VAL_DICT=5, VAL_CLOSURE=6, VAL_OBJECT=7
+    VAL_INT=0, VAL_FLOAT=1, VAL_BOOL=2, VAL_STRING=3, VAL_LIST=4, VAL_DICT=5, VAL_OBJECT=6, VAL_NONE=7, VAL_DEOPT=15, VAL_TRACE_EXIT=16
 } ValueType;
 
-#define VAL_NONE VAL_OBJECT
 
 typedef uint64_t Value;
+
 
 /* Forward declarations */
 typedef struct List List;
@@ -31,20 +32,39 @@ typedef struct Shape Shape;
 typedef struct Node Node;
 typedef struct Bytecode Bytecode;
 typedef struct Instruction Instruction;
+typedef struct FuncEntry FuncEntry;
 
 /* ================================================================
  *  GC & OBJECTS
  * ================================================================ */
 typedef enum {
-    OBJ_STRING, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC
+    OBJ_STRING, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY
 } ObjType;
 
 typedef struct GCObject {
     struct GCObject *next;
     unsigned char type;
     unsigned char marked;
+    unsigned char is_block_allocated;
+    unsigned char generation;
+    unsigned char in_remembered_set;
+    unsigned char is_stack_allocated;
+    void *block_ptr;
     size_t sz;
 } GCObject;
+
+typedef enum {
+    PACKED_INT64,
+    PACKED_FLOAT64
+} PackedType;
+
+typedef struct {
+    GCObject obj;
+    PackedType type;
+    int size;
+    int capacity;
+    void *data;
+} PackedArray;
 
 typedef struct {
     GCObject obj;
@@ -79,6 +99,7 @@ static inline Instance* AS_INSTANCE(Value v) { return (Instance*)(uintptr_t)(v &
 static inline BoundMethod* AS_BOUND_METHOD(Value v) { return (BoundMethod*)(uintptr_t)(v & MASK_PAYLOAD); }
 static inline Trait* AS_TRAIT(Value v) { return (Trait*)(uintptr_t)(v & MASK_PAYLOAD); }
 static inline NativeFunc* AS_NATIVE_FUNC(Value v) { return (NativeFunc*)(uintptr_t)(v & MASK_PAYLOAD); }
+static inline PackedArray* AS_PACKED_ARRAY(Value v) { return (PackedArray*)(uintptr_t)(v & MASK_PAYLOAD); }
 
 /* Value Constructors */
 static inline Value make_value(uint64_t type, uint64_t payload) {
@@ -90,8 +111,9 @@ static inline Value value_int(int64_t v) { return make_value(VAL_INT, (uint64_t)
 static inline Value value_float(double v) { Value val; memcpy(&val, &v, sizeof(v)); return val; }
 static inline Value value_bool(int v) { return make_value(VAL_BOOL, v ? 1 : 0); }
 static inline Value value_list(List *l) { return make_value(VAL_LIST, (uint64_t)(uintptr_t)l); }
+static inline Value value_packed(PackedArray *pa) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)pa); }
 static inline Value value_dict(Dict *d) { return make_value(VAL_DICT, (uint64_t)(uintptr_t)d); }
-static inline Value value_closure(Closure *c) { return make_value(VAL_CLOSURE, (uint64_t)(uintptr_t)c); }
+static inline Value value_closure(Closure *c) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)c); }
 static inline Value value_class(Class *c) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)c); }
 static inline Value value_trait(Trait *t) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)t); }
 static inline Value value_instance(Instance *i) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)i); }
@@ -100,35 +122,109 @@ static inline Value value_bound_method(BoundMethod *bm) { return make_value(VAL_
 static inline Value value_native_func(NativeFunc *nf) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)nf); }
 static inline Value value_none(void) { return make_value(VAL_NONE, 0); }
 
+typedef struct GlobalTable {
+    const char **names;
+    Value *values;
+    int count;
+    int capacity;
+} GlobalTable;
+
+extern GlobalTable global_table;
+int global_get_slot(const char *name);
+
+extern Value jit_call_helper(FuncEntry *fe, int argc, Value *args);
+extern Value jit_call_helper_name(const char *name, int argc, Value *args);
+extern Value value_from_double(double d);
+
 /* ================================================================
  *  BYTECODE
  * ================================================================ */
 typedef enum {
-    OP_CONST_INT, OP_CONST_FLOAT, OP_CONST_STRING, OP_CONST_BOOL,
-    OP_LOAD_VAR, OP_STORE_VAR,
-    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_NEG,
-    OP_LT, OP_GT, OP_LTE, OP_GTE, OP_EQ, OP_NEQ,
-    OP_AND, OP_OR, OP_NOT,
-    OP_STRING_CONCAT,
-    OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE,
-    OP_LEN, OP_RANGE, OP_TYPE, OP_APPEND, OP_INPUT, OP_SHOW, OP_WRITE,
-    OP_LIST_LITERAL, OP_DICT_LITERAL,
-    OP_INDEX, OP_SLICE, OP_STORE_INDEX,
-    OP_FUNC_DEF, OP_CALL, OP_RETURN,
-    OP_FOR_EACH, OP_FOR_EACH_PAIR,
-    OP_STOP, OP_SKIP,
+    OP_CONST_INT,
+    OP_CONST_FLOAT,
+    OP_CONST_STRING,
+    OP_CONST_BOOL,
+    OP_LOAD_VAR,
+    OP_STORE_VAR,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_MOD,
+    OP_POW,
+    OP_NEG,
+    OP_LT,
+    OP_GT,
+    OP_LTE,
+    OP_GTE,
+    OP_EQ,
+    OP_NEQ,
+    OP_AND,
+    OP_OR,
+    OP_NOT,
+    OP_JUMP,
+    OP_JUMP_IF_FALSE,
+    OP_JUMP_IF_TRUE,
+    OP_LEN,
+    OP_RANGE,
+    OP_TYPE,
+    OP_APPEND,
+    OP_INPUT,
+    OP_SHOW,
+    OP_WRITE,
+    OP_LIST_LITERAL,
+    OP_DICT_LITERAL,
+    OP_INDEX,
+    OP_SLICE,
+    OP_STORE_INDEX,
+    OP_FUNC_DEF,
+    OP_CALL,
+    OP_RETURN,
+    OP_FOR_EACH,
+    OP_FOR_EACH_PAIR,
+    OP_STOP,
+    OP_SKIP,
     OP_POP,
-    OP_PUSH_SCOPE, OP_POP_SCOPE, OP_STORE_LET,
-    OP_LOAD_LOCAL, OP_STORE_LOCAL,
-    OP_DICT_KEYS, OP_DICT_VALUES, OP_DICT_HAS, OP_DICT_REMOVE, OP_DICT_MERGE,
-    OP_MATH_ABS, OP_MATH_MIN, OP_MATH_MAX, OP_MATH_ROUND, OP_MATH_FLOOR, OP_MATH_CEIL, OP_MATH_SQRT,
-    OP_STR_UPPER, OP_STR_LOWER, OP_STR_TRIM, OP_STR_FIND, OP_STR_REPLACE, OP_STR_STARTSWITH, OP_STR_ENDSWITH, OP_STR_SPLIT,
-    OP_LIST_PUSH, OP_LIST_POP, OP_LIST_INSERT, OP_LIST_REMOVE, OP_LIST_CONTAINS, OP_LIST_SORT, OP_LIST_REVERSE,
-    OP_FILE_READ, OP_FILE_WRITE, OP_FILE_APPEND,
+    OP_PUSH_SCOPE,
+    OP_POP_SCOPE,
+    OP_STORE_LET,
+    OP_LOAD_LOCAL,
+    OP_STORE_LOCAL,
+    OP_DICT_KEYS,
+    OP_DICT_VALUES,
+    OP_DICT_HAS,
+    OP_DICT_REMOVE,
+    OP_DICT_MERGE,
+    OP_MATH_ABS,
+    OP_MATH_MIN,
+    OP_MATH_MAX,
+    OP_MATH_ROUND,
+    OP_MATH_FLOOR,
+    OP_MATH_CEIL,
+    OP_MATH_SQRT,
+    OP_STR_UPPER,
+    OP_STR_LOWER,
+    OP_STR_TRIM,
+    OP_STR_FIND,
+    OP_STR_REPLACE,
+    OP_STR_STARTSWITH,
+    OP_STR_ENDSWITH,
+    OP_STR_SPLIT,
+    OP_LIST_PUSH,
+    OP_LIST_POP,
+    OP_LIST_INSERT,
+    OP_LIST_REMOVE,
+    OP_LIST_CONTAINS,
+    OP_LIST_SORT,
+    OP_LIST_REVERSE,
+    OP_FILE_READ,
+    OP_FILE_WRITE,
+    OP_FILE_APPEND,
     OP_FSTRING,
     OP_LIST_COMP,
     OP_THROW,
-    OP_TRY_START, OP_TRY_END,
+    OP_TRY_START,
+    OP_TRY_END,
     OP_LAMBDA,
     OP_CALL_VALUE,
     OP_CLASS_DEF,
@@ -137,17 +233,53 @@ typedef enum {
     OP_USE_TRAIT,
     OP_GET_PROPERTY,
     OP_SET_PROPERTY,
-    OP_SPAWN
+    OP_SPAWN,
+    OP_MOVE,
+    OP_NOP,
+    OP_TRACE_ENTER,
+    OP_PACKED_ADD,
+    OP_PACKED_SUB
 } OpCode;
 
+typedef struct {
+    void *key;
+    intptr_t val;
+} CacheEntry;
 struct Instruction {
     OpCode op;
+    OpCode original_op;
     int arg;
     intptr_t ptr;
-    void *cache_key;
-    intptr_t cache_val;
+    CacheEntry cache[4];
+    unsigned char cache_next;
     long exec_count;
+    unsigned short r0, r1, r2;
+    unsigned char type; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
+    unsigned char is_stack_alloc;
+    void *trace;
 };
+
+typedef struct Trace {
+    Instruction *instructions;
+    int *original_offsets;
+    int count;
+    int capacity;
+    void *jit_code;
+    size_t jit_size;
+    Instruction *start_pc;
+} Trace;
+
+typedef struct TraceMap {
+    Instruction *pc;
+    Trace *trace;
+    struct TraceMap *next;
+} TraceMap;
+
+typedef struct {
+    int start_pc;
+    int end_pc;
+    int handler_pc;
+} ExceptionEntry;
 
 struct Bytecode {
     Instruction *code;
@@ -157,6 +289,8 @@ struct Bytecode {
     size_t jit_size;
     int jit_failed;
     int local_count;
+    ExceptionEntry *exception_table;
+    int exception_count;
 };
 
 /* ================================================================
@@ -173,6 +307,7 @@ typedef enum {
     NODE_AND, NODE_OR, NODE_NOT,
     NODE_IF, NODE_WHILE, NODE_UNTIL, NODE_REPEAT,
     NODE_FOR_EACH,
+    NODE_FOR_RANGE,
     NODE_STOP, NODE_SKIP,
     NODE_LET,
     NODE_FUNC_DEF, NODE_CALL, NODE_RETURN,
@@ -194,7 +329,9 @@ typedef enum {
     NODE_CLASS,
     NODE_TRAIT,
     NODE_USE_TRAIT,
-    NODE_SPAWN
+    NODE_SPAWN,
+    NODE_PACKED_ADD,
+    NODE_PACKED_SUB
 } NodeType;
 
 struct Node {
@@ -230,6 +367,14 @@ struct NativeFunc {
 
 typedef struct FuncEntry FuncEntry;
 
+typedef uint64_t TypeSignature;
+
+typedef struct {
+    TypeSignature signature;
+    void *jit_code;
+    size_t jit_size;
+} Specialization;
+
 struct FuncEntry {
     const char *name;
     int param_count;
@@ -240,6 +385,9 @@ struct FuncEntry {
     char **local_names;
     int local_count;
     int local_capacity;
+    Specialization *specs;
+    int spec_count;
+    int spec_capacity;
 };
 
 struct BoundMethod {
@@ -268,6 +416,8 @@ struct Class {
     struct Class *parent;
     Dict *methods;
     Shape *root_shape;
+    Shape *stable_shape;
+    int instances_created;
 };
 
 struct Instance {
@@ -313,6 +463,12 @@ int yyparse(void);
 void yyerror(const char *s);
 Node *node_new(NodeType type);
 void compile(Node *n);
+double val_to_double(Value v);
+
+/* Method Specialization Helpers */
+TypeSignature compute_signature(Value *regs, int count);
+void* func_get_specialization(FuncEntry *fe, TypeSignature sig);
+void func_add_specialization(FuncEntry *fe, TypeSignature sig, void *code, size_t size);
 
 typedef struct {
     int line;
