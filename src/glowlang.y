@@ -607,6 +607,8 @@ static Node* newIndexAssignNode(Node *c, Node *i, Node *v) { Node *n = node_new(
 static Bytecode *compiling_bc = NULL;
 static Class *last_compiling_class = NULL;
 static Trait *last_compiling_trait = NULL;
+static int next_free_reg = 0;
+
 static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     if (bc->count >= bc->capacity) { bc->capacity = (bc->capacity == 0) ? 1024 : bc->capacity * 2; bc->code = realloc(bc->code, sizeof(Instruction)*bc->capacity); }
     int idx = bc->count;
@@ -620,9 +622,6 @@ static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     }
     bc->code[idx].cache_next = 0;
     bc->code[idx].exec_count = 0;
-    if (idx > 0 && (op == OP_LOAD_VAR || op == OP_STORE_VAR || op == OP_STORE_LET || op == OP_MOVE || op == OP_ADD)) {
-        // We will set r0/r1/r2 later, but let's initialize them to a safe value
-    }
     bc->code[idx].r0 = 0;
     bc->code[idx].r1 = 0;
     bc->code[idx].r2 = 0;
@@ -659,8 +658,6 @@ static void bc_add_handler(Bytecode *bc, int start, int end, int handler) {
     bc->exception_table[bc->exception_count].handler_pc = handler;
     bc->exception_count++;
 }
-
-static int next_free_reg = 0;
 
 static void func_add_local(FuncEntry *fe, const char *name) {
     if (!fe || !name) return;
@@ -773,7 +770,7 @@ static void compile_stmt(Node *n) {
     switch (n->type) {
         case NODE_SEQ: compile_stmt(n->left); compile_stmt(n->right); break;
         case NODE_ASSIGN: {
-            int src = compile_expr(n->right, -1);
+            int src = compile_expr(n->left, -1);
             int dst = get_local_reg(n->name);
             if (src == -1) src = 0; // Fallback for invalid expression
             if (dst != -1) {
@@ -946,7 +943,9 @@ static void compile_stmt(Node *n) {
 }
 
 static int compile_expr(Node *n, int target_reg) {
-    if (!n) return -1;
+    if (!n) { 
+        return -1; 
+    }
     int reg = target_reg;
     if (reg == -1) reg = next_free_reg++;
 
@@ -2020,6 +2019,7 @@ static void std_init(void) {
 Node *root = NULL;
 int main(int argc, char **argv) {
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
+    next_free_reg = 0;
     if (argc > 1) {
         if (strcmp(argv[1], "--lsp") == 0) { handle_client(0); return 0; }
         yyin = fopen(argv[1], "r");
