@@ -1,0 +1,16 @@
+show "Testing Native Library Ecosystem"
+
+let m_sin = math.sin(3.14159 / 2)
+let m_sqrt = math.sqrt(16)
+let m_pow = math.pow(2, 8)
+
+show "sin(pi/2): ", m_sin
+show "sqrt(16): ", m_sqrt
+show "pow(2, 8): ", m_pow
+
+let hash = crypto.sha256("GlowLang")
+show "sha256('GlowLang'): ", hash
+
+if m_sqrt == 4.0:
+    show "Math operations are perfectly stable!"
+end

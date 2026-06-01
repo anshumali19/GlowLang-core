@@ -324,6 +324,8 @@ typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending
 static ThreadStack active_stacks[128];
 static int active_stack_count = 0;
 
+void print_error_trace(Value exception);
+
 static void vm_stack_init(void) {
     vm_stack_size = 4096;
     vm_stack = calloc(vm_stack_size, sizeof(Value));
@@ -340,20 +342,55 @@ static void vm_stack_init(void) {
     pthread_mutex_unlock(&threads_mutex);
 }
 
+static void vm_stack_cleanup(void) {
+    pthread_mutex_lock(&threads_mutex);
+    for (int i = 0; i < active_stack_count; i++) {
+        if (active_stacks[i].vm_stack_ptr == &vm_stack) {
+            active_stacks[i] = active_stacks[active_stack_count - 1];
+            active_stack_count--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&threads_mutex);
+    free(vm_stack);
+    vm_stack = NULL;
+}
+
 static void* thread_wrapper(void *arg) {
     ThreadData *td = (ThreadData*)arg;
     pthread_mutex_lock(&glow_gil);
     vm_stack_init();
-    FuncEntry *fe = NULL;
+    
+    // Push arguments onto the new thread's vm_stack
+    for (int i = 0; i < td->argc; i++) {
+        vm_stack[i] = td->args[i];
+    }
+
     if (GET_TYPE(td->callee) == VAL_OBJECT && (td->callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(td->callee);
-        if (ot == OBJ_NATIVE_FUNC) { AS_NATIVE_FUNC(td->callee)->func(td->argc, td->args); }
-        else if (ot == OBJ_BOUND_METHOD) { BoundMethod *bm = AS_BOUND_METHOD(td->callee); fe = bm->method; var_set("self", bm->instance); }
+        if (ot == OBJ_NATIVE_FUNC) { 
+            AS_NATIVE_FUNC(td->callee)->func(td->argc, td->args); 
+        } else if (ot == OBJ_BOUND_METHOD) { 
+            BoundMethod *bm = AS_BOUND_METHOD(td->callee); 
+            var_set("self", bm->instance);
+            if (bm->method && bm->method->body) {
+                run_bytecode(bm->method->body, NULL, NULL, 0);
+            }
+        } else if (ot == OBJ_CLOSURE) {
+            Closure *c = AS_CLOSURE(td->callee);
+            if (c->body) {
+                run_bytecode(c->body, NULL, c, 0);
+            }
+        }
     }
-    if (fe && fe->body) {
-        run_bytecode(fe->body, NULL, NULL, 0);
+    
+    if (has_exception) {
+        print_error_trace(pending_exception);
+        has_exception = 0;
     }
+    
     free(td->args); free(td); 
+    vm_stack_cleanup();
     pthread_mutex_unlock(&glow_gil);
     return NULL;
 }
@@ -686,6 +723,7 @@ static Trait *last_compiling_trait = NULL;
 static int next_free_reg = 0;
 static int compiling_line = 0;
 static const char *compiling_file = NULL;
+static __thread int profiling_active = 0;
 
 static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     if (bc->count >= bc->capacity) { bc->capacity = (bc->capacity == 0) ? 1024 : bc->capacity * 2; bc->code = realloc(bc->code, sizeof(Instruction)*bc->capacity); }
@@ -1471,6 +1509,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
 
 #define R(idx) vm_stack[base_reg + (idx)]
 #define DISPATCH() { \
+    if (profiling_active) pc->exec_count++; \
     if (has_exception) goto l_OP_THROW; \
     goto *dt[pc->op]; \
 }
@@ -2105,6 +2144,25 @@ static Value native_len(int argc, Value *args) {
 }
 static Value native_range(int argc, Value *args) { int n = (argc > 0) ? (int)AS_INT(args[0]) : 0; List *l = list_new(n); for (int i = 0; i < n; i++) list_push(l, value_int(i)); return value_list(l); }
 static Value os_exit(int argc, Value *args) { exit(argc > 0 ? AS_INT(args[0]) : 0); return value_none(); }
+#include <math.h>
+#include <openssl/sha.h>
+
+static Value math_sin(int argc, Value *args) { return argc > 0 ? value_from_double(sin(val_to_double(args[0]))) : value_none(); }
+static Value math_cos(int argc, Value *args) { return argc > 0 ? value_from_double(cos(val_to_double(args[0]))) : value_none(); }
+static Value math_sqrt(int argc, Value *args) { return argc > 0 ? value_from_double(sqrt(val_to_double(args[0]))) : value_none(); }
+static Value math_pow(int argc, Value *args) { return argc > 1 ? value_from_double(pow(val_to_double(args[0]), val_to_double(args[1]))) : value_none(); }
+
+static Value crypto_sha256(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
+    const char *str = AS_STRING(args[0]);
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((const unsigned char*)str, strlen(str), hash);
+    char out[SHA256_DIGEST_LENGTH * 2 + 1];
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(out + (i * 2), "%02x", hash[i]);
+    out[SHA256_DIGEST_LENGTH * 2] = 0;
+    return value_string_copy(out);
+}
+
 static Value os_time(int argc, Value *args) { struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
 static SSL_CTX *ssl_ctx = NULL;
@@ -2224,6 +2282,98 @@ static Value native_stacktrace(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_profile_start(int argc, Value *args) {
+    profiling_active = 1;
+    return value_none();
+}
+
+static int profile_compare(const void *a, const void *b) {
+    typedef struct { const char *file; int line; long count; } ProfileEntry;
+    return (int)(((ProfileEntry*)b)->count - ((ProfileEntry*)a)->count);
+}
+
+static Value native_profile_stop(int argc, Value *args) {
+    profiling_active = 0;
+    typedef struct { const char *file; int line; long count; } ProfileEntry;
+    int max_entries = 10000;
+    ProfileEntry *entries = malloc(sizeof(ProfileEntry) * max_entries);
+    int count = 0;
+
+    // Collect from func_table
+    for (int i=0; i<func_table_size; i++) {
+        if (func_table[i].used && func_table[i].body) {
+            Bytecode *bc = func_table[i].body;
+            for (int j=0; j<bc->count; j++) {
+                Instruction *pc = &bc->code[j];
+                if (pc->exec_count > 0 && pc->line > 0 && pc->file) {
+                     int found = -1;
+                     for (int k=0; k<count; k++) {
+                         if (entries[k].line == pc->line && strcmp(entries[k].file, pc->file) == 0) {
+                             found = k; break;
+                         }
+                     }
+                     if (found != -1) entries[found].count += pc->exec_count;
+                     else if (count < max_entries) {
+                         entries[count].file = pc->file;
+                         entries[count].line = pc->line;
+                         entries[count].count = pc->exec_count;
+                         count++;
+                     }
+                }
+            }
+        }
+    }
+    // Collect from main_fe
+    if (main_fe.body) {
+        Bytecode *bc = main_fe.body;
+        for (int j=0; j<bc->count; j++) {
+            Instruction *pc = &bc->code[j];
+            if (pc->exec_count > 0 && pc->line > 0 && pc->file) {
+                 int found = -1;
+                 for (int k=0; k<count; k++) {
+                     if (entries[k].line == pc->line && strcmp(entries[k].file, pc->file) == 0) {
+                         found = k; break;
+                     }
+                 }
+                 if (found != -1) entries[found].count += pc->exec_count;
+                 else if (count < max_entries) {
+                     entries[count].file = pc->file;
+                     entries[count].line = pc->line;
+                     entries[count].count = pc->exec_count;
+                     count++;
+                 }
+            }
+        }
+    }
+
+    qsort(entries, count, sizeof(ProfileEntry), profile_compare);
+
+    printf("\n--- Performance Hot-Spots ---\n");
+    printf("  %10s | %s\n", "Executions", "Source Location");
+    printf("  -----------+------------------\n");
+    for (int i=0; i<count && i < 10; i++) {
+        printf("  %10ld | %s:%d\n", entries[i].count, entries[i].file, entries[i].line);
+        print_error_line(entries[i].file, entries[i].line);
+    }
+    printf("------------------------------\n");
+
+    free(entries);
+    return value_none();
+}
+
+void print_error_trace(Value exception);
+
+static Value os_sleep(int argc, Value *args) {
+    if (argc > 0) {
+        int ms = (int)AS_INT(args[0]);
+        // Drop GIL while sleeping so other threads can run
+        pthread_mutex_unlock(&glow_gil);
+        usleep(ms * 1000);
+        pthread_mutex_lock(&glow_gil);
+    }
+    return value_none();
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2235,14 +2385,27 @@ static void std_init(void) {
 
     Dict *debug = dict_new(4);
     dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
+    dict_set(debug, "profile_start", native_func_new("profile_start", native_profile_start));
+    dict_set(debug, "profile_stop", native_func_new("profile_stop", native_profile_stop));
     var_set("debug", value_dict(debug));
+
+    Dict *math = dict_new(4);
+    dict_set(math, "sin", native_func_new("sin", math_sin));
+    dict_set(math, "cos", native_func_new("cos", math_cos));
+    dict_set(math, "sqrt", native_func_new("sqrt", math_sqrt));
+    dict_set(math, "pow", native_func_new("pow", math_pow));
+    var_set("math", value_dict(math));
+
+    Dict *crypto = dict_new(4);
+    dict_set(crypto, "sha256", native_func_new("sha256", crypto_sha256));
+    var_set("crypto", value_dict(crypto));
 
     Dict *sqlite = dict_new(4);
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
     dict_set(sqlite, "exec", native_func_new("exec", native_sqlite_exec));
     dict_set(sqlite, "close", native_func_new("close", native_sqlite_close));
     var_set("sqlite", value_dict(sqlite));
-    Dict *os = dict_new(4); dict_set(os, "exit", native_func_new("exit", os_exit)); dict_set(os, "time", native_func_new("time", os_time)); var_set("os", value_dict(os));
+    Dict *os = dict_new(4); dict_set(os, "exit", native_func_new("exit", os_exit)); dict_set(os, "time", native_func_new("time", os_time)); dict_set(os, "sleep", native_func_new("sleep", os_sleep)); var_set("os", value_dict(os));
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4); dict_set(http, "listen", native_func_new("listen", http_listen)); dict_set(http, "close", native_func_new("close", http_close)); var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
@@ -2266,9 +2429,54 @@ int main(int argc, char **argv) {
                 bc_emit(main_bc, OP_RETURN, 0, 0); 
                 optimize_bytecode(main_bc); 
                 run_bytecode(main_bc, NULL, NULL, 0);
- 
+                if (has_exception) {
+                    print_error_trace(pending_exception);
+                }
             } 
             fclose(yyin); 
+        }
+    } else {
+        printf("GlowLang v1.0 Interactive REPL\nType 'exit' to quit.\n");
+        char line_buf[4096];
+        compiling_file = "<stdin>";
+        
+        Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
+        main_fe.body = main_bc;
+
+        while (1) {
+            printf("glow> ");
+            if (!fgets(line_buf, sizeof(line_buf), stdin)) break;
+            if (strncmp(line_buf, "exit", 4) == 0) break;
+            
+            root = NULL;
+            glow_clear_errors();
+            
+            YY_BUFFER_STATE bp = yy_scan_string(line_buf);
+            yyparse();
+            yy_delete_buffer(bp);
+            
+            if (glow_error_count == 0 && root) {
+                int old_count = main_bc->count;
+                compile(root);
+                
+                if (main_bc->count > old_count) {
+                    main_bc->local_count = next_free_reg;
+                    int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
+                    
+                    Instruction *start_pc = &main_bc->code[old_count];
+                    Value res = run_bytecode(main_bc, start_pc, NULL, 0);
+                    
+                    if (has_exception) {
+                        print_error_trace(pending_exception);
+                        has_exception = 0;
+                    } else if (res != 0 && GET_TYPE(res) != VAL_NONE) {
+                        print_value(res);
+                        printf("\n");
+                    }
+                    
+                    main_bc->count = ret_idx; // Remove temporary return
+                }
+            }
         }
     }
     return 0;
