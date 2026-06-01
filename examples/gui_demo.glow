@@ -1,0 +1,37 @@
+show "Starting GlowLang GUI Demo..."
+let ok = gui.open()
+
+when ok is true:
+    show "Window opened successfully."
+    
+    # Simple event loop
+    let running = true
+    let x = 100
+    let y = 100
+    
+    while running is true:
+        gui.clear()
+        
+        # Draw a moving square
+        gui.draw_rect(x, y, 50, 50)
+        
+        x = x + 1
+        when x > 500:
+            x = 100
+        end
+        
+        let ev = gui.poll()
+        when ev is not none:
+            show "Event detected: ", ev
+            when ev == "key":
+                running = false
+            end
+        end
+        
+        os.sleep(16) # ~60 FPS
+    end
+    
+    show "Closing GUI Demo."
+otherwise:
+    show "Could not open display (X11)."
+end

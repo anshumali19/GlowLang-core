@@ -1,0 +1,28 @@
+show "Testing Database Ecosystem"
+
+# SQLite Test
+let db = sqlite.open("test.db")
+sqlite.exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER, name TEXT)")
+sqlite.exec(db, "INSERT INTO users VALUES (1, 'Alice')")
+sqlite.exec(db, "INSERT INTO users VALUES (2, 'Bob')")
+
+let rows = sqlite.query(db, "SELECT * FROM users")
+show "SQLite Rows: ", rows
+
+every row in rows:
+    show "User: ", row["name"], " (ID: ", row["id"], ")"
+end
+
+sqlite.close(db)
+
+# Redis Test (requires local redis-server)
+# We will just verify the code compiles and attempts connection
+show "Attempting Redis connection..."
+let r = redis.connect("127.0.0.1", 6379)
+when r is not none:
+    redis.set(r, "version", "1.0")
+    let v = redis.get(r, "version")
+    show "Redis Value: ", v
+otherwise:
+    show "Redis server not found, skipping live test."
+end
