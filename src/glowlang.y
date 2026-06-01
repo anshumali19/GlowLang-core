@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -2459,6 +2460,80 @@ static Value native_sqlite_exec(int argc, Value *args) {
     return value_int(0);
 }
 
+static Value native_sqlite_query(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    sqlite3 *db = (sqlite3*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    const char *sql = AS_STRING(args[1]);
+    sqlite3_stmt *res;
+    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
+    
+    List *rows = list_new(8);
+    int cols = sqlite3_column_count(res);
+    
+    while (sqlite3_step(res) == SQLITE_ROW) {
+        Dict *row = dict_new(cols);
+        for (int i = 0; i < cols; i++) {
+            const char *col_name = sqlite3_column_name(res, i);
+            Value val;
+            int type = sqlite3_column_type(res, i);
+            if (type == SQLITE_INTEGER) val = value_int(sqlite3_column_int64(res, i));
+            else if (type == SQLITE_FLOAT) val = value_float(sqlite3_column_double(res, i));
+            else if (type == SQLITE_TEXT) val = value_string_copy((const char*)sqlite3_column_text(res, i));
+            else val = value_none();
+            dict_set(row, col_name, val);
+        }
+        list_push(rows, value_dict(row));
+    }
+    sqlite3_finalize(res);
+    return value_list(rows);
+}
+
+static Value native_redis_connect(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    const char *host = AS_STRING(args[0]);
+    int port = (int)AS_INT(args[1]);
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in serv_addr;
+    struct hostent *server = gethostbyname(host);
+    if (!server) return value_none();
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+    serv_addr.sin_port = htons(port);
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) return value_none();
+    return value_int(sockfd);
+}
+
+static Value native_redis_set(int argc, Value *args) {
+    if (argc < 3) return value_none();
+    int fd = (int)AS_INT(args[0]);
+    const char *key = AS_STRING(args[1]);
+    const char *val = AS_STRING(args[2]);
+    char cmd[1024];
+    int len = sprintf(cmd, "*3\r\n$3\r\nSET\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n", strlen(key), key, strlen(val), val);
+    write(fd, cmd, len);
+    char buf[128]; read(fd, buf, 127);
+    return value_bool(buf[0] == '+');
+}
+
+static Value native_redis_get(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    int fd = (int)AS_INT(args[0]);
+    const char *key = AS_STRING(args[1]);
+    char cmd[1024];
+    int len = sprintf(cmd, "*2\r\n$3\r\nGET\r\n$%zu\r\n%s\r\n", strlen(key), key);
+    write(fd, cmd, len);
+    char buf[4096]; int n = read(fd, buf, 4095);
+    if (n <= 0 || buf[0] == '-') return value_none();
+    if (buf[0] == '$') {
+        char *p = strchr(buf, '\r') + 2;
+        char *end = strstr(p, "\r\n");
+        if (end) *end = 0;
+        return value_string_copy(p);
+    }
+    return value_none();
+}
+
 static Value native_sqlite_close(int argc, Value *args) {
     if (argc < 1) return value_int(-1);
     sqlite3 *db = (sqlite3*)(uintptr_t)(args[0] & MASK_PAYLOAD);
@@ -2605,6 +2680,51 @@ static Value native_tensor_matmul(int argc, Value *args) {
     return value_packed(res);
 }
 
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+
+static Display *gui_display = NULL;
+static Window gui_window;
+static GC gui_gc;
+static int gui_screen;
+
+static Value native_gui_open(int argc, Value *args) {
+    gui_display = XOpenDisplay(NULL);
+    if (!gui_display) return value_bool(0);
+    gui_screen = DefaultScreen(gui_display);
+    gui_window = XCreateSimpleWindow(gui_display, RootWindow(gui_display, gui_screen), 10, 10, 800, 600, 1,
+                                   BlackPixel(gui_display, gui_screen), WhitePixel(gui_display, gui_screen));
+    XSelectInput(gui_display, gui_window, ExposureMask | KeyPressMask | ButtonPressMask);
+    XMapWindow(gui_display, gui_window);
+    gui_gc = XCreateGC(gui_display, gui_window, 0, NULL);
+    return value_bool(1);
+}
+
+static Value native_gui_clear(int argc, Value *args) {
+    if (!gui_display) return value_none();
+    XClearWindow(gui_display, gui_window);
+    return value_none();
+}
+
+static Value native_gui_rect(int argc, Value *args) {
+    if (argc < 4 || !gui_display) return value_none();
+    int x = (int)val_to_double(args[0]), y = (int)val_to_double(args[1]);
+    int w = (int)val_to_double(args[2]), h = (int)val_to_double(args[3]);
+    XFillRectangle(gui_display, gui_window, gui_gc, x, y, w, h);
+    XFlush(gui_display);
+    return value_none();
+}
+
+static Value native_gui_poll(int argc, Value *args) {
+    if (!gui_display) return value_none();
+    if (XPending(gui_display)) {
+        XEvent ev; XNextEvent(gui_display, &ev);
+        if (ev.type == KeyPress) return value_string_copy("key");
+        if (ev.type == ButtonPress) return value_string_copy("click");
+    }
+    return value_none();
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2645,8 +2765,23 @@ static void std_init(void) {
     Dict *sqlite = dict_new(4);
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
     dict_set(sqlite, "exec", native_func_new("exec", native_sqlite_exec));
+    dict_set(sqlite, "query", native_func_new("query", native_sqlite_query));
     dict_set(sqlite, "close", native_func_new("close", native_sqlite_close));
     var_set("sqlite", value_dict(sqlite));
+
+    Dict *redis = dict_new(4);
+    dict_set(redis, "connect", native_func_new("connect", native_redis_connect));
+    dict_set(redis, "set", native_func_new("set", native_redis_set));
+    dict_set(redis, "get", native_func_new("get", native_redis_get));
+    var_set("redis", value_dict(redis));
+
+    Dict *gui = dict_new(4);
+    dict_set(gui, "open", native_func_new("open", native_gui_open));
+    dict_set(gui, "clear", native_func_new("clear", native_gui_clear));
+    dict_set(gui, "draw_rect", native_func_new("draw_rect", native_gui_rect));
+    dict_set(gui, "poll", native_func_new("poll", native_gui_poll));
+    var_set("gui", value_dict(gui));
+
     Dict *os = dict_new(4); dict_set(os, "exit", native_func_new("exit", os_exit)); dict_set(os, "time", native_func_new("time", os_time)); dict_set(os, "sleep", native_func_new("sleep", os_sleep)); var_set("os", value_dict(os));
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4); 
