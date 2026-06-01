@@ -2137,6 +2137,7 @@ static Value native_len(int argc, Value *args) {
     Value v = args[0]; 
     if (GET_TYPE(v) == VAL_STRING) return value_int(strlen(AS_STRING(v))); 
     if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size); 
+    if (GET_TYPE(v) == VAL_DICT) return value_int(AS_DICT(v)->size);
     if (GET_TYPE(v) == VAL_OBJECT) {
         if ((v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_PACKED_ARRAY) return value_int(AS_PACKED_ARRAY(v)->size);
     }
@@ -2161,6 +2162,128 @@ static Value crypto_sha256(int argc, Value *args) {
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(out + (i * 2), "%02x", hash[i]);
     out[SHA256_DIGEST_LENGTH * 2] = 0;
     return value_string_copy(out);
+}
+
+static void json_append_str(const char *s, char **buf, int *size, int *cap) {
+    int len = strlen(s);
+    if (*size + len + 1 > *cap) {
+        *cap = (*cap == 0) ? 1024 : *cap * 2;
+        while (*size + len + 1 > *cap) *cap *= 2;
+        *buf = realloc(*buf, *cap);
+    }
+    strcpy(*buf + *size, s);
+    *size += len;
+}
+
+static void json_stringify_helper(Value v, char **buf, int *size, int *cap) {
+    if (v == 0) { json_append_str("null", buf, size, cap); return; }
+    if ((v & MASK_NAN) != MASK_NAN) { 
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v)); json_append_str(tmp, buf, size, cap); return; 
+    }
+    uint64_t type = (v & MASK_TYPE) >> 48;
+    if (type == VAL_INT) {
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, buf, size, cap);
+    } else if (type == VAL_BOOL) {
+        json_append_str(AS_BOOL(v) ? "true" : "false", buf, size, cap);
+    } else if (type == VAL_STRING) {
+        json_append_str("\"", buf, size, cap); json_append_str(AS_STRING(v), buf, size, cap); json_append_str("\"", buf, size, cap);
+    } else if (type == VAL_LIST) {
+        json_append_str("[", buf, size, cap);
+        List *l = AS_LIST(v);
+        for (int i = 0; i < l->size; i++) {
+            json_stringify_helper(l->items[i], buf, size, cap);
+            if (i < l->size - 1) json_append_str(", ", buf, size, cap);
+        }
+        json_append_str("]", buf, size, cap);
+    } else if (type == VAL_DICT) {
+        json_append_str("{", buf, size, cap);
+        Dict *d = AS_DICT(v);
+        int first = 1;
+        for (int i = 0; i < d->capacity; i++) {
+            if (d->keys[i]) {
+                if (!first) json_append_str(", ", buf, size, cap);
+                json_append_str("\"", buf, size, cap); json_append_str(d->keys[i], buf, size, cap); json_append_str("\": ", buf, size, cap);
+                json_stringify_helper(d->values[i], buf, size, cap);
+                first = 0;
+            }
+        }
+        json_append_str("}", buf, size, cap);
+    } else {
+        json_append_str("null", buf, size, cap);
+    }
+}
+
+static Value json_parse_value(const char **src) {
+    while (**src && isspace(**src)) (*src)++;
+    if (**src == '{') {
+        (*src)++;
+        Dict *d = dict_new(8);
+        while (**src && **src != '}') {
+            while (**src && isspace(**src)) (*src)++;
+            if (**src == '"') {
+                (*src)++;
+                const char *start = *src;
+                while (**src && **src != '"') (*src)++;
+                int len = *src - start;
+                char *key = malloc(len + 1); memcpy(key, start, len); key[len] = 0;
+                const char *interned = intern_string(key); free(key);
+                (*src)++;
+                while (**src && isspace(**src)) (*src)++;
+                if (**src == ':') (*src)++;
+                dict_set(d, interned, json_parse_value(src));
+            }
+            while (**src && isspace(**src)) (*src)++;
+            if (**src == ',') (*src)++;
+        }
+        if (**src == '}') (*src)++;
+        return value_dict(d);
+    } else if (**src == '[') {
+        (*src)++;
+        List *l = list_new(8);
+        while (**src && **src != ']') {
+            list_push(l, json_parse_value(src));
+            while (**src && isspace(**src)) (*src)++;
+            if (**src == ',') (*src)++;
+        }
+        if (**src == ']') (*src)++;
+        return value_list(l);
+    } else if (**src == '"') {
+        (*src)++;
+        const char *start = *src;
+        while (**src && **src != '"') (*src)++;
+        int len = *src - start;
+        char *str = malloc(len + 1); memcpy(str, start, len); str[len] = 0;
+        Value res = value_string_copy(str);
+        free(str);
+        (*src)++;
+        return res;
+    } else if (isdigit(**src) || **src == '-') {
+        char *end;
+        double d = strtod(*src, &end);
+        *src = end;
+        return value_from_double(d);
+    } else if (strncmp(*src, "true", 4) == 0) { *src += 4; return value_bool(1); }
+    else if (strncmp(*src, "false", 5) == 0) { *src += 5; return value_bool(0); }
+    else if (strncmp(*src, "null", 4) == 0) { *src += 4; return value_none(); }
+    return value_none();
+}
+
+static Value native_json_parse(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
+    const char *src = AS_STRING(args[0]);
+    return json_parse_value(&src);
+}
+
+static Value native_json_stringify(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    int cap = 1024;
+    int size = 0;
+    char *buf = malloc(cap);
+    buf[0] = '\0';
+    json_stringify_helper(args[0], &buf, &size, &cap);
+    Value res = value_string_copy(buf);
+    free(buf);
+    return res;
 }
 
 static Value os_time(int argc, Value *args) { struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
@@ -2205,6 +2328,29 @@ static Value http_listen(int argc, Value *args) {
     int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) return value_int(-1);
     listen(sockfd, 1024); return value_int(sockfd);
+}
+static Value http_accept(int argc, Value *args) {
+    if (argc < 1) return value_int(-1);
+    int sockfd = AS_INT(args[0]);
+    struct sockaddr_in client_addr; socklen_t client_len = sizeof(client_addr);
+    int client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_len);
+    return value_int(client_fd);
+}
+static Value http_read(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    int fd = AS_INT(args[0]);
+    char buf[4096];
+    int n = read(fd, buf, 4095);
+    if (n <= 0) return value_none();
+    buf[n] = '\0';
+    return value_string_copy(buf);
+}
+static Value http_write(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
+    int fd = AS_INT(args[0]);
+    const char *resp = AS_STRING(args[1]);
+    write(fd, resp, strlen(resp));
+    return value_none();
 }
 static Value http_close(int argc, Value *args) { if (argc < 1) return value_int(-1); close(AS_INT(args[0])); return value_none(); }
 
@@ -2407,8 +2553,18 @@ static void std_init(void) {
     var_set("sqlite", value_dict(sqlite));
     Dict *os = dict_new(4); dict_set(os, "exit", native_func_new("exit", os_exit)); dict_set(os, "time", native_func_new("time", os_time)); dict_set(os, "sleep", native_func_new("sleep", os_sleep)); var_set("os", value_dict(os));
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
-    Dict *http = dict_new(4); dict_set(http, "listen", native_func_new("listen", http_listen)); dict_set(http, "close", native_func_new("close", http_close)); var_set("http", value_dict(http));
+    Dict *http = dict_new(4); 
+    dict_set(http, "listen", native_func_new("listen", http_listen)); 
+    dict_set(http, "accept", native_func_new("accept", http_accept)); 
+    dict_set(http, "read", native_func_new("read", http_read)); 
+    dict_set(http, "send", native_func_new("send", http_write)); 
+    dict_set(http, "close", native_func_new("close", http_close)); 
+    var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
+    Dict *json = dict_new(4); 
+    dict_set(json, "stringify", native_func_new("stringify", native_json_stringify)); 
+    dict_set(json, "parse", native_func_new("parse", native_json_parse));
+    var_set("json", value_dict(json));
 }
 
 Node *root = NULL;

@@ -1,0 +1,9 @@
+let raw = "{\"id\": 101, \"active\": true, \"scores\": [90, 85, 92]}"
+let data = json.parse(raw)
+
+show "Parsed ID: ", data["id"]
+show "Is Active: ", data["active"]
+show "First Score: ", data["scores"][0]
+
+let back = json.stringify(data)
+show "Stringified back: ", back
