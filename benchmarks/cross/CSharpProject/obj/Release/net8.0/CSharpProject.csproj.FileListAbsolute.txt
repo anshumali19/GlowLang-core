@@ -1,15 +1,15 @@
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.deps.json
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.runtimeconfig.json
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.dll
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.pdb
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.GeneratedMSBuildEditorConfig.editorconfig
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.AssemblyInfoInputs.cache
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.AssemblyInfo.cs
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.csproj.CoreCompileInputs.cache
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.sourcelink.json
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.dll
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/refint/CSharpProject.dll
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.pdb
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.genruntimeconfig.cache
-/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/Release/net8.0/ref/CSharpProject.dll
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.deps.json
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.runtimeconfig.json
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.dll
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/bin/Release/net8.0/CSharpProject.pdb
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.GeneratedMSBuildEditorConfig.editorconfig
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.AssemblyInfoInputs.cache
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.AssemblyInfo.cs
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.csproj.CoreCompileInputs.cache
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.sourcelink.json
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.dll
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/refint/CSharpProject.dll
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.pdb
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/CSharpProject.genruntimeconfig.cache
+/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/Release/net8.0/ref/CSharpProject.dll
