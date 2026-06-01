@@ -1,0 +1,13 @@
+func f3():
+    show 1 / 0
+end
+
+func f2():
+    f3()
+end
+
+func f1():
+    f2()
+end
+
+f1()
