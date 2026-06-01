@@ -1,0 +1,50 @@
+# GlowLang Web Routing & API Demo
+
+func handle_request(req):
+    show "Processing Request..."
+    
+    # Simple Routing Logic
+    let body = {}
+    body["status"] = "success"
+    body["server"] = "GlowLang/1.0"
+    
+    when req == "/":
+        body["message"] = "Welcome to the GlowLang API!"
+    eif req == "/data":
+        body["payload"] = [1, 2, 3, 4, 5]
+    otherwise:
+        body["status"] = "error"
+        body["message"] = "Not Found"
+    end
+    
+    let json_resp = json.stringify(body)
+    let length = len(json_resp)
+    
+    let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+    header = header + length
+    header = header + "\r\n\r\n"
+    
+    return header + json_resp
+end
+
+show "Starting GlowLang Web Server on port 8080..."
+let server = http.listen(8080)
+
+# Main loop
+let count = 0
+while count < 2:
+    let client = http.accept(server)
+    let raw_req = http.read(client)
+    
+    # Very basic request parsing (first line)
+    show "Client Connected."
+    
+    let response = handle_request("/")
+    
+    let _ = http.send(client, response)
+    let __ = http.close(client)
+    count = count + 1
+end
+
+let ___ = http.close(server)
+show "Server Finished."

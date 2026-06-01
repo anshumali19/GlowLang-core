@@ -1,0 +1,13 @@
+let server = http.listen(8080)
+let client = http.accept(server)
+
+let user = {}
+user["status"] = 200
+user["message"] = "GlowLang API is running!"
+
+let body = json.stringify(user)
+let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n" + body
+
+let _ = http.send(client, resp)
+let __ = http.close(client)
+let ___ = http.close(server)
