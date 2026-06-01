@@ -1,0 +1,8 @@
+let user = {}
+user["name"] = "Admin"
+user["age"] = 42
+user["is_active"] = true
+user["tags"] = ["web", "backend", "glowlang"]
+
+let j = json.stringify(user)
+show j

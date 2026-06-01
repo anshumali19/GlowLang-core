@@ -1,0 +1,13 @@
+show "Starting HTTP JSON Server on port 8080..."
+let server = http.listen(8080)
+let client = http.accept(server)
+let req = http.read(client)
+show req
+let user = {}
+user["message"] = "Hello from GlowLang API!"
+user["status"] = 200
+let body = json.stringify(user)
+let _ = http.write(client, body)
+let __ = http.close(client)
+let ___ = http.close(server)
+show "Server shut down cleanly."
