@@ -1,7 +1,7 @@
 {
     "name": "glowlang-vscode",
-    "displayName": "GlowLang 4.0",
-    "description": "Industrial-grade VS Code support for GlowLang 4.0 (JIT & Native Networking)",
+    "displayName": "GlowLang",
+    "description": "Industrial-grade VS Code support for GlowLang (JIT & Native Networking)",
     "version": "1.0.0",
     "publisher": "glowlang",
     "engines": {
