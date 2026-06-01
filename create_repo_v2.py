@@ -13,7 +13,7 @@ headers = {
 }
 data = {
     "name": REPO,
-    "description": "GlowLang 4.0 - High-performance, natural-language systems programming language",
+    "description": "GlowLang - High-performance, natural-language systems programming language",
     "private": False,
     "has_issues": True,
     "has_projects": True,

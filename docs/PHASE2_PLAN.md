@@ -1,4 +1,4 @@
-# GlowLang 3.0 — Phase 2 & Phase 3 Roadmap
+# GlowLang — Phase 2 & Phase 3 Roadmap
 
 **Date:** April 13, 2026
 **Status:** Phase 1 ✅ COMPLETE
@@ -162,9 +162,9 @@
 
 ## 📊 Current Performance Summary
 
-### GlowLang 3.0 vs Other Languages
+### GlowLang vs Other Languages
 
-| Benchmark | GlowLang 3.0 | C (gcc -O2) | Python 3.12 |
+| Benchmark | GlowLang | C (gcc -O2) | Python 3.12 |
 |---|---|---|---|
 | **fib(30)** | ~3.0 ms | ~2.7 ms | ~101 ms |
 | **Loop 10M** | ~0.97 ms | ~0.86 ms | ~604 ms |

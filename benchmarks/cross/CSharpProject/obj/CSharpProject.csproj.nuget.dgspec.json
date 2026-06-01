@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/CSharpProject.csproj": {}
+    "/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/CSharpProject.csproj": {}
   },
   "projects": {
-    "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/CSharpProject.csproj": {
+    "/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/CSharpProject.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/CSharpProject.csproj",
+        "projectUniqueName": "/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/CSharpProject.csproj",
         "projectName": "CSharpProject",
-        "projectPath": "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/CSharpProject.csproj",
+        "projectPath": "/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/CSharpProject.csproj",
         "packagesPath": "/home/anshumali/.nuget/packages/",
-        "outputPath": "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/cross/CSharpProject/obj/",
+        "outputPath": "/home/anshumali/Desktop/GlowLang/benchmarks/cross/CSharpProject/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "/home/anshumali/.nuget/NuGet/NuGet.Config"
