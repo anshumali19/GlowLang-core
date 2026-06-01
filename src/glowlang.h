@@ -60,17 +60,16 @@ typedef enum {
 
 typedef struct {
     GCObject obj;
+    void *data;
     PackedType type;
     int size;
     int capacity;
-    void *data;
 } PackedArray;
 
 typedef struct {
     GCObject obj;
     char chars[];
 } GCString;
-
 #define MASK_NAN      ((uint64_t)0x7FF8000000000000)
 #define MASK_TYPE     ((uint64_t)0x0007000000000000)
 #define MASK_PAYLOAD  ((uint64_t)0x0000FFFFFFFFFFFF)
