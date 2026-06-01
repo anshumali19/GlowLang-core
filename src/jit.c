@@ -296,7 +296,7 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 emit_mov_rdi_reg(&buf, pc->r1); // coll
                 emit_mov_rsi_reg(&buf, pc->r2); // idx
                 emit_mov_rax_imm64(&buf, (uintptr_t)packed_array_get_jit);
-                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
+                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0); // call
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
@@ -305,7 +305,7 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 emit_mov_rsi_reg(&buf, pc->r1); // idx
                 emit_mov_rdx_reg(&buf, pc->r2); // val
                 emit_mov_rax_imm64(&buf, (uintptr_t)packed_array_set_jit);
-                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
+                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0); // call
                 break;
             }
             case OP_SIMD_ADD: {

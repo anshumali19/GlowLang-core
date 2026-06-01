@@ -1,0 +1,39 @@
+show "GlowLang AI/ML Runtime Test"
+
+# Create two tensors using the new high-level API
+let size = 5
+let a = tensor.zeros(size)
+let b = tensor.zeros(size)
+
+# Fill with data - ensuring we use floating point literals for double precision
+let i = 0
+while i < size:
+    a[i] = i * 1.0
+    b[i] = i * 2.0
+    i = i + 1
+end
+
+show "Tensor A: ", a
+show "Tensor B: ", b
+
+# Element-wise operations
+let c = tensor.add(a, b)
+let d = tensor.mul(a, b)
+
+show "A + B: ", c
+show "A * B: ", d
+
+# Dot Product
+let dot = tensor.dot(a, b)
+show "A . B (Dot Product): ", dot
+
+# Benchmark path
+let large_size = 1000000
+let t1 = tensor.zeros(large_size)
+let t2 = tensor.zeros(large_size)
+
+let start = os.time()
+let t3 = tensor.add(t1, t2)
+let t_end = os.time()
+
+show "SIMD Accelerated 1M Add took: ", (t_end - start), " seconds"

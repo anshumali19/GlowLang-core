@@ -115,7 +115,7 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
 Value packed_array_get_jit(Value v_pa, Value v_idx) {
     if (GET_TYPE(v_pa) != VAL_OBJECT || GET_OBJ_TYPE(v_pa) != OBJ_PACKED_ARRAY) return value_none();
     PackedArray *pa = AS_PACKED_ARRAY(v_pa);
-    int idx = (int)AS_INT(v_idx);
+    int idx = (int)val_to_double(v_idx);
     if (idx < 0 || idx >= pa->size) return value_none();
     if (pa->type == PACKED_INT64) return value_int(((int64_t*)pa->data)[idx]);
     return value_float(((double*)pa->data)[idx]);
@@ -124,10 +124,10 @@ Value packed_array_get_jit(Value v_pa, Value v_idx) {
 void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val) {
     if (GET_TYPE(v_pa) != VAL_OBJECT || GET_OBJ_TYPE(v_pa) != OBJ_PACKED_ARRAY) return;
     PackedArray *pa = AS_PACKED_ARRAY(v_pa);
-    int idx = (int)AS_INT(v_idx);
+    int idx = (int)val_to_double(v_idx);
     if (idx < 0 || idx >= pa->size) return;
-    if (pa->type == PACKED_INT64) ((int64_t*)pa->data)[idx] = AS_INT(v_val);
-    else ((double*)pa->data)[idx] = AS_FLOAT(v_val);
+    if (pa->type == PACKED_INT64) ((int64_t*)pa->data)[idx] = (int64_t)val_to_double(v_val);
+    else ((double*)pa->data)[idx] = val_to_double(v_val);
 }
 
 void simd_add_helper(Value v_a, Value v_b, Value v_target) {
@@ -637,13 +637,13 @@ static void packed_array_push(PackedArray *pa, Value v) {
 static Value packed_array_get(PackedArray *pa, int idx) {
     if (idx < 0 || idx >= pa->size) return value_none();
     if (pa->type == PACKED_INT64) return value_int(((int64_t*)pa->data)[idx]);
-    return value_float(((double*)pa->data)[idx]);
+    return value_from_double(((double*)pa->data)[idx]);
 }
 
 static void packed_array_set(PackedArray *pa, int idx, Value v) {
     if (idx < 0 || idx >= pa->size) return;
-    if (pa->type == PACKED_INT64) ((int64_t*)pa->data)[idx] = AS_INT(v);
-    else ((double*)pa->data)[idx] = AS_FLOAT(v);
+    if (pa->type == PACKED_INT64) ((int64_t*)pa->data)[idx] = (int64_t)val_to_double(v);
+    else ((double*)pa->data)[idx] = val_to_double(v);
 }
 
 static Shape* shape_new(Shape *p, const char *n, int o) { Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE); s->parent = p; s->name = n; s->offset = o; s->transitions = dict_new(4); return s; }
@@ -2399,6 +2399,48 @@ static Value native_packed_sub(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_packed_mul(int argc, Value *args) { 
+    if (argc < 2) return value_none();
+    Value a = args[0], b = args[1];
+    if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
+        GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
+        PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
+        if (pa->type == pb->type && pa->size == pb->size) {
+            PackedArray *res = packed_array_new(pa->type, pa->size);
+            if (pa->type == PACKED_FLOAT64) {
+                double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                for (int i=0; i<pa->size; i++) dr[i] = da[i] * db[i];
+            } else {
+                int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                for (int i=0; i<pa->size; i++) ir[i] = ia[i] * ib[i];
+            }
+            return value_packed(res);
+        }
+    }
+    return value_none();
+}
+
+static Value native_packed_dot(int argc, Value *args) { 
+    if (argc < 2) return value_none();
+    Value a = args[0], b = args[1];
+    if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
+        GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
+        PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
+        if (pa->type == pb->type && pa->size == pb->size) {
+            if (pa->type == PACKED_FLOAT64) {
+                double *da = (double*)pa->data, *db = (double*)pb->data, sum = 0;
+                for (int i=0; i<pa->size; i++) sum += da[i] * db[i];
+                return value_float(sum);
+            } else {
+                int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, sum = 0;
+                for (int i=0; i<pa->size; i++) sum += ia[i] * ib[i];
+                return value_int(sum);
+            }
+        }
+    }
+    return value_none();
+}
+
 #include <sqlite3.h>
 
 static Value native_sqlite_open(int argc, Value *args) {
@@ -2520,6 +2562,49 @@ static Value os_sleep(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_tensor_create(int argc, Value *args) {
+    int sz = (argc > 0) ? (int)AS_INT(args[0]) : 0;
+    return value_packed(packed_array_new(PACKED_FLOAT64, sz));
+}
+
+static Value native_tensor_zeros(int argc, Value *args) {
+    int sz = (argc > 0) ? (int)AS_INT(args[0]) : 0;
+    PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
+    memset(pa->data, 0, sz * sizeof(double));
+    return value_packed(pa);
+}
+
+static Value native_tensor_transpose(int argc, Value *args) {
+    if (argc < 3) return value_none(); // tensor, rows, cols
+    PackedArray *src = AS_PACKED_ARRAY(args[0]);
+    int rows = (int)val_to_double(args[1]), cols = (int)val_to_double(args[2]);
+    PackedArray *res = packed_array_new(src->type, src->size);
+    if (src->type == PACKED_FLOAT64) {
+        double *s = (double*)src->data, *r = (double*)res->data;
+        for (int i = 0; i < rows; i++) for (int j = 0; j < cols; j++) r[j * rows + i] = s[i * cols + j];
+    }
+    return value_packed(res);
+}
+
+static Value native_tensor_matmul(int argc, Value *args) {
+    if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    int rA = (int)val_to_double(args[1]), cA = (int)val_to_double(args[2]);
+    PackedArray *pb = AS_PACKED_ARRAY(args[3]);
+    int rB = (int)val_to_double(args[4]), cB = (int)val_to_double(args[5]);
+    if (cA != rB) return value_none();
+    PackedArray *res = packed_array_new(pa->type, rA * cB);
+    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+    for (int i = 0; i < rA; i++) {
+        for (int j = 0; j < cB; j++) {
+            double sum = 0;
+            for (int k = 0; k < cA; k++) sum += da[i * cA + k] * db[k * cB + j];
+            dr[i * cB + j] = sum;
+        }
+    }
+    return value_packed(res);
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2545,6 +2630,17 @@ static void std_init(void) {
     Dict *crypto = dict_new(4);
     dict_set(crypto, "sha256", native_func_new("sha256", crypto_sha256));
     var_set("crypto", value_dict(crypto));
+
+    Dict *tensor = dict_new(4);
+    dict_set(tensor, "create", native_func_new("create", native_tensor_create));
+    dict_set(tensor, "zeros", native_func_new("zeros", native_tensor_zeros));
+    dict_set(tensor, "add", native_func_new("add", native_packed_add));
+    dict_set(tensor, "sub", native_func_new("sub", native_packed_sub));
+    dict_set(tensor, "mul", native_func_new("mul", native_packed_mul));
+    dict_set(tensor, "dot", native_func_new("dot", native_packed_dot));
+    dict_set(tensor, "transpose", native_func_new("transpose", native_tensor_transpose));
+    dict_set(tensor, "matmul", native_func_new("matmul", native_tensor_matmul));
+    var_set("tensor", value_dict(tensor));
 
     Dict *sqlite = dict_new(4);
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
