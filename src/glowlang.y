@@ -2350,9 +2350,10 @@ static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
     int fd = AS_INT(args[0]);
     const char *resp = AS_STRING(args[1]);
-    write(fd, resp, strlen(resp));
+    if (write(fd, resp, strlen(resp)) < 0) return value_int(-1);
     return value_none();
 }
+
 static Value http_close(int argc, Value *args) { if (argc < 1) return value_int(-1); close(AS_INT(args[0])); return value_none(); }
 
 static Value native_packed_int(int argc, Value *args) { int sz = argc > 0 ? (int)AS_INT(args[0]) : 0; return value_packed(packed_array_new(PACKED_INT64, sz)); }
@@ -2466,10 +2467,10 @@ static Value native_sqlite_query(int argc, Value *args) {
     const char *sql = AS_STRING(args[1]);
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
-    
+
     List *rows = list_new(8);
     int cols = sqlite3_column_count(res);
-    
+
     while (sqlite3_step(res) == SQLITE_ROW) {
         Dict *row = dict_new(cols);
         for (int i = 0; i < cols; i++) {
@@ -2511,8 +2512,9 @@ static Value native_redis_set(int argc, Value *args) {
     const char *val = AS_STRING(args[2]);
     char cmd[1024];
     int len = sprintf(cmd, "*3\r\n$3\r\nSET\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n", strlen(key), key, strlen(val), val);
-    write(fd, cmd, len);
-    char buf[128]; read(fd, buf, 127);
+    if (write(fd, cmd, len) < 0) return value_bool(0);
+    char buf[128]; 
+    if (read(fd, buf, 127) <= 0) return value_bool(0);
     return value_bool(buf[0] == '+');
 }
 
@@ -2522,7 +2524,7 @@ static Value native_redis_get(int argc, Value *args) {
     const char *key = AS_STRING(args[1]);
     char cmd[1024];
     int len = sprintf(cmd, "*2\r\n$3\r\nGET\r\n$%zu\r\n%s\r\n", strlen(key), key);
-    write(fd, cmd, len);
+    if (write(fd, cmd, len) < 0) return value_none();
     char buf[4096]; int n = read(fd, buf, 4095);
     if (n <= 0 || buf[0] == '-') return value_none();
     if (buf[0] == '$') {

@@ -1,0 +1,56 @@
+
+# GlowLang Web Middleware & Routing Framework
+
+class App:
+    action init():
+        self.routes = {}
+        self.middlewares = []
+    end
+    
+    action use(middleware_func):
+        self.middlewares = self.middlewares + [middleware_func]
+    end
+    
+    action get(path, handler):
+        self.routes[path] = handler
+    end
+    
+    action listen(port):
+        show "Server listening on port " + port
+        let server = http.listen(port)
+        
+        let count = 0
+        while count < 2: # Limit for testing purposes
+            let client = http.accept(server)
+            let raw_req = http.read(client)
+            
+            # Run middlewares
+            let is_blocked = false
+            every each mw in self.middlewares:
+                let ok = mw(raw_req)
+                when ok is false:
+                    is_blocked = true
+                end
+            end
+            
+            when is_blocked is false:
+                # Basic mock route matching (assuming GET /)
+                let path = "/"
+                let handler = self.routes[path]
+                
+                when handler is not none:
+                    let response = handler(raw_req)
+                    let body = json.stringify(response)
+                    let resp_str = "HTTP/1.1 200 OK\nContent-Type: application/json\nContent-Length: " + len(body) + "\n\n" + body
+                    let _ = http.send(client, resp_str)
+                otherwise:
+                    let _ = http.send(client, "HTTP/1.1 404 Not Found\n\n")
+                end
+            end
+            
+            let __ = http.close(client)
+            count = count + 1
+        end
+        let ___ = http.close(server)
+    end
+end
