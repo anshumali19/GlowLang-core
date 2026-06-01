@@ -1,15 +1,12 @@
-# GlowLang — Advanced Runtime & Ecosystem Expansion Prompt
+# GlowLang — Full Ecosystem & Production Expansion Prompt
 
-You are working on GlowLang, a high-performance natural-language-like programming language with a production-grade adaptive runtime architecture.
-
-GlowLang already contains:
+You are working on GlowLang, a production-grade adaptive programming language runtime with:
 
 * Register-Based Virtual Machine
 * Direct-Threaded Dispatch
-* Aligned x86-64 JIT Compiler
 * Type-Specialized JIT
 * Polymorphic Inline Caches (PICs)
-* Hidden Classes (Shapes)
+* Hidden Classes / Shapes
 * Register-Based Upvalues
 * Static Method Inlining
 * Escape Analysis
@@ -19,442 +16,445 @@ GlowLang already contains:
 * Bump Allocation
 * Generational Garbage Collector
 * Method Specialization
-* Native-speed recursion system
-* Natural-language-like syntax philosophy
+* Global Slotting
+* Direct JIT-to-JIT Call Linking
+* Packed Arrays
+* SIMD Foundations
+* Natural-Language-Like Syntax
 
-The runtime is already highly optimized and benchmark-competitive with modern languages.
+GlowLang is already highly optimized and benchmark-competitive.
 
-The objective now is NOT to redesign the language.
+The goal now is to transform GlowLang into a fully capable ecosystem language that supports:
 
-The objective is to evolve GlowLang into:
+* AI/ML
+* web development
+* networking
+* async systems
+* databases
+* native interop
+* tooling
+* deployment
+* large-scale application development
 
-* a complete production-grade runtime ecosystem
-* a scalable systems-capable scripting language
-* a lightweight high-performance development platform
-* a modern AI/runtime-ready language
-* a deployable ecosystem with native tooling
-
-while STRICTLY preserving the current language identity.
+while STRICTLY preserving the current architecture and language identity.
 
 ---
 
-# CRITICAL RULE (DO NOT BREAK)
+# CRITICAL SAFETY RULES (HIGHEST PRIORITY)
+
+## DO NOT TOUCH STABLE SYSTEMS
+
+If a feature, runtime component, optimization pass, allocator, compiler phase, JIT system, syntax behavior, GC subsystem, package workflow, module loader, or runtime architecture already exists and works correctly, then DO NOT rewrite, redesign, replace, destabilize, or modify it unnecessarily.
+
+If something already exists:
+
+* leave it intact
+* preserve compatibility
+* preserve performance
+* preserve semantics
+* preserve syntax behavior
+
+Only implement missing functionality or measurable improvements.
+
+---
+
+# DO NOT HARM THE LANGUAGE
 
 DO NOT:
 
-* redesign the syntax
-* make GlowLang feel like Python
-* make GlowLang feel like JavaScript
-* make GlowLang feel like Rust
-* introduce unnecessary boilerplate
-* alter existing runtime semantics
-* break existing optimization systems
-* replace the current architecture
-* touch already stable components unless explicitly required
-* weaken the “Natural Language Like” design philosophy
+* break existing syntax
+* change the Natural Language Like philosophy
+* introduce Python-like syntax cloning
+* introduce unnecessary complexity
+* rewrite working architecture
+* destabilize the JIT
+* damage runtime performance
+* alter stable GC systems
+* break package compatibility
+* weaken startup speed
+* increase memory overhead unnecessarily
+* introduce unsafe optimizations without guard systems
+* sacrifice readability for engineering complexity
 
-ALL enhancements must integrate into the existing architecture cleanly.
+GlowLang must remain:
 
-The user-facing syntax must remain:
-
-* readable
 * lightweight
+* readable
 * expressive
-* conversational
-* elegant
-* minimal
-
-The runtime/compiler should absorb all complexity internally.
+* fast-starting
+* adaptive
+* production-stable
 
 ---
 
-# PACKAGE MANAGER & ECOSYSTEM STANDARD
+# PACKAGE MANAGER STANDARD
 
-GlowLang already has a package manager named:
+GlowLang already has an official package manager:
 
 # gdu
 
-This MUST remain the official package system.
+This MUST remain the official ecosystem manager.
 
-The package workflow should remain simple and natural.
+Example usage:
 
-Examples:
-
-```bash id="bxyi3m"
+```bash id="jlwm1a"
 gdu install numpy
-gdu install vision
-gdu install webtools
+gdu install ai
+gdu install web
+gdu install postgres
 ```
 
-NOT:
+Do NOT redesign or replace `gdu`.
 
-* pip
-* npm
-* cargo
-* poetry-style complexity
-
-The ecosystem should feel:
-
-* lightweight
-* instant
-* minimal
-* developer-friendly
-* natural
+Expand it carefully.
 
 ---
 
 # MODULE SYSTEM REQUIREMENTS
 
-GlowLang’s import system must remain natural-language-like.
+GlowLang imports must remain natural and lightweight.
 
-Preferred style examples:
+Preferred examples:
 
-```glow id="jlwmj6"
+```glow id="jlwm1b"
 use math
 ```
 
-```glow id="jlwmu7"
-use matrix from vision
+```glow id="jlwm1c"
+use matrix from ai
 ```
 
-```glow id="jlwmz8"
+```glow id="jlwm1d"
 using graphics as gfx
 ```
 
 Avoid:
 
+* excessive nesting
 * Python-style clutter
-* excessive dots/chains
-* verbose package syntax
+* JavaScript-style import complexity
+* verbose module syntax
 
 ---
 
-# ADVANCED RUNTIME & COMPILER EXPANSION TASKS
+# ECOSYSTEM EXPANSION TASKS
 
-Implement and refine the following systems while preserving all existing architecture and syntax behavior.
-
----
-
-# PERFORMANCE & MEMORY SYSTEMS
-
-## Object Layout Optimization
-
-Optimize object field placement and memory alignment for improved cache locality and reduced pointer chasing.
-
-## Hidden Class Transition Pruning
-
-Reduce unnecessary shape transitions and stabilize object layout evolution graphs.
-
-## Cache Locality Optimization
-
-Improve memory access patterns for hot objects, arrays, and closures.
-
-## Branch Prediction Optimization
-
-Restructure hot execution paths to maximize CPU branch predictor efficiency.
-
-## Advanced Register Allocation Refinement
-
-Further reduce register spilling and improve register lifetime management.
-
-## SIMD / Vectorization Backend
-
-Add AVX/SSE/NEON vectorization support for numerical workloads.
-
-## Packed Typed Arrays
-
-Implement packed integer/float array structures for high-performance numeric workloads.
-
-## Profile-Guided Optimization (PGO)
-
-Allow runtime profiling data to guide optimization decisions.
-
-## Runtime Profiling Infrastructure
-
-Build internal profiling systems for:
-
-* hot paths
-* type frequency
-* allocation behavior
-* branch behavior
-* shape usage
-
-## Adaptive Tiered Compilation Refinement
-
-Improve transitions between:
-
-* interpreter
-* baseline JIT
-* optimizing JIT
-* trace compiler
-
-## JIT Guard Optimization
-
-Reduce overhead of runtime type/shape guards while preserving speculative optimization safety.
+Implement missing ecosystem capabilities while preserving all existing architecture.
 
 ---
 
-# GARBAGE COLLECTION & MEMORY MANAGEMENT
+# AI / MACHINE LEARNING SYSTEMS
 
-## Concurrent / Incremental GC
+Implement:
 
-Reduce pause times using concurrent or incremental garbage collection strategies.
+* Tensor runtime
+* PackedTensor structures
+* Matrix engine
+* SIMD tensor acceleration
+* CUDA/OpenCL interoperability
+* AI numeric kernels
+* Automatic differentiation
+* ONNX model loading
+* Neural-network primitives
+* Scientific computing APIs
 
-## Write Barrier Optimization
+Goal:
+GlowLang should support:
 
-Optimize generational and concurrent GC write barriers.
-
-## Object Storage Compaction
-
-Reduce fragmentation and improve object density in memory.
-
----
-
-# DYNAMIC RUNTIME OPTIMIZATION
-
-## Devirtualization
-
-Convert stable dynamic calls into direct/native jumps where possible.
-
-## Inline Cached Method Dispatch Refinement
-
-Further optimize method dispatch caching behavior for polymorphic workloads.
-
-## Optimized Closure Representation
-
-Reduce closure allocation overhead and improve upvalue locality.
-
-## Zero-Cost Exception Handling
-
-Implement optimized exception mechanisms with near-zero overhead in non-throwing paths.
+* AI workloads
+* ML pipelines
+* vector computation
+* numerical simulations
+* data processing
 
 ---
 
-# STRING & TEXT ENGINE
+# WEB DEVELOPMENT STACK
 
-## Fast String Engine
+Implement:
 
-Optimize string creation, slicing, concatenation, hashing, and comparison.
+* HTTP server runtime
+* Async networking layer
+* Routing system
+* Middleware engine
+* WebSocket support
+* REST API framework
+* JSON serialization
+* Database connectors
+* Template rendering
+* ORM/query layer
 
-## Rope String Implementation
+Goal:
+GlowLang should support:
 
-Efficiently support large immutable string concatenation and editing.
-
-## String Interning System
-
-Intern frequently reused strings for faster comparisons and lower memory use.
-
----
-
-# NATIVE INTEROP & PLATFORM SYSTEMS
-
-## Native FFI System
-
-Implement lightweight native interoperability for:
-
-* C
-* C++
-* system libraries
-
-while preserving GlowLang readability.
-
-Example direction:
-
-```glow id="jlwmx9"
-use native sqlite
-```
-
-Avoid verbose binding systems.
+* backend APIs
+* real-time networking
+* scalable web services
+* modern web applications
 
 ---
 
-# CONCURRENCY & EXECUTION
+# ASYNC & CONCURRENCY RUNTIME
 
-## Coroutine / Async Runtime
+Implement:
 
-Implement lightweight coroutine scheduling and async execution.
+* Coroutine scheduler
+* Async runtime
+* Event loop
+* Timers
+* Non-blocking I/O
+* Socket runtime
+* Multithreading support
+* Lock-free queues
+* Task scheduling
+* Concurrent runtime primitives
 
-## Multithreading Runtime
+Goal:
+GlowLang should scale efficiently for:
 
-Support scalable multithreaded execution.
-
-## Lock-Free Runtime Structures
-
-Implement lock-free queues, allocators, and runtime coordination structures.
-
----
-
-# MULTI-PLATFORM BACKENDS
-
-## ARM64 Native Backend
-
-Add optimized ARM64 code generation.
-
-## WebAssembly Backend
-
-Allow GlowLang execution inside browsers and WASM environments.
-
-## Ahead-of-Time (AOT) Compilation
-
-Support native executable generation for deployment scenarios.
+* servers
+* networking
+* concurrent workloads
+* async applications
 
 ---
 
-# COMPILER OPTIMIZATION SYSTEMS
+# DATABASE ECOSYSTEM
 
-## Bytecode Optimization Passes
+Implement:
 
-Add advanced bytecode-level optimization stages.
+* PostgreSQL driver
+* SQLite runtime integration
+* Redis client
+* Query builder
+* ORM system
+* Migration tooling
+* Connection pooling
 
-## Constant Folding Expansion
+---
 
-Expand compile-time evaluation and simplification.
+# GUI & GRAPHICS SYSTEMS
 
-## Dead Code Elimination Expansion
+Implement:
 
-Aggressively remove unreachable or unused code paths.
+* Windowing toolkit
+* Graphics bindings
+* Event-driven UI system
+* Rendering APIs
+* Lightweight GUI framework
 
-## Loop Unrolling
+---
 
-Optimize predictable hot loops.
+# GAME DEVELOPMENT CAPABILITIES
 
-## Hot Loop Trace Refinement
+Implement:
 
-Improve trace recording and execution quality for loop-heavy workloads.
-
-## Incremental Compiler Pipeline
-
-Support partial recompilation and faster development workflows.
+* Game loop framework
+* ECS architecture support
+* OpenGL/Vulkan bindings
+* Audio runtime
+* Physics bindings
+* Input systems
 
 ---
 
 # TOOLING & DEVELOPER EXPERIENCE
 
-## Fast Module Loader
+Implement:
 
-Optimize package/module loading and dependency resolution.
-
-## Native Package Manager
-
-Expand the gdu ecosystem capabilities.
-
-## REPL Optimization Layer
-
-Improve interactive runtime responsiveness and state retention.
-
-## Debugger + Runtime Introspection
-
-Implement production-grade debugging and runtime inspection tools.
-
-## Runtime Snapshotting / Fast Startup Images
-
-Allow serialized runtime snapshots for near-instant startup.
+* Language Server Protocol (LSP)
+* VSCode integration
+* Debugger
+* Runtime profiler
+* Stack traces
+* Runtime introspection
+* Formatter
+* Package documentation generator
+* Interactive REPL improvements
 
 ---
 
-# AI / NUMERICAL COMPUTING SYSTEMS
+# PLATFORM & DEPLOYMENT SYSTEMS
 
-## AI/ML Numeric Runtime Optimizations
+Implement:
 
-Optimize tensor/math/numeric operations for:
-
-* AI workloads
-* matrix operations
-* vector computation
-* data pipelines
-
-Potentially integrate:
-
-* SIMD
-* packed arrays
-* native acceleration
+* ARM64 backend
+* WebAssembly backend
+* AOT compilation
+* Cross-compilation
+* Binary packaging
+* Runtime snapshots
+* Fast startup images
+* Docker/deployment tooling
 
 ---
 
-# ADD THIS IMPORTANT ENGINEERING RULE TO THE PROMPT
+# ADVANCED OPTIMIZATION SYSTEMS
 
-## Existing Systems Protection Rule
+Implement/refine:
 
-If a system, optimization, compiler pass, runtime feature, allocator, JIT behavior, GC mechanism, package workflow, module loader, syntax feature, or architectural component already exists and is functioning correctly, then there is NO need to redesign, rewrite, replace, or modify it unnecessarily.
+* Object Layout Optimization
+* Hidden Class Transition Pruning
+* Cache Locality Optimization
+* Branch Prediction Optimization
+* Advanced Register Allocation Refinement
+* SIMD / Vectorization Backend
+* Packed Typed Arrays
+* Profile-Guided Optimization (PGO)
+* Runtime Profiling Infrastructure
+* Adaptive Tiered Compilation Refinement
+* JIT Guard Optimization
+* Concurrent / Incremental GC
+* Write Barrier Optimization
+* Devirtualization
+* Inline Cached Method Dispatch Refinement
+* Object Storage Compaction
+* Fast String Engine
+* Rope String Implementation
+* String Interning System
+* Native FFI System
+* Coroutine / Async Runtime
+* Multithreading Runtime
+* Lock-Free Runtime Structures
+* ARM64 Native Backend
+* WebAssembly Backend
+* Ahead-of-Time (AOT) Compilation
+* Bytecode Optimization Passes
+* Constant Folding Expansion
+* Dead Code Elimination Expansion
+* Loop Unrolling
+* Hot Loop Trace Refinement
+* Fast Module Loader
+* Native Package Manager Expansion
+* Incremental Compiler Pipeline
+* REPL Optimization Layer
+* Debugger + Runtime Introspection
+* Optimized Closure Representation
+* Zero-Cost Exception Handling
+* Runtime Snapshotting / Fast Startup Images
+* AI/ML Numeric Runtime Optimizations
 
-Only implement improvements where:
+---
 
-* measurable bottlenecks exist
-* missing functionality exists
-* performance regressions exist
-* architectural gaps exist
-* scalability limitations exist
+# TESTING REQUIREMENTS (EXTREMELY IMPORTANT)
 
-DO NOT:
+After implementing ANY feature:
 
-* rewrite stable components for stylistic reasons
-* replace working systems unnecessarily
-* introduce breaking architectural changes
-* alter already optimized pipelines without measurable benefit
-* modify syntax that already aligns with the GlowLang philosophy
+You MUST rigorously test it.
 
-All future enhancements must:
+Do NOT create:
 
-* integrate cleanly into the current architecture
-* preserve backward compatibility
-* preserve runtime stability
-* preserve benchmark integrity
-* preserve the Natural Language Like identity
-* avoid unnecessary engine complexity
+* fake implementations
+* shell-only demos
+* placeholder systems
+* mock outputs
+* skeleton APIs
+* non-functional wrappers
 
-Priority should always be:
+Every implemented feature must:
+
+* function fully
+* execute correctly
+* integrate with the runtime
+* survive stress testing
+* survive edge-case testing
+* survive concurrency testing
+* survive memory pressure testing
+* survive long-running execution
+* preserve compatibility with existing systems
+
+---
+
+# REQUIRED TESTING PROCESS
+
+For EVERY implemented system:
+
+1. Unit tests
+2. Integration tests
+3. Stress tests
+4. Performance tests
+5. Concurrency tests
+6. Memory integrity tests
+7. Runtime stability tests
+8. JIT correctness tests
+9. GC safety tests
+10. Real-world workload tests
+
+Verify:
+
+* actual execution
+* actual correctness
+* actual runtime behavior
+
+NOT just printed shell output.
+
+---
+
+# BENCHMARK REQUIREMENTS
+
+After implementation and testing:
+
+Run comprehensive benchmarks against all languages installed on the Linux system, including but not limited to:
+
+* C
+* C++
+* Go
+* Java
+* Node.js
+* Python
+* Rust (if installed)
+* C#/.NET (if installed)
+
+Benchmark categories must include:
+
+* tight loops
+* recursion
+* graph algorithms
+* object-heavy workloads
+* async networking
+* AI/numeric workloads
+* SIMD workloads
+* string processing
+* allocation-heavy workloads
+* multithreaded workloads
+
+Generate:
+
+* reproducible benchmark reports
+* memory usage analysis
+* startup latency analysis
+* throughput analysis
+* GC behavior analysis
+* scalability analysis
+
+---
+
+# FINAL ENGINEERING RULE
+
+GlowLang is already production-grade.
+
+DO NOT destroy stability chasing theoretical optimizations.
+
+Priority order:
 
 1. Stability
-2. Performance
-3. Maintainability
-4. Runtime efficiency
-5. Developer experience
+2. Correctness
+3. Runtime Safety
+4. Backward Compatibility
+5. Maintainability
+6. Performance
+7. Ecosystem Growth
+8. Developer Experience
 
-GlowLang’s evolution should be:
+All improvements must be:
 
 * incremental
-* performance-driven
-* architecture-aware
 * benchmark-verified
+* architecture-aware
+* production-safe
 * minimally disruptive
 
-
-# IMPORTANT ENGINEERING RULES
-
-DO NOT:
-
-* rewrite stable systems unnecessarily
-* introduce architecture-breaking changes
-* copy Python internals blindly
-* introduce JVM-like runtime heaviness
-* compromise startup speed
-* reduce readability
-* sacrifice natural-language identity for optimization
-
-GlowLang should remain:
-
-* lightweight like Lua
-* readable like Python
-* adaptive like V8
-* fast like modern JIT runtimes
-
-while preserving its own unique identity.
-
----
-
-# TARGET ENDGOAL
-
-GlowLang should become:
-
-* a high-performance scripting language
-* a natural-language-like systems runtime
-* a modern automation language
-* an AI-ready execution platform
-* a lightweight deployment/runtime ecosystem
-* a fast CLI/backend language
-* a production-grade adaptive runtime
-
-without losing its defining philosophy:
+GlowLang must continue to feel:
 
 # “Readable like human language.
 

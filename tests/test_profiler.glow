@@ -1,0 +1,12 @@
+func heavy_work():
+    let total = 0
+    every i from 0 to 100000:
+        total = total + i
+    end
+    return total
+end
+
+debug.profile_start()
+heavy_work()
+heavy_work()
+debug.profile_stop()
