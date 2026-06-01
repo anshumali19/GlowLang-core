@@ -1,0 +1,16 @@
+# Async Concurrency Demo
+
+action worker(id):
+    show "Worker " + id + " starting..."
+    os.sleep(500) # Non-blocking sleep, yields GIL
+    show "Worker " + id + " finished!"
+end
+
+show "Spawning workers..."
+spawn worker(1)
+spawn worker(2)
+spawn worker(3)
+
+show "Main thread waiting for workers..."
+os.sleep(1000)
+show "Done."

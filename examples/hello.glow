@@ -1,0 +1,10 @@
+# Hello World in GlowLang
+
+let name = "World"
+show "Hello, " + name + "!"
+
+action greet(person):
+    return "Greetings, " + person
+end
+
+show greet("GlowLang Developer")
