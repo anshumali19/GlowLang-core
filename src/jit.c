@@ -49,7 +49,10 @@ static void emit_mov_r11_imm64(JITBuffer *buf, uint64_t imm) {
 Value add_floats_jit(Value a, Value b) { return value_float(val_to_double(a) + val_to_double(b)); }
 Value sub_floats_jit(Value a, Value b) { return value_float(val_to_double(a) - val_to_double(b)); }
 Value mul_floats_jit(Value a, Value b) { return value_float(val_to_double(a) * val_to_double(b)); }
-Value div_floats_jit(Value a, Value b) { return value_float(val_to_double(a) / val_to_double(b)); }
+Value div_floats_jit(Value a, Value b) { 
+    if (val_to_double(b) == 0.0) return make_value(VAL_DEOPT, 0);
+    return value_float(val_to_double(a) / val_to_double(b)); 
+}
 
 static void emit_mov_rax_reg(JITBuffer *buf, int reg) {
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x84); jit_emit_byte(buf, 0x24); jit_emit_u32(buf, reg * 8);
@@ -318,7 +321,9 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
     offsets[bc->count] = buf.size;
     for (int i = 0; i < jump_count; i++) { uint32_t target_offset = offsets[jumps[i].instr_idx]; uint32_t patch_pos = jumps[i].patch_pos; int32_t rel = (int32_t)target_offset - (int32_t)(patch_pos + 4); memcpy(code + patch_pos, &rel, 4); }
     mprotect(code, size, PROT_READ | PROT_EXEC);
-    bc->jit_code = code; bc->jit_size = size; free(offsets); free(jumps);
+    bc->jit_code = code; bc->jit_size = buf.size;
+    bc->jit_offsets = offsets; 
+    free(jumps);
 }
 
 void jit_compile(Bytecode *bc) {
