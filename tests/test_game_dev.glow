@@ -1,0 +1,40 @@
+show "GlowLang Game Dev Engine Test"
+
+# Physics primitives
+let p1 = [10, 20]
+let p2 = [40, 60]
+let dist = math.vec2_dist(p1[0], p1[1], p2[0], p2[1])
+show "Distance between points: ", dist
+
+# Collision Test (AABB)
+# Player: rect at (10, 10) size 50x50
+# Enemy: rect at (40, 40) size 50x50
+let player_x = 10
+let player_y = 10
+let enemy_x = 40
+let enemy_y = 40
+
+let hit = collision.aabb(player_x, player_y, 50, 50, enemy_x, enemy_y, 50, 50)
+show "Collision Detected: ", hit
+
+when hit is true:
+    show "BOOM! Player hit enemy."
+end
+
+# Component System (GlowLang Classes as ECS)
+class Entity:
+    action init(id):
+        self.id = id
+        self.components = {}
+    end
+    
+    action add_component(name, data):
+        self.components[name] = data
+    end
+end
+
+let hero = Entity(1)
+hero.add_component("health", 100)
+hero.add_component("position", [10, 10])
+
+show "Hero Health: ", hero.components["health"]
