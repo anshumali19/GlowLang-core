@@ -134,6 +134,15 @@ typedef struct GlobalTable {
 extern GlobalTable global_table;
 int global_get_slot(const char *name);
 
+typedef struct CallFrame {
+    struct FuncEntry *fe;
+    struct Instruction *pc;
+} CallFrame;
+extern __thread CallFrame call_stack[1024];
+extern __thread int call_stack_ptr;
+void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
+void call_stack_pop(void);
+
 extern TypeSignature compute_signature(Value *regs, int count);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_name(const char *name, int argc, Value *args, struct Instruction *pc);
@@ -264,6 +273,8 @@ struct Instruction {
     unsigned short r0, r1, r2;
     unsigned char type; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
     unsigned char is_stack_alloc;
+    int line;
+    const char *file;
     void *trace;
 };
 
@@ -295,8 +306,10 @@ struct Bytecode {
     int count;
     void *jit_code;
     size_t jit_size;
+    uint32_t *jit_offsets;
     int jit_failed;
     int local_count;
+    struct FuncEntry *owner;
     ExceptionEntry *exception_table;
     int exception_count;
 };

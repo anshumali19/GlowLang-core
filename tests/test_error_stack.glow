@@ -1,0 +1,13 @@
+func f3():
+    non_existent_func()
+end
+
+func f2():
+    f3()
+end
+
+func f1():
+    f2()
+end
+
+f1()

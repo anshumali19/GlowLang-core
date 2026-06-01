@@ -1,0 +1,12 @@
+func div_test(n):
+    return 10 / n
+end
+
+# Warmup to JIT
+let k = 0
+while k < 110:
+    div_test(1)
+    k = k + 1
+end
+
+show div_test(0)

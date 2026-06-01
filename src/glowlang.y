@@ -65,6 +65,7 @@ static Instance* instance_new(Class *k);
 static Value bound_method_new(Value instance, FuncEntry *method);
 
 Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
+    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     if (fe && fe->body) {
         TypeSignature sig = compute_signature(args, fe->param_count);
         void *jit = func_get_specialization(fe, sig);
@@ -75,7 +76,10 @@ Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
             }
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
-            return ((JITFunc)jit)(args, &deopt_pc);
+            call_stack_push(fe, NULL);
+            Value res = ((JITFunc)jit)(args, &deopt_pc);
+            call_stack_pop();
+            return res;
         }
         return run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
     }
@@ -83,6 +87,7 @@ Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
 }
 
 Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
+    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     FuncEntry *fe = func_get(name);
     if (fe) return jit_call_helper(fe, argc, args, pc);
     Value v = var_get(name);
@@ -90,6 +95,7 @@ Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction 
 }
 
 Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
+    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(callee);
         if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(callee)));
@@ -149,6 +155,22 @@ double val_to_double(Value v) {
 Value value_from_double(double d) {
     if (d == (int64_t)d) return value_int((int64_t)d);
     return value_float(d);
+}
+
+#define MAX_CALL_STACK 1024
+__thread CallFrame call_stack[MAX_CALL_STACK];
+__thread int call_stack_ptr = 0;
+
+void call_stack_push(FuncEntry *fe, Instruction *pc) {
+    if (call_stack_ptr < MAX_CALL_STACK) {
+        call_stack[call_stack_ptr].fe = fe;
+        call_stack[call_stack_ptr].pc = pc;
+        call_stack_ptr++;
+    }
+}
+
+void call_stack_pop(void) {
+    if (call_stack_ptr > 0) call_stack_ptr--;
 }
 
 static int val_eq(Value a, Value b) {
@@ -232,7 +254,13 @@ static unsigned int hash_str(const char *s) {
 
 static int func_table_size = 1024;
 static FuncEntry *func_table = NULL;
-static void func_table_init(void) { func_table = calloc(func_table_size, sizeof(FuncEntry)); }
+static FuncEntry main_fe;
+static void func_table_init(void) { 
+    func_table = calloc(func_table_size, sizeof(FuncEntry)); 
+    main_fe.name = "<main>";
+    main_fe.param_count = 0;
+    main_fe.body = NULL;
+}
 static FuncEntry* func_table_add(const char *name) {
     unsigned int h = hash_str(name) % func_table_size;
     unsigned int idx = h;
@@ -656,6 +684,8 @@ static Bytecode *compiling_bc = NULL;
 static Class *last_compiling_class = NULL;
 static Trait *last_compiling_trait = NULL;
 static int next_free_reg = 0;
+static int compiling_line = 0;
+static const char *compiling_file = NULL;
 
 static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     if (bc->count >= bc->capacity) { bc->capacity = (bc->capacity == 0) ? 1024 : bc->capacity * 2; bc->code = realloc(bc->code, sizeof(Instruction)*bc->capacity); }
@@ -665,7 +695,7 @@ static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     bc->code[idx].arg = arg;
     bc->code[idx].ptr = ptr;
     for (int i=0; i<4; i++) {
-        bc->code[idx].cache[i].key = NULL;
+        bc->code[idx].cache[i].key = (void*)-1;
         bc->code[idx].cache[i].val = 0;
     }
     bc->code[idx].cache_next = 0;
@@ -675,6 +705,8 @@ static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     bc->code[idx].r2 = 0;
     bc->code[idx].type = 0;
     bc->code[idx].is_stack_alloc = 0;
+    bc->code[idx].line = compiling_line;
+    bc->code[idx].file = compiling_file;
     bc->code[idx].trace = NULL;
     bc->count++;
     return idx;
@@ -690,13 +722,14 @@ static int bc_emit_reg(Bytecode *bc, OpCode op, int r0, int r1, int r2) {
     bc->code[idx].r2 = (unsigned short)r2;
     return idx;
 }
-static Bytecode* bc_new() { 
+static Bytecode* bc_new(FuncEntry *owner) { 
     Bytecode *bc = calloc(1, sizeof(Bytecode)); 
     bc->capacity = 1024; 
     bc->code = calloc(bc->capacity, sizeof(Instruction)); 
+    bc->owner = owner;
     bc->exception_table = NULL;
     bc->exception_count = 0;
-    return bc; 
+    return bc;
 }
 
 static void bc_add_handler(Bytecode *bc, int start, int end, int handler) {
@@ -809,6 +842,7 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
 
 static void compile_stmt(Node *n) {
     if (!n) return;
+    compiling_line = n->line;
     if (compiling_func && n->name) {
         if (n->type == NODE_VAR || n->type == NODE_ASSIGN || n->type == NODE_LET) {
             func_add_local(compiling_func, n->name);
@@ -898,7 +932,7 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_FUNC_DEF: {
-            FuncEntry *fe = func_table_add(n->name); fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new();
+            FuncEntry *fe = func_table_add(n->name); fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; 
             FuncEntry *pf = compiling_func; compiling_func = fe;
             int old_free = next_free_reg; next_free_reg = fe->param_count + fe->local_count;
@@ -994,6 +1028,7 @@ static int compile_expr(Node *n, int target_reg) {
     if (!n) { 
         return -1; 
     }
+    compiling_line = n->line;
     int reg = target_reg;
     if (reg == -1) reg = next_free_reg++;
 
@@ -1164,7 +1199,7 @@ static int compile_expr(Node *n, int target_reg) {
             FuncEntry *fe = func_table_add(n->name);
             fe->param_count = n->func_param_count;
             fe->params = n->func_params;
-            fe->body = bc_new();
+            fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; FuncEntry *pf = compiling_func; compiling_func = fe;
             int old_free = next_free_reg; next_free_reg = fe->param_count;
             compile_stmt(n->left);
@@ -1269,6 +1304,81 @@ static Trait *vm_last_trait = NULL;
 
 void jit_compile_trace(Trace *t);
 
+static __thread char *exception_stack_trace = NULL;
+static __thread const char *error_file = NULL;
+static __thread int error_line = 0;
+
+char* format_stack_trace(void) {
+    char *buf = malloc(4096);
+    buf[0] = '\0';
+    strcat(buf, "Stack Trace:\n");
+    for (int i = call_stack_ptr - 1; i >= 0; i--) {
+        FuncEntry *fe = call_stack[i].fe;
+        Instruction *pc = call_stack[i].pc;
+        int line = pc ? pc->line : 0;
+        const char *file = pc ? pc->file : "<unknown>";
+        char frame[256];
+        snprintf(frame, 256, "  at %s (%s:%d)\n", fe ? fe->name : "<unknown>", file, line);
+        strcat(buf, frame);
+    }
+    return buf;
+}
+
+void print_stack_trace(void) {
+    char *s = format_stack_trace();
+    fprintf(stderr, "%s", s);
+    free(s);
+}
+
+void print_error_line(const char *file, int line) {
+    if (!file || line <= 0) return;
+    FILE *f = fopen(file, "r");
+    if (!f) return;
+    char buf[1024];
+    int curr = 1;
+    while (fgets(buf, 1024, f)) {
+        if (curr == line) {
+            fprintf(stderr, "  %4d | %s", line, buf);
+            break;
+        }
+        curr++;
+    }
+    fclose(f);
+}
+
+void print_error_trace(Value exception) {
+    fprintf(stderr, "Uncaught Exception: ");
+    if (exception == 0) { fprintf(stderr, "none"); }
+    else if ((exception & MASK_NAN) != MASK_NAN) { fprintf(stderr, "%g", AS_FLOAT(exception)); }
+    else {
+        uint64_t type = (exception & MASK_TYPE) >> 48;
+        if (type == VAL_INT) fprintf(stderr, "%ld", (long)AS_INT(exception));
+        else if (type == VAL_BOOL) fprintf(stderr, AS_BOOL(exception) ? "true" : "false");
+        else if (type == VAL_STRING) fprintf(stderr, "%s", AS_STRING(exception));
+        else {
+            ObjType ot = GET_OBJ_TYPE(exception);
+            if (ot == OBJ_CLASS) fprintf(stderr, "<class %s>", AS_CLASS(exception)->name);
+            else if (ot == OBJ_INSTANCE) fprintf(stderr, "<instance of %s>", AS_INSTANCE(exception)->klass->name);
+            else fprintf(stderr, "<object>");
+        }
+    }
+    fprintf(stderr, "\n\n");
+    
+    // Print source context for the actual error location
+    if (error_file && error_line > 0) {
+        print_error_line(error_file, error_line);
+    }
+    fprintf(stderr, "\n");
+
+    if (exception_stack_trace) {
+        fprintf(stderr, "%s", exception_stack_trace);
+        free(exception_stack_trace);
+        exception_stack_trace = NULL;
+    } else {
+        print_stack_trace();
+    }
+}
+
 static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
     static __thread int call_depth = 0;
     if (++call_depth > 500) {
@@ -1276,6 +1386,9 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         call_depth--;
         return value_none();
     }
+
+    call_stack_push(bc->owner, start_pc ? start_pc : bc->code);
+    int my_frame_idx = call_stack_ptr - 1;
 
     size_t old_arena_used = stack_arena_used;
     int old_top = vm_stack_top;
@@ -1299,9 +1412,9 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         if (bc->code[0].exec_count >= 5) jit_compile(bc);
     }
     if (!start_pc && bc->jit_code) {
-        typedef Value (*JitFunc)(Value *R, int *pc_idx);
+        typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
-        Value res = ((JitFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
+        Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
         if (GET_TYPE(res) == VAL_DEOPT) {
             pc = &bc->code[deopt_pc];
             goto l_RESUME_INTERP;
@@ -1352,11 +1465,13 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         &&l_OP_NOP,
         &&l_OP_TRACE_ENTER,
         &&l_OP_PACKED_ADD,
-        &&l_OP_PACKED_SUB
+        &&l_OP_PACKED_SUB,
+        &&l_OP_SIMD_ADD
     };
 
 #define R(idx) vm_stack[base_reg + (idx)]
 #define DISPATCH() { \
+    if (has_exception) goto l_OP_THROW; \
     goto *dt[pc->op]; \
 }
     DISPATCH();
@@ -1419,14 +1534,17 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_MUL: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_int(AS_INT(a) * AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_from_double(val_to_double(a) * val_to_double(b)); } pc++; DISPATCH(); }
     l_OP_DIV: { 
         Value a = R(pc->r1), b = R(pc->r2);
-        if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT && AS_INT(b) != 0) {
+        if (val_to_double(b) == 0.0) {
+            pending_exception = value_string_copy("Division by zero");
+            has_exception = 1;
+            goto l_OP_THROW;
+        }
+        if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
             pc->type = 1;
             R(pc->r0) = value_int(AS_INT(a) / AS_INT(b));
         } else {
             pc->type = 2;
-            double da = val_to_double(a), db = val_to_double(b);
-            if (db == 0.0) R(pc->r0) = value_none();
-            else R(pc->r0) = value_from_double(da / db);
+            R(pc->r0) = value_from_double(val_to_double(a) / val_to_double(b));
         }
         pc++; DISPATCH(); 
     }
@@ -1482,10 +1600,29 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_CALL: {
         int ac = pc->arg; const char *n = (const char*)pc->ptr;
         FuncEntry *fe = func_get(n);
+        call_stack[my_frame_idx].pc = pc; // Update current frame PC
         if (fe && fe->body) {
             TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
+            
+            // 1. PIC Lookup
+            if (pc->cache[0].key == (void*)sig && pc->cache[0].val) {
+                typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                JITFunc f = (JITFunc)pc->cache[0].val;
+                int deopt_pc = 0;
+                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                if (GET_TYPE(res) == VAL_DEOPT) {
+                    res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                }
+                if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                pc++; DISPATCH();
+            }
+
             void *jit = func_get_specialization(fe, sig);
             if (jit && jit != (void*)1) {
+                // Update Cache
+                pc->cache[0].key = (void*)sig;
+                pc->cache[0].val = (intptr_t)jit;
+
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc f = (JITFunc)jit;
                 int deopt_pc = 0;
@@ -1515,7 +1652,12 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 if (ot == OBJ_CLASS) { R(pc->r0) = value_instance(instance_new(AS_CLASS(v))); }
                 else if (ot == OBJ_NATIVE_FUNC) { R(pc->r0) = AS_NATIVE_FUNC(v)->func(ac, &R(pc->r2)); }
                 else R(pc->r0) = value_none();
-            } else R(pc->r0) = value_none();
+            } else {
+                char msg[256]; snprintf(msg, 256, "Function '%s' not found", n);
+                pending_exception = value_string_copy(msg);
+                has_exception = 1;
+                goto l_OP_THROW;
+            }
         }
         pc++; DISPATCH();
     }
@@ -1533,18 +1675,28 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_TRY_START: pc++; DISPATCH();
     l_OP_TRY_END: pc++; DISPATCH();
     l_OP_THROW: {
-        Value exc = R(pc->r0);
+        Value exc = (has_exception) ? pending_exception : R(pc->r0);
+        pending_exception = exc; has_exception = 1;
+        call_stack[my_frame_idx].pc = pc; // Record error location
+        
+        if (!exception_stack_trace) {
+            exception_stack_trace = format_stack_trace();
+            error_file = pc->file;
+            error_line = pc->line;
+        }
+
         int current_pc_idx = (int)(pc - bc->code);
         for (int i = 0; i < bc->exception_count; i++) {
             if (current_pc_idx >= bc->exception_table[i].start_pc && 
                 current_pc_idx < bc->exception_table[i].end_pc) {
                 R(0) = exc;
                 has_exception = 0;
+                pending_exception = 0;
+                if (exception_stack_trace) { free(exception_stack_trace); exception_stack_trace = NULL; }
                 pc = bc->code + bc->exception_table[i].handler_pc;
                 DISPATCH();
             }
         }
-        pending_exception = exc; has_exception = 1; 
         goto l_FINISH;
     }
     l_OP_CLASS_DEF: {
@@ -1629,6 +1781,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     }
     l_OP_CALL_VALUE: {
         int ac = pc->arg; Value callee = R(pc->r1);
+        call_stack[my_frame_idx].pc = pc; // Update current frame PC
         if(GET_TYPE(callee)==VAL_OBJECT && (callee & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(callee);
             if(ot==OBJ_CLASS) { R(pc->r0) = value_instance(instance_new(AS_CLASS(callee))); }
@@ -1642,7 +1795,9 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                         typedef Value (*JITFunc)(Value *R, int *pc_idx);
                         JITFunc f = (JITFunc)jit;
                         int deopt_pc = 0;
+                        call_stack_push(bm->method, NULL);
                         Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                        call_stack_pop();
                         if (GET_TYPE(res) == VAL_DEOPT) {
                             res = run_bytecode(bm->method->body, &bm->method->body->code[deopt_pc], NULL, base_reg + pc->r2);
                         }
@@ -1656,17 +1811,25 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                         if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                     }
                 } else R(pc->r0) = value_none();
-            }
- else if(ot==OBJ_CLOSURE) {
+            } else if(ot==OBJ_CLOSURE) {
                 Closure *c = AS_CLOSURE(callee);
                 if(c->body) {
                     Value res = run_bytecode(c->body, NULL, c, base_reg + pc->r2);
                     if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                 } else R(pc->r0) = value_none();
-            } else if(ot==OBJ_NATIVE_FUNC) {
+            } else if (ot == OBJ_NATIVE_FUNC) {
                 R(pc->r0) = AS_NATIVE_FUNC(callee)->func(ac, &R(pc->r2));
-            } else R(pc->r0) = value_none();
-        } else R(pc->r0) = value_none(); pc++; DISPATCH();
+            } else {
+                pending_exception = value_string_copy("Object is not callable");
+                has_exception = 1;
+                goto l_OP_THROW;
+            }
+        } else {
+            pending_exception = value_string_copy("Attempted to call a non-object value");
+            has_exception = 1;
+            goto l_OP_THROW;
+        }
+        pc++; DISPATCH();
     }
     l_OP_LIST_LITERAL: {
         int n = pc->arg; List *l = pc->is_stack_alloc ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
@@ -1885,11 +2048,18 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_DEFAULT: pc++; DISPATCH();
 
 l_FINISH:
+    if (has_exception && call_depth == 1) {
+        print_error_trace(pending_exception);
+        has_exception = 0; // Prevent double report
+    }
+    call_stack_pop();
     vm_stack_top = old_top;
     stack_arena_used = old_arena_used;
     call_depth--;
-    return (has_exception) ? value_none() : R(0); // This is heuristic for return value
-}void print_value(Value v) {
+    return (has_exception) ? value_none() : R(0);
+}
+
+void print_value(Value v) {
     if (v == 0) { printf("none"); return; }
     if ((v & MASK_NAN) != MASK_NAN) { printf("%g", AS_FLOAT(v)); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
@@ -2049,6 +2219,11 @@ static Value native_sqlite_close(int argc, Value *args) {
     return value_int(sqlite3_close(db));
 }
 
+static Value native_stacktrace(int argc, Value *args) {
+    print_stack_trace();
+    return value_none();
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2057,6 +2232,10 @@ static void std_init(void) {
     var_set("packed_add", native_func_new("packed_add", native_packed_add));
     var_set("packed_sub", native_func_new("packed_sub", native_packed_sub));
     var_set("net_close", native_func_new("net_close", net_close));
+
+    Dict *debug = dict_new(4);
+    dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
+    var_set("debug", value_dict(debug));
 
     Dict *sqlite = dict_new(4);
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
@@ -2077,9 +2256,11 @@ int main(int argc, char **argv) {
         if (strcmp(argv[1], "--lsp") == 0) { handle_client(0); return 0; }
         yyin = fopen(argv[1], "r");
         if(yyin) { 
+            compiling_file = argv[1];
             yyparse(); 
             if(root) { 
-                Bytecode *main_bc = bc_new(); compiling_bc = main_bc; next_free_reg = 0; 
+                Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0; 
+                main_fe.body = main_bc;
                 compile(root); 
                 main_bc->local_count = next_free_reg;
                 bc_emit(main_bc, OP_RETURN, 0, 0); 
