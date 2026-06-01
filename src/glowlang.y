@@ -2725,6 +2725,53 @@ static Value native_gui_poll(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_collision_aabb(int argc, Value *args) {
+    if (argc < 8) return value_bool(0);
+    double x1 = val_to_double(args[0]), y1 = val_to_double(args[1]), w1 = val_to_double(args[2]), h1 = val_to_double(args[3]);
+    double x2 = val_to_double(args[4]), y2 = val_to_double(args[5]), w2 = val_to_double(args[6]), h2 = val_to_double(args[7]);
+    return value_bool(x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2);
+}
+
+static Value math_vec2_add(int argc, Value *args) {
+    if (argc < 4) return value_none();
+    double x1 = val_to_double(args[0]), y1 = val_to_double(args[1]), x2 = val_to_double(args[2]), y2 = val_to_double(args[3]);
+    List *l = list_new(2); list_push(l, value_from_double(x1 + x2)); list_push(l, value_from_double(y1 + y2));
+    return value_list(l);
+}
+
+static Value math_vec2_dist(int argc, Value *args) {
+    if (argc < 4) return value_none();
+    double x1 = val_to_double(args[0]), y1 = val_to_double(args[1]), x2 = val_to_double(args[2]), y2 = val_to_double(args[3]);
+    return value_from_double(sqrt(pow(x2 - x1, 2) + pow(y2 - y1, 2)));
+}
+
+static Value native_fs_readdir(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    DIR *d = opendir(AS_STRING(args[0]));
+    if (!d) return value_none();
+    List *l = list_new(8);
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) { if (dir->d_name[0] != '.') list_push(l, value_string_copy(dir->d_name)); }
+    closedir(d);
+    return value_list(l);
+}
+
+static Value native_fs_stat(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    struct stat st;
+    if (stat(AS_STRING(args[0]), &st) != 0) return value_none();
+    Dict *d = dict_new(4);
+    dict_set(d, "size", value_int(st.st_size));
+    dict_set(d, "is_dir", value_bool(S_ISDIR(st.st_mode)));
+    return value_dict(d);
+}
+
+static Value native_os_getenv(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    char *v = getenv(AS_STRING(args[0]));
+    return v ? value_string_copy(v) : value_none();
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2745,7 +2792,13 @@ static void std_init(void) {
     dict_set(math, "cos", native_func_new("cos", math_cos));
     dict_set(math, "sqrt", native_func_new("sqrt", math_sqrt));
     dict_set(math, "pow", native_func_new("pow", math_pow));
+    dict_set(math, "vec2_add", native_func_new("vec2_add", math_vec2_add));
+    dict_set(math, "vec2_dist", native_func_new("vec2_dist", math_vec2_dist));
     var_set("math", value_dict(math));
+
+    Dict *collision = dict_new(4);
+    dict_set(collision, "aabb", native_func_new("aabb", native_collision_aabb));
+    var_set("collision", value_dict(collision));
 
     Dict *crypto = dict_new(4);
     dict_set(crypto, "sha256", native_func_new("sha256", crypto_sha256));
@@ -2782,7 +2835,18 @@ static void std_init(void) {
     dict_set(gui, "poll", native_func_new("poll", native_gui_poll));
     var_set("gui", value_dict(gui));
 
-    Dict *os = dict_new(4); dict_set(os, "exit", native_func_new("exit", os_exit)); dict_set(os, "time", native_func_new("time", os_time)); dict_set(os, "sleep", native_func_new("sleep", os_sleep)); var_set("os", value_dict(os));
+    Dict *os = dict_new(4); 
+    dict_set(os, "exit", native_func_new("exit", os_exit)); 
+    dict_set(os, "time", native_func_new("time", os_time)); 
+    dict_set(os, "sleep", native_func_new("sleep", os_sleep)); 
+    dict_set(os, "getenv", native_func_new("getenv", native_os_getenv));
+    var_set("os", value_dict(os));
+
+    Dict *fs = dict_new(4);
+    dict_set(fs, "readdir", native_func_new("readdir", native_fs_readdir));
+    dict_set(fs, "stat", native_func_new("stat", native_fs_stat));
+    var_set("fs", value_dict(fs));
+
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4); 
     dict_set(http, "listen", native_func_new("listen", http_listen)); 

@@ -1,0 +1,21 @@
+show "GlowLang Advanced StdLib Test"
+
+# FS Test
+let files = fs.readdir(".")
+show "Files in current directory: ", len(files)
+
+# Find Makefile
+every each f in files:
+    when f == "Makefile":
+        let info = fs.stat(f)
+        show "Makefile Size: ", info["size"], " bytes"
+    end
+end
+
+# OS Test
+let path = os.getenv("PATH")
+when path is not none:
+    show "Environment PATH length: ", len(path)
+otherwise:
+    show "PATH not found."
+end
