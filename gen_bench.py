@@ -383,9 +383,9 @@ while i < V:
 end
 
 let start = os.time()
-dijkstra(graph, V, 0)
+let res = dijkstra(graph, V, 0)
 let end_time = os.time()
-show "Glow Time: ", end_time - start, " s"
+show "Glow Time: ", end_time - start, " s (Result: ", res, ")"
 """
 
 run_sh = """#!/bin/bash

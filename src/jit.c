@@ -239,9 +239,10 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             case OP_JUMP: { jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_FALSE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_TRUE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
+            case OP_CALL_SELF_FAST:
             case OP_CALL:
             case OP_CALL_VALUE: {
-                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
+                FuncEntry *target_fe = (pc->op == OP_CALL || pc->op == OP_CALL_SELF_FAST) ? func_get((const char*)pc->ptr) : NULL;
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, r2*8
                 
@@ -290,6 +291,37 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
                 uint32_t done = buf.size; *(uint32_t*)(buf.code + jmp_done + 1) = (uint32_t)(done - (jmp_done + 5));
                 emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_TAIL_CALL: {
+                FuncEntry *target_fe = func_get((const char*)pc->ptr);
+                if (target_fe && target_fe == fe) {
+                    for (int k = 0; k < pc->arg && k < fe->param_count; k++) {
+                        emit_mov_rax_reg(&buf, pc->r2 + k);
+                        emit_mov_reg_rax(&buf, k);
+                    }
+                    jit_emit_byte(&buf, 0xe9);
+                    jumps[jump_count].instr_idx = 0;
+                    jumps[jump_count].patch_pos = buf.size;
+                    jit_emit_u32(&buf, 0);
+                    jump_count++;
+                } else {
+                    jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
+                    jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
+                    emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd2);
+                    emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                    if (target_fe) { 
+                        emit_mov_rdi_imm64(&buf, (uintptr_t)target_fe); 
+                        emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper); 
+                    } else { 
+                        emit_mov_rax_reg(&buf, pc->r1); 
+                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                        emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val); 
+                    }
+                    jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
+                    jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5f); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5e); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5d); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x5c); jit_emit_byte(&buf, 0x5d); jit_emit_byte(&buf, 0xc3);
+                }
                 break;
             }
             case OP_INDEX: {

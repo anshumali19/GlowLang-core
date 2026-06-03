@@ -158,7 +158,7 @@ Value value_from_double(double d) {
     return value_float(d);
 }
 
-#define MAX_CALL_STACK 1024
+#define MAX_CALL_STACK 65536
 __thread CallFrame call_stack[MAX_CALL_STACK];
 __thread int call_stack_ptr = 0;
 
@@ -174,6 +174,28 @@ void call_stack_pop(void) {
     if (call_stack_ptr > 0) call_stack_ptr--;
 }
 
+#include <immintrin.h>
+
+static int string_compare_simd(const char *s1, const char *s2) {
+    if (s1 == s2) return 1;
+    if (!s1 || !s2) return 0;
+    
+    // For simplicity, we compare in 32-byte chunks if they are long enough
+    size_t l1 = strlen(s1);
+    size_t l2 = strlen(s2);
+    if (l1 != l2) return 0;
+    
+    size_t i = 0;
+    for (; i + 32 <= l1; i += 32) {
+        __m256i v1 = _mm256_loadu_si256((__m256i*)&s1[i]);
+        __m256i v2 = _mm256_loadu_si256((__m256i*)&s2[i]);
+        __m256i cmp = _mm256_cmpeq_epi8(v1, v2);
+        unsigned int mask = _mm256_movemask_epi8(cmp);
+        if (mask != 0xFFFFFFFF) return 0;
+    }
+    return strcmp(s1 + i, s2 + i) == 0;
+}
+
 static int val_eq(Value a, Value b) {
     if (a == b) return 1;
     if (((a) & MASK_NAN) != MASK_NAN && ((b) & MASK_NAN) != MASK_NAN) return AS_FLOAT(a) == AS_FLOAT(b);
@@ -181,7 +203,7 @@ static int val_eq(Value a, Value b) {
     uint64_t tb = ((b) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
     if (ta == VAL_INT && tb == VAL_FLOAT) return (double)AS_INT(a) == AS_FLOAT(b);
     if (ta == VAL_FLOAT && tb == VAL_INT) return AS_FLOAT(a) == (double)AS_INT(b);
-    if (ta == VAL_STRING && tb == VAL_STRING) return strcmp(AS_STRING(a), AS_STRING(b)) == 0;
+    if (ta == VAL_STRING && tb == VAL_STRING) return string_compare_simd(AS_STRING(a), AS_STRING(b));
     return 0;
 }
 
@@ -201,8 +223,64 @@ static int value_truthy(Value v) {
 static Value value_string_copy(const char *s) {
     size_t len = strlen(s);
     GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
-    strcpy(gs->chars, s);
+    gs->size = (int)len;
+    if (len >= 32) {
+        size_t i = 0;
+        for (; i + 32 <= len; i += 32) {
+            __m256i v = _mm256_loadu_si256((__m256i*)&s[i]);
+            _mm256_storeu_si256((__m256i*)&gs->chars[i], v);
+        }
+        strcpy(gs->chars + i, s + i);
+    } else {
+        strcpy(gs->chars, s);
+    }
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+}
+
+static Value rope_new(Value left, Value right) {
+    RopeNode *rn = gc_alloc(sizeof(RopeNode), OBJ_ROPE);
+    rn->length = rope_length(left) + rope_length(right);
+    rn->is_leaf = false;
+    rn->internal.left = (RopeNode*)(uintptr_t)(left & MASK_PAYLOAD);
+    rn->internal.right = (RopeNode*)(uintptr_t)(right & MASK_PAYLOAD);
+    return make_value(VAL_STRING, (uint64_t)(uintptr_t)rn);
+}
+
+static void rope_flatten_recursive(RopeNode *rn, char *dest, size_t *offset) {
+    if (rn->obj.type == OBJ_STRING) {
+        GCString *gs = (GCString*)rn;
+        strcpy(dest + *offset, gs->chars);
+        *offset += strlen(gs->chars);
+    } else if (rn->obj.type == OBJ_ROPE) {
+        if (rn->is_leaf) {
+            GCString *gs = (GCString*)(uintptr_t)(rn->leaf.flat_string & MASK_PAYLOAD);
+            strcpy(dest + *offset, gs->chars + rn->leaf.offset);
+            *offset += rn->length;
+        } else {
+            rope_flatten_recursive(rn->internal.left, dest, offset);
+            rope_flatten_recursive(rn->internal.right, dest, offset);
+        }
+    }
+}
+
+const char* rope_flatten(Value v) {
+    GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (obj->type == OBJ_STRING) return ((GCString*)obj)->chars;
+    if (obj->type == OBJ_ROPE) {
+        RopeNode *rn = (RopeNode*)obj;
+        char *s = malloc(rn->length + 1);
+        size_t offset = 0;
+        rope_flatten_recursive(rn, s, &offset);
+        s[rn->length] = '\0';
+        Value flat = value_string_copy(s);
+        free(s);
+        // Cache it in the rope node? 
+        rn->is_leaf = true;
+        rn->leaf.flat_string = flat;
+        rn->leaf.offset = 0;
+        return AS_STRING(flat);
+    }
+    return "";
 }
 
 GlobalTable global_table = {NULL, NULL, 0, 0};
@@ -247,9 +325,20 @@ static void var_table_init(void) {
     // No longer needed
 }
 
+#include <nmmintrin.h>
+
 static unsigned int hash_str(const char *s) {
     unsigned int h = 5381;
-    while (*s) h = ((h << 5) + h) + *s++;
+    const uint64_t *p = (const uint64_t*)s;
+    size_t len = strlen(s);
+    size_t i = 0;
+    for (; i + 8 <= len; i += 8) {
+        h = _mm_crc32_u64(h, *p++);
+    }
+    s = (const char*)p;
+    for (; i < len; i++) {
+        h = _mm_crc32_u8(h, *s++);
+    }
     return h;
 }
 
@@ -274,7 +363,7 @@ static FuncEntry* func_table_add(const char *name) {
     return NULL;
 }
 FuncEntry* func_get(const char *name) {
-    if (!func_table) return NULL;
+    if (!name || !func_table) return NULL;
     unsigned int h = hash_str(name) % func_table_size;
     unsigned int idx = h;
     do {
@@ -326,9 +415,8 @@ static ThreadStack active_stacks[128];
 static int active_stack_count = 0;
 
 void print_error_trace(Value exception);
-
-static void vm_stack_init(void) {
-    vm_stack_size = 4096;
+void vm_stack_init(void) {
+    vm_stack_size = 2 * 1024 * 1024; // 16MB if Value is 8 bytes
     vm_stack = calloc(vm_stack_size, sizeof(Value));
     sp = 0;
     vm_stack_top = 0;
@@ -337,7 +425,7 @@ static void vm_stack_init(void) {
         active_stacks[active_stack_count].vm_stack_ptr = &vm_stack;
         active_stacks[active_stack_count].sp_ptr = &sp;
         active_stacks[active_stack_count].top_ptr = &vm_stack_top;
-                active_stacks[active_stack_count].pending_exc_ptr = &pending_exception;
+        active_stacks[active_stack_count].pending_exc_ptr = &pending_exception;
         active_stack_count++;
     }
     pthread_mutex_unlock(&threads_mutex);
@@ -462,6 +550,16 @@ static void gc_mark_object(GCObject *obj) {
         }
         case OBJ_INSTANCE: { Instance *ins = (Instance*)obj; gc_mark_object((GCObject*)ins->klass); gc_mark_object((GCObject*)ins->shape); if(ins->fields) { int lim = ins->shape ? ins->shape->offset : -1; for(int i=0; i<=lim; i++) gc_mark_value(ins->fields[i]); } break; }
         case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; gc_mark_value(bm->instance); break; }
+        case OBJ_ROPE: {
+            RopeNode *rn = (RopeNode*)obj;
+            if (rn->is_leaf) gc_mark_value(rn->leaf.flat_string);
+            else {
+                gc_mark_object((GCObject*)rn->internal.left);
+                gc_mark_object((GCObject*)rn->internal.right);
+            }
+            break;
+        }
+        case OBJ_STRING_BUILDER: break; // Buffer is raw malloc'd, no nested objects to mark
         default: break;
     }
 }
@@ -495,6 +593,7 @@ static void gc_full_collect(void) {
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
             else if (unmarked->type == OBJ_PACKED_ARRAY) free(((PackedArray*)unmarked)->data);
+            else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
             gc_allocated -= unmarked->sz;
             if (unmarked->is_block_allocated) { ((GCBlock*)unmarked->block_ptr)->live_count--; } else { free(unmarked); }
         } else {
@@ -534,6 +633,7 @@ static void gc_minor_collect(void) {
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
             else if (unmarked->type == OBJ_PACKED_ARRAY) free(((PackedArray*)unmarked)->data);
+            else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
             gc_allocated -= unmarked->sz;
             if (unmarked->is_block_allocated) { ((GCBlock*)unmarked->block_ptr)->live_count--; } else { free(unmarked); }
         } else {
@@ -618,7 +718,15 @@ static PackedArray* packed_array_new(PackedType type, int capacity) {
     pa->size = capacity;
     pa->capacity = capacity;
     size_t elem_sz = (type == PACKED_INT64) ? sizeof(int64_t) : sizeof(double);
-    pa->data = capacity > 0 ? calloc(capacity, elem_sz) : NULL;
+    if (capacity > 0) {
+        if (posix_memalign(&pa->data, 32, capacity * elem_sz) != 0) {
+            pa->data = NULL;
+        } else {
+            memset(pa->data, 0, capacity * elem_sz);
+        }
+    } else {
+        pa->data = NULL;
+    }
     return pa;
 }
 
@@ -722,6 +830,7 @@ static Bytecode *compiling_bc = NULL;
 static Class *last_compiling_class = NULL;
 static Trait *last_compiling_trait = NULL;
 static int next_free_reg = 0;
+static int global_lambda_count = 0;
 static int compiling_line = 0;
 static const char *compiling_file = NULL;
 static __thread int profiling_active = 0;
@@ -1043,6 +1152,55 @@ static void compile_stmt(Node *n) {
              compiling_bc->code[idx].r1 = base;
              break;
         }
+        case NODE_IMPORT: {
+            bc_emit(compiling_bc, OP_USE_FILE, 0, (intptr_t)n->name);
+            break;
+        }
+        case NODE_WHENEVER: {
+            // Refined edge-triggered semantic: spawn a background monitor
+            const char *last_name = intern_string("_whenever_last");
+            const char *curr_name = intern_string("_whenever_curr");
+            
+            Node *init_last = node_new(NODE_LET);
+            init_last->name = last_name;
+            init_last->left = newBoolNode(0);
+            
+            Node *get_curr = node_new(NODE_LET);
+            get_curr->name = curr_name;
+            get_curr->left = n->left;
+            
+            Node *not_last = node_new(NODE_NOT);
+            not_last->left = newVarNode(last_name);
+            Node *trigger_cond = node_new(NODE_AND);
+            trigger_cond->left = newVarNode(curr_name);
+            trigger_cond->right = not_last;
+            
+            Node *action = newIfNode(trigger_cond, n->right, NULL);
+            Node *update_last = newAssignNode(last_name, newVarNode(curr_name));
+            
+            Node *os_var = newVarNode(intern_string("os"));
+            Node *sleep_var = node_new(NODE_INDEX);
+            sleep_var->left = os_var;
+            sleep_var->name = intern_string("sleep");
+            
+            Node **sleep_args = malloc(sizeof(Node*));
+            sleep_args[0] = newFloatNode(0.01);
+            Node *sleep_call = newCallExprNode(sleep_var, sleep_args, 1);
+            
+            Node *loop_content = newSeqNode(get_curr, newSeqNode(action, newSeqNode(update_last, sleep_call)));
+            Node *while_loop = newWhileNode(newBoolNode(1), loop_content);
+            Node *lambda_body = newSeqNode(init_last, while_loop);
+            
+            char buf[64]; snprintf(buf, sizeof(buf), "whenever_%d", global_lambda_count++);
+            Node *lambda = newFuncNode(intern_string(buf), 0, NULL, lambda_body);
+            lambda->type = NODE_LAMBDA;
+            
+            Node *spawn_node = node_new(NODE_SPAWN);
+            spawn_node->left = newCallExprNode(lambda, NULL, 0);
+            
+            compile_stmt(spawn_node);
+            break;
+        }
         case NODE_INDEX_ASSIGN: {
             int val = compile_expr(n->third, -1);
             int obj = compile_expr(n->left, -1);
@@ -1131,6 +1289,8 @@ static int compile_expr(Node *n, int target_reg) {
         case NODE_SUB:
         case NODE_MUL:
         case NODE_DIV:
+        case NODE_MOD:
+        case NODE_POW:
         case NODE_LT:
         case NODE_GT:
         case NODE_LTE:
@@ -1146,6 +1306,8 @@ static int compile_expr(Node *n, int target_reg) {
                 case NODE_SUB: op = OP_SUB; break;
                 case NODE_MUL: op = OP_MUL; break;
                 case NODE_DIV: op = OP_DIV; break;
+                case NODE_MOD: op = OP_MOD; break;
+                case NODE_POW: op = OP_POW; break;
                 case NODE_LT: op = OP_LT; break;
                 case NODE_GT: op = OP_GT; break;
                 case NODE_LTE: op = OP_LTE; break;
@@ -1276,7 +1438,7 @@ void yyerror(const char *s) { fprintf(stderr, "Error: %s at line %d\n", s, line_
 %token <int_val> INT_LIT
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
-%token SHOW WRITE WHEN EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
+%token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part
 %type <node_list> expr_list arg_list
@@ -1291,10 +1453,6 @@ void yyerror(const char *s) { fprintf(stderr, "Error: %s at line %d\n", s, line_
 %left MUL DIV MOD
 %right POW
 %nonassoc NOT_OP
-
-%{
-static int global_lambda_count = 0;
-%}
 
 %%
 
@@ -1312,6 +1470,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | CLASS ID EXTENDS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->parent_name = $4; $$->left = $7; }
     | TRAIT ID COLON NEWLINE lines END { $$ = node_new(NODE_TRAIT); $$->name = $2; $$->left = $5; }
     | USE ID { $$ = node_new(NODE_USE_TRAIT); $$->name = $2; }
+    | WHENEVER condition COLON NEWLINE lines END { $$ = node_new(NODE_WHENEVER); $$->left = $2; $$->right = $5; }
     | WHEN condition COLON NEWLINE lines eif_chain otherwise_part END { $$ = newIfNode($2, $5, $7 ? newSeqNode($6, $7) : $6); }
     | WHILE condition COLON NEWLINE lines END { $$ = newWhileNode($2, $5); }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; }
@@ -1420,7 +1579,7 @@ void print_error_trace(Value exception) {
 
 static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
     static __thread int call_depth = 0;
-    if (++call_depth > 500) {
+    if (++call_depth > 10000) {
         fprintf(stderr, "ERROR: Maximum recursion depth exceeded\n");
         call_depth--;
         return value_none();
@@ -1431,14 +1590,6 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
 
     size_t old_arena_used = stack_arena_used;
     int old_top = vm_stack_top;
-    if (base_reg + bc->local_count >= vm_stack_size) {
-        int old_size = vm_stack_size;
-        vm_stack_size = (vm_stack_size == 0) ? 4096 : vm_stack_size * 2;
-        while (base_reg + bc->local_count >= vm_stack_size) vm_stack_size *= 2;
-        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
-        for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
-    }
-
     if (base_reg + bc->local_count > vm_stack_top) vm_stack_top = base_reg + bc->local_count;
 
     static __thread long total_instructions = 0;
@@ -1448,7 +1599,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
 
     if (!start_pc && bc->count > 0 && !bc->jit_code && !bc->jit_failed) {
         bc->code[0].exec_count++;
-        if (bc->code[0].exec_count >= 5) jit_compile(bc);
+        if (0) jit_compile(bc);
     }
     if (!start_pc && bc->jit_code) {
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
@@ -1458,6 +1609,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
             pc = &bc->code[deopt_pc];
             goto l_RESUME_INTERP;
         }
+        call_stack_pop();
         vm_stack_top = old_top;
         stack_arena_used = old_arena_used;
         call_depth--;
@@ -1465,7 +1617,15 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     }
 
     l_RESUME_INTERP:;
-    
+    if (base_reg + bc->local_count >= vm_stack_size) {
+        int old_size = vm_stack_size;
+        vm_stack_size = (vm_stack_size == 0) ? 4096 : vm_stack_size * 2;
+        while (base_reg + bc->local_count >= vm_stack_size) vm_stack_size *= 2;
+        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+        for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+    }
+    if (base_reg + bc->local_count > vm_stack_top) vm_stack_top = base_reg + bc->local_count;
+
     static void* dt[] = {
         &&l_OP_CONST_INT, &&l_OP_CONST_FLOAT, &&l_OP_CONST_STRING, &&l_OP_CONST_BOOL,
         &&l_OP_LOAD_VAR, &&l_OP_STORE_VAR,
@@ -1476,7 +1636,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         &&l_OP_LEN, &&l_OP_RANGE, &&l_OP_TYPE, &&l_OP_APPEND, &&l_OP_INPUT, &&l_OP_SHOW, &&l_OP_WRITE,
         &&l_OP_LIST_LITERAL, &&l_OP_DICT_LITERAL,
         &&l_OP_INDEX, &&l_OP_SLICE, &&l_OP_STORE_INDEX,
-        &&l_OP_FUNC_DEF, &&l_OP_CALL, &&l_OP_RETURN,
+        &&l_OP_FUNC_DEF, &&l_OP_CALL, &&l_OP_CALL_SELF_FAST, &&l_OP_TAIL_CALL, &&l_OP_RETURN,
         &&l_OP_FOR_EACH, &&l_OP_FOR_EACH_PAIR,
         &&l_OP_STOP, &&l_OP_SKIP,
         &&l_OP_POP,
@@ -1505,7 +1665,15 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         &&l_OP_TRACE_ENTER,
         &&l_OP_PACKED_ADD,
         &&l_OP_PACKED_SUB,
-        &&l_OP_SIMD_ADD
+        &&l_OP_PACKED_MUL,
+        &&l_OP_PACKED_LOAD,
+        &&l_OP_PACKED_STORE,
+        &&l_OP_PACKED_FUSED_MUL_ADD,
+        &&l_OP_MATRIX_MUL,
+        &&l_OP_SIMD_ADD,
+        &&l_OP_USE_FILE,
+        &&l_OP_ITER_START,
+        &&l_OP_ITER_NEXT
     };
 
 #define R(idx) vm_stack[base_reg + (idx)]
@@ -1541,22 +1709,12 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
             pc->type = 1;
             res = value_int(AS_INT(a) + AS_INT(b));
         } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
-            pc->type = 3;
-            char buf_a[64], buf_b[64];
-            const char *sa, *sb;
-            if (GET_TYPE(a) == VAL_STRING) sa = AS_STRING(a);
-            else if (GET_TYPE(a) == VAL_INT) { snprintf(buf_a, sizeof(buf_a), "%ld", (long)AS_INT(a)); sa = buf_a; }
-            else if (GET_TYPE(a) == VAL_FLOAT) { snprintf(buf_a, sizeof(buf_a), "%g", AS_FLOAT(a)); sa = buf_a; }
-            else sa = "";
-            
-            if (GET_TYPE(b) == VAL_STRING) sb = AS_STRING(b);
-            else if (GET_TYPE(b) == VAL_INT) { snprintf(buf_b, sizeof(buf_b), "%ld", (long)AS_INT(b)); sb = buf_b; }
-            else if (GET_TYPE(b) == VAL_FLOAT) { snprintf(buf_b, sizeof(buf_b), "%g", AS_FLOAT(b)); sb = buf_b; }
-            else sb = "";
-            
-            char *tmp = malloc(strlen(sa) + strlen(sb) + 1);
-            strcpy(tmp, sa); strcat(tmp, sb);
-            res = value_string_copy(tmp); free(tmp);
+            Value sa, sb;
+            if (GET_TYPE(a) == VAL_STRING) sa = a;
+            else { char buf[64]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) snprintf(buf,64,"%g",AS_FLOAT(a)); else strcpy(buf, ""); sa = value_string_copy(buf); }
+            if (GET_TYPE(b) == VAL_STRING) sb = b;
+            else { char buf[64]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) snprintf(buf,64,"%g",AS_FLOAT(b)); else strcpy(buf, ""); sb = value_string_copy(buf); }
+            res = rope_new(sa, sb);
         } else if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
             pc->type = 5;
             List *la = AS_LIST(a), *lb = AS_LIST(b);
@@ -1701,6 +1859,57 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         }
         pc++; DISPATCH();
     }
+    l_OP_CALL_SELF_FAST: {
+        int ac = pc->arg; FuncEntry *fe = bc->owner;
+        if (fe && fe->body) {
+            TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
+            void *jit = func_get_specialization(fe, sig);
+            if (jit && jit != (void*)1) {
+                typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                JITFunc f = (JITFunc)jit; int deopt_pc = 0;
+                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                if (GET_TYPE(res) == VAL_DEOPT) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+            } else {
+                Value res = run_bytecode(fe->body, NULL, NULL, base_reg + pc->r2);
+                if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+            }
+        }
+        pc++; DISPATCH();
+    }
+    l_OP_TAIL_CALL: {
+        int ac = pc->arg; const char *n = (const char*)pc->ptr;
+        FuncEntry *fe = func_get(n);
+        if (fe && fe->body) {
+            int needed = fe->param_count;
+            if (fe->body->local_count > needed) needed = fe->body->local_count;
+            if (base_reg + needed >= vm_stack_size) {
+                int old_size = vm_stack_size;
+                while (base_reg + needed >= vm_stack_size) vm_stack_size *= 2;
+                vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+            }
+            call_stack[my_frame_idx].fe = fe;
+            call_stack[my_frame_idx].pc = fe->body->code;
+            int arg_base = base_reg + pc->r2;
+            if (arg_base + ac >= vm_stack_size) {
+                 goto l_OP_CALL; 
+            }
+            for (int i=0; i<ac && i<fe->param_count; i++) vm_stack[base_reg + i] = vm_stack[arg_base + i];
+            for (int i=ac; i<fe->param_count; i++) vm_stack[base_reg + i] = value_none();
+            bc = fe->body; pc = bc->code;
+            stack_arena_used = old_arena_used;
+            if (bc->jit_code) {
+                typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                int deopt_pc = 0;
+                Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
+                if (GET_TYPE(res) == VAL_DEOPT) { pc = &bc->code[deopt_pc]; goto l_RESUME_INTERP; }
+                R(0) = res; goto l_FINISH;
+            }
+            goto l_RESUME_INTERP;
+        }
+        goto l_OP_CALL;
+    }
     l_OP_RETURN: {
         R(0) = R(pc->r0);
         goto l_FINISH;
@@ -1828,6 +2037,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
             else if(ot==OBJ_BOUND_METHOD) {
                 BoundMethod *bm = AS_BOUND_METHOD(callee);
                 if(bm->method && bm->method->body) {
+                    Value old_self = var_get("self");
                     var_set("self", bm->instance);
                     TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], bm->method->param_count);
                     void *jit = func_get_specialization(bm->method, sig);
@@ -1841,6 +2051,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                         if (GET_TYPE(res) == VAL_DEOPT) {
                             res = run_bytecode(bm->method->body, &bm->method->body->code[deopt_pc], NULL, base_reg + pc->r2);
                         }
+                        var_set("self", old_self);
                         if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                     } else {
                         bm->method->used++;
@@ -1848,6 +2059,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                             jit_compile_specialized(bm->method, sig);
                         }
                         Value res = run_bytecode(bm->method->body, NULL, NULL, base_reg + pc->r2);
+                        var_set("self", old_self);
                         if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                     }
                 } else R(pc->r0) = value_none();
@@ -1878,17 +2090,17 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         R(pc->r0) = value_list(l); pc++; DISPATCH();
     }
     l_OP_INDEX: {
-        Value coll = R(pc->r1), idx = R(pc->r2);
+        Value coll = R(pc->r1), idx_arg = R(pc->r2);
         if (GET_TYPE(coll) == VAL_LIST) {
-            int i = (int)AS_INT(idx); if (i < 0) i += AS_LIST(coll)->size;
+            int i = (int)AS_INT(idx_arg); if (i < 0) i += AS_LIST(coll)->size;
             if (i >= 0 && i < AS_LIST(coll)->size) R(pc->r0) = AS_LIST(coll)->items[i];
             else R(pc->r0) = value_none();
         } else if (GET_TYPE(coll) == VAL_OBJECT) {
             if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
-                R(pc->r0) = packed_array_get(AS_PACKED_ARRAY(coll), (int)AS_INT(idx));
+                R(pc->r0) = packed_array_get(AS_PACKED_ARRAY(coll), (int)AS_INT(idx_arg));
             } else R(pc->r0) = value_none();
         } else if (GET_TYPE(coll) == VAL_DICT) {
-            R(pc->r0) = dict_get(AS_DICT(coll), AS_STRING(idx));
+            R(pc->r0) = dict_get(AS_DICT(coll), AS_STRING(idx_arg));
         } else R(pc->r0) = value_none();
         pc++; DISPATCH();
     }
@@ -2038,6 +2250,51 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         if (GET_TYPE(res) == VAL_TRACE_EXIT) { pc = bc->code + off; goto *dt[pc->op]; }
         pc->op = pc->original_op; goto *dt[pc->op];
     }
+    l_OP_USE_FILE: {
+        const char *path = (const char*)pc->ptr;
+        FILE *f = fopen(path, "r");
+        if (!f) {
+            char err[512]; snprintf(err, sizeof(err), "Could not open file: %s", path);
+            pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
+        }
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (sz < 0) { fclose(f); pc++; DISPATCH(); }
+        char *buf = malloc(sz + 1); 
+        size_t nread = fread(buf, 1, sz, f); buf[nread] = '\0'; fclose(f);
+
+        Node *old_root = root;
+        const char *old_file = compiling_file;
+        Bytecode *old_bc = compiling_bc;
+        int old_reg = next_free_reg;
+        FuncEntry *old_func = compiling_func;
+        Class *old_class = last_compiling_class; Trait *old_trait = last_compiling_trait;
+
+        compiling_file = path;
+        int old_line = line_num; line_num = 1;
+        YY_BUFFER_STATE bp = yy_scan_string(buf);
+        root = NULL; int parse_res = yyparse(); yy_delete_buffer(bp);
+        line_num = old_line;
+        if (parse_res != 0) {
+            char err[512]; snprintf(err, sizeof(err), "Failed to load module: %s (syntax error)", path);
+            pending_exception = value_string_copy(err); has_exception = 1;
+            free(buf); goto l_OP_THROW;
+        }
+        if (root) {
+            FuncEntry *fe = arena_alloc(sizeof(FuncEntry)); memset(fe, 0, sizeof(FuncEntry));
+            fe->name = "use_file";
+            Bytecode *use_bc = bc_new(fe); compiling_bc = use_bc; next_free_reg = 0;
+            last_compiling_class = NULL; last_compiling_trait = NULL;
+            compiling_func = fe;
+            compile(root); bc_emit(use_bc, OP_RETURN, 0, 0);
+            run_bytecode(use_bc, NULL, NULL, vm_stack_top);
+        }
+        root = old_root; compiling_file = old_file; compiling_bc = old_bc; 
+        next_free_reg = old_reg; compiling_func = old_func;
+        last_compiling_class = old_class; last_compiling_trait = old_trait;
+        free(buf); 
+        if (has_exception) goto l_OP_THROW;
+        pc++; DISPATCH();
+    }
     l_OP_PACKED_ADD: {
         Value a = R(pc->r1), b = R(pc->r2);
         if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
@@ -2081,6 +2338,13 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         simd_add_helper(a, b, target);
         pc++; DISPATCH();
     }
+    l_OP_PACKED_MUL:
+    l_OP_PACKED_LOAD:
+    l_OP_PACKED_STORE:
+    l_OP_PACKED_FUSED_MUL_ADD:
+    l_OP_MATRIX_MUL:
+    l_OP_ITER_START:
+    l_OP_ITER_NEXT:
     l_OP_NOP: pc++; DISPATCH();
     l_RECORD_STEP: {
         pc++; DISPATCH();
@@ -2165,52 +2429,52 @@ static Value crypto_sha256(int argc, Value *args) {
     return value_string_copy(out);
 }
 
-static void json_append_str(const char *s, char **buf, int *size, int *cap) {
+static void json_append_str(const char *s, StringBuilder *sb) {
     int len = strlen(s);
-    if (*size + len + 1 > *cap) {
-        *cap = (*cap == 0) ? 1024 : *cap * 2;
-        while (*size + len + 1 > *cap) *cap *= 2;
-        *buf = realloc(*buf, *cap);
+    if (sb->size + len >= sb->capacity) {
+        sb->capacity = (sb->size + len + 1) * 2;
+        sb->buffer = realloc(sb->buffer, sb->capacity);
     }
-    strcpy(*buf + *size, s);
-    *size += len;
+    memcpy(sb->buffer + sb->size, s, len);
+    sb->size += len;
+    sb->buffer[sb->size] = '\0';
 }
 
-static void json_stringify_helper(Value v, char **buf, int *size, int *cap) {
-    if (v == 0) { json_append_str("null", buf, size, cap); return; }
+static void json_stringify_helper(Value v, StringBuilder *sb) {
+    if (v == 0) { json_append_str("null", sb); return; }
     if ((v & MASK_NAN) != MASK_NAN) { 
-        char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v)); json_append_str(tmp, buf, size, cap); return; 
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v)); json_append_str(tmp, sb); return; 
     }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {
-        char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, buf, size, cap);
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, sb);
     } else if (type == VAL_BOOL) {
-        json_append_str(AS_BOOL(v) ? "true" : "false", buf, size, cap);
+        json_append_str(AS_BOOL(v) ? "true" : "false", sb);
     } else if (type == VAL_STRING) {
-        json_append_str("\"", buf, size, cap); json_append_str(AS_STRING(v), buf, size, cap); json_append_str("\"", buf, size, cap);
+        json_append_str("\"", sb); json_append_str(AS_STRING(v), sb); json_append_str("\"", sb);
     } else if (type == VAL_LIST) {
-        json_append_str("[", buf, size, cap);
+        json_append_str("[", sb);
         List *l = AS_LIST(v);
         for (int i = 0; i < l->size; i++) {
-            json_stringify_helper(l->items[i], buf, size, cap);
-            if (i < l->size - 1) json_append_str(", ", buf, size, cap);
+            json_stringify_helper(l->items[i], sb);
+            if (i < l->size - 1) json_append_str(", ", sb);
         }
-        json_append_str("]", buf, size, cap);
+        json_append_str("]", sb);
     } else if (type == VAL_DICT) {
-        json_append_str("{", buf, size, cap);
+        json_append_str("{", sb);
         Dict *d = AS_DICT(v);
         int first = 1;
         for (int i = 0; i < d->capacity; i++) {
             if (d->keys[i]) {
-                if (!first) json_append_str(", ", buf, size, cap);
-                json_append_str("\"", buf, size, cap); json_append_str(d->keys[i], buf, size, cap); json_append_str("\": ", buf, size, cap);
-                json_stringify_helper(d->values[i], buf, size, cap);
+                if (!first) json_append_str(", ", sb);
+                json_append_str("\"", sb); json_append_str(d->keys[i], sb); json_append_str("\": ", sb);
+                json_stringify_helper(d->values[i], sb);
                 first = 0;
             }
         }
-        json_append_str("}", buf, size, cap);
+        json_append_str("}", sb);
     } else {
-        json_append_str("null", buf, size, cap);
+        json_append_str("null", sb);
     }
 }
 
@@ -2277,13 +2541,14 @@ static Value native_json_parse(int argc, Value *args) {
 
 static Value native_json_stringify(int argc, Value *args) {
     if (argc < 1) return value_none();
-    int cap = 1024;
-    int size = 0;
-    char *buf = malloc(cap);
-    buf[0] = '\0';
-    json_stringify_helper(args[0], &buf, &size, &cap);
-    Value res = value_string_copy(buf);
-    free(buf);
+    StringBuilder sb;
+    sb.capacity = 1024;
+    sb.size = 0;
+    sb.buffer = malloc(sb.capacity);
+    sb.buffer[0] = '\0';
+    json_stringify_helper(args[0], &sb);
+    Value res = value_string_copy(sb.buffer);
+    free(sb.buffer);
     return res;
 }
 
@@ -2367,12 +2632,21 @@ static Value native_packed_add(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type && pa->size == pb->size) {
             PackedArray *res = packed_array_new(pa->type, pa->size);
+            int sz = pa->size;
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                for (int i=0; i<pa->size; i++) dr[i] = da[i] + db[i];
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    _mm256_storeu_pd(&dr[i], _mm256_add_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                }
+                for (; i < sz; i++) dr[i] = da[i] + db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                for (int i=0; i<pa->size; i++) ir[i] = ia[i] + ib[i];
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    _mm256_storeu_si256((__m256i*)&ir[i], _mm256_add_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
+                }
+                for (; i < sz; i++) ir[i] = ia[i] + ib[i];
             }
             return value_packed(res);
         }
@@ -2388,12 +2662,21 @@ static Value native_packed_sub(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type && pa->size == pb->size) {
             PackedArray *res = packed_array_new(pa->type, pa->size);
+            int sz = pa->size;
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                for (int i=0; i<pa->size; i++) dr[i] = da[i] - db[i];
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    _mm256_storeu_pd(&dr[i], _mm256_sub_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                }
+                for (; i < sz; i++) dr[i] = da[i] - db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                for (int i=0; i<pa->size; i++) ir[i] = ia[i] - ib[i];
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    _mm256_storeu_si256((__m256i*)&ir[i], _mm256_sub_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
+                }
+                for (; i < sz; i++) ir[i] = ia[i] - ib[i];
             }
             return value_packed(res);
         }
@@ -2409,12 +2692,17 @@ static Value native_packed_mul(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type && pa->size == pb->size) {
             PackedArray *res = packed_array_new(pa->type, pa->size);
+            int sz = pa->size;
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                for (int i=0; i<pa->size; i++) dr[i] = da[i] * db[i];
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    _mm256_storeu_pd(&dr[i], _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                }
+                for (; i < sz; i++) dr[i] = da[i] * db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                for (int i=0; i<pa->size; i++) ir[i] = ia[i] * ib[i];
+                for (int i=0; i<sz; i++) ir[i] = ia[i] * ib[i]; // No native AVX2 64-bit multiply
             }
             return value_packed(res);
         }
@@ -2429,13 +2717,22 @@ static Value native_packed_dot(int argc, Value *args) {
         GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type && pa->size == pb->size) {
+            int sz = pa->size;
             if (pa->type == PACKED_FLOAT64) {
-                double *da = (double*)pa->data, *db = (double*)pb->data, sum = 0;
-                for (int i=0; i<pa->size; i++) sum += da[i] * db[i];
+                double *da = (double*)pa->data, *db = (double*)pb->data;
+                __m256d sum_vec = _mm256_setzero_pd();
+                int i = 0;
+                for (; i <= sz - 4; i += 4) {
+                    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                }
+                double temp[4];
+                _mm256_storeu_pd(temp, sum_vec);
+                double sum = temp[0] + temp[1] + temp[2] + temp[3];
+                for (; i < sz; i++) sum += da[i] * db[i];
                 return value_float(sum);
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, sum = 0;
-                for (int i=0; i<pa->size; i++) sum += ia[i] * ib[i];
+                for (int i=0; i<sz; i++) sum += ia[i] * ib[i];
                 return value_int(sum);
             }
         }
@@ -2663,6 +2960,8 @@ static Value native_tensor_transpose(int argc, Value *args) {
     return value_packed(res);
 }
 
+#include <immintrin.h>
+
 static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
@@ -2672,10 +2971,20 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (cA != rB) return value_none();
     PackedArray *res = packed_array_new(pa->type, rA * cB);
     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+    
     for (int i = 0; i < rA; i++) {
         for (int j = 0; j < cB; j++) {
-            double sum = 0;
-            for (int k = 0; k < cA; k++) sum += da[i * cA + k] * db[k * cB + j];
+            __m256d sum_vec = _mm256_setzero_pd();
+            int k = 0;
+            for (; k <= cA - 4; k += 4) {
+                __m256d va = _mm256_loadu_pd(&da[i * cA + k]);
+                __m256d vb = _mm256_set_pd(db[(k+3) * cB + j], db[(k+2) * cB + j], db[(k+1) * cB + j], db[k * cB + j]);
+                sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
+            }
+            double temp[4];
+            _mm256_storeu_pd(temp, sum_vec);
+            double sum = temp[0] + temp[1] + temp[2] + temp[3];
+            for (; k < cA; k++) sum += da[i * cA + k] * db[k * cB + j];
             dr[i * cB + j] = sum;
         }
     }
@@ -2774,6 +3083,35 @@ static Value native_os_getenv(int argc, Value *args) {
     return v ? value_string_copy(v) : value_none();
 }
 
+static Value native_string_builder_new(int argc, Value *args) {
+    StringBuilder *sb = gc_alloc(sizeof(StringBuilder), OBJ_STRING_BUILDER);
+    sb->capacity = 32;
+    sb->size = 0;
+    sb->buffer = malloc(sb->capacity);
+    sb->buffer[0] = '\0';
+    return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)sb);
+}
+
+static Value native_string_builder_append(int argc, Value *args) {
+    if (argc < 2) return args[0];
+    StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    const char *s = AS_STRING(args[1]);
+    int len = strlen(s);
+    if (sb->size + len >= sb->capacity) {
+        sb->capacity = (sb->size + len + 1) * 2;
+        sb->buffer = realloc(sb->buffer, sb->capacity);
+    }
+    memcpy(sb->buffer + sb->size, s, len);
+    sb->size += len;
+    sb->buffer[sb->size] = '\0';
+    return args[0];
+}
+
+static Value native_string_builder_build(int argc, Value *args) {
+    StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    return value_string_copy(sb->buffer);
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("range", native_func_new("range", native_range));
@@ -2782,6 +3120,9 @@ static void std_init(void) {
     var_set("packed_add", native_func_new("packed_add", native_packed_add));
     var_set("packed_sub", native_func_new("packed_sub", native_packed_sub));
     var_set("net_close", native_func_new("net_close", net_close));
+    var_set("text_builder", native_func_new("text_builder", native_string_builder_new));
+    var_set("append", native_func_new("append", native_string_builder_append));
+    var_set("build", native_func_new("build", native_string_builder_build));
 
     Dict *debug = dict_new(4);
     dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
