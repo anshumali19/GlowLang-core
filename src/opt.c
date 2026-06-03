@@ -210,6 +210,30 @@ void optimize_bytecode(Bytecode *bc) {
             }
         }
     }
-    
+    // Pass 5: Tail Call & Self-Call Fast Optimization (Early Decision)
+    for (int i = 0; i < bc->count - 1; i++) {
+        Instruction *pc = &bc->code[i];
+
+        // 1. TCO: OP_CALL + OP_RETURN -> OP_TAIL_CALL
+        if (pc->op == OP_CALL && bc->code[i+1].op == OP_RETURN && pc->r0 == bc->code[i+1].r0) {
+            pc->op = OP_TAIL_CALL;
+            bc->code[i+1].op = OP_NOP;
+        }
+
+        // 2. Self-Call Fast Path
+        if (pc->op == OP_CALL) {
+             const char *name = (const char*)pc->ptr;
+             if (bc->owner && bc->owner->name && strcmp(name, bc->owner->name) == 0) {
+                 pc->op = OP_CALL_SELF_FAST;
+             }
+        }
+
+        // Handle TCO for Self-Call as well
+        if (pc->op == OP_CALL_SELF_FAST && bc->code[i+1].op == OP_RETURN && pc->r0 == bc->code[i+1].r0) {
+            pc->op = OP_TAIL_CALL;
+            bc->code[i+1].op = OP_NOP;
+        }
+    }
+
     free(is_jump_target);
 }
