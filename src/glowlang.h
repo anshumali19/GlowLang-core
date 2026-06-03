@@ -38,7 +38,7 @@ typedef struct FuncEntry FuncEntry;
  *  GC & OBJECTS
  * ================================================================ */
 typedef enum {
-    OBJ_STRING, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY
+    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER
 } ObjType;
 
 typedef struct GCObject {
@@ -68,8 +68,33 @@ typedef struct {
 
 typedef struct {
     GCObject obj;
+    int size;
     char chars[];
 } GCString;
+
+typedef struct RopeNode {
+    GCObject obj;
+    size_t length;
+    bool is_leaf;
+    union {
+        struct {
+            struct RopeNode *left;
+            struct RopeNode *right;
+        } internal;
+        struct {
+            Value flat_string;
+            int offset;
+        } leaf;
+    };
+} RopeNode;
+
+typedef struct {
+    GCObject obj;
+    char *buffer;
+    int size;
+    int capacity;
+} StringBuilder;
+
 #define MASK_NAN      ((uint64_t)0x7FF8000000000000)
 #define MASK_TYPE     ((uint64_t)0x0007000000000000)
 #define MASK_PAYLOAD  ((uint64_t)0x0000FFFFFFFFFFFF)
@@ -77,6 +102,15 @@ typedef struct {
 /* Extract bits to type */
 #define GET_TYPE(v)   ( (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (((v) & MASK_TYPE) >> 48) )
 #define GET_OBJ_TYPE(v) (((GCObject*)(uintptr_t)((v) & MASK_PAYLOAD))->type)
+
+static inline size_t rope_length(Value v) {
+    if (GET_TYPE(v) == VAL_STRING) {
+        GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+        if (obj->type == OBJ_STRING) return strlen(((GCString*)obj)->chars);
+        if (obj->type == OBJ_ROPE) return ((RopeNode*)obj)->length;
+    }
+    return 0;
+}
 
 /* Accessors */
 static inline double AS_FLOAT(Value v) { double d; memcpy(&d, &v, sizeof(v)); return d; }
@@ -86,9 +120,10 @@ static inline int64_t AS_INT(Value v) {
     return (int64_t)payload;
 }
 static inline int AS_BOOL(Value v) { return (int)(v & MASK_PAYLOAD); }
-static inline const char* AS_STRING(Value v) { 
-    GCString *gs = (GCString*)(uintptr_t)(v & MASK_PAYLOAD);
-    return gs ? gs->chars : "";
+extern const char* rope_flatten(Value v);
+static inline const char* AS_STRING(Value v) {
+    if (GET_TYPE(v) != VAL_STRING) return "";
+    return rope_flatten(v);
 }
 static inline List* AS_LIST(Value v) { return (List*)(uintptr_t)(v & MASK_PAYLOAD); }
 static inline Dict* AS_DICT(Value v) { return (Dict*)(uintptr_t)(v & MASK_PAYLOAD); }
@@ -137,7 +172,7 @@ typedef struct CallFrame {
     struct FuncEntry *fe;
     struct Instruction *pc;
 } CallFrame;
-extern __thread CallFrame call_stack[1024];
+extern __thread CallFrame call_stack[65536];
 extern __thread int call_stack_ptr;
 void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
 void call_stack_pop(void);
@@ -194,6 +229,8 @@ typedef enum {
     OP_STORE_INDEX,
     OP_FUNC_DEF,
     OP_CALL,
+    OP_CALL_SELF_FAST,
+    OP_TAIL_CALL,
     OP_RETURN,
     OP_FOR_EACH,
     OP_FOR_EACH_PAIR,
@@ -254,7 +291,15 @@ typedef enum {
     OP_TRACE_ENTER,
     OP_PACKED_ADD,
     OP_PACKED_SUB,
-    OP_SIMD_ADD
+    OP_PACKED_MUL,
+    OP_PACKED_LOAD,
+    OP_PACKED_STORE,
+    OP_PACKED_FUSED_MUL_ADD,
+    OP_MATRIX_MUL,
+    OP_SIMD_ADD,
+    OP_USE_FILE,
+    OP_ITER_START,
+    OP_ITER_NEXT
 } OpCode;
 
 typedef struct {
@@ -351,7 +396,8 @@ typedef enum {
     NODE_USE_TRAIT,
     NODE_SPAWN,
     NODE_PACKED_ADD,
-    NODE_PACKED_SUB
+    NODE_PACKED_SUB,
+    NODE_WHENEVER
 } NodeType;
 
 struct Node {

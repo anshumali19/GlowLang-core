@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -lm -pthread -lssl -lcrypto
+CFLAGS = -O2 -lm -pthread -lssl -lcrypto -mavx2 -msse4.2
 FLEX = flex
 BISON = bison
 

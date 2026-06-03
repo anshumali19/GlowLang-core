@@ -10,7 +10,7 @@ typedef struct ArenaChunk {
     char data[ARENA_CHUNK_SIZE];
 } ArenaChunk;
 
-static ArenaChunk *arena_head = NULL;
+static __thread ArenaChunk *arena_head = NULL;
 
 void arena_init(void) {
     if (!arena_head) {
