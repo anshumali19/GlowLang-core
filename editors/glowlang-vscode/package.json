@@ -115,6 +115,10 @@
                 "title": "GlowLang: Open Stack Visualizer"
             },
             {
+                "command": "glowlang.openPlayground",
+                "title": "GlowLang: Open Interactive Playground"
+            },
+            {
                 "command": "glowlang.packageInit",
                 "title": "GlowLang: Initialize Package"
             },

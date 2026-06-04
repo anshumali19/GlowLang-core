@@ -32,6 +32,7 @@ function activate(context) {
         vscode.commands.registerCommand('glowlang.profile', () => profileCurrentFile()),
         vscode.commands.registerCommand('glowlang.openProfiler', () => openHtmlTool('profiler', 'GlowLang Profiler')),
         vscode.commands.registerCommand('glowlang.openStackVisualizer', () => openHtmlTool('stack_visualizer', 'GlowLang Stack Visualizer')),
+        vscode.commands.registerCommand('glowlang.openPlayground', () => openHtmlTool('playground', 'GlowLang Playground')),
         vscode.commands.registerCommand('glowlang.packageInit', () => runGlowCommand('--init')),
         vscode.commands.registerCommand('glowlang.packageInstall', () => runGlowCommand('--install')),
         vscode.commands.registerCommand('glowlang.restartLsp', () => restartLsp(context))
@@ -171,6 +172,8 @@ function openHtmlTool(toolName, title) {
     
     if (toolName === 'profiler') {
         htmlFile = path.join(toolsDir, 'profiler', 'profiler.html');
+    } else if (toolName === 'playground') {
+        htmlFile = path.join(toolsDir, 'playground', 'playground.html');
     } else {
         htmlFile = path.join(toolsDir, 'stack_visualizer', 'visualizer.html');
     }
