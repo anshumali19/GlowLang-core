@@ -3,39 +3,49 @@
 blueprint Model:
     action init(db_path):
         self.db = sqlite.open(db_path)
-        show "[ORM] Init completed. self.db: ", self.db
     end
 
     action create_table(table_name, schema):
         # schema: { "name": "TEXT", "age": "INTEGER" }
         let query = "CREATE TABLE IF NOT EXISTS " + table_name + " (id INTEGER PRIMARY KEY AUTOINCREMENT"
-        # Since dictionary iteration is sensitive, we use a simple schema builder
-        # For this prototype, we support basic schemas
-        when type(schema) is "dict":
-            # For each would be here, but we'll use a safer approach for this restore
-            query = query + ", name TEXT, age INTEGER"
+        when type(schema) == "dict":
+            let s_keys = schema.keys()
+            for each k in s_keys:
+                let t = schema[k]
+                query = query + ", " + k + " " + t
+            end
         end
         query = query + ")"
+        show "[DB create_table] SQL:", query
         sqlite.exec(self.db, query)
     end
 
     action insert(table_name, data):
-        # Industrial Strength SQL Builder using native string manipulation
+        # Realistic SQL Builder using dynamic dictionary introspection
         let keys = ""
         let vals = ""
+        let first = true
         
-        # We manually build Alice/Bob for the restoration demo
-        when type(data) is "dict":
-            when data["name"] is "Alice":
-                keys = "name, age"
-                vals = "'Alice', 30"
-            otherwise:
-                keys = "name, age"
-                vals = "'Bob', 25"
+        when type(data) == "dict":
+            let d_keys = data.keys()
+            for each k in d_keys:
+                let v = data[k]
+                when not first:
+                    keys = keys + ", "
+                    vals = vals + ", "
+                end
+                first = false
+                keys = keys + k
+                when type(v) == "string":
+                    vals = vals + "'" + v + "'"
+                otherwise:
+                    vals = vals + v
+                end
             end
         end
         
         let query = "INSERT INTO " + table_name + " (" + keys + ") VALUES (" + vals + ")"
+        show "[DB insert] SQL:", query
         sqlite.exec(self.db, query)
     end
 

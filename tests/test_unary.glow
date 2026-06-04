@@ -1,0 +1,35 @@
+# Test unary minus
+
+show "=== Testing basic unary minus ==="
+let a = 10
+let b = -a
+show "a =", a
+show "b =", b
+
+let c = -5.5
+show "c =", c
+
+show "=== Testing precedence ==="
+# -2**3 should be -(2**3) = -8
+let d = -2**3
+show "-2**3 =", d
+
+# (-2)**3 should be -8 as well
+let e = (-2)**3
+show "(-2)**3 =", e
+
+# -2 * 3 should be -6
+let f = -2 * 3
+show "-2 * 3 =", f
+
+# 2 * -3 should be -6
+let g = 2 * -3
+show "2 * -3 =", g
+
+# -2 + 3 should be 1
+let h = -2 + 3
+show "-2 + 3 =", h
+
+show "=== Nested negation ==="
+let i = --10
+show "--10 =", i

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include "arena.h"
 
 /* ================================================================
@@ -33,6 +34,7 @@ typedef struct Node Node;
 typedef struct Bytecode Bytecode;
 typedef struct Instruction Instruction;
 typedef struct FuncEntry FuncEntry;
+typedef struct { Value callee; int argc; Value *args; } ThreadData;
 
 /* ================================================================
  *  GC & OBJECTS
@@ -483,6 +485,7 @@ struct BoundMethod {
     GCObject obj;
     Value instance;
     FuncEntry *method;
+    NativeFuncPtr native_method;
 };
 
 struct Trait {
@@ -548,9 +551,157 @@ extern Node *root;
 extern FILE *yyin;
 int yyparse(void);
 void yyerror(const char *s);
+
+/* ================================================================
+ *  AST HELPER FUNCTION CONSTRUCTORS
+ * ================================================================ */
 Node *node_new(NodeType type);
+Node* newIntNode(int64_t v);
+Node* newFloatNode(double v);
+Node* newBoolNode(int v);
+Node* newStringNode(const char *s);
+Node* newVarNode(const char *s);
+Node* newAssignNode(const char *s, Node *e);
+Node* newBinOp(NodeType t, Node *l, Node *r);
+Node* newSeqNode(Node *l, Node *r);
+Node* newFuncNode(const char *n, int pc, char **ps, Node *b);
+Node* newReturnNode(Node *e);
+Node* newIfNode(Node *c, Node *t, Node *e);
+Node* newWhileNode(Node *c, Node *b);
+Node* newUntilNode(Node *c, Node *b);
+Node* newRepeatNode(Node *c, Node *b);
+Node* newCompoundAssignNode(NodeType t, const char *s, Node *e);
+Node* newShowNode(Node **is, int c);
+Node* newExprStmtNode(Node *e);
+Node* newCallExprNode(Node *e, Node **as, int c);
+
+/* ================================================================
+ *  GC & ALLOCATOR FUNCTIONS (gc.c)
+ * ================================================================ */
+void* gc_alloc(size_t sz, ObjType type);
+void* gc_alloc_stack(size_t sz, ObjType type);
+void gc_free_stack_arena_range(size_t old_used, size_t new_used);
+void gc_write_barrier(GCObject *src, Value target);
+void gc_full_collect(void);
+void gc_minor_collect(void);
+extern GCObject *gc_objects;
+extern size_t gc_allocated;
+extern size_t gc_threshold;
+extern pthread_mutex_t gc_mutex;
+extern pthread_mutex_t threads_mutex;
+extern __thread char *stack_arena;
+extern __thread size_t stack_arena_used;
+Value native_verify_gc(int argc, Value *args);
+
+/* ================================================================
+ *  VM INTERPRETER & THREADING (vm.c)
+ * ================================================================ */
+Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg);
+void print_bytecode(Bytecode *bc);
+void print_error_trace(Value exception);
+void print_error_line(const char *file, int line);
+void print_stack_trace(void);
+char* format_stack_trace(void);
+void vm_stack_init(void);
+void vm_stack_cleanup(void);
+void call_stack_push(FuncEntry *fe, Instruction *pc);
+void call_stack_pop(void);
+int val_eq(Value a, Value b);
+int value_truthy(Value v);
+extern __thread Value *vm_stack;
+extern __thread int vm_stack_size;
+extern __thread int sp;
+extern __thread int vm_stack_top;
+extern __thread Value pending_exception;
+extern __thread int has_exception;
+extern __thread char *exception_stack_trace;
+extern __thread const char *error_file;
+extern __thread int error_line;
+extern __thread int profiling_active;
+extern __thread int trace_mode;
+extern int next_free_reg;
+extern int global_lambda_count;
+typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
+extern ThreadStack active_stacks[128];
+extern int active_stack_count;
+extern pthread_mutex_t glow_gil;
+
+/* ================================================================
+ *  COMPILER ROUTINES (compiler.c)
+ * ================================================================ */
+Bytecode* bc_new(FuncEntry *owner);
+void bc_free(Bytecode *bc);
+int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr);
+void optimize_bytecode(Bytecode *bc);
 void compile(Node *n);
+void func_entry_cleanup(FuncEntry *fe);
+extern Bytecode *compiling_bc;
+extern FuncEntry *compiling_func;
+extern Class *last_compiling_class;
+extern Trait *last_compiling_trait;
+
+/* ================================================================
+ *  OBJECT MODEL, NATIVE MODULES & RUNTIME HELPERS (stdlib.c)
+ * ================================================================ */
+Dict* dict_new(int sz);
+void dict_set(Dict *d, const char *key, Value val);
+Value dict_get(Dict *d, const char *key);
+List* list_new(int sz);
+void list_push(List *l, Value val);
+PackedArray* packed_array_new(PackedType type, int capacity);
+Value packed_array_get(PackedArray *pa, int idx);
+void packed_array_set(PackedArray *pa, int idx, Value v);
+void visualize_stack(int base_reg, int local_count);
+
+Value native_dict_has(int argc, Value *args);
+Value native_dict_keys(int argc, Value *args);
+Value native_dict_values(int argc, Value *args);
+Value native_dict_remove(int argc, Value *args);
+Value native_dict_merge(int argc, Value *args);
+Value native_str_contains(int argc, Value *args);
+Value native_str_find(int argc, Value *args);
+Value native_str_slice(int argc, Value *args);
+Value native_str_split(int argc, Value *args);
+Value list_pop(List *l);
+void list_insert(List *l, int idx, Value val);
+void list_remove(List *l, int idx);
+int list_contains(List *l, Value val);
+void list_sort(List *l);
+void list_reverse(List *l);
+Value value_string_copy(const char *s);
+Value rope_new(Value left, Value right);
+const char* rope_flatten(Value v);
+Class* class_new(const char *name, Class *parent);
+Value class_get_method(Class *c, const char *name);
+Instance* instance_new(Class *c);
+Value instance_get(Instance *inst, const char *name);
+void instance_set(Instance *inst, const char *name, Value val);
+Trait* trait_new(const char *name);
+Value bound_method_new(Value inst, FuncEntry *fe);
+Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
+Value native_func_new(const char *name, NativeFuncPtr ptr);
+const char *intern_string(const char *s);
+void intern_table_init(void);
+void intern_cleanup(void);
+void lexer_cleanup(void);
+void var_table_init(void);
+int global_get_slot(const char *name);
+void var_set(const char *name, Value val);
+Value var_get(const char *name);
+void func_table_init(void);
+FuncEntry* func_table_add(const char *name);
+FuncEntry* func_get(const char *name);
+void std_init(void);
+void std_cleanup(void);
+void print_value(Value v);
 double val_to_double(Value v);
+extern Class *vm_last_class;
+extern Trait *vm_last_trait;
+extern FuncEntry *func_table;
+extern int func_table_size;
+extern int func_table_capacity;
+extern FuncEntry main_fe;
+extern const char *compiling_file;
 
 /* Method Specialization Helpers */
 TypeSignature compute_signature(Value *regs, int count);
@@ -570,5 +721,7 @@ void glow_add_error(int line, const char *msg);
 typedef struct yy_buffer_state *YY_BUFFER_STATE;
 extern YY_BUFFER_STATE yy_scan_string(const char * str);
 extern void yy_delete_buffer(YY_BUFFER_STATE buffer);
+extern YY_BUFFER_STATE get_current_buffer(void);
+extern void yy_switch_to_buffer(YY_BUFFER_STATE buffer);
 
 #endif
