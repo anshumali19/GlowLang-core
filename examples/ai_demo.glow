@@ -1,0 +1,10 @@
+import "lib/ai.glow"
+
+show "[AI Demo] Running ML model..."
+let net = SimpleNet()
+let features = tensor.zeros(10)
+let start = os.time()
+let pred = net.predict(features)
+let duration = os.time() - start
+show "Prediction result: ", pred
+show "Time elapsed: ", duration, " s"

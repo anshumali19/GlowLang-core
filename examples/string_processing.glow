@@ -1,0 +1,13 @@
+show "[String Processing] Testing string builders and operations..."
+
+let s1 = "   GlowLang   "
+let trimmed = s1.trim()
+show "Trimmed string: '", trimmed, "'"
+
+let upper = trimmed.upper()
+let lower = trimmed.lower()
+show "Uppercase: ", upper
+show "Lowercase: ", lower
+
+let words = trimmed.split("w")
+show "Split by 'w': ", words

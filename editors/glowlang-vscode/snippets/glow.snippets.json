@@ -1,0 +1,275 @@
+{
+    "Function": {
+        "prefix": "func",
+        "body": [
+            "func ${1:name}(${2:params}):",
+            "    ${3:# body}",
+            "end"
+        ],
+        "description": "Define a GlowLang function"
+    },
+    "Task (Async Function)": {
+        "prefix": "task",
+        "body": [
+            "task ${1:name}(${2:params}):",
+            "    ${3:# async body}",
+            "end"
+        ],
+        "description": "Define an async task"
+    },
+    "Blueprint (Class)": {
+        "prefix": "blueprint",
+        "body": [
+            "blueprint ${1:Name}:",
+            "    action init(${2:params}):",
+            "        ${3:# constructor}",
+            "    end",
+            "",
+            "    action ${4:method}(${5:params}):",
+            "        ${6:# method body}",
+            "    end",
+            "end"
+        ],
+        "description": "Define a GlowLang blueprint (class)"
+    },
+    "Action (Method)": {
+        "prefix": "action",
+        "body": [
+            "action ${1:name}(${2:params}):",
+            "    ${3:# body}",
+            "end"
+        ],
+        "description": "Define a blueprint action (method)"
+    },
+    "When (If)": {
+        "prefix": "when",
+        "body": [
+            "when ${1:condition}:",
+            "    ${2:# body}",
+            "end"
+        ],
+        "description": "Conditional when block"
+    },
+    "When/Otherwise (If/Else)": {
+        "prefix": "whenotherwise",
+        "body": [
+            "when ${1:condition}:",
+            "    ${2:# true branch}",
+            "otherwise:",
+            "    ${3:# false branch}",
+            "end"
+        ],
+        "description": "Conditional when/otherwise block"
+    },
+    "When/Eif/Otherwise": {
+        "prefix": "wheneif",
+        "body": [
+            "when ${1:condition}:",
+            "    ${2:# first}",
+            "eif ${3:other_condition}:",
+            "    ${4:# second}",
+            "otherwise:",
+            "    ${5:# default}",
+            "end"
+        ],
+        "description": "Multi-branch conditional"
+    },
+    "For Each Loop": {
+        "prefix": "foreach",
+        "body": [
+            "for each ${1:item} in ${2:collection}:",
+            "    ${3:# body}",
+            "end"
+        ],
+        "description": "For each loop over a collection"
+    },
+    "For Range Loop": {
+        "prefix": "forrange",
+        "body": [
+            "for ${1:i} from ${2:0} to ${3:10}:",
+            "    ${4:# body}",
+            "end"
+        ],
+        "description": "For loop with numeric range"
+    },
+    "While Loop": {
+        "prefix": "while",
+        "body": [
+            "while ${1:condition}:",
+            "    ${2:# body}",
+            "end"
+        ],
+        "description": "While loop"
+    },
+    "Repeat N Times": {
+        "prefix": "repeat",
+        "body": [
+            "repeat ${1:10} times:",
+            "    ${2:# body}",
+            "end"
+        ],
+        "description": "Repeat N times loop"
+    },
+    "Let Variable": {
+        "prefix": "let",
+        "body": [
+            "let ${1:name} = ${2:value}"
+        ],
+        "description": "Declare a variable"
+    },
+    "Show (Print)": {
+        "prefix": "show",
+        "body": [
+            "show ${1:\"message\"}"
+        ],
+        "description": "Print output"
+    },
+    "Lambda": {
+        "prefix": "lambda",
+        "body": [
+            "lambda (${1:params}): ${2:expression}"
+        ],
+        "description": "Lambda expression"
+    },
+    "Try/Catch": {
+        "prefix": "trycatch",
+        "body": [
+            "try:",
+            "    ${1:# risky code}",
+            "catch ${2:error}:",
+            "    ${3:# handle error}",
+            "end"
+        ],
+        "description": "Error handling block"
+    },
+    "Import": {
+        "prefix": "import",
+        "body": [
+            "import \"${1:module}\""
+        ],
+        "description": "Import a module"
+    },
+    "Use Library": {
+        "prefix": "use",
+        "body": [
+            "use \"${1:lib/module.glow}\""
+        ],
+        "description": "Use a library file"
+    },
+    "Spawn (Async)": {
+        "prefix": "spawn",
+        "body": [
+            "spawn ${1:task_name}(${2:args})"
+        ],
+        "description": "Spawn an async task"
+    },
+    "Web Server": {
+        "prefix": "webserver",
+        "body": [
+            "use \"lib/web.glow\"",
+            "",
+            "let server = Server(${1:8080})",
+            "",
+            "server.route(\"/\", lambda (req):",
+            "    return \"${2:Hello from GlowLang!}\"",
+            ")",
+            "",
+            "server.start()"
+        ],
+        "description": "GlowLang web server boilerplate"
+    },
+    "Database Model": {
+        "prefix": "dbmodel",
+        "body": [
+            "use \"lib/db.glow\"",
+            "",
+            "let model = Model(\"${1:database.db}\")",
+            "model.create_table(\"${2:users}\", {\"${3:name}\": \"TEXT\", \"${4:age}\": \"INTEGER\"})",
+            "model.insert(\"${2:users}\", {\"${3:name}\": \"${5:Alice}\", \"${4:age}\": ${6:30}})",
+            "let results = model.find_all(\"${2:users}\")",
+            "show results"
+        ],
+        "description": "Database model boilerplate"
+    },
+    "AI Neural Net": {
+        "prefix": "neuralnet",
+        "body": [
+            "use \"lib/ai.glow\"",
+            "",
+            "let net = SimpleNet()",
+            "let input = tensor.create(${1:10})",
+            "let result = net.predict(input)",
+            "show result"
+        ],
+        "description": "AI neural network boilerplate"
+    },
+    "HTTP GET Request": {
+        "prefix": "httpget",
+        "body": [
+            "use \"lib/http_client.glow\"",
+            "",
+            "let client = HttpClient()",
+            "let response = client.get(\"${1:https://api.example.com/data}\")",
+            "show response.body"
+        ],
+        "description": "HTTP GET request"
+    },
+    "Middleware Chain": {
+        "prefix": "middleware",
+        "body": [
+            "use \"lib/middleware.glow\"",
+            "",
+            "let pipeline = MiddlewarePipeline()",
+            "pipeline.add(Logger())",
+            "pipeline.add(Auth(\"${1:secret}\"))",
+            "",
+            "let result = pipeline.run(${2:request})",
+            "show result"
+        ],
+        "description": "Middleware pipeline setup"
+    },
+    "ORM Schema": {
+        "prefix": "ormschema",
+        "body": [
+            "use \"lib/orm.glow\"",
+            "",
+            "let schema = Schema(\"${1:users}\")",
+            "schema.field(\"${2:name}\", \"TEXT\", {\"required\": true})",
+            "schema.field(\"${3:email}\", \"TEXT\", {\"unique\": true})",
+            "schema.field(\"${4:age}\", \"INTEGER\", {\"default\": 0})",
+            "",
+            "let orm = ORM(\"${5:database.db}\")",
+            "orm.register(schema)",
+            "orm.migrate()"
+        ],
+        "description": "ORM schema definition"
+    },
+    "ML Pipeline": {
+        "prefix": "mlpipeline",
+        "body": [
+            "use \"lib/ml_pipeline.glow\"",
+            "",
+            "let pipeline = Pipeline()",
+            "pipeline.add_step(Normalize())",
+            "pipeline.add_step(TrainTestSplit(0.8))",
+            "pipeline.add_step(LinearModel())",
+            "pipeline.add_step(Evaluate())",
+            "",
+            "let results = pipeline.run(${1:dataset})",
+            "show results"
+        ],
+        "description": "ML pipeline boilerplate"
+    },
+    "File Header Comment": {
+        "prefix": "header",
+        "body": [
+            "# ============================================",
+            "# ${1:Module Name}",
+            "# ${2:Description}",
+            "# Author: ${3:Your Name}",
+            "# ============================================",
+            ""
+        ],
+        "description": "File header comment block"
+    }
+}

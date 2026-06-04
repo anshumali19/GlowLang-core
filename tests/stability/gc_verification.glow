@@ -1,0 +1,300 @@
+show "===================================================================="
+show "         GLOWLANG GC VERIFICATION SUITE"
+show "===================================================================="
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. Heap Integrity — Allocation/Deallocation Cycles
+# ═══════════════════════════════════════════════════════════════════════
+show "1. Heap Integrity: Allocation/Deallocation Cycles..."
+
+func alloc_dealloc_cycle(rounds):
+    let i = 0
+    while i < rounds:
+        # Allocate various object types
+        let s = "string_" + i
+        let l = [1, 2, 3, i]
+        let d = {"key": i, "val": s}
+
+        # Let them go out of scope (implicit dealloc)
+        if i % 1000 == 0:
+            let info = os.gc_info()
+            show "   Round ", i, ": heap=", (info.allocated / 1024), " KB"
+        end
+        i = i + 1
+    end
+end
+
+alloc_dealloc_cycle(5000)
+let gc1 = os.verify_gc()
+show "   Heap integrity after alloc/dealloc: ", gc1
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. Dangling Reference Detection
+# ═══════════════════════════════════════════════════════════════════════
+show "2. Dangling Reference Detection..."
+
+# Test that references to objects are properly invalidated
+func create_and_return():
+    let local_list = [1, 2, 3, 4, 5]
+    let local_str = "temporary"
+    let local_dict = {"a": 1, "b": 2}
+    return [local_list, local_str, local_dict]
+end
+
+# The returned values should still be valid even though locals are gone
+let returned = create_and_return()
+show "   Returned list: ", returned[0]
+show "   Returned string: ", returned[1]
+show "   Returned dict: ", returned[2]
+
+# Stress: create and discard many refs
+let ref_i = 0
+while ref_i < 2000:
+    let temp_ref = create_and_return()
+    # temp_ref goes out of scope each iteration
+    ref_i = ref_i + 1
+end
+let gc2 = os.verify_gc()
+show "   Heap after ref cycles: ", gc2
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. Closure Lifetime Validation
+# ═══════════════════════════════════════════════════════════════════════
+show "3. Closure Lifetime Validation..."
+
+func make_closure_chain(depth):
+    if depth == 0:
+        let val = "leaf"
+        return lambda(): val
+    end
+    let captured = "level_" + depth
+    let inner = make_closure_chain(depth - 1)
+    return lambda(): captured + "_" + inner()
+end
+
+let closure_chain = make_closure_chain(10)
+let chain_result = closure_chain()
+show "   Closure chain result: ", chain_result
+
+# Multiple closures capturing the same variable
+let global_shared = [0]
+func shared_capture():
+    let inc = lambda():
+        global_shared[0] = global_shared[0] + 1
+    end
+    let get = lambda():
+        return global_shared[0]
+    end
+    let reset = lambda():
+        global_shared[0] = 0
+    end
+    return [inc, get, reset]
+end
+
+let ops = shared_capture()
+
+let ci = 0
+while ci < 1000:
+    ops[0]()
+    ci = ci + 1
+end
+show "   Shared capture after 1000 increments: ", ops[1]()
+ops[2]()
+show "   After reset: ", ops[1]()
+
+let gc3 = os.verify_gc()
+show "   Heap after closures: ", gc3
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4. Iterator Lifetime Validation
+# ═══════════════════════════════════════════════════════════════════════
+show "4. Iterator Lifetime Validation..."
+
+# Create iterators that outlive their source
+func create_data():
+    let data = range(100)
+    return data
+end
+
+let iter_data = create_data()
+let iter_sum = 0
+for each v in iter_data:
+    iter_sum = iter_sum + v
+end
+show "   Iterator sum from escaped data: ", iter_sum
+
+# Nested iterators
+let outer = range(50)
+let nested_count = 0
+for each a in outer:
+    let inner = range(50)
+    for each b in inner:
+        nested_count = nested_count + 1
+    end
+end
+show "   Nested iterator count (50x50): ", nested_count
+
+# Break from iterators and verify no leaks
+let break_data = range(1000)
+let break_sum = 0
+for each v in break_data:
+    if v > 100:
+        break_sum = break_sum + v
+    end
+end
+
+let gc4 = os.verify_gc()
+show "   Heap after iterators: ", gc4
+
+# ═══════════════════════════════════════════════════════════════════════
+# 5. Rope Ownership Validation
+# ═══════════════════════════════════════════════════════════════════════
+show "5. Rope Ownership Validation..."
+
+# Build rope trees and verify they survive GC
+func build_rope(n):
+    let s = ""
+    let i = 0
+    while i < n:
+        s = s + "R"
+        i = i + 1
+    end
+    return s
+end
+
+let rope1 = build_rope(5000)
+show "   Rope 1 length: ", len(rope1)
+
+# Alternating append/prepend to stress rope balancing
+let rope2 = "seed"
+let ri = 0
+while ri < 3000:
+    if ri % 2 == 0:
+        rope2 = rope2 + "A"
+    end
+    if ri % 2 == 1:
+        rope2 = "B" + rope2
+    end
+    ri = ri + 1
+end
+show "   Rope 2 length: ", len(rope2)
+
+func rope_slice(s, start_idx, end_idx):
+    let res = ""
+    let i = start_idx
+    while i < end_idx:
+        res = res + s[i]
+        i = i + 1
+    end
+    return res
+end
+
+# Rope slicing
+let rope3 = build_rope(1000)
+let slice1 = rope_slice(rope3, 0, 100)
+let slice2 = rope_slice(rope3, 500, 600)
+show "   Rope slice lengths: ", len(slice1), ", ", len(slice2)
+
+let gc5 = os.verify_gc()
+show "   Heap after ropes: ", gc5
+
+# ═══════════════════════════════════════════════════════════════════════
+# 6. Tensor Allocation Tracing
+# ═══════════════════════════════════════════════════════════════════════
+show "6. Tensor Allocation Tracing..."
+
+func tensor_alloc_trace(rounds):
+    let i = 0
+    while i < rounds:
+        let t1 = tensor.zeros(1000)
+        let t2 = tensor.zeros(1000)
+        let t3 = tensor.add(t1, t2)
+        let t4 = tensor.mul(t1, t2)
+        let dot = tensor.dot(t1, t2)
+        # t1, t2, t3, t4 go out of scope — GC must reclaim
+        if i % 100 == 0:
+            let info = os.gc_info()
+            show "   Tensor trace round ", i, ": heap=", (info.allocated / 1024), " KB"
+        end
+        i = i + 1
+    end
+end
+
+tensor_alloc_trace(500)
+let gc6 = os.verify_gc()
+show "   Heap after tensor tracing: ", gc6
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. Cross-Type GC Stress
+# ═══════════════════════════════════════════════════════════════════════
+show "7. Cross-Type GC Stress (mixed allocations)..."
+
+class GCTestObj:
+    func init(id):
+        self.id = id
+        self.data = "obj_" + id
+        self.children = []
+    end
+end
+
+func cross_type_stress(n):
+    let i = 0
+    while i < n:
+        # Mix strings, lists, dicts, closures, objects
+        let s = "str_" + i
+        let l = [i, i + 1, s]
+        let d = {"id": i, "name": s}
+        let obj = GCTestObj(i)
+        let closure = lambda(): s + "_captured"
+
+        if i % 500 == 0:
+            let info = os.gc_info()
+            show "   Cross-type round ", i, ": heap=", (info.allocated / 1024), " KB"
+        end
+        i = i + 1
+    end
+end
+
+cross_type_stress(2000)
+let gc7 = os.verify_gc()
+show "   Heap after cross-type stress: ", gc7
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. Long-Lived Object Survival
+# ═══════════════════════════════════════════════════════════════════════
+show "8. Long-Lived Object Survival..."
+
+let survivors = []
+let si = 0
+while si < 100:
+    let obj = GCTestObj(si)
+    survivors = survivors + [obj]
+    si = si + 1
+end
+
+# Create a lot of garbage while survivors should stay alive
+let garbage_i = 0
+while garbage_i < 5000:
+    let temp = "garbage_" + garbage_i
+    let temp_list = [garbage_i]
+    garbage_i = garbage_i + 1
+end
+
+# Verify survivors are still intact
+show "   Survivors count: ", len(survivors)
+show "   First survivor id: ", survivors[0].id
+show "   Last survivor id: ", survivors[99].id
+
+let gc8 = os.verify_gc()
+show "   Heap after survival test: ", gc8
+
+# ═══════════════════════════════════════════════════════════════════════
+# Final GC Check
+# ═══════════════════════════════════════════════════════════════════════
+show "Final GC Heap Integrity Verification..."
+let final_gc = os.verify_gc()
+show "   Final heap status: ", final_gc
+
+show "===================================================================="
+show "         GC VERIFICATION SUITE COMPLETED"
+show "===================================================================="

@@ -1,0 +1,13 @@
+import "lib/db.glow"
+
+show "[Database CRUD] Opening database..."
+let db = Model("test.db")
+db.create_table("users", {"name": "TEXT", "age": "INTEGER"})
+
+show "[Database CRUD] Inserting records..."
+db.insert("users", {"name": "Alice", "age": 30})
+db.insert("users", {"name": "Bob", "age": 25})
+
+show "[Database CRUD] Querying all users..."
+let users = db.find_all("users")
+show "Users: ", users
