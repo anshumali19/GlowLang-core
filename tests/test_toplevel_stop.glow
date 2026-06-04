@@ -1,0 +1,3 @@
+show "Before top-level stop"
+stop
+show "After top-level stop (should not be printed)"

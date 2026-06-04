@@ -1,4 +1,4 @@
-let g = func(x):
+let g = lambda(x):
     return x + 10
 end
 show "g(5):", g(5)

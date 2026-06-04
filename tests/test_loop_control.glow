@@ -1,0 +1,75 @@
+# Test stop and skip loop semantics
+
+show "=== Testing while loop with stop ==="
+let i = 0
+while i < 10:
+    i = i + 1
+    when i == 5:
+        stop
+    end
+    show "i =", i
+end
+show "Finished while loop with stop. i =", i
+
+show "=== Testing while loop with skip ==="
+let j = 0
+while j < 5:
+    j = j + 1
+    when j == 3:
+        skip
+    end
+    show "j =", j
+end
+show "Finished while loop with skip. j =", j
+
+show "=== Testing for range loop with stop ==="
+for k from 1 to 5:
+    when k == 3:
+        stop
+    end
+    show "k =", k
+end
+show "Finished for range loop with stop"
+
+show "=== Testing for range loop with skip ==="
+for l from 1 to 5:
+    when l == 3:
+        skip
+    end
+    show "l =", l
+end
+show "Finished for range loop with skip"
+
+show "=== Testing for each loop with stop ==="
+let lst = [10, 20, 30, 40, 50]
+for each x in lst:
+    when x == 30:
+        stop
+    end
+    show "x =", x
+end
+show "Finished for each loop with stop"
+
+show "=== Testing for each loop with skip ==="
+for each y in lst:
+    when y == 30:
+        skip
+    end
+    show "y =", y
+end
+show "Finished for each loop with skip"
+
+show "=== Testing nested loops ==="
+let outer_count = 0
+while outer_count < 3:
+    outer_count = outer_count + 1
+    let inner_count = 0
+    while inner_count < 3:
+        inner_count = inner_count + 1
+        when inner_count == 2:
+            stop
+        end
+        show "outer =", outer_count, "inner =", inner_count
+    end
+end
+show "Finished nested loops"
