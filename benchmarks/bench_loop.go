@@ -1,12 +1,7 @@
 package main
-
 import "fmt"
-
 func main() {
-	i, total := 0, 0
-	for i < 100000 {
-		total += i
-		i++
-	}
-	fmt.Println(total)
+    var total int64 = 0
+    for i := 0; i < 10000000; i++ { total += int64(i) }
+    fmt.Println(total)
 }
