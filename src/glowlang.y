@@ -1683,8 +1683,10 @@ void yyerror(const char *s) { fprintf(stderr, "Error: %s at line %d\n", s, line_
 %%
 
 program: lines { root = $1; };
-lines: lines NEWLINE stmt { $$ = newSeqNode($1, $3); } | lines NEWLINE { $$ = $1; } | stmt { $$ = $1; } | IMPORT STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; } | { $$ = NULL; };
+lines: lines NEWLINE stmt { $$ = newSeqNode($1, $3); } | lines NEWLINE { $$ = $1; } | stmt { $$ = $1; } | { $$ = NULL; };
 stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->name, $3); else { $$ = $1; $$->type = NODE_INDEX_ASSIGN; $$->third = $3; } }
+    | IMPORT STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
+    | USE STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | RETURN expr { $$ = newReturnNode($2); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
@@ -4074,7 +4076,7 @@ int glow_main(int argc, char **argv) {
                         printf("Syntax Check: OK\n");
                     }
                 }
-                fclose(yyin);
+                if (yyin) fclose(yyin);
             } else {
                 fprintf(stderr, "Error: Could not open file '%s'\n", filename);
                 return 1;
@@ -4101,7 +4103,7 @@ int glow_main(int argc, char **argv) {
                 run_bytecode(main_bc, NULL, NULL, 0);
                 if (has_exception) print_error_trace(pending_exception);
             }
-            fclose(yyin);
+            if (yyin) fclose(yyin);
         } else {
             fprintf(stderr, "Usage: glow [run|repl|check] <file>\n");
             return 1;
