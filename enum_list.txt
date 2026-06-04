@@ -1,0 +1,136 @@
+static inline Value value_iterator(Iterator *i) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)i); }
+static inline Value value_native_func(NativeFunc *nf) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)nf); }
+static inline Value value_none(void) { return make_value(VAL_NONE, 0); }
+
+typedef uint64_t TypeSignature;
+
+typedef struct GlobalTable {
+    const char **names;
+    Value *values;
+    int count;
+    int capacity;
+} GlobalTable;
+
+extern GlobalTable global_table;
+int global_get_slot(const char *name);
+
+typedef struct CallFrame {
+    struct FuncEntry *fe;
+    struct Instruction *pc;
+} CallFrame;
+extern __thread CallFrame call_stack[1024];
+extern __thread int call_stack_ptr;
+void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
+void call_stack_pop(void);
+
+extern TypeSignature compute_signature(Value *regs, int count);
+extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
+extern Value jit_call_helper_name(const char *name, int argc, Value *args, struct Instruction *pc);
+extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
+extern Value packed_array_get_jit(Value v_pa, Value v_idx);
+extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
+extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
+extern Value value_from_double(double d);
+
+/* ================================================================
+ *  BYTECODE
+ * ================================================================ */
+typedef enum {
+    OP_CONST_INT,
+    OP_CONST_FLOAT,
+    OP_CONST_STRING,
+    OP_CONST_BOOL,
+    OP_LOAD_VAR,
+    OP_STORE_VAR,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_MOD,
+    OP_POW,
+    OP_NEG,
+    OP_LT,
+    OP_GT,
+    OP_LTE,
+    OP_GTE,
+    OP_EQ,
+    OP_NEQ,
+    OP_AND,
+    OP_OR,
+    OP_NOT,
+    OP_JUMP,
+    OP_JUMP_IF_FALSE,
+    OP_JUMP_IF_TRUE,
+    OP_LEN,
+    OP_RANGE,
+    OP_TYPE,
+    OP_APPEND,
+    OP_INPUT,
+    OP_SHOW,
+    OP_WRITE,
+    OP_LIST_LITERAL,
+    OP_DICT_LITERAL,
+    OP_INDEX,
+    OP_SLICE,
+    OP_STORE_INDEX,
+    OP_FUNC_DEF,
+    OP_CALL,
+    OP_CALL_SELF_FAST,
+    OP_TAIL_CALL,
+    OP_RETURN,
+    OP_FOR_EACH,
+    OP_FOR_EACH_PAIR,
+    OP_STOP,
+    OP_SKIP,
+    OP_POP,
+    OP_PUSH_SCOPE,
+    OP_POP_SCOPE,
+    OP_STORE_LET,
+    OP_LOAD_LOCAL,
+    OP_STORE_LOCAL,
+    OP_DICT_KEYS,
+    OP_DICT_VALUES,
+    OP_DICT_HAS,
+    OP_DICT_REMOVE,
+    OP_DICT_MERGE,
+    OP_MATH_ABS,
+    OP_MATH_MIN,
+    OP_MATH_MAX,
+    OP_MATH_ROUND,
+    OP_MATH_FLOOR,
+    OP_MATH_CEIL,
+    OP_MATH_SQRT,
+    OP_STR_UPPER,
+    OP_STR_LOWER,
+    OP_STR_TRIM,
+    OP_STR_FIND,
+    OP_STR_REPLACE,
+    OP_STR_STARTSWITH,
+    OP_STR_ENDSWITH,
+    OP_STR_SPLIT,
+    OP_LIST_PUSH,
+    OP_LIST_POP,
+    OP_LIST_INSERT,
+    OP_LIST_REMOVE,
+    OP_LIST_CONTAINS,
+    OP_LIST_SORT,
+    OP_LIST_REVERSE,
+    OP_FILE_READ,
+    OP_FILE_WRITE,
+    OP_FILE_APPEND,
+    OP_FSTRING,
+    OP_LIST_COMP,
+    OP_THROW,
+    OP_TRY_START,
+    OP_TRY_END,
+    OP_LAMBDA,
+    OP_CALL_VALUE,
+    OP_CLASS_DEF,
+    OP_METHOD_DEF,
+    OP_TRAIT_DEF,
+    OP_USE_TRAIT,
+    OP_GET_PROPERTY,
+    OP_SET_PROPERTY,
+    OP_SPAWN,
+    OP_MOVE,
+    OP_NOP,

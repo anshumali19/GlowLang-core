@@ -1,0 +1,18 @@
+# GlowNet Redis Wrapper
+# Industrial Stress Project - Database Subsystem
+
+blueprint RedisClient:
+    action init(host, port):
+        self.host = host
+        self.port = port
+        self.handle = redis.connect(host, port)
+    end
+
+    action set(key, value):
+        return redis.set(self.handle, key, value)
+    end
+
+    action get(key):
+        return redis.get(self.handle, key)
+    end
+end

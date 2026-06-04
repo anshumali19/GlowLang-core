@@ -1,0 +1,22 @@
+# GlowNet SIMD Stress Test
+# Industrial Stress Project
+
+action run_simd_stress():
+    let size = 1000000
+    let a = packed_float(size)
+    let b = packed_float(size)
+    
+    show "Starting SIMD Stress: 1M elements"
+    let start = os.time()
+    
+    let i = 0
+    while i < 10:
+        let c = packed_add(a, b)
+        i = i + 1
+    end
+    
+    let end_time = os.time()
+    show "SIMD Stress Completed in " + (end_time - start) + "s"
+end
+
+let _ = run_simd_stress()

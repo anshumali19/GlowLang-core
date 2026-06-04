@@ -1,0 +1,28 @@
+# Task Scheduler Subsystem
+
+blueprint Task:
+    action init(id, task_func):
+        self.id = id
+        self.task_func = task_func
+        self.status = "pending"
+    end
+end
+
+blueprint Scheduler:
+    action init():
+        self.tasks = []
+    end
+
+    action schedule(task):
+        self.tasks = self.tasks + [task]
+        show "[Scheduler] Scheduled task ", task.id
+    end
+
+    action run_all():
+        every each t in self.tasks:
+            show "[Scheduler] Running task ", t.id
+            t.task_func()
+            t.status = "completed"
+        end
+    end
+end

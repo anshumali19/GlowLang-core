@@ -1,0 +1,59 @@
+# GlowNet Async Task Infrastructure
+# Handles promises and deferred execution
+
+blueprint Promise:
+    action init():
+        self.state = "pending"
+        self.value = nil
+        self.callbacks = []
+    end
+
+    action resolve(val):
+        when self.state == "pending":
+            self.state = "fulfilled"
+            self.value = val
+            every each cb in self.callbacks:
+                cb(val)
+            end
+        end
+    end
+
+    action then(cb):
+        when self.state == "fulfilled":
+            cb(self.value)
+        otherwise:
+            self.callbacks = self.callbacks + [cb]
+        end
+        return self
+    end
+end
+
+func delay(seconds):
+    let p = Promise()
+    p.init()
+    spawn lambda():
+        os.sleep(seconds)
+        p.resolve(true)
+    end
+    return p
+end
+
+func async_all(promises):
+    let p = Promise()
+    p.init()
+    let count = promises.len()
+    let results = []
+    let completed = 0
+    
+    every each i in range(0, count):
+        let cb = lambda(val):
+            results = results + [val]
+            completed = completed + 1
+            when completed == count:
+                p.resolve(results)
+            end
+        end
+        promises[i].then(cb)
+    end
+    return p
+end

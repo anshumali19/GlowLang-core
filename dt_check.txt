@@ -1,0 +1,101 @@
+1875:        &&l_OP_CONST_INT, &&l_OP_CONST_FLOAT, &&l_OP_CONST_STRING, &&l_OP_CONST_BOOL,
+1876-        &&l_OP_LOAD_VAR, &&l_OP_STORE_VAR,
+1877-        &&l_OP_ADD, &&l_OP_SUB, &&l_OP_MUL, &&l_OP_DIV, &&l_OP_MOD, &&l_OP_POW, &&l_OP_NEG,
+1878-        &&l_OP_LT, &&l_OP_GT, &&l_OP_LTE, &&l_OP_GTE, &&l_OP_EQ, &&l_OP_NEQ,
+1879-        &&l_OP_AND, &&l_OP_OR, &&l_OP_NOT,
+1880-        &&l_OP_JUMP, &&l_OP_JUMP_IF_FALSE, &&l_OP_JUMP_IF_TRUE,
+1881-        &&l_OP_LEN, &&l_OP_RANGE, &&l_OP_TYPE, &&l_OP_APPEND, &&l_OP_INPUT, &&l_OP_SHOW, &&l_OP_WRITE,
+1882-        &&l_OP_LIST_LITERAL, &&l_OP_DICT_LITERAL,
+1883-        &&l_OP_INDEX, &&l_OP_SLICE, &&l_OP_STORE_INDEX,
+1884-        &&l_OP_FUNC_DEF, &&l_OP_CALL, &&l_OP_CALL_SELF_FAST, &&l_OP_TAIL_CALL, &&l_OP_RETURN,
+1885-        &&l_OP_FOR_EACH, &&l_OP_FOR_EACH_PAIR,
+1886-        &&l_OP_STOP, &&l_OP_SKIP,
+1887-        &&l_OP_POP,
+1888-        &&l_OP_PUSH_SCOPE, &&l_OP_POP_SCOPE, &&l_OP_STORE_LET,
+1889-        &&l_OP_LOAD_LOCAL, &&l_OP_STORE_LOCAL,
+1890-        &&l_OP_DICT_KEYS, &&l_OP_DICT_VALUES, &&l_OP_DICT_HAS, &&l_OP_DICT_REMOVE, &&l_OP_DICT_MERGE,
+1891-        &&l_OP_MATH_ABS, &&l_OP_MATH_MIN, &&l_OP_MATH_MAX, &&l_OP_MATH_ROUND, &&l_OP_MATH_FLOOR, &&l_OP_MATH_CEIL, &&l_OP_MATH_SQRT,
+1892-        &&l_OP_STR_UPPER, &&l_OP_STR_LOWER, &&l_OP_STR_TRIM, &&l_OP_STR_FIND, &&l_OP_STR_REPLACE, &&l_OP_STR_STARTSWITH, &&l_OP_STR_ENDSWITH, &&l_OP_STR_SPLIT,
+1893-        &&l_OP_LIST_PUSH, &&l_OP_LIST_POP, &&l_OP_LIST_INSERT, &&l_OP_LIST_REMOVE, &&l_OP_LIST_CONTAINS, &&l_OP_LIST_SORT, &&l_OP_LIST_REVERSE,
+1894-        &&l_OP_FILE_READ, &&l_OP_FILE_WRITE, &&l_OP_FILE_APPEND,
+1895-        &&l_OP_FSTRING,
+1896-        &&l_OP_LIST_COMP,
+1897-        &&l_OP_THROW,
+1898-        &&l_OP_TRY_START, &&l_OP_TRY_END,
+1899-        &&l_OP_LAMBDA,
+1900-        &&l_OP_CALL_VALUE,
+1901-        &&l_OP_CLASS_DEF,
+1902-        &&l_OP_METHOD_DEF,
+1903-        &&l_OP_TRAIT_DEF,
+1904-        &&l_OP_USE_TRAIT,
+1905-        &&l_OP_GET_PROPERTY,
+1906-        &&l_OP_SET_PROPERTY,
+1907-        &&l_OP_SPAWN,
+1908-        &&l_OP_MOVE,
+1909-        &&l_OP_NOP,
+1910-        &&l_OP_TRACE_ENTER,
+1911-        &&l_OP_PACKED_ADD, &&l_OP_PACKED_SUB, &&l_OP_PACKED_MUL,
+1912-        &&l_OP_PACKED_LOAD, &&l_OP_PACKED_STORE, &&l_OP_PACKED_FUSED_MUL_ADD,
+1913-        &&l_OP_MATRIX_MUL,
+1914-        &&l_OP_SIMD_ADD,
+1915-        &&l_OP_USE_FILE,
+1916-        &&l_OP_ITER_START,
+1917-        &&l_OP_ITER_NEXT
+1918-    };
+1919-
+1920-#define R(idx) vm_stack[base_reg + (idx)]
+1921-#define DISPATCH() { \
+1922-    if (profiling_active) pc->exec_count++; \
+1923-    if (has_exception) goto l_OP_THROW; \
+1924-    fprintf(stdout, "OP: %d\\n", pc->op); fflush(stdout); \
+1925-    goto *dt[pc->op]; \
+1926-}
+1927-    DISPATCH();
+1928-
+1929-    l_OP_CONST_INT: R(pc->r0) = value_int(pc->arg); pc++; DISPATCH();
+1930-    l_OP_CONST_FLOAT: R(pc->r0) = *(Value*)pc->ptr; pc++; DISPATCH();
+1931-    l_OP_CONST_STRING: R(pc->r0) = value_string_copy((const char*)pc->ptr); pc++; DISPATCH();
+1932-    l_OP_CONST_BOOL: R(pc->r0) = value_bool(pc->arg); pc++; DISPATCH();
+1933-    l_OP_LOAD_VAR: {
+1934-        int slot = pc->arg;
+1935-        const char *name = (const char*)pc->ptr;
+1936-        
+1937-        // 0. Thread-local self Path
+1938-        if (name && strcmp(name, "self") == 0) {
+1939-            R(pc->r0) = current_self;
+1940-            pc++; DISPATCH();
+1941-        }
+1942-
+1943-        // 1. Inline Cache Path (Fast)
+1944-        if (current_closure && pc->cache[0].key == current_closure) {
+1945-            R(pc->r0) = current_closure->captured_values[pc->cache[0].val];
+1946-            pc++; DISPATCH();
+1947-        }
+1948-
+1949-        // 2. Upvalue Path (Slow resolution)
+1950-        if (current_closure && name) {
+1951-            for (int i = 0; i < current_closure->captured_count; i++) {
+1952-                if (strcmp(current_closure->captured_names[i], name) == 0) {
+1953-                    pc->cache[0].key = current_closure;
+1954-                    pc->cache[0].val = i;
+1955-                    R(pc->r0) = current_closure->captured_values[i];
+1956-                    pc++; DISPATCH();
+1957-                }
+1958-            }
+1959-        }
+1960-
+1961-        // 3. Global Table Path (Legacy)
+1962-        if (slot >= global_table.count) { fprintf(stderr, "ERROR: LOAD_VAR slot %d out of bounds (%d)\n", slot, global_table.count); exit(1); }
+1963-        Value val = global_table.values[slot];
+1964-        if (GET_TYPE(val) == VAL_NONE && name) {
+1965-            FuncEntry *fe = func_get(name);
+1966-            if (fe) {
+1967-                val = bound_method_new(value_none(), fe);
+1968-                global_table.values[slot] = val; // Cache it
+1969-            }
+1970-        }
+1971-        R(pc->r0) = val;
+1972-        pc++; DISPATCH();
+1973-    }
+1974-    l_OP_STORE_VAR: {
+1975-        int slot = pc->arg;

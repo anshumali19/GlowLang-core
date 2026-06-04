@@ -1,0 +1,55 @@
+# JIT Stress Subsystem
+
+func factorial(n):
+    when n < 2:
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+func hot_loop(iterations):
+    let sum = 0
+    for i from 0 to iterations:
+        sum = sum + i
+    end
+    return sum
+end
+
+blueprint Base:
+    action run():
+        return 0
+    end
+end
+
+blueprint ExtA extends Base:
+    action run():
+        return 1
+    end
+end
+
+blueprint ExtB extends Base:
+    action run():
+        return 2
+    end
+end
+
+func run_jit_stress():
+    show "[Stress] Starting JIT Validation..."
+    let start = os.time()
+    
+    for i from 0 to 100:
+        let _ = factorial(15)
+    end
+    
+    let _ = hot_loop(10000)
+    
+    let a = ExtA()
+    let b = ExtB()
+    for i from 0 to 1000:
+        a.run()
+        b.run()
+    end
+    
+    let end_time = os.time()
+    show "[Stress] JIT Validation Completed in ", (end_time - start), "s"
+end

@@ -1,0 +1,29 @@
+# Tensor Subsystem
+# SIMD-capable numerical data structures
+
+blueprint Tensor:
+    action init(shape, type):
+        self.shape = shape
+        self.type = type
+        let size = 1
+        every each dim in shape:
+            size = size * dim
+        end
+        self.data = tensor.zeros(size, type)
+    end
+
+    action get_size():
+        return self.data.len()
+    end
+
+    action add(other):
+        # Native SIMD fast-path if types match
+        when self.type == other.type:
+            let res = Tensor(self.shape, self.type)
+            res.init(self.shape, self.type)
+            res.data = self.data + other.data # OP_PACKED_ADD
+            return res
+        end
+        return nil
+    end
+end

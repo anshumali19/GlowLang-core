@@ -1,0 +1,34 @@
+# GlowNet Middleware System
+# Handles request/response wrapping
+
+let middleware_chain = []
+
+func use_middleware(m):
+    middleware_chain = middleware_chain + [m]
+end
+
+func execute_chain(request, final_handler):
+    let current_index = 0
+    
+    func next(req):
+        when current_index < middleware_chain.len():
+            let m = middleware_chain[current_index]
+            current_index = current_index + 1
+            return m(req, next)
+        otherwise:
+            return final_handler(req)
+        end
+    end
+    
+    return next(request)
+end
+
+# Example Logging Middleware
+func logger_middleware(req, next):
+    show "[Request] ", req["method"], " ", req["path"]
+    let start = os.time()
+    let res = next(req)
+    let end_time = os.time()
+    show "[Response] Status: ", res["status"], " (", (end_time - start), "s)"
+    return res
+end

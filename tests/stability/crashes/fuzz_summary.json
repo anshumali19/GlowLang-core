@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-06-04T12:50:41.737477",
+  "total_runs": 1280,
+  "crashes": 0,
+  "unique_crashes": 0,
+  "timeouts": 0,
+  "categories": {
+    "lexer": {
+      "runs": 200,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "parser": {
+      "runs": 200,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "tensor": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "async": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "modules": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "bytecode": {
+      "runs": 150,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "malformed_tensor": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "malformed_async": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "rope_string": {
+      "runs": 100,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "gc_pressure": {
+      "runs": 80,
+      "crashes": 0,
+      "timeouts": 0
+    },
+    "deep_nesting": {
+      "runs": 50,
+      "crashes": 0,
+      "timeouts": 0
+    }
+  }
+}

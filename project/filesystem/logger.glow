@@ -1,0 +1,35 @@
+# GlowNet Logger Subsystem
+# Handles structured logging and snapshotting
+
+blueprint Logger:
+    action init(filename):
+        self.filename = filename
+        self.level = "INFO"
+    end
+
+    action log(msg):
+        let timestamp = os.time()
+        let entry = "[" + self.level + "] " + timestamp + ": " + msg
+        show entry
+        # Simulation of file write
+        # os.append(self.filename, entry + "\n")
+    end
+
+    action info(msg):
+        self.level = "INFO"
+        self.log(msg)
+    end
+
+    action warn(msg):
+        self.level = "WARN"
+        self.log(msg)
+    end
+
+    action error(msg):
+        self.level = "ERROR"
+        self.log(msg)
+    end
+end
+
+let main_logger = Logger("glownet.log")
+main_logger.init("glownet.log")

@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-06-04T12:50:34.274579",
+  "binary": "/home/anshumali/Desktop/GlowLang 1.0/bin/glowlang",
+  "passed": 4,
+  "failed": 0,
+  "results": [
+    {
+      "test": "gc_suite",
+      "status": "PASS",
+      "checkpoints": 8
+    },
+    {
+      "test": "memory_growth",
+      "status": "WARN",
+      "ratio": 4.992960974816261
+    },
+    {
+      "test": "asan_gc",
+      "status": "PASS"
+    },
+    {
+      "test": "gc_cycles",
+      "status": "PASS",
+      "heaps": [
+        2403984,
+        4804144,
+        7204304,
+        9604464,
+        12004624,
+        14404784,
+        16804944,
+        19205104,
+        21605264,
+        24005424
+      ]
+    },
+    {
+      "test": "closure_gc",
+      "status": "PASS"
+    }
+  ]
+}

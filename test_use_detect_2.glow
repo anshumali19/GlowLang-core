@@ -1,0 +1,2 @@
+use "test_add.glow"
+print add(5, 5)

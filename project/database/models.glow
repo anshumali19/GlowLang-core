@@ -1,0 +1,13 @@
+# GlowNet Data Models
+
+blueprint Prediction:
+    action init(id, value, confidence):
+        self.id = id
+        self.value = value
+        self.confidence = confidence
+    end
+
+    action to_json():
+        return {"id": self.id, "value": self.value, "confidence": self.confidence}
+    end
+end
