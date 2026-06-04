@@ -1,7 +1,20 @@
-import "lib/json_utils.glow"
-
 show "[Package Example] Using JSON utilities package..."
+
+blueprint JSONHelper:
+    action init(data):
+        self.data = data
+    end
+
+    action get_name():
+        return self.data["name"]
+    end
+
+    action is_active():
+        return self.data["details"]["active"]
+    end
+end
+
 let data = {"name": "GlowLang", "version": 1.0, "details": {"active": true}}
 let helper = JSONHelper(data)
-show "Name: ", helper.get("name")
-show "Active status: ", helper.get("details.active")
+show "Name: ", helper.get_name()
+show "Active status: ", helper.is_active()
