@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowLang Profiler — Hot-Path Visualizer</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #f0883e;
+    --accent2: #58a6ff;
+    --accent3: #3fb950;
+    --danger: #f85149;
+    --warning: #d29922;
+    --glow: #ff6b2b;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    overflow-x: hidden;
+}
+/* Header */
+.header {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.header h1 .icon { font-size: 24px; }
+.header-actions { display: flex; gap: 8px; }
+.btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.btn:hover { background: var(--border); border-color: var(--text-muted); }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover { background: #d2751f; }
+
+/* Tabs */
+.tabs {
+    display: flex;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+}
+.tab {
+    padding: 10px 20px;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    transition: all 0.15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Content */
+.content { padding: 24px; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Stats Cards */
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+}
+.stat-card .label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.stat-card .value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+}
+.stat-card .sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Hot Path Table */
+.table-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+thead th {
+    background: var(--bg-tertiary);
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+}
+thead th:hover { color: var(--text); }
+tbody td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+}
+tbody tr:hover { background: var(--bg-tertiary); }
+.fn-name { color: var(--accent2); font-weight: 600; }
+.hot { color: var(--danger); font-weight: 700; }
+.warm { color: var(--warning); }
+.cold { color: var(--accent3); }
+
+/* Heat bar */
+.heat-bar {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+    min-width: 80px;
+}
+.heat-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+/* Flame Graph */
+.flame-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+.flame-container h3 {
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 12px;
+}
+.flame-graph {
+    position: relative;
+    width: 100%;
+    min-height: 200px;
+}
+.flame-row {
+    display: flex;
+    width: 100%;
+    margin-bottom: 2px;
+}
+.flame-block {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    font-size: 11px;
+    color: #fff;
+    border-radius: 3px;
+    cursor: pointer;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    transition: filter 0.1s;
+    margin-right: 1px;
+}
+.flame-block:hover { filter: brightness(1.3); }
+
+/* Allocation Graph */
+.chart-area {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+.chart-area h3 {
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+canvas { width: 100%; height: 300px; }
+
+/* GC Timeline */
+.gc-timeline {
+    position: relative;
+    height: 120px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 16px;
+}
+.gc-event {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #fff;
+    cursor: pointer;
+    transition: filter 0.1s;
+}
+.gc-event:hover { filter: brightness(1.4); }
+.gc-event .gc-bar {
+    width: 3px;
+    border-radius: 2px;
+}
+.gc-event .gc-label {
+    margin-top: 4px;
+    font-size: 9px;
+}
+
+/* Tooltip */
+.tooltip {
+    position: fixed;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text);
+    pointer-events: none;
+    z-index: 1000;
+    max-width: 300px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: none;
+}
+.tooltip .tt-title { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+.tooltip .tt-row { display: flex; justify-content: space-between; gap: 16px; }
+.tooltip .tt-key { color: var(--text-muted); }
+.tooltip .tt-val { color: var(--text); font-weight: 600; }
+
+/* Load overlay */
+.load-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(13,17,23,0.9);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+}
+.load-overlay.hidden { display: none; }
+.load-overlay .spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.load-overlay p { margin-top: 16px; color: var(--text-muted); font-size: 14px; }
+
+.section-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text);
+}
+
+/* File input styling */
+.file-drop {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 40px;
+    text-align: center;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 24px;
+}
+.file-drop:hover, .file-drop.dragover {
+    border-color: var(--accent);
+    background: rgba(240,136,62,0.05);
+}
+.file-drop .icon { font-size: 36px; margin-bottom: 8px; }
+.file-drop input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="tooltip" id="tooltip"></div>
+
+<div class="header">
+    <h1><span class="icon">🔥</span> GlowLang Profiler</h1>
+    <div class="header-actions">
+        <button class="btn" onclick="loadDemoData()">Load Demo Data</button>
+        <button class="btn" onclick="document.getElementById('fileInput').click()">📂 Load Profile</button>
+        <button class="btn btn-primary" onclick="exportReport()">📊 Export Report</button>
+        <input type="file" id="fileInput" accept=".json,.prof" onchange="loadProfileFile(event)" style="display:none">
+    </div>
+</div>
+
+<div class="tabs">
+    <div class="tab active" onclick="switchTab('hotpath')">🔥 Hot Paths</div>
+    <div class="tab" onclick="switchTab('flame')">📊 Flame Graph</div>
+    <div class="tab" onclick="switchTab('alloc')">💾 Allocations</div>
+    <div class="tab" onclick="switchTab('gc')">♻️ GC Timeline</div>
+</div>
+
+<div class="content">
+    <!-- Hot Path Panel -->
+    <div class="panel active" id="panel-hotpath">
+        <div class="stats-row" id="stats-row"></div>
+        <div class="section-title">Function Execution Profile</div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)">Function</th>
+                        <th onclick="sortTable(1)">Calls</th>
+                        <th onclick="sortTable(2)">Self Time (ms)</th>
+                        <th onclick="sortTable(3)">Total Time (ms)</th>
+                        <th onclick="sortTable(4)">% Total</th>
+                        <th>Heat</th>
+                    </tr>
+                </thead>
+                <tbody id="hotpath-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Flame Graph Panel -->
+    <div class="panel" id="panel-flame">
+        <div class="section-title">Flame Graph — Call Stack Visualization</div>
+        <div class="flame-container">
+            <div class="flame-graph" id="flame-graph"></div>
+        </div>
+    </div>
+
+    <!-- Allocations Panel -->
+    <div class="panel" id="panel-alloc">
+        <div class="section-title">Memory Allocation Graph</div>
+        <div class="stats-row" id="alloc-stats"></div>
+        <div class="chart-area">
+            <h3>Allocation Over Time</h3>
+            <canvas id="allocChart"></canvas>
+        </div>
+        <div class="chart-area" style="margin-top:16px">
+            <h3>Allocation by Type</h3>
+            <div id="alloc-type-bars"></div>
+        </div>
+    </div>
+
+    <!-- GC Panel -->
+    <div class="panel" id="panel-gc">
+        <div class="section-title">Garbage Collection Timeline</div>
+        <div class="stats-row" id="gc-stats"></div>
+        <div class="chart-area">
+            <h3>GC Events Timeline</h3>
+            <div class="gc-timeline" id="gc-timeline"></div>
+        </div>
+        <div class="table-container" style="margin-top:16px">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Event #</th>
+                        <th>Time (ms)</th>
+                        <th>Type</th>
+                        <th>Freed (KB)</th>
+                        <th>Pause (μs)</th>
+                        <th>Heap Before</th>
+                        <th>Heap After</th>
+                    </tr>
+                </thead>
+                <tbody id="gc-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="load-overlay hidden" id="loading">
+    <div class="spinner"></div>
+    <p>Analyzing profile data...</p>
+</div>
+
+<script>
+// State
+let profileData = null;
+let sortCol = 4;
+let sortAsc = false;
+
+// Tab switching
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+    document.getElementById(`panel-${name}`).classList.add('active');
+}
+
+// Tooltip
+const tooltip = document.getElementById('tooltip');
+function showTooltip(e, html) {
+    tooltip.innerHTML = html;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY + 12) + 'px';
+}
+function hideTooltip() { tooltip.style.display = 'none'; }
+document.addEventListener('mousemove', e => {
+    if (tooltip.style.display === 'block') {
+        tooltip.style.left = (e.clientX + 12) + 'px';
+        tooltip.style.top = (e.clientY + 12) + 'px';
+    }
+});
+
+// Color helpers
+function heatColor(pct) {
+    if (pct > 50) return '#f85149';
+    if (pct > 25) return '#d29922';
+    if (pct > 10) return '#f0883e';
+    return '#3fb950';
+}
+function heatClass(pct) {
+    if (pct > 40) return 'hot';
+    if (pct > 15) return 'warm';
+    return 'cold';
+}
+function flameColor(depth) {
+    const colors = ['#f85149','#f0883e','#d29922','#58a6ff','#3fb950','#bc8cff','#ff7b72','#79c0ff'];
+    return colors[depth % colors.length];
+}
+
+// Render stats
+function renderStats(data) {
+    const totalTime = data.functions.reduce((s,f) => s + f.totalTime, 0);
+    const totalCalls = data.functions.reduce((s,f) => s + f.calls, 0);
+    const hottest = data.functions.reduce((a,b) => a.selfTime > b.selfTime ? a : b);
+    document.getElementById('stats-row').innerHTML = `
+        <div class="stat-card"><div class="label">Total Time</div><div class="value">${totalTime.toFixed(1)}ms</div><div class="sub">wall clock</div></div>
+        <div class="stat-card"><div class="label">Total Calls</div><div class="value">${totalCalls.toLocaleString()}</div><div class="sub">function invocations</div></div>
+        <div class="stat-card"><div class="label">Functions Profiled</div><div class="value">${data.functions.length}</div><div class="sub">unique symbols</div></div>
+        <div class="stat-card"><div class="label">Hottest Function</div><div class="value" style="font-size:16px;color:var(--danger)">${hottest.name}</div><div class="sub">${hottest.selfTime.toFixed(1)}ms (${((hottest.selfTime/totalTime)*100).toFixed(1)}%)</div></div>
+    `;
+}
+
+// Render hot path table
+function renderHotPath(data) {
+    const totalTime = data.functions.reduce((s,f) => s + f.totalTime, 0);
+    const sorted = [...data.functions].sort((a,b) => {
+        const va = [a.name, a.calls, a.selfTime, a.totalTime, (a.totalTime/totalTime)*100][sortCol];
+        const vb = [b.name, b.calls, b.selfTime, b.totalTime, (b.totalTime/totalTime)*100][sortCol];
+        if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+        return sortAsc ? va - vb : vb - va;
+    });
+    
+    const tbody = document.getElementById('hotpath-body');
+    tbody.innerHTML = sorted.map(f => {
+        const pct = (f.totalTime / totalTime * 100);
+        return `<tr>
+            <td class="fn-name">${f.name}</td>
+            <td>${f.calls.toLocaleString()}</td>
+            <td>${f.selfTime.toFixed(2)}</td>
+            <td>${f.totalTime.toFixed(2)}</td>
+            <td class="${heatClass(pct)}">${pct.toFixed(1)}%</td>
+            <td><div class="heat-bar"><div class="heat-fill" style="width:${Math.min(pct,100)}%;background:${heatColor(pct)}"></div></div></td>
+        </tr>`;
+    }).join('');
+}
+
+function sortTable(col) {
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = false; }
+    renderHotPath(profileData);
+}
+
+// Flame graph
+function renderFlameGraph(data) {
+    const container = document.getElementById('flame-graph');
+    container.innerHTML = '';
+    const stacks = data.stacks || generateStacks(data.functions);
+    
+    stacks.forEach((row, depth) => {
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'flame-row';
+        row.forEach(block => {
+            const el = document.createElement('div');
+            el.className = 'flame-block';
+            el.style.width = block.width + '%';
+            el.style.background = flameColor(depth + block.colorOffset);
+            el.textContent = block.name;
+            el.addEventListener('mouseenter', e => showTooltip(e, `
+                <div class="tt-title">${block.name}</div>
+                <div class="tt-row"><span class="tt-key">Self:</span><span class="tt-val">${block.selfTime.toFixed(2)}ms</span></div>
+                <div class="tt-row"><span class="tt-key">Total:</span><span class="tt-val">${block.totalTime.toFixed(2)}ms</span></div>
+                <div class="tt-row"><span class="tt-key">Calls:</span><span class="tt-val">${block.calls}</span></div>
+            `));
+            el.addEventListener('mouseleave', hideTooltip);
+            rowDiv.appendChild(el);
+        });
+        container.appendChild(rowDiv);
+    });
+}
+
+function generateStacks(functions) {
+    const total = functions.reduce((s,f) => s + f.totalTime, 0);
+    const stacks = [];
+    
+    // Level 0: main
+    stacks.push([{ name: 'main()', width: 100, selfTime: total * 0.05, totalTime: total, calls: 1, colorOffset: 0 }]);
+    
+    // Level 1: top-level calls
+    let remaining = 100;
+    const l1 = [];
+    functions.slice(0, Math.min(5, functions.length)).forEach((f, i) => {
+        const w = Math.max((f.totalTime / total) * 100, 3);
+        remaining -= w;
+        l1.push({ name: f.name, width: w, selfTime: f.selfTime, totalTime: f.totalTime, calls: f.calls, colorOffset: i });
+    });
+    if (remaining > 0) l1.push({ name: '(other)', width: remaining, selfTime: 0, totalTime: total * remaining / 100, calls: 0, colorOffset: 6 });
+    stacks.push(l1);
+    
+    // Level 2+: subdivide top functions
+    for (let depth = 2; depth < 5; depth++) {
+        const level = [];
+        l1.forEach((parent, i) => {
+            if (parent.name === '(other)') {
+                level.push({ name: '...', width: parent.width, selfTime: 0, totalTime: parent.totalTime * 0.5, calls: 0, colorOffset: 7 });
+            } else {
+                const childWidth = parent.width * (0.7 - depth * 0.1);
+                const selfWidth = parent.width - childWidth;
+                if (childWidth > 2) {
+                    level.push({ name: parent.name + '::inner', width: childWidth, selfTime: parent.selfTime * 0.5, totalTime: parent.totalTime * 0.6, calls: parent.calls, colorOffset: i + depth });
+                }
+                if (selfWidth > 1) {
+                    level.push({ name: '(self)', width: selfWidth, selfTime: parent.selfTime * 0.5, totalTime: parent.totalTime * 0.4, calls: 0, colorOffset: i + depth + 1 });
+                }
+            }
+        });
+        if (level.length > 0) stacks.push(level);
+    }
+    
+    return stacks;
+}
+
+// Allocation chart (canvas)
+function renderAllocChart(data) {
+    const alloc = data.allocations || generateAllocData();
+    
+    // Stats
+    document.getElementById('alloc-stats').innerHTML = `
+        <div class="stat-card"><div class="label">Peak Memory</div><div class="value">${alloc.peakMB.toFixed(1)} MB</div></div>
+        <div class="stat-card"><div class="label">Total Allocated</div><div class="value">${alloc.totalMB.toFixed(1)} MB</div></div>
+        <div class="stat-card"><div class="label">Allocations</div><div class="value">${alloc.count.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Alloc Rate</div><div class="value">${alloc.ratePerSec.toLocaleString()}/s</div></div>
+    `;
+    
+    // Canvas chart
+    const canvas = document.getElementById('allocChart');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width - 32;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    const pts = alloc.timeline;
+    const maxY = Math.max(...pts.map(p => p.y)) * 1.1;
+    const W = canvas.width, H = canvas.height;
+    
+    // Grid
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+        const y = H - (i / 5) * H;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '10px monospace';
+        ctx.fillText((maxY * i / 5).toFixed(1) + ' MB', 4, y - 4);
+    }
+    
+    // Area fill
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    pts.forEach((p, i) => {
+        const x = (i / (pts.length - 1)) * W;
+        const y = H - (p.y / maxY) * H;
+        ctx.lineTo(x, y);
+    });
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(240,136,62,0.3)');
+    grad.addColorStop(1, 'rgba(240,136,62,0.02)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    
+    // Line
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+        const x = (i / (pts.length - 1)) * W;
+        const y = H - (p.y / maxY) * H;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#f0883e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Type bars
+    const typeContainer = document.getElementById('alloc-type-bars');
+    typeContainer.innerHTML = alloc.byType.map(t => `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+            <span style="color:var(--text-muted);width:100px;font-size:12px;">${t.type}</span>
+            <div class="heat-bar" style="flex:1;height:20px;border-radius:4px;">
+                <div class="heat-fill" style="width:${t.pct}%;background:${t.color};height:100%;border-radius:4px;display:flex;align-items:center;padding-left:6px;">
+                    <span style="font-size:10px;color:#fff;">${t.pct.toFixed(1)}% — ${t.count.toLocaleString()} allocs</span>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function generateAllocData() {
+    const pts = [];
+    let y = 0.5;
+    for (let i = 0; i < 100; i++) {
+        y += (Math.random() - 0.3) * 0.8;
+        if (y < 0.1) y = 0.1;
+        pts.push({ x: i, y });
+    }
+    return {
+        peakMB: Math.max(...pts.map(p => p.y)),
+        totalMB: pts.reduce((s, p) => s + p.y, 0) / 10,
+        count: 148392,
+        ratePerSec: 12483,
+        timeline: pts,
+        byType: [
+            { type: 'String', pct: 35.2, count: 52234, color: '#58a6ff' },
+            { type: 'List', pct: 22.8, count: 33833, color: '#3fb950' },
+            { type: 'Dict', pct: 18.4, count: 27304, color: '#f0883e' },
+            { type: 'Closure', pct: 12.1, count: 17955, color: '#bc8cff' },
+            { type: 'Tensor', pct: 7.3, count: 10833, color: '#f85149' },
+            { type: 'Other', pct: 4.2, count: 6233, color: '#8b949e' }
+        ]
+    };
+}
+
+// GC Timeline
+function renderGCTimeline(data) {
+    const gc = data.gc || generateGCData();
+    
+    document.getElementById('gc-stats').innerHTML = `
+        <div class="stat-card"><div class="label">GC Events</div><div class="value">${gc.events.length}</div></div>
+        <div class="stat-card"><div class="label">Total Pause</div><div class="value">${gc.totalPauseUs.toFixed(0)} μs</div><div class="sub">${(gc.totalPauseUs/1000).toFixed(2)}ms</div></div>
+        <div class="stat-card"><div class="label">Max Pause</div><div class="value">${gc.maxPauseUs.toFixed(0)} μs</div></div>
+        <div class="stat-card"><div class="label">Total Freed</div><div class="value">${gc.totalFreedKB.toFixed(0)} KB</div></div>
+    `;
+    
+    const timeline = document.getElementById('gc-timeline');
+    const maxTime = Math.max(...gc.events.map(e => e.timeMs));
+    const maxPause = Math.max(...gc.events.map(e => e.pauseUs));
+    
+    timeline.innerHTML = gc.events.map(e => {
+        const left = (e.timeMs / maxTime) * 98 + 1;
+        const barH = Math.max((e.pauseUs / maxPause) * 80, 8);
+        const color = e.type === 'major' ? '#f85149' : (e.type === 'minor' ? '#d29922' : '#3fb950');
+        return `<div class="gc-event" style="left:${left}%;width:12px"
+            onmouseenter="showTooltip(event, '<div class=tt-title>GC ${e.type}</div><div class=tt-row><span class=tt-key>Time:</span><span class=tt-val>${e.timeMs.toFixed(1)}ms</span></div><div class=tt-row><span class=tt-key>Pause:</span><span class=tt-val>${e.pauseUs.toFixed(0)}μs</span></div><div class=tt-row><span class=tt-key>Freed:</span><span class=tt-val>${e.freedKB.toFixed(1)}KB</span></div>')"
+            onmouseleave="hideTooltip()">
+            <div class="gc-bar" style="height:${barH}px;background:${color}"></div>
+            <div class="gc-label">${e.type[0].toUpperCase()}</div>
+        </div>`;
+    }).join('');
+    
+    // Table
+    document.getElementById('gc-body').innerHTML = gc.events.map((e, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td>${e.timeMs.toFixed(1)}</td>
+            <td style="color:${e.type === 'major' ? 'var(--danger)' : 'var(--warning)'}">${e.type}</td>
+            <td>${e.freedKB.toFixed(1)}</td>
+            <td>${e.pauseUs.toFixed(0)}</td>
+            <td>${e.heapBeforeKB.toFixed(0)} KB</td>
+            <td>${e.heapAfterKB.toFixed(0)} KB</td>
+        </tr>
+    `).join('');
+}
+
+function generateGCData() {
+    const events = [];
+    let t = 0;
+    let heap = 256;
+    for (let i = 0; i < 24; i++) {
+        t += Math.random() * 50 + 10;
+        const type = Math.random() > 0.7 ? 'major' : 'minor';
+        const freed = type === 'major' ? Math.random() * 200 + 100 : Math.random() * 50 + 10;
+        const pause = type === 'major' ? Math.random() * 500 + 200 : Math.random() * 100 + 20;
+        const before = heap;
+        heap = Math.max(heap - freed + Math.random() * 80, 64);
+        events.push({ timeMs: t, type, freedKB: freed, pauseUs: pause, heapBeforeKB: before, heapAfterKB: heap });
+    }
+    return {
+        events,
+        totalPauseUs: events.reduce((s, e) => s + e.pauseUs, 0),
+        maxPauseUs: Math.max(...events.map(e => e.pauseUs)),
+        totalFreedKB: events.reduce((s, e) => s + e.freedKB, 0)
+    };
+}
+
+// Demo data
+function loadDemoData() {
+    profileData = {
+        functions: [
+            { name: 'fibonacci', calls: 832040, selfTime: 145.3, totalTime: 312.7 },
+            { name: 'merge_sort', calls: 16383, selfTime: 89.2, totalTime: 201.4 },
+            { name: 'handle_request', calls: 10000, selfTime: 67.8, totalTime: 178.3 },
+            { name: 'json.stringify', calls: 50000, selfTime: 45.1, totalTime: 45.1 },
+            { name: 'tensor.dot', calls: 25000, selfTime: 112.5, totalTime: 134.2 },
+            { name: 'sqlite.query', calls: 5000, selfTime: 34.6, totalTime: 89.7 },
+            { name: 'http.send', calls: 10000, selfTime: 23.4, totalTime: 23.4 },
+            { name: 'string.split', calls: 100000, selfTime: 18.9, totalTime: 18.9 },
+            { name: 'list.append', calls: 500000, selfTime: 12.3, totalTime: 12.3 },
+            { name: 'dict.has', calls: 200000, selfTime: 8.7, totalTime: 8.7 },
+            { name: 'len', calls: 800000, selfTime: 4.2, totalTime: 4.2 },
+            { name: 'Server.init', calls: 1, selfTime: 0.8, totalTime: 3.2 },
+            { name: 'Layer.forward', calls: 25000, selfTime: 56.4, totalTime: 156.8 },
+            { name: 'SimpleNet.predict', calls: 5000, selfTime: 12.1, totalTime: 324.6 },
+            { name: 'Model.insert', calls: 5000, selfTime: 28.3, totalTime: 62.9 }
+        ]
+    };
+    
+    renderAll();
+}
+
+function renderAll() {
+    renderStats(profileData);
+    renderHotPath(profileData);
+    renderFlameGraph(profileData);
+    renderAllocChart(profileData);
+    renderGCTimeline(profileData);
+}
+
+// File loading
+function loadProfileFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    document.getElementById('loading').classList.remove('hidden');
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            profileData = JSON.parse(e.target.result);
+            renderAll();
+        } catch (err) {
+            alert('Invalid profile data: ' + err.message);
+        }
+        document.getElementById('loading').classList.add('hidden');
+    };
+    reader.readAsText(file);
+}
+
+// Export
+function exportReport() {
+    if (!profileData) { alert('No profile data loaded'); return; }
+    
+    const totalTime = profileData.functions.reduce((s,f) => s + f.totalTime, 0);
+    let report = '# GlowLang Profile Report\n';
+    report += `Generated: ${new Date().toISOString()}\n\n`;
+    report += `## Summary\n`;
+    report += `- Total Time: ${totalTime.toFixed(1)}ms\n`;
+    report += `- Functions: ${profileData.functions.length}\n\n`;
+    report += `## Hot Functions\n\n`;
+    report += `| Function | Calls | Self (ms) | Total (ms) | % |\n`;
+    report += `|----------|-------|-----------|------------|---|\n`;
+    
+    profileData.functions
+        .sort((a,b) => b.totalTime - a.totalTime)
+        .forEach(f => {
+            report += `| ${f.name} | ${f.calls} | ${f.selfTime.toFixed(2)} | ${f.totalTime.toFixed(2)} | ${((f.totalTime/totalTime)*100).toFixed(1)}% |\n`;
+        });
+    
+    const blob = new Blob([report], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'glowlang-profile-report.md';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// Init with demo data on load
+window.addEventListener('load', () => {
+    loadDemoData();
+});
+
+// Handle window resize for canvas
+window.addEventListener('resize', () => {
+    if (profileData) renderAllocChart(profileData);
+});
+</script>
+</body>
+</html>

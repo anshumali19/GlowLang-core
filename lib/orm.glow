@@ -1,0 +1,486 @@
+# GlowORM — Object-Relational Mapping Layer
+# Schema definition, query builder, migrations, and CRUD operations
+
+# Schema Definition
+blueprint Field:
+    action init(name, field_type, options):
+        self.name = name
+        self.field_type = field_type
+        self.options = options
+        # Defaults
+        self.required = false
+        self.unique = false
+        self.default_val = none
+        self.primary_key = false
+        self.auto_increment = false
+        self.foreign_key = none
+        self._apply_options()
+    end
+
+    action _apply_options():
+        when self.options is not none:
+            when self.options.has("required"):
+                self.required = self.options["required"]
+            end
+            when self.options.has("unique"):
+                self.unique = self.options["unique"]
+            end
+            when self.options.has("default"):
+                self.default_val = self.options["default"]
+            end
+            when self.options.has("primary_key"):
+                self.primary_key = self.options["primary_key"]
+            end
+            when self.options.has("auto_increment"):
+                self.auto_increment = self.options["auto_increment"]
+            end
+            when self.options.has("foreign_key"):
+                self.foreign_key = self.options["foreign_key"]
+            end
+        end
+    end
+
+    action to_sql():
+        let sql = self.name + " " + self.field_type
+        when self.primary_key:
+            sql = sql + " PRIMARY KEY"
+        end
+        when self.auto_increment:
+            sql = sql + " AUTOINCREMENT"
+        end
+        when self.required:
+            sql = sql + " NOT NULL"
+        end
+        when self.unique:
+            sql = sql + " UNIQUE"
+        end
+        when self.default_val is not none:
+            when type(self.default_val) == "string":
+                sql = sql + " DEFAULT '" + self.default_val + "'"
+            otherwise:
+                sql = sql + " DEFAULT " + self.default_val
+            end
+        end
+        when self.foreign_key is not none:
+            sql = sql + " REFERENCES " + self.foreign_key
+        end
+        return sql
+    end
+end
+
+blueprint Schema:
+    action init(table_name):
+        self.table_name = table_name
+        self.fields = []
+        self.timestamps = false
+        # Auto-add id field
+        self.field("id", "INTEGER", {"primary_key": true, "auto_increment": true})
+    end
+
+    action field(name, field_type, options):
+        let f = Field(name, field_type, options)
+        append(self.fields, f)
+        return self
+    end
+
+    action string(name, options):
+        return self.field(name, "TEXT", options)
+    end
+
+    action integer(name, options):
+        return self.field(name, "INTEGER", options)
+    end
+
+    action real(name, options):
+        return self.field(name, "REAL", options)
+    end
+
+    action boolean(name, options):
+        return self.field(name, "INTEGER", options)  # SQLite uses INTEGER for bool
+    end
+
+    action blob(name, options):
+        return self.field(name, "BLOB", options)
+    end
+
+    action enable_timestamps():
+        self.timestamps = true
+        self.field("created_at", "TEXT", {"default": "CURRENT_TIMESTAMP"})
+        self.field("updated_at", "TEXT", {"default": "CURRENT_TIMESTAMP"})
+        return self
+    end
+
+    action to_create_sql():
+        let sql = "CREATE TABLE IF NOT EXISTS " + self.table_name + " ("
+        let first = true
+        for each f in self.fields:
+            when not first:
+                sql = sql + ", "
+            end
+            sql = sql + f.to_sql()
+            first = false
+        end
+        sql = sql + ")"
+        return sql
+    end
+end
+
+# Query Builder
+blueprint Query:
+    action init(table_name):
+        self.table = table_name
+        self._select = "*"
+        self._where = []
+        self._order = none
+        self._limit = none
+        self._offset = none
+        self._joins = []
+        self._group = none
+        self._having = none
+        self._values = []
+    end
+
+    action select(columns):
+        self._select = columns
+        return self
+    end
+
+    action where(condition):
+        append(self._where, condition)
+        return self
+    end
+
+    action where_eq(column, value):
+        when type(value) == "string":
+            append(self._where, column + " = '" + value + "'")
+        otherwise:
+            append(self._where, column + " = " + value)
+        end
+        return self
+    end
+
+    action where_gt(column, value):
+        append(self._where, column + " > " + value)
+        return self
+    end
+
+    action where_lt(column, value):
+        append(self._where, column + " < " + value)
+        return self
+    end
+
+    action where_like(column, pattern):
+        append(self._where, column + " LIKE '" + pattern + "'")
+        return self
+    end
+
+    action where_in(column, values):
+        let vals = ""
+        let first = true
+        for each v in values:
+            when not first:
+                vals = vals + ", "
+            end
+            when type(v) == "string":
+                vals = vals + "'" + v + "'"
+            otherwise:
+                vals = vals + v
+            end
+            first = false
+        end
+        append(self._where, column + " IN (" + vals + ")")
+        return self
+    end
+
+    action where_null(column):
+        append(self._where, column + " IS NULL")
+        return self
+    end
+
+    action where_not_null(column):
+        append(self._where, column + " IS NOT NULL")
+        return self
+    end
+
+    action join(table, on_clause):
+        append(self._joins, "JOIN " + table + " ON " + on_clause)
+        return self
+    end
+
+    action left_join(table, on_clause):
+        append(self._joins, "LEFT JOIN " + table + " ON " + on_clause)
+        return self
+    end
+
+    action order_by(column, direction):
+        self._order = column + " " + direction
+        return self
+    end
+
+    action group_by(column):
+        self._group = column
+        return self
+    end
+
+    action having(condition):
+        self._having = condition
+        return self
+    end
+
+    action limit(n):
+        self._limit = n
+        return self
+    end
+
+    action offset(n):
+        self._offset = n
+        return self
+    end
+
+    action build_select():
+        let sql = "SELECT " + self._select + " FROM " + self.table
+        for each j in self._joins:
+            sql = sql + " " + j
+        end
+        when len(self._where) > 0:
+            sql = sql + " WHERE " + self._where[0]
+            let i = 1
+            while i < len(self._where):
+                sql = sql + " AND " + self._where[i]
+                i = i + 1
+            end
+        end
+        when self._group is not none:
+            sql = sql + " GROUP BY " + self._group
+        end
+        when self._having is not none:
+            sql = sql + " HAVING " + self._having
+        end
+        when self._order is not none:
+            sql = sql + " ORDER BY " + self._order
+        end
+        when self._limit is not none:
+            sql = sql + " LIMIT " + self._limit
+        end
+        when self._offset is not none:
+            sql = sql + " OFFSET " + self._offset
+        end
+        return sql
+    end
+
+    action build_count():
+        let sql = "SELECT COUNT(*) as count FROM " + self.table
+        when len(self._where) > 0:
+            sql = sql + " WHERE " + self._where[0]
+            let i = 1
+            while i < len(self._where):
+                sql = sql + " AND " + self._where[i]
+                i = i + 1
+            end
+        end
+        return sql
+    end
+
+    action build_delete():
+        let sql = "DELETE FROM " + self.table
+        when len(self._where) > 0:
+            sql = sql + " WHERE " + self._where[0]
+            let i = 1
+            while i < len(self._where):
+                sql = sql + " AND " + self._where[i]
+                i = i + 1
+            end
+        end
+        return sql
+    end
+end
+
+# Migration System
+blueprint Migration:
+    action init(version, description):
+        self.version = version
+        self.description = description
+        self.up_queries = []
+        self.down_queries = []
+    end
+
+    action up(sql):
+        append(self.up_queries, sql)
+        return self
+    end
+
+    action down(sql):
+        append(self.down_queries, sql)
+        return self
+    end
+end
+
+blueprint MigrationRunner:
+    action init(db):
+        self.db = db
+        self.migrations = []
+        # Ensure migrations table exists
+        sqlite.exec(self.db, "CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, description TEXT, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+    end
+
+    action add(migration):
+        append(self.migrations, migration)
+        return self
+    end
+
+    action run():
+        let applied = sqlite.query(self.db, "SELECT version FROM _migrations")
+        let applied_versions = []
+        for each row in applied:
+            append(applied_versions, row["version"])
+        end
+
+        let count = 0
+        for each m in self.migrations:
+            let already = false
+            for each v in applied_versions:
+                when v == m.version:
+                    already = true
+                end
+            end
+            when not already:
+                show "[Migration] Applying v" + m.version + ": " + m.description
+                for each sql in m.up_queries:
+                    sqlite.exec(self.db, sql)
+                end
+                sqlite.exec(self.db, "INSERT INTO _migrations (version, description) VALUES (" + m.version + ", '" + m.description + "')")
+                count = count + 1
+            end
+        end
+        show "[Migration] " + count + " migration(s) applied"
+    end
+
+    action rollback(target_version):
+        let current = sqlite.query(self.db, "SELECT MAX(version) as v FROM _migrations")
+        let cv = current[0]["v"]
+        
+        let i = len(self.migrations) - 1
+        while i >= 0:
+            let m = self.migrations[i]
+            when m.version > target_version and m.version <= cv:
+                show "[Migration] Rolling back v" + m.version + ": " + m.description
+                for each sql in m.down_queries:
+                    sqlite.exec(self.db, sql)
+                end
+                sqlite.exec(self.db, "DELETE FROM _migrations WHERE version = " + m.version)
+            end
+            i = i - 1
+        end
+    end
+end
+
+# ORM — Main Interface
+blueprint ORM:
+    action init(db_path):
+        self.db = sqlite.open(db_path)
+        self.schemas = {}
+        self.migration_runner = MigrationRunner(self.db)
+        show "[ORM] Connected to " + db_path
+    end
+
+    action register(schema):
+        self.schemas[schema.table_name] = schema
+        return self
+    end
+
+    action migrate():
+        for each name in self.schemas:
+            let schema = self.schemas[name]
+            let sql = schema.to_create_sql()
+            sqlite.exec(self.db, sql)
+            show "[ORM] Table '" + name + "' ready"
+        end
+    end
+
+    action add_migration(migration):
+        self.migration_runner.add(migration)
+        return self
+    end
+
+    action run_migrations():
+        self.migration_runner.run()
+    end
+
+    action rollback(version):
+        self.migration_runner.rollback(version)
+    end
+
+    action insert(table, data):
+        let keys = ""
+        let vals = ""
+        let first = true
+        for each key in data:
+            when not first:
+                keys = keys + ", "
+                vals = vals + ", "
+            end
+            keys = keys + key
+            when type(data[key]) == "string":
+                vals = vals + "'" + data[key] + "'"
+            eif data[key] is none:
+                vals = vals + "NULL"
+            otherwise:
+                vals = vals + data[key]
+            end
+            first = false
+        end
+        let sql = "INSERT INTO " + table + " (" + keys + ") VALUES (" + vals + ")"
+        sqlite.exec(self.db, sql)
+        return self
+    end
+
+    action find(table):
+        return Query(table)
+    end
+
+    action exec_query(query):
+        let sql = query.build_select()
+        return sqlite.query(self.db, sql)
+    end
+
+    action exec_raw(sql):
+        return sqlite.query(self.db, sql)
+    end
+
+    action update(table, data, where_clause):
+        let set_parts = ""
+        let first = true
+        for each key in data:
+            when not first:
+                set_parts = set_parts + ", "
+            end
+            when type(data[key]) == "string":
+                set_parts = set_parts + key + " = '" + data[key] + "'"
+            eif data[key] is none:
+                set_parts = set_parts + key + " = NULL"
+            otherwise:
+                set_parts = set_parts + key + " = " + data[key]
+            end
+            first = false
+        end
+        let sql = "UPDATE " + table + " SET " + set_parts + " WHERE " + where_clause
+        sqlite.exec(self.db, sql)
+        return self
+    end
+
+    action delete(table, where_clause):
+        let sql = "DELETE FROM " + table + " WHERE " + where_clause
+        sqlite.exec(self.db, sql)
+        return self
+    end
+
+    action count(table):
+        let result = sqlite.query(self.db, "SELECT COUNT(*) as count FROM " + table)
+        return result[0]["count"]
+    end
+
+    action close():
+        sqlite.close(self.db)
+        show "[ORM] Connection closed"
+    end
+end

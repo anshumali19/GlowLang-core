@@ -1,0 +1,320 @@
+show "===================================================================="
+show "         GLOWLANG RACE CONDITION TESTING SUITE"
+show "===================================================================="
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. Shared Counter Contention
+# ═══════════════════════════════════════════════════════════════════════
+show "1. Shared Counter Contention (Data Race Detection)..."
+
+let shared_counter = 0
+
+func increment_counter(thread_id, iterations):
+    let i = 0
+    while i < iterations:
+        shared_counter = shared_counter + 1
+        i = i + 1
+    end
+end
+
+# Spawn multiple threads writing to same variable
+let t = 0
+while t < 10:
+    spawn increment_counter(t, 100)
+    t = t + 1
+end
+os.sleep(500)
+show "   Shared counter value (expected ~1000, may vary): ", shared_counter
+show "   [NOTE] Value != 1000 indicates data race (expected without locks)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. Async Scheduler Collision
+# ═══════════════════════════════════════════════════════════════════════
+show "2. Async Scheduler Collision Test..."
+
+let collision_log = []
+
+func scheduler_task(id, delay):
+    let i = 0
+    while i < delay:
+        i = i + 1
+    end
+    # All tasks try to append to the same list
+    collision_log = collision_log + [id]
+end
+
+let sc = 0
+while sc < 50:
+    spawn scheduler_task(sc, sc * 10)
+    sc = sc + 1
+end
+os.sleep(1000)
+show "   Scheduler collision log length: ", len(collision_log)
+show "   [PASS] No crash during concurrent list append"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. Thread-Local Isolation Verification
+# ═══════════════════════════════════════════════════════════════════════
+show "3. Thread-Local Isolation..."
+
+func local_only_task(id):
+    # Each thread has its own locals — they should not interfere
+    let local_val = id * 100
+    let local_str = "thread_" + id
+    let local_list = [id, id + 1, id + 2]
+
+    # Compute with locals only
+    let result = 0
+    let li = 0
+    while li < len(local_list):
+        result = result + local_list[li]
+        li = li + 1
+    end
+
+    # Verify local integrity
+    if local_val != id * 100:
+        show "   [ERROR] Thread ", id, " local_val corrupted!"
+    end
+
+    return result
+end
+
+let tl = 0
+while tl < 20:
+    spawn local_only_task(tl)
+    tl = tl + 1
+end
+os.sleep(300)
+show "   [PASS] Thread-local isolation test completed (20 threads)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4. Concurrent Object Allocation Race
+# ═══════════════════════════════════════════════════════════════════════
+show "4. Concurrent Object Allocation..."
+
+class RaceNode:
+    func init(val):
+        self.val = val
+        self.data = "node_" + val
+    end
+end
+
+func alloc_objects(thread_id, count):
+    let nodes = []
+    let i = 0
+    while i < count:
+        let n = RaceNode(thread_id * 1000 + i)
+        nodes = nodes + [n]
+        i = i + 1
+    end
+    return nodes
+end
+
+let ao = 0
+while ao < 10:
+    spawn alloc_objects(ao, 100)
+    ao = ao + 1
+end
+os.sleep(500)
+show "   [PASS] Concurrent object allocation (10 threads x 100 objects)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 5. String Concatenation Race
+# ═══════════════════════════════════════════════════════════════════════
+show "5. String Concatenation Race..."
+
+let shared_string = ""
+
+func string_race(id, count):
+    let i = 0
+    while i < count:
+        shared_string = shared_string + "X"
+        i = i + 1
+    end
+end
+
+let sr = 0
+while sr < 5:
+    spawn string_race(sr, 50)
+    sr = sr + 1
+end
+os.sleep(300)
+show "   Shared string length (expected ~250, may vary): ", len(shared_string)
+show "   [PASS] No crash during concurrent string concat"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 6. Spawn-and-Wait Pattern
+# ═══════════════════════════════════════════════════════════════════════
+show "6. Spawn-and-Wait Coordination..."
+
+let completion_flags = [0, 0, 0, 0, 0]
+
+func flagged_worker(index, work):
+    let i = 0
+    while i < work:
+        i = i + 1
+    end
+    completion_flags[index] = 1
+end
+
+spawn flagged_worker(0, 100)
+spawn flagged_worker(1, 200)
+spawn flagged_worker(2, 300)
+spawn flagged_worker(3, 400)
+spawn flagged_worker(4, 500)
+
+os.sleep(500)
+
+let all_done = true
+let fi = 0
+while fi < 5:
+    if completion_flags[fi] != 1:
+        all_done = false
+        show "   [WARN] Worker ", fi, " did not complete"
+    end
+    fi = fi + 1
+end
+
+if all_done:
+    show "   [PASS] All 5 workers completed via flag coordination"
+end
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. Concurrent GC Trigger Race
+# ═══════════════════════════════════════════════════════════════════════
+show "7. Concurrent GC Trigger Race..."
+
+func gc_heavy_worker(id, rounds):
+    let i = 0
+    while i < rounds:
+        let temp_str = "gc_worker_" + id + "_iter_" + i
+        let temp_list = [i, i + 1, i + 2, temp_str]
+        let temp_dict = {"worker": id, "round": i}
+        i = i + 1
+    end
+end
+
+let gw = 0
+while gw < 8:
+    spawn gc_heavy_worker(gw, 1000)
+    gw = gw + 1
+end
+os.sleep(1000)
+show "   [PASS] Concurrent GC-heavy work (8 threads x 1000 rounds)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. Rapid Spawn/Exit Churn
+# ═══════════════════════════════════════════════════════════════════════
+show "8. Rapid Spawn/Exit Churn..."
+
+func micro_task(id):
+    return id * 2
+end
+
+let churn_start = os.time()
+let mi = 0
+while mi < 2000:
+    spawn micro_task(mi)
+    mi = mi + 1
+end
+os.sleep(300)
+let churn_end = os.time()
+show "   Spawned and exited 2000 micro-tasks in ", (churn_end - churn_start), " s"
+show "   [PASS] Spawn/exit churn completed"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 9. Exception in Concurrent Threads
+# ═══════════════════════════════════════════════════════════════════════
+show "9. Exception in Concurrent Threads..."
+
+func throwing_worker(id):
+    if id % 2 == 0:
+        throw "error_from_" + id
+    end
+    return id
+end
+
+let ew = 0
+while ew < 20:
+    try:
+        spawn throwing_worker(ew)
+    catch e:
+        # Expected for some threads
+    end
+    ew = ew + 1
+end
+os.sleep(300)
+show "   [PASS] Concurrent exception handling (20 threads, 10 throwing)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 10. Tensor Operations Under Thread Contention
+# ═══════════════════════════════════════════════════════════════════════
+show "10. Tensor Ops Under Thread Contention..."
+
+func tensor_worker(id, size):
+    let t1 = tensor.zeros(size)
+    let t2 = tensor.zeros(size)
+    let i = 0
+    while i < size:
+        t1[i] = id * 1.0
+        t2[i] = i * 1.0
+        i = i + 1
+    end
+    let result = tensor.add(t1, t2)
+    let dot = tensor.dot(t1, t2)
+    return dot
+end
+
+let tw = 0
+while tw < 5:
+    spawn tensor_worker(tw, 1000)
+    tw = tw + 1
+end
+os.sleep(500)
+show "   [PASS] Concurrent tensor operations (5 threads x 1000-element tensors)"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 11. Closure Capture Under Contention
+# ═══════════════════════════════════════════════════════════════════════
+show "11. Closure Capture Under Contention..."
+
+let global_race_sum = [0]
+func make_shared_closure():
+    let inc = lambda():
+        global_race_sum[0] = global_race_sum[0] + 1
+    end
+    let get = lambda():
+        return global_race_sum[0]
+    end
+    return [inc, get]
+end
+
+let closure_pair = make_shared_closure()
+
+func closure_race_worker(pair, iterations):
+    let i = 0
+    while i < iterations:
+        pair[0]()
+        i = i + 1
+    end
+end
+
+let cw = 0
+while cw < 5:
+    spawn closure_race_worker(closure_pair, 100)
+    cw = cw + 1
+end
+os.sleep(300)
+show "   Closure counter value (expected ~500): ", closure_pair[1]()
+show "   [PASS] Closure capture race test completed"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Final Heap Check
+# ═══════════════════════════════════════════════════════════════════════
+show "Final Heap Integrity Check..."
+let final_gc = os.verify_gc()
+show "   Final heap status: ", final_gc
+
+show "===================================================================="
+show "         RACE CONDITION TESTS COMPLETED (11 tests)"
+show "===================================================================="

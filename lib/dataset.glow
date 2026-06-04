@@ -1,0 +1,375 @@
+# GlowDataset — Dataset Loading & Processing Library
+# Load, split, shuffle, batch, and transform datasets for ML pipelines
+
+blueprint Dataset:
+    action init():
+        self.data = []
+        self.labels = []
+        self.features = []
+        self.size = 0
+        self.feature_names = []
+        self.label_name = "label"
+    end
+
+    action from_list(data, label_key):
+        self.data = data
+        self.label_name = label_key
+        self.size = len(data)
+        
+        # Extract labels and features
+        self.labels = []
+        self.features = []
+        for each row in data:
+            append(self.labels, row[label_key])
+            let feat = {}
+            for each key in row:
+                when key != label_key:
+                    feat[key] = row[key]
+                    # Track feature names from first row
+                    when len(self.feature_names) < len(row) - 1:
+                        append(self.feature_names, key)
+                    end
+                end
+            end
+            append(self.features, feat)
+        end
+        return self
+    end
+
+    action from_csv(filepath, delimiter, label_column):
+        let content = fs.read(filepath)
+        let lines = content.split("\n")
+        
+        when len(lines) < 2:
+            show "[Dataset] Error: CSV file is empty or has no data"
+            return self
+        end
+        
+        # Parse header
+        let header = lines[0].split(delimiter)
+        self.feature_names = []
+        let label_idx = 0 - 1
+        let i = 0
+        for each col in header:
+            let trimmed = col.trim()
+            when trimmed == label_column:
+                label_idx = i
+                self.label_name = trimmed
+            otherwise:
+                append(self.feature_names, trimmed)
+            end
+            i = i + 1
+        end
+        
+        # Parse data rows
+        let row_idx = 1
+        while row_idx < len(lines):
+            let line = lines[row_idx]
+            when len(line.trim()) > 0:
+                let values = line.split(delimiter)
+                let row = {}
+                let j = 0
+                for each val in values:
+                    let col_name = header[j].trim()
+                    # Try to parse as number
+                    try:
+                        row[col_name] = float(val.trim())
+                    catch e:
+                        row[col_name] = val.trim()
+                    end
+                    j = j + 1
+                end
+                append(self.data, row)
+                when label_idx >= 0:
+                    append(self.labels, row[label_column])
+                end
+                append(self.features, row)
+            end
+            row_idx = row_idx + 1
+        end
+        
+        self.size = len(self.data)
+        show "[Dataset] Loaded " + self.size + " rows from " + filepath
+        return self
+    end
+
+    action head(n):
+        let result = []
+        let count = n
+        when count > self.size:
+            count = self.size
+        end
+        for i from 0 to count:
+            append(result, self.data[i])
+        end
+        return result
+    end
+
+    action tail(n):
+        let result = []
+        let start = self.size - n
+        when start < 0:
+            start = 0
+        end
+        for i from start to self.size:
+            append(result, self.data[i])
+        end
+        return result
+    end
+
+    action sample(n):
+        let result = []
+        let indices = []
+        let count = 0
+        while count < n and count < self.size:
+            let idx = int(random() * self.size)
+            # Simple duplicate avoidance
+            let dup = false
+            for each existing in indices:
+                when existing == idx:
+                    dup = true
+                end
+            end
+            when not dup:
+                append(indices, idx)
+                append(result, self.data[idx])
+                count = count + 1
+            end
+        end
+        return result
+    end
+
+    action shuffle():
+        # Fisher-Yates shuffle
+        let i = self.size - 1
+        while i > 0:
+            let j = int(random() * (i + 1))
+            # Swap data
+            let temp = self.data[i]
+            self.data[i] = self.data[j]
+            self.data[j] = temp
+            # Swap labels
+            when len(self.labels) > 0:
+                let temp_l = self.labels[i]
+                self.labels[i] = self.labels[j]
+                self.labels[j] = temp_l
+            end
+            i = i - 1
+        end
+        return self
+    end
+
+    action describe():
+        let info = {}
+        info["size"] = self.size
+        info["features"] = self.feature_names
+        info["label"] = self.label_name
+        
+        # Basic stats for numeric features
+        let stats = {}
+        for each fname in self.feature_names:
+            let values = []
+            for each row in self.data:
+                when type(row[fname]) == "integer" or type(row[fname]) == "float":
+                    append(values, row[fname])
+                end
+            end
+            when len(values) > 0:
+                let s = {}
+                let total = 0
+                let mn = values[0]
+                let mx = values[0]
+                for each v in values:
+                    total = total + v
+                    when v < mn:
+                        mn = v
+                    end
+                    when v > mx:
+                        mx = v
+                    end
+                end
+                s["count"] = len(values)
+                s["mean"] = total / len(values)
+                s["min"] = mn
+                s["max"] = mx
+                stats[fname] = s
+            end
+        end
+        info["stats"] = stats
+        return info
+    end
+end
+
+# Train/Test Split
+func train_test_split(dataset, train_ratio):
+    let shuffled = dataset.shuffle()
+    let split_idx = int(dataset.size * train_ratio)
+    
+    let train = Dataset()
+    let test = Dataset()
+    
+    train.feature_names = dataset.feature_names
+    test.feature_names = dataset.feature_names
+    train.label_name = dataset.label_name
+    test.label_name = dataset.label_name
+    
+    for i from 0 to split_idx:
+        append(train.data, dataset.data[i])
+        when len(dataset.labels) > 0:
+            append(train.labels, dataset.labels[i])
+        end
+    end
+    train.size = len(train.data)
+    
+    for i from split_idx to dataset.size:
+        append(test.data, dataset.data[i])
+        when len(dataset.labels) > 0:
+            append(test.labels, dataset.labels[i])
+        end
+    end
+    test.size = len(test.data)
+    
+    show "[Dataset] Split: " + train.size + " train, " + test.size + " test"
+    return {"train": train, "test": test}
+end
+
+# Batch Iterator
+blueprint BatchIterator:
+    action init(dataset, batch_size):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.current = 0
+        self.total_batches = int(dataset.size / batch_size)
+        when dataset.size % batch_size > 0:
+            self.total_batches = self.total_batches + 1
+        end
+    end
+
+    action has_next():
+        return self.current < self.total_batches
+    end
+
+    action next():
+        let start = self.current * self.batch_size
+        let end_idx = start + self.batch_size
+        when end_idx > self.dataset.size:
+            end_idx = self.dataset.size
+        end
+        
+        let batch_data = []
+        let batch_labels = []
+        for i from start to end_idx:
+            append(batch_data, self.dataset.data[i])
+            when len(self.dataset.labels) > 0:
+                append(batch_labels, self.dataset.labels[i])
+            end
+        end
+        
+        self.current = self.current + 1
+        return {"data": batch_data, "labels": batch_labels, "batch_num": self.current}
+    end
+
+    action reset():
+        self.current = 0
+    end
+end
+
+# Data Transformers
+blueprint OneHotEncoder:
+    action init():
+        self.categories = {}
+    end
+
+    action fit(data, column):
+        let unique = []
+        for each row in data:
+            let val = row[column]
+            let found = false
+            for each u in unique:
+                when u == val:
+                    found = true
+                end
+            end
+            when not found:
+                append(unique, val)
+            end
+        end
+        self.categories[column] = unique
+        return self
+    end
+
+    action transform(data, column):
+        let cats = self.categories[column]
+        let result = []
+        for each row in data:
+            let encoded = {}
+            for each key in row:
+                when key != column:
+                    encoded[key] = row[key]
+                end
+            end
+            for each cat in cats:
+                when row[column] == cat:
+                    encoded[column + "_" + cat] = 1
+                otherwise:
+                    encoded[column + "_" + cat] = 0
+                end
+            end
+            append(result, encoded)
+        end
+        return result
+    end
+end
+
+blueprint StandardScaler:
+    action init():
+        self.means = {}
+        self.stds = {}
+    end
+
+    action fit(data, columns):
+        for each col in columns:
+            let values = []
+            for each row in data:
+                append(values, row[col])
+            end
+            let total = 0
+            for each v in values:
+                total = total + v
+            end
+            let mean = total / len(values)
+            let var_sum = 0
+            for each v in values:
+                var_sum = var_sum + (v - mean) * (v - mean)
+            end
+            let std = sqrt(var_sum / len(values))
+            self.means[col] = mean
+            self.stds[col] = std
+        end
+        return self
+    end
+
+    action transform(data, columns):
+        let result = []
+        for each row in data:
+            let new_row = {}
+            for each key in row:
+                new_row[key] = row[key]
+            end
+            for each col in columns:
+                let std = self.stds[col]
+                when std == 0:
+                    std = 1.0
+                end
+                new_row[col] = (row[col] - self.means[col]) / std
+            end
+            append(result, new_row)
+        end
+        return result
+    end
+end
+
+# Convenience: create batches from a dataset
+func batches(dataset, size):
+    return BatchIterator(dataset, size)
+end

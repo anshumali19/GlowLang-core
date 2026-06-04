@@ -1,0 +1,311 @@
+# GlowMiddleware — HTTP Middleware Framework
+# Composable middleware pipeline for request/response processing
+
+blueprint Request:
+    action init(method, path, headers, body):
+        self.method = method
+        self.path = path
+        self.headers = headers
+        self.body = body
+        self.params = {}
+        self.query = {}
+        self.context = {}
+        self.timestamp = os.time()
+    end
+
+    action set_context(key, value):
+        self.context[key] = value
+    end
+
+    action get_context(key):
+        return self.context[key]
+    end
+end
+
+blueprint Response:
+    action init():
+        self.status = 200
+        self.headers = {}
+        self.body = ""
+        self.sent = false
+    end
+
+    action set_status(code):
+        self.status = code
+        return self
+    end
+
+    action set_header(key, value):
+        self.headers[key] = value
+        return self
+    end
+
+    action send(body):
+        self.body = body
+        self.sent = true
+        return self
+    end
+
+    action send_json(data):
+        self.headers["Content-Type"] = "application/json"
+        self.body = json.stringify(data)
+        self.sent = true
+        return self
+    end
+
+    action redirect(url):
+        self.status = 302
+        self.headers["Location"] = url
+        self.sent = true
+        return self
+    end
+
+    action build_http():
+        let status_text = self._status_text()
+        let result = "HTTP/1.1 " + self.status + " " + status_text + "\r\n"
+        for each key in self.headers:
+            result = result + key + ": " + self.headers[key] + "\r\n"
+        end
+        result = result + "Content-Length: " + len(self.body) + "\r\n"
+        result = result + "\r\n" + self.body
+        return result
+    end
+
+    action _status_text():
+        when self.status == 200:
+            return "OK"
+        eif self.status == 201:
+            return "Created"
+        eif self.status == 204:
+            return "No Content"
+        eif self.status == 301:
+            return "Moved Permanently"
+        eif self.status == 302:
+            return "Found"
+        eif self.status == 400:
+            return "Bad Request"
+        eif self.status == 401:
+            return "Unauthorized"
+        eif self.status == 403:
+            return "Forbidden"
+        eif self.status == 404:
+            return "Not Found"
+        eif self.status == 500:
+            return "Internal Server Error"
+        otherwise:
+            return "Unknown"
+        end
+    end
+end
+
+# Middleware Pipeline
+blueprint MiddlewarePipeline:
+    action init():
+        self.middlewares = []
+        self.error_handler = none
+    end
+
+    action add(middleware):
+        append(self.middlewares, middleware)
+        return self
+    end
+
+    action set_error_handler(handler):
+        self.error_handler = handler
+        return self
+    end
+
+    action run(request):
+        let response = Response()
+        let index = 0
+        let middlewares = self.middlewares
+        let error_handler = self.error_handler
+
+        # Build the next() chain
+        func execute(idx):
+            when idx >= len(middlewares):
+                return none
+            end
+            let mw = middlewares[idx]
+            try:
+                mw.handle(request, response, lambda (): execute(idx + 1))
+            catch error:
+                when error_handler is not none:
+                    error_handler.handle(error, request, response)
+                otherwise:
+                    response.set_status(500).send("Internal Server Error: " + error)
+                end
+            end
+        end
+
+        execute(0)
+        return response
+    end
+end
+
+# Built-in Middleware: Logger
+blueprint Logger:
+    action init():
+        self.format = "default"
+    end
+
+    action handle(req, res, next):
+        let start = os.time()
+        show "[" + req.timestamp + "] " + req.method + " " + req.path
+        next()
+        let duration = os.time() - start
+        show "  → " + res.status + " (" + duration + "ms)"
+    end
+end
+
+# Built-in Middleware: CORS
+blueprint CORS:
+    action init(origins):
+        self.allowed_origins = origins
+        self.allowed_methods = "GET, POST, PUT, DELETE, OPTIONS"
+        self.allowed_headers = "Content-Type, Authorization"
+    end
+
+    action handle(req, res, next):
+        res.set_header("Access-Control-Allow-Origin", self.allowed_origins)
+        res.set_header("Access-Control-Allow-Methods", self.allowed_methods)
+        res.set_header("Access-Control-Allow-Headers", self.allowed_headers)
+
+        # Handle preflight
+        when req.method == "OPTIONS":
+            res.set_status(204).send("")
+            return none
+        end
+
+        next()
+    end
+end
+
+# Built-in Middleware: Auth (Token-based)
+blueprint Auth:
+    action init(secret):
+        self.secret = secret
+        self.public_paths = ["/", "/login", "/health"]
+    end
+
+    action add_public(path):
+        append(self.public_paths, path)
+        return self
+    end
+
+    action handle(req, res, next):
+        # Skip auth for public paths
+        for each path in self.public_paths:
+            when req.path == path:
+                next()
+                return none
+            end
+        end
+
+        # Check Authorization header
+        let auth = req.headers["Authorization"]
+        when auth is none:
+            res.set_status(401).send_json({"error": "Missing Authorization header"})
+            return none
+        end
+
+        # Simple token validation
+        when not auth.starts_with("Bearer "):
+            res.set_status(401).send_json({"error": "Invalid token format"})
+            return none
+        end
+
+        let token = auth.slice(7, len(auth))
+        when token != self.secret:
+            res.set_status(403).send_json({"error": "Invalid token"})
+            return none
+        end
+
+        req.set_context("authenticated", true)
+        next()
+    end
+end
+
+# Built-in Middleware: Rate Limiter
+blueprint RateLimiter:
+    action init(max_requests, window_seconds):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests = {}
+    end
+
+    action handle(req, res, next):
+        let client_id = req.headers["X-Forwarded-For"]
+        when client_id is none:
+            client_id = "unknown"
+        end
+
+        let now = os.time()
+        when self.requests[client_id] is none:
+            self.requests[client_id] = {"count": 0, "start": now}
+        end
+
+        let record = self.requests[client_id]
+
+        # Reset window if expired
+        when now - record["start"] > self.window:
+            record["count"] = 0
+            record["start"] = now
+        end
+
+        record["count"] = record["count"] + 1
+
+        when record["count"] > self.max_requests:
+            res.set_status(429).send_json({"error": "Too many requests", "retry_after": self.window - (now - record["start"])})
+            return none
+        end
+
+        res.set_header("X-RateLimit-Remaining", self.max_requests - record["count"])
+        next()
+    end
+end
+
+# Built-in Middleware: Body Parser
+blueprint BodyParser:
+    action init():
+        self.max_size = 1048576  # 1MB default
+    end
+
+    action handle(req, res, next):
+        when req.headers["Content-Type"] == "application/json":
+            when len(req.body) > self.max_size:
+                res.set_status(413).send_json({"error": "Payload too large"})
+                return none
+            end
+            try:
+                req.set_context("parsed_body", json.parse(req.body))
+            catch error:
+                res.set_status(400).send_json({"error": "Invalid JSON body"})
+                return none
+            end
+        end
+        next()
+    end
+end
+
+# Built-in Middleware: Error Handler
+blueprint ErrorHandler:
+    action init():
+        self.debug = false
+    end
+
+    action enable_debug():
+        self.debug = true
+        return self
+    end
+
+    action handle(error, req, res):
+        show "[ERROR] " + req.method + " " + req.path + ": " + error
+        let body = {"error": "Internal Server Error"}
+        when self.debug:
+            body["detail"] = "" + error
+            body["path"] = req.path
+        end
+        res.set_status(500).send_json(body)
+    end
+end

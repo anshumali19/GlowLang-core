@@ -1,0 +1,187 @@
+{
+    "name": "glowlang-vscode",
+    "displayName": "GlowLang",
+    "description": "Full-featured VS Code support for GlowLang — syntax highlighting, snippets, LSP integration, run/debug, and package management.",
+    "version": "2.0.0",
+    "publisher": "glowlang",
+    "license": "MIT",
+    "icon": "images/glow-icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/glowlang/glowlang"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Snippets",
+        "Linters",
+        "Debuggers"
+    ],
+    "keywords": [
+        "glowlang",
+        "glow",
+        "jit",
+        "systems programming",
+        "natural language syntax"
+    ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:glow",
+        "workspaceContains:**/*.glow"
+    ],
+    "dependencies": {
+        "vscode-languageclient": "^8.0.2"
+    },
+    "contributes": {
+        "configuration": {
+            "title": "GlowLang",
+            "properties": {
+                "glowlang.path": {
+                    "type": "string",
+                    "default": "glowlang",
+                    "description": "Path to the glowlang executable"
+                },
+                "glowlang.enableLsp": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable GlowLang LSP server for diagnostics and completion"
+                },
+                "glowlang.profilerPort": {
+                    "type": "number",
+                    "default": 9229,
+                    "description": "Port for the profiler web UI"
+                },
+                "glowlang.trace.server": {
+                    "type": "string",
+                    "enum": ["off", "messages", "verbose"],
+                    "default": "off",
+                    "description": "Trace LSP server communication"
+                }
+            }
+        },
+        "languages": [
+            {
+                "id": "glow",
+                "aliases": ["GlowLang", "Glow", "glow"],
+                "extensions": [".glow"],
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "./images/glow-icon.png",
+                    "dark": "./images/glow-icon.png"
+                }
+            }
+        ],
+        "grammars": [
+            {
+                "language": "glow",
+                "scopeName": "source.glow",
+                "path": "./syntaxes/glow.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "glow",
+                "path": "./snippets/glow.snippets.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "glowlang.run",
+                "title": "GlowLang: Run Current File",
+                "icon": "$(play)"
+            },
+            {
+                "command": "glowlang.runWithArgs",
+                "title": "GlowLang: Run With Arguments"
+            },
+            {
+                "command": "glowlang.debug",
+                "title": "GlowLang: Debug Current File",
+                "icon": "$(debug-alt)"
+            },
+            {
+                "command": "glowlang.profile",
+                "title": "GlowLang: Profile Current File",
+                "icon": "$(graph)"
+            },
+            {
+                "command": "glowlang.openProfiler",
+                "title": "GlowLang: Open Profiler UI"
+            },
+            {
+                "command": "glowlang.openStackVisualizer",
+                "title": "GlowLang: Open Stack Visualizer"
+            },
+            {
+                "command": "glowlang.packageInit",
+                "title": "GlowLang: Initialize Package"
+            },
+            {
+                "command": "glowlang.packageInstall",
+                "title": "GlowLang: Install Dependencies"
+            },
+            {
+                "command": "glowlang.restartLsp",
+                "title": "GlowLang: Restart LSP Server"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "glowlang.run",
+                    "when": "resourceLangId == glow",
+                    "group": "navigation"
+                },
+                {
+                    "command": "glowlang.debug",
+                    "when": "resourceLangId == glow",
+                    "group": "navigation"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "glowlang.run",
+                    "when": "resourceLangId == glow",
+                    "group": "1_run"
+                },
+                {
+                    "command": "glowlang.profile",
+                    "when": "resourceLangId == glow",
+                    "group": "1_run"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "command": "glowlang.run",
+                "key": "ctrl+shift+r",
+                "mac": "cmd+shift+r",
+                "when": "resourceLangId == glow"
+            },
+            {
+                "command": "glowlang.debug",
+                "key": "ctrl+shift+d",
+                "mac": "cmd+shift+d",
+                "when": "resourceLangId == glow"
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "type": "glowlang",
+                "required": ["file"],
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "The .glow file to execute"
+                    },
+                    "args": {
+                        "type": "array",
+                        "description": "Arguments to pass to the script"
+                    }
+                }
+            }
+        ]
+    }
+}

@@ -1,0 +1,285 @@
+# GlowJSON — JSON Utility Library
+# Extends the built-in json module with path queries, schema validation,
+# transformation helpers, diff, merge, and pretty-printing
+
+blueprint JsonPath:
+    action init(data):
+        self.data = data
+    end
+
+    action get(path):
+        # Path format: "user.address.city" or "users[0].name"
+        let parts = self._parse_path(path)
+        let current = self.data
+        for each part in parts:
+            when current is none:
+                return none
+            end
+            when part["type"] == "key":
+                current = current[part["value"]]
+            eif part["type"] == "index":
+                current = current[part["value"]]
+            end
+        end
+        return current
+    end
+
+    action set(path, value):
+        let parts = self._parse_path(path)
+        let current = self.data
+        let i = 0
+        while i < len(parts) - 1:
+            let part = parts[i]
+            when part["type"] == "key":
+                when current[part["value"]] is none:
+                    current[part["value"]] = {}
+                end
+                current = current[part["value"]]
+            eif part["type"] == "index":
+                current = current[part["value"]]
+            end
+            i = i + 1
+        end
+        let last = parts[len(parts) - 1]
+        current[last["value"]] = value
+        return self
+    end
+
+    action has(path):
+        let result = self.get(path)
+        return result is not none
+    end
+
+    action delete(path):
+        let parts = self._parse_path(path)
+        let current = self.data
+        let i = 0
+        while i < len(parts) - 1:
+            current = current[parts[i]["value"]]
+            when current is none:
+                return self
+            end
+            i = i + 1
+        end
+        let last = parts[len(parts) - 1]
+        # Remove key from dict
+        current[last["value"]] = none
+        return self
+    end
+
+    action _parse_path(path):
+        let parts = []
+        let segments = path.split(".")
+        for each seg in segments:
+            # Check for array index notation: "items[0]"
+            when seg.contains("["):
+                let bracket_pos = seg.find("[")
+                let key = seg.slice(0, bracket_pos)
+                let idx_str = seg.slice(bracket_pos + 1, len(seg) - 1)
+                append(parts, {"type": "key", "value": key})
+                append(parts, {"type": "index", "value": int(idx_str)})
+            otherwise:
+                append(parts, {"type": "key", "value": seg})
+            end
+        end
+        return parts
+    end
+end
+
+# Schema Validator
+blueprint JsonValidator:
+    action init():
+        self.errors = []
+    end
+
+    action validate(data, schema):
+        self.errors = []
+        self._validate_node(data, schema, "root")
+        return len(self.errors) == 0
+    end
+
+    action get_errors():
+        return self.errors
+    end
+
+    action _validate_node(data, schema, path):
+        # Check type
+        when schema.has("type"):
+            let expected = schema["type"]
+            let actual = type(data)
+            when expected == "string" and actual != "string":
+                append(self.errors, path + ": expected string, got " + actual)
+            eif expected == "integer" and actual != "integer":
+                append(self.errors, path + ": expected integer, got " + actual)
+            eif expected == "number" and actual != "integer" and actual != "float":
+                append(self.errors, path + ": expected number, got " + actual)
+            eif expected == "boolean" and actual != "boolean":
+                append(self.errors, path + ": expected boolean, got " + actual)
+            eif expected == "list" and actual != "list":
+                append(self.errors, path + ": expected list, got " + actual)
+            eif expected == "dict" and actual != "dict":
+                append(self.errors, path + ": expected dict, got " + actual)
+            end
+        end
+
+        # Check required fields
+        when schema.has("required"):
+            let required = schema["required"]
+            for each field in required:
+                when data[field] is none:
+                    append(self.errors, path + "." + field + ": required field missing")
+                end
+            end
+        end
+
+        # Check min/max for numbers
+        when schema.has("min"):
+            when data < schema["min"]:
+                append(self.errors, path + ": value " + data + " is less than min " + schema["min"])
+            end
+        end
+        when schema.has("max"):
+            when data > schema["max"]:
+                append(self.errors, path + ": value " + data + " is greater than max " + schema["max"])
+            end
+        end
+
+        # Check string length
+        when schema.has("minLength"):
+            when len(data) < schema["minLength"]:
+                append(self.errors, path + ": string too short")
+            end
+        end
+        when schema.has("maxLength"):
+            when len(data) > schema["maxLength"]:
+                append(self.errors, path + ": string too long")
+            end
+        end
+
+        # Check nested properties
+        when schema.has("properties"):
+            let props = schema["properties"]
+            for each key in props:
+                when data.has(key):
+                    self._validate_node(data[key], props[key], path + "." + key)
+                end
+            end
+        end
+    end
+end
+
+# JSON Diff
+func json_diff(a, b):
+    let changes = []
+    _diff_recursive(a, b, "", changes)
+    return changes
+end
+
+func _diff_recursive(a, b, path, changes):
+    when type(a) != type(b):
+        append(changes, {"path": path, "type": "type_change", "from": a, "to": b})
+        return none
+    end
+
+    when type(a) == "dict":
+        # Check removed and changed keys
+        for each key in a:
+            let child_path = path + "." + key
+            when b[key] is none:
+                append(changes, {"path": child_path, "type": "removed", "value": a[key]})
+            otherwise:
+                _diff_recursive(a[key], b[key], child_path, changes)
+            end
+        end
+        # Check added keys
+        for each key in b:
+            when a[key] is none:
+                append(changes, {"path": path + "." + key, "type": "added", "value": b[key]})
+            end
+        end
+    eif type(a) == "list":
+        let max_len = len(a)
+        when len(b) > max_len:
+            max_len = len(b)
+        end
+        for i from 0 to max_len:
+            when i < len(a) and i < len(b):
+                _diff_recursive(a[i], b[i], path + "[" + i + "]", changes)
+            eif i >= len(a):
+                append(changes, {"path": path + "[" + i + "]", "type": "added", "value": b[i]})
+            otherwise:
+                append(changes, {"path": path + "[" + i + "]", "type": "removed", "value": a[i]})
+            end
+        end
+    otherwise:
+        when a != b:
+            append(changes, {"path": path, "type": "changed", "from": a, "to": b})
+        end
+    end
+end
+
+# JSON Merge (deep merge two dicts)
+func json_merge(base, overlay):
+    let result = {}
+    for each key in base:
+        result[key] = base[key]
+    end
+    for each key in overlay:
+        when type(result[key]) == "dict" and type(overlay[key]) == "dict":
+            result[key] = json_merge(result[key], overlay[key])
+        otherwise:
+            result[key] = overlay[key]
+        end
+    end
+    return result
+end
+
+# Pretty print JSON with indentation
+func json_pretty(data):
+    return _pretty_format(data, 0)
+end
+
+func _pretty_format(data, indent):
+    let pad = ""
+    for i from 0 to indent:
+        pad = pad + "  "
+    end
+    let inner_pad = pad + "  "
+
+    when type(data) == "dict":
+        let result = "{\n"
+        let first = true
+        for each key in data:
+            when not first:
+                result = result + ",\n"
+            end
+            result = result + inner_pad + "\"" + key + "\": " + _pretty_format(data[key], indent + 1)
+            first = false
+        end
+        result = result + "\n" + pad + "}"
+        return result
+    eif type(data) == "list":
+        let result = "[\n"
+        let first = true
+        for each item in data:
+            when not first:
+                result = result + ",\n"
+            end
+            result = result + inner_pad + _pretty_format(item, indent + 1)
+            first = false
+        end
+        result = result + "\n" + pad + "]"
+        return result
+    eif type(data) == "string":
+        return "\"" + data + "\""
+    eif data is none:
+        return "null"
+    otherwise:
+        return "" + data
+    end
+end
+
+# Convenience: wrap data for path operations
+func jpath(data):
+    return JsonPath(data)
+end

@@ -1,0 +1,175 @@
+# GlowHTTP — High-Performance HTTP Client Library
+# Provides GET, POST, PUT, DELETE with headers, timeouts, and JSON support
+
+blueprint HttpClient:
+    action init():
+        self.base_url = ""
+        self.headers = {}
+        self.timeout = 30
+        self.follow_redirects = true
+        self.max_redirects = 10
+    end
+
+    action set_base_url(url):
+        self.base_url = url
+        return self
+    end
+
+    action set_header(key, value):
+        self.headers[key] = value
+        return self
+    end
+
+    action set_timeout(seconds):
+        self.timeout = seconds
+        return self
+    end
+
+    action get(url):
+        let full_url = self._resolve_url(url)
+        let opts = self._build_options("GET", full_url)
+        return self._execute(opts)
+    end
+
+    action post(url, body):
+        let full_url = self._resolve_url(url)
+        let opts = self._build_options("POST", full_url)
+        opts["body"] = body
+        return self._execute(opts)
+    end
+
+    action put(url, body):
+        let full_url = self._resolve_url(url)
+        let opts = self._build_options("PUT", full_url)
+        opts["body"] = body
+        return self._execute(opts)
+    end
+
+    action delete(url):
+        let full_url = self._resolve_url(url)
+        let opts = self._build_options("DELETE", full_url)
+        return self._execute(opts)
+    end
+
+    action patch(url, body):
+        let full_url = self._resolve_url(url)
+        let opts = self._build_options("PATCH", full_url)
+        opts["body"] = body
+        return self._execute(opts)
+    end
+
+    action post_json(url, data):
+        self.set_header("Content-Type", "application/json")
+        let body = json.stringify(data)
+        return self.post(url, body)
+    end
+
+    action _resolve_url(url):
+        when self.base_url != "":
+            return self.base_url + url
+        end
+        return url
+    end
+
+    action _build_options(method, url):
+        let opts = {}
+        opts["method"] = method
+        opts["url"] = url
+        opts["headers"] = self.headers
+        opts["timeout"] = self.timeout
+        opts["follow_redirects"] = self.follow_redirects
+        return opts
+    end
+
+    action _execute(opts):
+        let response = HttpResponse()
+        try:
+            let raw = http.request(opts["method"], opts["url"], opts)
+            response.status = raw["status"]
+            response.body = raw["body"]
+            response.headers = raw["headers"]
+            response.ok = response.status >= 200 and response.status < 300
+        catch error:
+            response.status = 0
+            response.body = ""
+            response.ok = false
+            response.error = error
+        end
+        return response
+    end
+end
+
+blueprint HttpResponse:
+    action init():
+        self.status = 0
+        self.body = ""
+        self.headers = {}
+        self.ok = false
+        self.error = none
+    end
+
+    action json():
+        return json.parse(self.body)
+    end
+
+    action text():
+        return self.body
+    end
+
+    action is_ok():
+        return self.ok
+    end
+
+    action is_error():
+        return not self.ok
+    end
+end
+
+# Convenience functions for quick requests
+func http_get(url):
+    let client = HttpClient()
+    return client.get(url)
+end
+
+func http_post(url, body):
+    let client = HttpClient()
+    return client.post(url, body)
+end
+
+func http_post_json(url, data):
+    let client = HttpClient()
+    return client.post_json(url, data)
+end
+
+# URL Builder
+blueprint URLBuilder:
+    action init(base):
+        self.base = base
+        self.path_parts = []
+        self.query_params = {}
+    end
+
+    action path(segment):
+        append(self.path_parts, segment)
+        return self
+    end
+
+    action param(key, value):
+        self.query_params[key] = value
+        return self
+    end
+
+    action build():
+        let url = self.base
+        for each part in self.path_parts:
+            url = url + "/" + part
+        end
+        let first = true
+        # Build query string from params
+        # Note: dict iteration depends on runtime support
+        when len(self.query_params) > 0:
+            url = url + "?"
+        end
+        return url
+    end
+end

@@ -1,27 +1,27 @@
 # GlowAI — Practical AI & Matrix Ecosystem
 
-blueprint Layer:
-    action init(in_dim, out_dim):
+class Layer:
+    func init(in_dim, out_dim):
         self.weights = tensor.create(in_dim * out_dim)
         self.bias = tensor.zeros(out_dim)
     end
 
-    action forward(input):
+    func forward(in_val):
         # input: tensor of in_dim
         # result = input * weights + bias
         # Note: simplified for 1D vectors in this example
-        return tensor.add(tensor.dot(input, self.weights), self.bias)
+        return tensor.add(tensor.dot(in_val, self.weights), self.bias)
     end
 end
 
-blueprint SimpleNet:
-    action init():
+class SimpleNet:
+    func init():
         self.l1 = Layer(10, 5)
         self.l2 = Layer(5, 1)
     end
 
-    action predict(input):
-        let x = self.l1.forward(input)
+    func predict(in_val):
+        let x = self.l1.forward(in_val)
         return self.l2.forward(x)
     end
 end

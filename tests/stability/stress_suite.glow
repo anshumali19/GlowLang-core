@@ -1,8 +1,10 @@
-show "===================================================="
-show "          GLOWLANG INDUSTRIAL STRESS SUITE"
-show "===================================================="
+show "===================================================================="
+show "         GLOWLANG INDUSTRIAL STRESS SUITE — Phase 1 Expanded"
+show "===================================================================="
 
+# ═══════════════════════════════════════════════════════════════════════
 # 1. Deep Recursive Depth Checks (TCO vs Stack Limit)
+# ═══════════════════════════════════════════════════════════════════════
 show "1. Stressing Deep Recursion & TCO..."
 
 func stress_tco(n, acc):
@@ -27,14 +29,15 @@ end
 
 try:
     show "   Triggering recursion depth limit..."
-    # The recursion depth is limited in VM to prevent C stack overflows, so this should trigger recursion limit error
     stress_deep_recursion(2000)
     show "   [ERROR] Deep recursion did not trigger stack limit exception!"
 catch e:
     show "   [SUCCESS] Caught expected recursion limit exception: ", e
 end
 
+# ═══════════════════════════════════════════════════════════════════════
 # 2. High-pressure SIMD Tensor Allocations & GC Stress Loops
+# ═══════════════════════════════════════════════════════════════════════
 show "2. Stressing GC & SIMD Tensors..."
 
 func stress_tensors(count):
@@ -58,7 +61,9 @@ stress_tensors(1000)
 let end_tensor = os.time()
 show "   Tensor allocations & operations took: ", (end_tensor - start_tensor), " s"
 
+# ═══════════════════════════════════════════════════════════════════════
 # 3. Concurrency Overload Checks
+# ═══════════════════════════════════════════════════════════════════════
 show "3. Stressing Async Scheduler..."
 
 func async_worker(id):
@@ -74,11 +79,13 @@ while spawned < 500:
     spawn async_worker(spawned)
     spawned = spawned + 1
 end
-os.sleep(200) # Yield and let async tasks run
+os.sleep(200)
 let end_async = os.time()
 show "   Spawned 500 async workers, time elapsed: ", (end_async - start_async), " s"
 
+# ═══════════════════════════════════════════════════════════════════════
 # 4. StringBuilder/Rope Allocations under Heavy Loads
+# ═══════════════════════════════════════════════════════════════════════
 show "4. Stressing StringBuilder & Rope Allocations..."
 
 let start_sb = os.time()
@@ -95,7 +102,9 @@ let huge_str = build(sb)
 let end_sb = os.time()
 show "   StringBuilder stress complete (Length: ", len(huge_str), " characters, took: ", (end_sb - start_sb), " s)"
 
+# ═══════════════════════════════════════════════════════════════════════
 # 5. Iterator Pressure Tests
+# ═══════════════════════════════════════════════════════════════════════
 show "5. Stressing Iterator Infrastructure..."
 
 let start_iter = os.time()
@@ -121,11 +130,359 @@ end
 let end_iter = os.time()
 show "   Iterator stress complete (Mapped count: ", len(mapped_list), ", sum: ", sum_comp, ", took: ", (end_iter - start_iter), " s)"
 
-# Heap Integrity Verification
+# ═══════════════════════════════════════════════════════════════════════
+# 6. Heap Integrity Verification
+# ═══════════════════════════════════════════════════════════════════════
 show "6. Performing GC Heap Integrity Verification..."
 let verified = os.verify_gc()
 show "   Heap status: ", verified
 
-show "===================================================="
-show "          STRESS SUITE COMPLETED SUCCESSFULLY"
-show "===================================================="
+# ═══════════════════════════════════════════════════════════════════════
+# 7. Long-Running Execution Test (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "7. Long-Running Computation Stability..."
+
+func fibonacci_iterative(n):
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < n:
+        let temp = b
+        b = a + b
+        a = temp
+        i = i + 1
+    end
+    return a
+end
+
+let start_lr = os.time()
+let fib_result = fibonacci_iterative(10000)
+let end_lr = os.time()
+show "   Fibonacci(10000) computed in ", (end_lr - start_lr), " s"
+
+# Sustained computation loop
+func sustained_compute(iterations):
+    let result = 0
+    let i = 0
+    while i < iterations:
+        result = result + (i * i) % 997
+        if i % 10000 == 0:
+            let info = os.gc_info()
+        end
+        i = i + 1
+    end
+    return result
+end
+
+let start_sc = os.time()
+let sc_res = sustained_compute(100000)
+let end_sc = os.time()
+show "   Sustained 100K-iteration compute took: ", (end_sc - start_sc), " s, result: ", sc_res
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. Recursive Stress Tests (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "8. Recursive Stress Patterns..."
+
+# Mutual recursion
+func is_even_r(n):
+    if n == 0:
+        return true
+    end
+    return is_odd_r(n - 1)
+end
+
+func is_odd_r(n):
+    if n == 0:
+        return false
+    end
+    return is_even_r(n - 1)
+end
+
+let re_start = os.time()
+let even_check = is_even_r(500)
+let odd_check = is_odd_r(500)
+let re_end = os.time()
+show "   Mutual recursion (500 deep): even=", even_check, ", odd=", odd_check, " in ", (re_end - re_start), " s"
+
+# Ackermann (small inputs to avoid explosion)
+func ackermann(m, n):
+    if m == 0:
+        return n + 1
+    end
+    if n == 0:
+        return ackermann(m - 1, 1)
+    end
+    return ackermann(m - 1, ackermann(m, n - 1))
+end
+
+let ack_start = os.time()
+let ack_res = ackermann(3, 4)
+let ack_end = os.time()
+show "   Ackermann(3,4) = ", ack_res, " in ", (ack_end - ack_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 9. Tensor Allocation Stress (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "9. Tensor Allocation Pressure..."
+
+func tensor_pressure(rounds):
+    let i = 0
+    while i < rounds:
+        # Create tensors of varying sizes
+        let small_t = tensor.zeros(10)
+        let med_t = tensor.zeros(1000)
+        let large_t = tensor.zeros(10000)
+
+        # Do operations
+        let r1 = tensor.add(small_t, small_t)
+        let r2 = tensor.add(med_t, med_t)
+        let r3 = tensor.add(large_t, large_t)
+
+        # Dot products
+        let d1 = tensor.dot(small_t, small_t)
+        let d2 = tensor.dot(med_t, med_t)
+
+        if i % 100 == 0:
+            show "   Tensor pressure round ", i, "/", rounds
+        end
+        i = i + 1
+    end
+end
+
+let tp_start = os.time()
+tensor_pressure(500)
+let tp_end = os.time()
+show "   Tensor pressure test took: ", (tp_end - tp_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 10. Async Overload Tests (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "10. Async Overload Stress..."
+
+func cpu_bound_task(id, work):
+    let result = 0
+    let i = 0
+    while i < work:
+        result = result + i
+        i = i + 1
+    end
+    return result
+end
+
+let ao_start = os.time()
+let ao_count = 0
+while ao_count < 1000:
+    spawn cpu_bound_task(ao_count, 100)
+    ao_count = ao_count + 1
+end
+os.sleep(500)
+let ao_end = os.time()
+show "   Spawned 1000 CPU-bound tasks in ", (ao_end - ao_start), " s"
+
+# Spawn with exception handling
+func failing_task(id):
+    if id % 3 == 0:
+        throw "task_error_" + id
+    end
+    return id
+end
+
+let fe_count = 0
+while fe_count < 100:
+    try:
+        spawn failing_task(fe_count)
+    catch e:
+        # Expected failures
+    end
+    fe_count = fe_count + 1
+end
+os.sleep(200)
+show "   Exception-spawning test completed"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 11. Rope/String Stress Tests (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "11. Rope/String Heavy Stress..."
+
+# Extreme concatenation building a long string
+func build_long_string(n):
+    let s = ""
+    let i = 0
+    while i < n:
+        s = s + "X"
+        i = i + 1
+    end
+    return s
+end
+
+let rs_start = os.time()
+let long_str = build_long_string(10000)
+show "   Built string of length: ", len(long_str)
+
+# String builder vs concat comparison
+let sb2 = text_builder()
+let sb_i = 0
+while sb_i < 50000:
+    append(sb2, "Y")
+    sb_i = sb_i + 1
+end
+let sb_result = build(sb2)
+show "   StringBuilder result length: ", len(sb_result)
+
+# Rope tree stress via alternating prepend/append
+let rope_str = "seed"
+let ri = 0
+while ri < 2000:
+    if ri % 2 == 0:
+        rope_str = rope_str + "R"
+    end
+    if ri % 2 == 1:
+        rope_str = "L" + rope_str
+    end
+    ri = ri + 1
+end
+let rs_end = os.time()
+show "   Rope stress length: ", len(rope_str), " in ", (rs_end - rs_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 12. Iterator Pressure Tests (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "12. Extended Iterator Pressure..."
+
+# Chained iteration patterns
+let ip_start = os.time()
+let data = range(5000)
+let filtered = []
+for each v in data:
+    if v % 3 == 0:
+        filtered = filtered + [v]
+    end
+end
+show "   Filtered to ", len(filtered), " elements from 5000"
+
+# Nested iteration
+let nested_sum = 0
+let outer_list = range(100)
+for each a in outer_list:
+    let inner_list = range(100)
+    for each b in inner_list:
+        nested_sum = nested_sum + 1
+    end
+end
+let ip_end = os.time()
+show "   Nested iteration (100x100) sum: ", nested_sum, " in ", (ip_end - ip_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 13. Module Scaling Tests (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "13. Module/Function Scaling..."
+
+# Define many functions and call them
+func gen_func_0():
+    return 0
+end
+func gen_func_1():
+    return 1
+end
+func gen_func_2():
+    return 2
+end
+func gen_func_3():
+    return 3
+end
+func gen_func_4():
+    return 4
+end
+func gen_func_5():
+    return 5
+end
+func gen_func_6():
+    return 6
+end
+func gen_func_7():
+    return 7
+end
+func gen_func_8():
+    return 8
+end
+func gen_func_9():
+    return 9
+end
+
+let ms_start = os.time()
+let func_sum = 0
+let ms_i = 0
+while ms_i < 1000:
+    func_sum = func_sum + gen_func_0() + gen_func_1() + gen_func_2()
+    func_sum = func_sum + gen_func_3() + gen_func_4() + gen_func_5()
+    func_sum = func_sum + gen_func_6() + gen_func_7() + gen_func_8() + gen_func_9()
+    ms_i = ms_i + 1
+end
+let ms_end = os.time()
+show "   Called 10 functions x 1000 iterations, sum: ", func_sum, " in ", (ms_end - ms_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 14. Closure & Lambda Stress (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "14. Closure & Lambda Lifetime Stress..."
+
+let global_sum = 0
+let cl_start = os.time()
+let lambdas = []
+let ci = 0
+while ci < 100:
+    let l = lambda():
+        global_sum = global_sum + 1
+    end
+    lambdas = lambdas + [l]
+    ci = ci + 1
+end
+
+# Invoke all lambdas via list to bypass optimization
+for each l in lambdas:
+    let wrapper = [l]
+    wrapper[0]()
+    wrapper[0]()
+    wrapper[0]()
+end
+let cl_end = os.time()
+show "   Created and invoked 100 closures, global_sum: ", global_sum, " in ", (cl_end - cl_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 15. Class/Object Stress (NEW)
+# ═══════════════════════════════════════════════════════════════════════
+show "15. Object/Class Allocation Stress..."
+
+class StressNode:
+    func init(val):
+        self.val = val
+        self.children = []
+    end
+
+    func add_child(child):
+        self.children = self.children + [child]
+    end
+end
+
+let obj_start = os.time()
+let root_node = StressNode(0)
+let ni = 1
+while ni < 500:
+    let child = StressNode(ni)
+    root_node.add_child(child)
+    ni = ni + 1
+end
+let obj_end = os.time()
+show "   Created tree with 500 nodes in ", (obj_end - obj_start), " s"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Final Verification
+# ═══════════════════════════════════════════════════════════════════════
+show "Final: GC Heap Integrity Check..."
+let final_gc = os.verify_gc()
+show "   Final heap status: ", final_gc
+
+show "===================================================================="
+show "         STRESS SUITE COMPLETED SUCCESSFULLY (15 sections)"
+show "===================================================================="

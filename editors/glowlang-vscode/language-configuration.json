@@ -1,0 +1,50 @@
+{
+    "comments": {
+        "lineComment": "#",
+        "blockComment": ["/*", "*/"]
+    },
+    "brackets": [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"]
+    ],
+    "autoClosingPairs": [
+        { "open": "{", "close": "}" },
+        { "open": "[", "close": "]" },
+        { "open": "(", "close": ")" },
+        { "open": "\"", "close": "\"", "notIn": ["string"] },
+        { "open": "f\"", "close": "\"", "notIn": ["string"] },
+        { "open": "/*", "close": "*/", "notIn": ["string"] }
+    ],
+    "surroundingPairs": [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+        ["\"", "\""]
+    ],
+    "folding": {
+        "markers": {
+            "start": "^\\s*(func|task|action|blueprint|Blueprint|when|if|while|until|for|repeat|try)\\b.*:\\s*$",
+            "end": "^\\s*end\\b"
+        }
+    },
+    "indentationRules": {
+        "increaseIndentPattern": "^\\s*(func|task|action|blueprint|Blueprint|when|if|eif|otherwise|while|until|for|repeat|try|catch|finally)\\b.*:\\s*(#.*)?$",
+        "decreaseIndentPattern": "^\\s*(end|otherwise|eif|catch|finally)\\b"
+    },
+    "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*",
+    "onEnterRules": [
+        {
+            "beforeText": "^\\s*(func|task|action|blueprint|Blueprint|when|if|eif|otherwise|while|until|for|repeat|try|catch|finally)\\b.*:\\s*$",
+            "action": {
+                "indent": "indent"
+            }
+        },
+        {
+            "beforeText": "^\\s*end\\b",
+            "action": {
+                "indent": "outdent"
+            }
+        }
+    ]
+}

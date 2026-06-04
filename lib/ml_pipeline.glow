@@ -1,0 +1,605 @@
+# GlowML — Machine Learning Pipeline Framework
+# Composable pipeline steps for training, evaluating, and deploying ML models
+
+# Pipeline Core
+blueprint Pipeline:
+    action init():
+        self.steps = []
+        self.results = {}
+        self.fitted = false
+        self.name = "Pipeline"
+    end
+
+    action set_name(name):
+        self.name = name
+        return self
+    end
+
+    action add_step(step):
+        append(self.steps, step)
+        return self
+    end
+
+    action run(data):
+        show "[Pipeline:" + self.name + "] Starting with " + len(self.steps) + " steps"
+        let current = data
+        let step_num = 1
+        for each step in self.steps:
+            show "[Pipeline] Step " + step_num + "/" + len(self.steps) + ": " + step.name()
+            current = step.execute(current)
+            self.results[step.name()] = current
+            step_num = step_num + 1
+        end
+        self.fitted = true
+        show "[Pipeline:" + self.name + "] Complete"
+        return current
+    end
+
+    action get_results():
+        return self.results
+    end
+
+    action get_step_result(step_name):
+        return self.results[step_name]
+    end
+end
+
+# Pipeline Steps
+
+# Step: Normalize features
+blueprint Normalize:
+    action init():
+        self.columns = []
+        self.method = "standard"  # or "minmax"
+        self.stats = {}
+    end
+
+    action set_columns(cols):
+        self.columns = cols
+        return self
+    end
+
+    action set_method(method):
+        self.method = method
+        return self
+    end
+
+    action name():
+        return "Normalize(" + self.method + ")"
+    end
+
+    action execute(data):
+        let dataset = data["dataset"]
+        when dataset is none:
+            dataset = data
+        end
+
+        let rows = dataset.data
+        let cols = self.columns
+        when len(cols) == 0:
+            cols = dataset.feature_names
+        end
+
+        # Calculate stats
+        for each col in cols:
+            let values = []
+            for each row in rows:
+                when row[col] is not none:
+                    append(values, row[col])
+                end
+            end
+            let total = 0
+            let mn = values[0]
+            let mx = values[0]
+            for each v in values:
+                total = total + v
+                when v < mn:
+                    mn = v
+                end
+                when v > mx:
+                    mx = v
+                end
+            end
+            let mean = total / len(values)
+            let var_sum = 0
+            for each v in values:
+                var_sum = var_sum + (v - mean) * (v - mean)
+            end
+            self.stats[col] = {"mean": mean, "std": sqrt(var_sum / len(values)), "min": mn, "max": mx}
+        end
+
+        # Apply normalization
+        for each row in rows:
+            for each col in cols:
+                let s = self.stats[col]
+                when self.method == "standard":
+                    let std = s["std"]
+                    when std == 0:
+                        std = 1.0
+                    end
+                    row[col] = (row[col] - s["mean"]) / std
+                eif self.method == "minmax":
+                    let range = s["max"] - s["min"]
+                    when range == 0:
+                        range = 1.0
+                    end
+                    row[col] = (row[col] - s["min"]) / range
+                end
+            end
+        end
+
+        data["dataset"] = dataset
+        data["normalize_stats"] = self.stats
+        return data
+    end
+end
+
+# Step: Train/Test Split
+blueprint TrainTestSplit:
+    action init(ratio):
+        self.ratio = ratio
+    end
+
+    action name():
+        return "TrainTestSplit(" + self.ratio + ")"
+    end
+
+    action execute(data):
+        let dataset = data["dataset"]
+        when dataset is none:
+            dataset = data
+        end
+
+        let split_idx = int(dataset.size * self.ratio)
+        
+        let train_data = []
+        let train_labels = []
+        let test_data = []
+        let test_labels = []
+        
+        for i from 0 to split_idx:
+            append(train_data, dataset.data[i])
+            when len(dataset.labels) > i:
+                append(train_labels, dataset.labels[i])
+            end
+        end
+        for i from split_idx to dataset.size:
+            append(test_data, dataset.data[i])
+            when len(dataset.labels) > i:
+                append(test_labels, dataset.labels[i])
+            end
+        end
+
+        data["train_data"] = train_data
+        data["train_labels"] = train_labels
+        data["test_data"] = test_data
+        data["test_labels"] = test_labels
+        data["split_info"] = {"train_size": len(train_data), "test_size": len(test_data), "ratio": self.ratio}
+        
+        show "  → Train: " + len(train_data) + " samples, Test: " + len(test_data) + " samples"
+        return data
+    end
+end
+
+# Step: Linear Regression Model
+blueprint LinearModel:
+    action init():
+        self.weights = {}
+        self.bias = 0.0
+        self.learning_rate = 0.01
+        self.epochs = 100
+    end
+
+    action set_lr(lr):
+        self.learning_rate = lr
+        return self
+    end
+
+    action set_epochs(n):
+        self.epochs = n
+        return self
+    end
+
+    action name():
+        return "LinearModel"
+    end
+
+    action execute(data):
+        let train_data = data["train_data"]
+        let train_labels = data["train_labels"]
+        let dataset = data["dataset"]
+        let features = dataset.feature_names
+
+        # Initialize weights
+        for each f in features:
+            self.weights[f] = 0.0
+        end
+
+        # Training loop (gradient descent)
+        let epoch = 0
+        while epoch < self.epochs:
+            let total_loss = 0.0
+            let i = 0
+            for each row in train_data:
+                # Forward pass
+                let pred = self.bias
+                for each f in features:
+                    when row[f] is not none:
+                        pred = pred + self.weights[f] * row[f]
+                    end
+                end
+
+                # Compute error
+                let error = pred - train_labels[i]
+                total_loss = total_loss + error * error
+
+                # Update weights
+                for each f in features:
+                    when row[f] is not none:
+                        self.weights[f] = self.weights[f] - self.learning_rate * error * row[f]
+                    end
+                end
+                self.bias = self.bias - self.learning_rate * error
+                i = i + 1
+            end
+
+            when epoch % 20 == 0:
+                let mse = total_loss / len(train_data)
+                show "  → Epoch " + epoch + ": MSE = " + mse
+            end
+            epoch = epoch + 1
+        end
+
+        data["model"] = self
+        data["model_weights"] = self.weights
+        data["model_bias"] = self.bias
+        return data
+    end
+
+    action predict(row, features):
+        let pred = self.bias
+        for each f in features:
+            when row[f] is not none:
+                pred = pred + self.weights[f] * row[f]
+            end
+        end
+        return pred
+    end
+end
+
+# Step: K-Nearest Neighbors Classifier
+blueprint KNNClassifier:
+    action init(k):
+        self.k = k
+        self.train_data = []
+        self.train_labels = []
+        self.features = []
+    end
+
+    action name():
+        return "KNN(k=" + self.k + ")"
+    end
+
+    action execute(data):
+        self.train_data = data["train_data"]
+        self.train_labels = data["train_labels"]
+        self.features = data["dataset"].feature_names
+        
+        data["model"] = self
+        show "  → KNN fitted with k=" + self.k
+        return data
+    end
+
+    action predict(row):
+        # Calculate distances to all training points
+        let distances = []
+        let i = 0
+        for each train_row in self.train_data:
+            let dist = 0.0
+            for each f in self.features:
+                let diff = row[f] - train_row[f]
+                dist = dist + diff * diff
+            end
+            append(distances, {"dist": sqrt(dist), "label": self.train_labels[i]})
+            i = i + 1
+        end
+        
+        # Sort by distance (simple selection sort for k nearest)
+        let nearest = []
+        let used = []
+        let found = 0
+        while found < self.k and found < len(distances):
+            let min_dist = 999999999
+            let min_idx = 0 - 1
+            let j = 0
+            for each d in distances:
+                let is_used = false
+                for each u in used:
+                    when u == j:
+                        is_used = true
+                    end
+                end
+                when not is_used and d["dist"] < min_dist:
+                    min_dist = d["dist"]
+                    min_idx = j
+                end
+                j = j + 1
+            end
+            append(nearest, distances[min_idx])
+            append(used, min_idx)
+            found = found + 1
+        end
+        
+        # Vote
+        let votes = {}
+        for each n in nearest:
+            let label = n["label"]
+            when votes[label] is none:
+                votes[label] = 0
+            end
+            votes[label] = votes[label] + 1
+        end
+        
+        # Find majority
+        let best_label = none
+        let best_count = 0
+        for each label in votes:
+            when votes[label] > best_count:
+                best_count = votes[label]
+                best_label = label
+            end
+        end
+        return best_label
+    end
+end
+
+# Step: Evaluate Model
+blueprint Evaluate:
+    action init():
+        self.metrics = {}
+    end
+
+    action name():
+        return "Evaluate"
+    end
+
+    action execute(data):
+        let model = data["model"]
+        let test_data = data["test_data"]
+        let test_labels = data["test_labels"]
+        let features = data["dataset"].feature_names
+
+        # Check if regression or classification
+        let predictions = []
+        for each row in test_data:
+            let pred = model.predict(row, features)
+            append(predictions, pred)
+        end
+
+        # Compute metrics
+        when type(test_labels[0]) == "integer" or type(test_labels[0]) == "float":
+            # Regression metrics
+            let mse = 0.0
+            let mae = 0.0
+            let i = 0
+            for each pred in predictions:
+                let error = pred - test_labels[i]
+                mse = mse + error * error
+                mae = mae + abs(error)
+                i = i + 1
+            end
+            mse = mse / len(predictions)
+            mae = mae / len(predictions)
+
+            # R² score
+            let mean_label = 0.0
+            for each l in test_labels:
+                mean_label = mean_label + l
+            end
+            mean_label = mean_label / len(test_labels)
+            let ss_res = 0.0
+            let ss_tot = 0.0
+            let j = 0
+            for each pred in predictions:
+                ss_res = ss_res + (test_labels[j] - pred) * (test_labels[j] - pred)
+                ss_tot = ss_tot + (test_labels[j] - mean_label) * (test_labels[j] - mean_label)
+                j = j + 1
+            end
+            let r2 = 1.0
+            when ss_tot > 0:
+                r2 = 1.0 - ss_res / ss_tot
+            end
+
+            self.metrics = {"type": "regression", "mse": mse, "rmse": sqrt(mse), "mae": mae, "r2": r2, "samples": len(predictions)}
+            show "  → MSE: " + mse + ", RMSE: " + sqrt(mse) + ", MAE: " + mae + ", R²: " + r2
+        otherwise:
+            # Classification metrics
+            let correct = 0
+            let i = 0
+            for each pred in predictions:
+                when pred == test_labels[i]:
+                    correct = correct + 1
+                end
+                i = i + 1
+            end
+            let accuracy = correct / len(predictions)
+
+            self.metrics = {"type": "classification", "accuracy": accuracy, "correct": correct, "total": len(predictions)}
+            show "  → Accuracy: " + accuracy + " (" + correct + "/" + len(predictions) + ")"
+        end
+
+        data["metrics"] = self.metrics
+        data["predictions"] = predictions
+        return data
+    end
+end
+
+# Step: Feature Selection (top-k by variance)
+blueprint FeatureSelector:
+    action init(k):
+        self.k = k
+        self.selected = []
+    end
+
+    action name():
+        return "FeatureSelector(top " + self.k + ")"
+    end
+
+    action execute(data):
+        let dataset = data["dataset"]
+        let features = dataset.feature_names
+        let rows = dataset.data
+
+        # Calculate variance for each feature
+        let variances = {}
+        for each f in features:
+            let values = []
+            for each row in rows:
+                when type(row[f]) == "integer" or type(row[f]) == "float":
+                    append(values, row[f])
+                end
+            end
+            when len(values) > 0:
+                let mean = 0
+                for each v in values:
+                    mean = mean + v
+                end
+                mean = mean / len(values)
+                let var_sum = 0
+                for each v in values:
+                    var_sum = var_sum + (v - mean) * (v - mean)
+                end
+                variances[f] = var_sum / len(values)
+            otherwise:
+                variances[f] = 0
+            end
+        end
+
+        # Select top-k by variance
+        self.selected = []
+        let remaining = []
+        for each f in features:
+            append(remaining, f)
+        end
+
+        let selected_count = 0
+        while selected_count < self.k and len(remaining) > 0:
+            let best = remaining[0]
+            let best_var = variances[remaining[0]]
+            for each f in remaining:
+                when variances[f] > best_var:
+                    best = f
+                    best_var = variances[f]
+                end
+            end
+            append(self.selected, best)
+            # Remove from remaining
+            let new_remaining = []
+            for each f in remaining:
+                when f != best:
+                    append(new_remaining, f)
+                end
+            end
+            remaining = new_remaining
+            selected_count = selected_count + 1
+        end
+
+        dataset.feature_names = self.selected
+        data["dataset"] = dataset
+        data["selected_features"] = self.selected
+        show "  → Selected features: " + self.selected
+        return data
+    end
+end
+
+# Step: Cross Validation
+blueprint CrossValidation:
+    action init(k_folds, model_factory):
+        self.k = k_folds
+        self.model_factory = model_factory
+    end
+
+    action name():
+        return "CrossValidation(" + self.k + " folds)"
+    end
+
+    action execute(data):
+        let dataset = data["dataset"]
+        let fold_size = int(dataset.size / self.k)
+        let scores = []
+
+        for fold from 0 to self.k:
+            let test_start = fold * fold_size
+            let test_end = test_start + fold_size
+            when test_end > dataset.size:
+                test_end = dataset.size
+            end
+
+            let train_d = []
+            let train_l = []
+            let test_d = []
+            let test_l = []
+
+            for i from 0 to dataset.size:
+                when i >= test_start and i < test_end:
+                    append(test_d, dataset.data[i])
+                    when len(dataset.labels) > i:
+                        append(test_l, dataset.labels[i])
+                    end
+                otherwise:
+                    append(train_d, dataset.data[i])
+                    when len(dataset.labels) > i:
+                        append(train_l, dataset.labels[i])
+                    end
+                end
+            end
+
+            # Train and evaluate this fold
+            let fold_data = {"dataset": dataset, "train_data": train_d, "train_labels": train_l, "test_data": test_d, "test_labels": test_l}
+
+            let model = self.model_factory()
+            fold_data = model.execute(fold_data)
+            let evaluator = Evaluate()
+            fold_data = evaluator.execute(fold_data)
+            append(scores, fold_data["metrics"])
+        end
+
+        data["cv_scores"] = scores
+        
+        # Calculate mean score
+        let total_score = 0
+        for each s in scores:
+            when s["type"] == "regression":
+                total_score = total_score + s["r2"]
+            otherwise:
+                total_score = total_score + s["accuracy"]
+            end
+        end
+        let mean_score = total_score / len(scores)
+        data["cv_mean_score"] = mean_score
+        show "  → CV Mean Score: " + mean_score
+        
+        return data
+    end
+end
+
+# Convenience: build common pipelines
+func regression_pipeline(dataset):
+    let pipeline = Pipeline()
+    pipeline.set_name("Regression")
+    pipeline.add_step(Normalize())
+    pipeline.add_step(TrainTestSplit(0.8))
+    pipeline.add_step(LinearModel())
+    pipeline.add_step(Evaluate())
+    return pipeline.run({"dataset": dataset})
+end
+
+func classification_pipeline(dataset, k):
+    let pipeline = Pipeline()
+    pipeline.set_name("Classification")
+    pipeline.add_step(Normalize())
+    pipeline.add_step(TrainTestSplit(0.8))
+    pipeline.add_step(KNNClassifier(k))
+    pipeline.add_step(Evaluate())
+    return pipeline.run({"dataset": dataset})
+end
