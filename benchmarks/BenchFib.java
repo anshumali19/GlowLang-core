@@ -4,11 +4,8 @@ public class BenchFib {
         return fib(n - 1) + fib(n - 2);
     }
     public static void main(String[] args) {
-        int i = 0, total = 0;
-        while (i < 20) {
-            total += fib(i);
-            i++;
-        }
+        int total = 0;
+        for (int i = 0; i <= 30; i++) total += fib(i);
         System.out.println(total);
     }
 }

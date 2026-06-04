@@ -5,6 +5,6 @@ public class DsaAckermann {
         return ack(m - 1, ack(m, n - 1));
     }
     public static void main(String[] args) {
-        System.out.println(ack(3, 11));
+        System.out.println(ack(3, 8));
     }
 }

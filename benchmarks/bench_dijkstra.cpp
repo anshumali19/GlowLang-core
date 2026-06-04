@@ -1,51 +1,44 @@
-
-#include <iostream>
-#include <vector>
-#include <chrono>
-
-using namespace std;
-
-const int V = 1000;
-const int INF = 999999;
-
-int minDistance(const vector<int>& dist, const vector<bool>& sptSet) {
+#include <stdio.h>
+#include <stdlib.h>
+#define V 1000
+#define INF 999999
+int minDistance(int *dist, int *sptSet) {
     int min = INF, min_index = -1;
-    for (int v = 0; v < V; v++)
-        if (!sptSet[v] && dist[v] <= min) {
+    for (int v = 0; v < V; v++) {
+        if (sptSet[v] == 0 && dist[v] <= min) {
             min = dist[v];
             min_index = v;
         }
+    }
     return min_index;
 }
-
-void dijkstra(const vector<vector<int>>& graph, int src) {
-    vector<int> dist(V, INF);
-    vector<bool> sptSet(V, false);
+void dijkstra(int graph[V][V], int src) {
+    int dist[V];
+    int sptSet[V];
+    for (int i = 0; i < V; i++) {
+        dist[i] = INF;
+        sptSet[i] = 0;
+    }
     dist[src] = 0;
-    
     for (int count = 0; count < V - 1; count++) {
         int u = minDistance(dist, sptSet);
-        sptSet[u] = true;
-        for (int v = 0; v < V; v++)
-            if (!sptSet[v] && graph[u][v] && dist[u] != INF && dist[u] + graph[u][v] < dist[v])
+        sptSet[u] = 1;
+        for (int v = 0; v < V; v++) {
+            if (sptSet[v] == 0 && graph[u][v] != 0 && dist[u] != INF && dist[u] + graph[u][v] < dist[v]) {
                 dist[v] = dist[u] + graph[u][v];
+            }
+        }
     }
 }
-
+int graph[V][V];
 int main() {
-    vector<vector<int>> graph(V, vector<int>(V));
     for (int i = 0; i < V; i++) {
         for (int j = 0; j < V; j++) {
             if (i == j) graph[i][j] = 0;
             else graph[i][j] = (i * j + 1) % 100;
         }
     }
-    
-    auto start = chrono::high_resolution_clock::now();
     dijkstra(graph, 0);
-    auto end = chrono::high_resolution_clock::now();
-    
-    chrono::duration<double> time_taken = end - start;
-    cout << "C++ Time: " << time_taken.count() << " s\n";
+    printf("Done\n");
     return 0;
 }

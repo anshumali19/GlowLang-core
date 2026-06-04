@@ -1,54 +1,56 @@
-
-func minDistance(dist, sptSet, V):
-    let min_val = 999999
-    let min_index = 0 - 1
-    let v = 0
-    while v < V:
-        if sptSet[v] == 0:
-            if dist[v] <= min_val:
-                min_val = dist[v]
-                min_index = v
-            end
-        end
-        v = v + 1
+blueprint Dijkstra:
+    action init(v):
+        self.V = v
+        self.INF = 999999
     end
-    return min_index
-end
-
-func dijkstra(graph, V, src):
-    let dist = range(V)
-    let sptSet = range(V)
-    let i = 0
-    while i < V:
-        dist[i] = 999999
-        sptSet[i] = 0
-        i = i + 1
-    end
-    dist[src] = 0
-    
-    let count = 0
-    while count < V - 1:
-        let u = minDistance(dist, sptSet, V)
-        sptSet[u] = 1
-        
+    action minDistance(dist, sptSet):
+        let min_val = self.INF
+        let min_index = 0 - 1
         let v = 0
-        let row = graph[u]
-        while v < V:
-            if sptSet[v] == 0:
-                if row[v] != 0:
-                    if dist[u] != 999999:
-                        if dist[u] + row[v] < dist[v]:
-                            dist[v] = dist[u] + row[v]
-                        end
-                    end
+        while v < self.V:
+            when sptSet[v] is 0:
+                when dist[v] <= min_val:
+                    min_val = dist[v]
+                    min_index = v
                 end
             end
             v = v + 1
         end
-        count = count + 1
+        return min_index
+    end
+    action solve(graph, src):
+        let dist = range(self.V)
+        let sptSet = range(self.V)
+        let i = 0
+        while i < self.V:
+            dist[i] = self.INF
+            sptSet[i] = 0
+            i = i + 1
+        end
+        dist[src] = 0
+        
+        let count = 0
+        while count < (self.V - 1):
+            let u = self.minDistance(dist, sptSet)
+            sptSet[u] = 1
+            let v = 0
+            let row = graph[u]
+            while v < self.V:
+                when sptSet[v] is 0:
+                    when row[v] != 0:
+                        when dist[u] != self.INF:
+                            when (dist[u] + row[v]) < dist[v]:
+                                dist[v] = dist[u] + row[v]
+                            end
+                        end
+                    end
+                end
+                v = v + 1
+            end
+            count = count + 1
+        end
     end
 end
-
 let V = 1000
 let graph = range(V)
 let i = 0
@@ -56,10 +58,10 @@ while i < V:
     let row = range(V)
     let j = 0
     while j < V:
-        if i == j:
+        when i is j:
             row[j] = 0
         end
-        if i != j:
+        when i != j:
             row[j] = (i * j + 1) % 100
         end
         j = j + 1
@@ -67,8 +69,7 @@ while i < V:
     graph[i] = row
     i = i + 1
 end
-
-let start = os.time()
-let res = dijkstra(graph, V, 0)
-let end_time = os.time()
-show "Glow Time: ", end_time - start, " s (Result: ", res, ")"
+let d = Dijkstra()
+d.init(V)
+d.solve(graph, 0)
+show "Done"
