@@ -1,6 +1,6 @@
 show "[Async System] Initializing asynchronous scheduler..."
 
-func worker(id, delay):
+action worker(id, delay):
     let i = 0
     while i < 3:
         os.sleep(delay)
