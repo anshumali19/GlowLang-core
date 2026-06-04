@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowLang Stack Visualizer — VM Frame Inspector</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #f0883e;
+    --accent3: #3fb950;
+    --danger: #f85149;
+    --purple: #bc8cff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+}
+
+/* Header */
+.header {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s;
+}
+.btn:hover { background: var(--border); }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover { background: #4090df; }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* Layout */
+.main-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr 300px;
+    height: calc(100vh - 57px);
+}
+
+/* Left panel: Controls & Step */
+.left-panel {
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+.panel-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+}
+.panel-section h3 {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+/* Step controls */
+.step-controls {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+.step-btn {
+    flex: 1;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    text-align: center;
+    transition: all 0.1s;
+}
+.step-btn:hover { background: var(--border); }
+.step-btn:active { transform: scale(0.95); }
+.step-btn.playing { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.step-info {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+.step-info span { color: var(--accent); font-weight: 700; }
+
+/* Bytecode list */
+.bytecode-list {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 12px;
+}
+.bc-item {
+    padding: 4px 16px;
+    display: flex;
+    gap: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+    border-left: 3px solid transparent;
+}
+.bc-item:hover { background: var(--bg-tertiary); }
+.bc-item.active {
+    background: rgba(88,166,255,0.1);
+    border-left-color: var(--accent);
+}
+.bc-item .addr { color: var(--text-muted); width: 32px; text-align: right; }
+.bc-item .op { color: var(--accent2); font-weight: 600; width: 80px; }
+.bc-item .args { color: var(--text); }
+
+/* Center panel: Stack visualization */
+.center-panel {
+    padding: 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Stack frames visual */
+.stack-visual {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 4px;
+}
+.stack-frame {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+.stack-frame:hover { border-color: var(--accent); }
+.stack-frame.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(88,166,255,0.15);
+}
+.stack-frame.recursive {
+    border-left: 3px solid var(--purple);
+}
+.frame-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.frame-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+}
+.frame-depth {
+    font-size: 10px;
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--text-muted);
+}
+.frame-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 16px;
+}
+.frame-locals {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.local-var {
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+.local-var .var-name { color: var(--accent3); }
+.local-var .var-val { color: var(--text); margin-left: 4px; }
+
+/* Operand stack */
+.op-stack {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    max-width: 300px;
+}
+.op-slot {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+}
+.op-slot .slot-idx { color: var(--text-muted); width: 24px; }
+.op-slot .slot-type { color: var(--purple); width: 60px; }
+.op-slot .slot-val { color: var(--text); font-weight: 600; }
+
+/* Recursion map */
+.recursion-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+}
+.recursion-tree {
+    position: relative;
+}
+.rec-node {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0 4px;
+}
+.rec-box {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--accent);
+    cursor: pointer;
+    transition: all 0.15s;
+    min-width: 50px;
+    text-align: center;
+}
+.rec-box:hover { border-color: var(--accent); }
+.rec-box.active { background: var(--accent); color: #fff; }
+.rec-children {
+    display: flex;
+    margin-top: 8px;
+    position: relative;
+}
+.rec-children::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    width: 1px;
+    height: 8px;
+    background: var(--border);
+}
+
+/* Right panel: Details */
+.right-panel {
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+}
+.detail-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+}
+.detail-row:last-child { border-bottom: none; }
+.detail-key { color: var(--text-muted); }
+.detail-val { color: var(--text); font-weight: 600; }
+
+/* Memory bar */
+.mem-bar-container {
+    margin-top: 8px;
+}
+.mem-bar {
+    height: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+}
+.mem-segment {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: #fff;
+    min-width: 20px;
+}
+.mem-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 10px;
+}
+.mem-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.mem-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+/* Speed slider */
+.speed-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.speed-control input[type="range"] {
+    width: 80px;
+    accent-color: var(--accent);
+}
+
+/* Tooltip */
+.tooltip {
+    position: fixed;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text);
+    pointer-events: none;
+    z-index: 1000;
+    max-width: 280px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: none;
+}
+</style>
+</head>
+<body>
+
+<div class="tooltip" id="tooltip"></div>
+
+<div class="header">
+    <h1>📚 GlowLang Stack Visualizer</h1>
+    <div class="header-actions">
+        <div class="speed-control">
+            <span>Speed:</span>
+            <input type="range" min="1" max="10" value="5" id="speedSlider">
+        </div>
+        <button class="btn" onclick="loadDemoTrace()">Load Demo</button>
+        <button class="btn" onclick="document.getElementById('fileInput').click()">📂 Load Trace</button>
+        <button class="btn btn-danger" onclick="resetVisualization()">↺ Reset</button>
+        <input type="file" id="fileInput" accept=".json" onchange="loadTraceFile(event)" style="display:none">
+    </div>
+</div>
+
+<div class="main-layout">
+    <!-- Left: Bytecode & Controls -->
+    <div class="left-panel">
+        <div class="panel-section">
+            <h3>Execution Controls</h3>
+            <div class="step-controls">
+                <div class="step-btn" onclick="stepBack()" title="Step Back">⏮</div>
+                <div class="step-btn" onclick="stepPrev()" title="Previous">◀</div>
+                <div class="step-btn" id="playBtn" onclick="togglePlay()" title="Play/Pause">▶</div>
+                <div class="step-btn" onclick="stepNext()" title="Next">▶</div>
+                <div class="step-btn" onclick="stepEnd()" title="Step to End">⏭</div>
+            </div>
+            <div class="step-info">
+                Step <span id="stepNum">0</span> / <span id="totalSteps">0</span>
+            </div>
+            <input type="range" id="stepSlider" min="0" max="0" value="0" 
+                   style="width:100%;accent-color:var(--accent);margin-bottom:8px" 
+                   oninput="goToStep(parseInt(this.value))">
+        </div>
+        
+        <div class="panel-section">
+            <h3>Bytecode</h3>
+        </div>
+        <div class="bytecode-list" id="bytecodeList"></div>
+    </div>
+
+    <!-- Center: Stack Visualization -->
+    <div class="center-panel">
+        <div>
+            <div class="section-title">📦 Call Stack <span style="color:var(--text-muted);font-weight:400" id="stackDepthLabel">(depth: 0)</span></div>
+            <div class="stack-visual" id="stackVisual"></div>
+        </div>
+        
+        <div>
+            <div class="section-title">🗃️ Operand Stack</div>
+            <div class="op-stack" id="opStack"></div>
+        </div>
+
+        <div>
+            <div class="section-title">🌳 Recursion Map</div>
+            <div class="recursion-container">
+                <div class="recursion-tree" id="recursionTree"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Details -->
+    <div class="right-panel">
+        <div class="panel-section">
+            <h3>Current Instruction</h3>
+            <div id="instrDetail"></div>
+        </div>
+        <div class="panel-section">
+            <h3>Selected Frame</h3>
+            <div id="frameDetail"></div>
+        </div>
+        <div class="panel-section">
+            <h3>VM State</h3>
+            <div id="vmState"></div>
+        </div>
+        <div class="panel-section">
+            <h3>Memory Layout</h3>
+            <div id="memLayout"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// State
+let traceData = null;
+let currentStep = 0;
+let playing = false;
+let playInterval = null;
+let selectedFrame = 0;
+
+// Tooltip
+const tooltip = document.getElementById('tooltip');
+function showTip(e, html) {
+    tooltip.innerHTML = html;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY + 12) + 'px';
+}
+function hideTip() { tooltip.style.display = 'none'; }
+document.addEventListener('mousemove', e => {
+    if (tooltip.style.display === 'block') {
+        tooltip.style.left = (e.clientX + 12) + 'px';
+        tooltip.style.top = (e.clientY + 12) + 'px';
+    }
+});
+
+// Step controls
+function stepNext() {
+    if (!traceData || currentStep >= traceData.steps.length - 1) return;
+    currentStep++;
+    renderStep();
+}
+function stepPrev() {
+    if (!traceData || currentStep <= 0) return;
+    currentStep--;
+    renderStep();
+}
+function stepBack() { currentStep = 0; renderStep(); }
+function stepEnd() {
+    if (!traceData) return;
+    currentStep = traceData.steps.length - 1;
+    renderStep();
+}
+function goToStep(n) { currentStep = n; renderStep(); }
+
+function togglePlay() {
+    playing = !playing;
+    const btn = document.getElementById('playBtn');
+    if (playing) {
+        btn.classList.add('playing');
+        btn.textContent = '⏸';
+        const speed = 11 - document.getElementById('speedSlider').value;
+        playInterval = setInterval(() => {
+            if (currentStep >= traceData.steps.length - 1) {
+                togglePlay();
+                return;
+            }
+            stepNext();
+        }, speed * 100);
+    } else {
+        btn.classList.remove('playing');
+        btn.textContent = '▶';
+        clearInterval(playInterval);
+    }
+}
+
+function resetVisualization() {
+    if (playing) togglePlay();
+    currentStep = 0;
+    if (traceData) renderStep();
+}
+
+// Render everything for current step
+function renderStep() {
+    if (!traceData) return;
+    const step = traceData.steps[currentStep];
+    
+    document.getElementById('stepNum').textContent = currentStep;
+    document.getElementById('totalSteps').textContent = traceData.steps.length - 1;
+    document.getElementById('stepSlider').value = currentStep;
+    document.getElementById('stepSlider').max = traceData.steps.length - 1;
+    
+    renderBytecode(step);
+    renderCallStack(step);
+    renderOpStack(step);
+    renderInstrDetail(step);
+    renderFrameDetail(step);
+    renderVMState(step);
+    renderMemLayout(step);
+    renderRecursionMap(step);
+}
+
+function renderBytecode(step) {
+    const list = document.getElementById('bytecodeList');
+    const bytecodes = traceData.bytecodes || [];
+    list.innerHTML = bytecodes.map((bc, i) => `
+        <div class="bc-item ${i === step.pc ? 'active' : ''}" onclick="goToStepByPC(${i})">
+            <span class="addr">${i}</span>
+            <span class="op">${bc.op}</span>
+            <span class="args">${bc.args || ''}</span>
+        </div>
+    `).join('');
+    
+    // Scroll active into view
+    const active = list.querySelector('.active');
+    if (active) active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function goToStepByPC(pc) {
+    const idx = traceData.steps.findIndex(s => s.pc === pc);
+    if (idx >= 0) { currentStep = idx; renderStep(); }
+}
+
+function renderCallStack(step) {
+    const visual = document.getElementById('stackVisual');
+    const frames = step.callStack || [];
+    document.getElementById('stackDepthLabel').textContent = `(depth: ${frames.length})`;
+    
+    visual.innerHTML = frames.map((f, i) => `
+        <div class="stack-frame ${i === selectedFrame ? 'selected' : ''} ${f.recursive ? 'recursive' : ''}" 
+             onclick="selectFrame(${i})">
+            <div class="frame-header">
+                <span class="frame-name">${f.name}</span>
+                <span class="frame-depth">#${i}</span>
+            </div>
+            <div class="frame-meta">
+                <span>PC: ${f.pc}</span>
+                <span>Locals: ${f.locals ? f.locals.length : 0}</span>
+                ${f.recursive ? '<span style="color:var(--purple)">↻ recursive</span>' : ''}
+            </div>
+            ${f.locals && f.locals.length > 0 ? `
+                <div class="frame-locals">
+                    ${f.locals.map(l => `
+                        <div class="local-var">
+                            <span class="var-name">${l.name}</span> =
+                            <span class="var-val">${formatValue(l.value)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `).join('');
+}
+
+function selectFrame(i) {
+    selectedFrame = i;
+    renderStep();
+}
+
+function formatValue(v) {
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">none</span>';
+    if (typeof v === 'string') return `"${v}"`;
+    if (Array.isArray(v)) return `[${v.length} items]`;
+    if (typeof v === 'object') return `{${Object.keys(v).length} keys}`;
+    return String(v);
+}
+
+function renderOpStack(step) {
+    const stack = document.getElementById('opStack');
+    const ops = step.opStack || [];
+    
+    stack.innerHTML = ops.map((item, i) => `
+        <div class="op-slot">
+            <span class="slot-idx">${i}</span>
+            <span class="slot-type">${item.type}</span>
+            <span class="slot-val">${formatValue(item.value)}</span>
+        </div>
+    `).join('') || '<div style="color:var(--text-muted);font-size:12px;padding:8px">(empty)</div>';
+}
+
+function renderInstrDetail(step) {
+    const bc = traceData.bytecodes[step.pc] || {};
+    document.getElementById('instrDetail').innerHTML = `
+        <div class="detail-row"><span class="detail-key">Opcode</span><span class="detail-val" style="color:var(--accent2)">${bc.op || '—'}</span></div>
+        <div class="detail-row"><span class="detail-key">Address</span><span class="detail-val">${step.pc}</span></div>
+        <div class="detail-row"><span class="detail-key">Arguments</span><span class="detail-val">${bc.args || '—'}</span></div>
+        <div class="detail-row"><span class="detail-key">Description</span><span class="detail-val" style="font-weight:400;font-size:11px">${bc.desc || '—'}</span></div>
+    `;
+}
+
+function renderFrameDetail(step) {
+    const frames = step.callStack || [];
+    const f = frames[selectedFrame];
+    if (!f) {
+        document.getElementById('frameDetail').innerHTML = '<div style="color:var(--text-muted);font-size:12px">No frame selected</div>';
+        return;
+    }
+    
+    let html = `
+        <div class="detail-row"><span class="detail-key">Function</span><span class="detail-val" style="color:var(--accent)">${f.name}</span></div>
+        <div class="detail-row"><span class="detail-key">Return PC</span><span class="detail-val">${f.returnPc || '—'}</span></div>
+        <div class="detail-row"><span class="detail-key">Stack Base</span><span class="detail-val">${f.stackBase || 0}</span></div>
+        <div class="detail-row"><span class="detail-key">Recursive</span><span class="detail-val">${f.recursive ? 'Yes ↻' : 'No'}</span></div>
+    `;
+    
+    if (f.locals && f.locals.length > 0) {
+        html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Local Variables</div>';
+        f.locals.forEach(l => {
+            html += `<div class="detail-row"><span class="detail-key" style="color:var(--accent3)">${l.name}</span><span class="detail-val">${formatValue(l.value)}</span></div>`;
+        });
+    }
+    
+    document.getElementById('frameDetail').innerHTML = html;
+}
+
+function renderVMState(step) {
+    document.getElementById('vmState').innerHTML = `
+        <div class="detail-row"><span class="detail-key">Program Counter</span><span class="detail-val">${step.pc}</span></div>
+        <div class="detail-row"><span class="detail-key">Stack Depth</span><span class="detail-val">${(step.callStack || []).length}</span></div>
+        <div class="detail-row"><span class="detail-key">Op Stack Size</span><span class="detail-val">${(step.opStack || []).length}</span></div>
+        <div class="detail-row"><span class="detail-key">Heap Used</span><span class="detail-val">${step.heapUsed || '—'}</span></div>
+        <div class="detail-row"><span class="detail-key">GC Gen</span><span class="detail-val">${step.gcGen || 0}</span></div>
+        <div class="detail-row"><span class="detail-key">JIT Compiled</span><span class="detail-val">${step.jitCompiled ? 'Yes ⚡' : 'No'}</span></div>
+    `;
+}
+
+function renderMemLayout(step) {
+    const mem = step.memory || { stack: 30, heap: 45, code: 15, other: 10 };
+    const colors = { stack: '#58a6ff', heap: '#3fb950', code: '#f0883e', other: '#8b949e' };
+    
+    document.getElementById('memLayout').innerHTML = `
+        <div class="mem-bar-container">
+            <div class="mem-bar">
+                ${Object.entries(mem).map(([k,v]) => `
+                    <div class="mem-segment" style="width:${v}%;background:${colors[k] || '#8b949e'}">${v}%</div>
+                `).join('')}
+            </div>
+            <div class="mem-legend">
+                ${Object.entries(mem).map(([k,v]) => `
+                    <div class="mem-legend-item">
+                        <div class="mem-dot" style="background:${colors[k] || '#8b949e'}"></div>
+                        <span>${k}: ${v}%</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderRecursionMap(step) {
+    const container = document.getElementById('recursionTree');
+    const recData = step.recursion || traceData.recursion;
+    
+    if (!recData) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:12px">No recursion detected at this step</div>';
+        return;
+    }
+    
+    function renderNode(node, depth) {
+        const isActive = step.callStack && step.callStack.some(f => f.name === node.name && f.recursionId === node.id);
+        let html = `<div class="rec-node">`;
+        html += `<div class="rec-box ${isActive ? 'active' : ''}" 
+                     onmouseenter="showTip(event, '<b>${node.name}</b>(${node.args || ''})<br>Depth: ${depth}<br>Return: ${node.result !== undefined ? node.result : 'pending'}')"
+                     onmouseleave="hideTip()">
+                    ${node.name}(${node.args || ''})
+                 </div>`;
+        if (node.children && node.children.length > 0) {
+            html += `<div class="rec-children">`;
+            node.children.forEach(c => { html += renderNode(c, depth + 1); });
+            html += `</div>`;
+        }
+        html += `</div>`;
+        return html;
+    }
+    
+    container.innerHTML = renderNode(recData, 0);
+}
+
+// Demo data
+function loadDemoTrace() {
+    traceData = {
+        bytecodes: [
+            { op: 'PUSH_CONST', args: '5', desc: 'Push integer constant 5' },
+            { op: 'STORE_LOCAL', args: 'n', desc: 'Store top of stack to local variable n' },
+            { op: 'LOAD_LOCAL', args: 'n', desc: 'Load local variable n onto stack' },
+            { op: 'PUSH_CONST', args: '1', desc: 'Push integer constant 1' },
+            { op: 'CMP_LE', args: '', desc: 'Compare: is top-1 <= top?' },
+            { op: 'JUMP_IF', args: '10', desc: 'Jump to addr 10 if truthy' },
+            { op: 'LOAD_LOCAL', args: 'n', desc: 'Load n for recursive call' },
+            { op: 'PUSH_CONST', args: '1', desc: 'Push 1 for subtraction' },
+            { op: 'SUB', args: '', desc: 'Subtract: n - 1' },
+            { op: 'CALL', args: 'fib, 1', desc: 'Call fib with 1 argument' },
+            { op: 'LOAD_LOCAL', args: 'n', desc: 'Load n for second call' },
+            { op: 'PUSH_CONST', args: '2', desc: 'Push 2 for subtraction' },
+            { op: 'SUB', args: '', desc: 'Subtract: n - 2' },
+            { op: 'CALL', args: 'fib, 1', desc: 'Call fib with 1 argument' },
+            { op: 'ADD', args: '', desc: 'Add: fib(n-1) + fib(n-2)' },
+            { op: 'RETURN', args: '', desc: 'Return result' },
+            { op: 'PUSH_CONST', args: '1', desc: 'Base case: push 1' },
+            { op: 'RETURN', args: '', desc: 'Return base case' }
+        ],
+        steps: generateFibSteps(),
+        recursion: {
+            name: 'fib', args: '5', id: 0,
+            children: [
+                {
+                    name: 'fib', args: '4', id: 1,
+                    children: [
+                        {
+                            name: 'fib', args: '3', id: 2,
+                            children: [
+                                { name: 'fib', args: '2', id: 3, result: 1, children: [
+                                    { name: 'fib', args: '1', id: 7, result: 1, children: [] },
+                                    { name: 'fib', args: '0', id: 8, result: 0, children: [] }
+                                ]},
+                                { name: 'fib', args: '1', id: 4, result: 1, children: [] }
+                            ], result: 2
+                        },
+                        {
+                            name: 'fib', args: '2', id: 5, result: 1, children: [
+                                { name: 'fib', args: '1', id: 9, result: 1, children: [] },
+                                { name: 'fib', args: '0', id: 10, result: 0, children: [] }
+                            ]
+                        }
+                    ], result: 3
+                },
+                {
+                    name: 'fib', args: '3', id: 6,
+                    children: [
+                        { name: 'fib', args: '2', id: 11, result: 1, children: [
+                            { name: 'fib', args: '1', id: 12, result: 1, children: [] },
+                            { name: 'fib', args: '0', id: 13, result: 0, children: [] }
+                        ]},
+                        { name: 'fib', args: '1', id: 14, result: 1, children: [] }
+                    ], result: 2
+                }
+            ], result: 5
+        }
+    };
+    
+    currentStep = 0;
+    selectedFrame = 0;
+    renderStep();
+}
+
+function generateFibSteps() {
+    const steps = [];
+    // Simulate stepping through fibonacci(5)
+    const traces = [
+        { pc: 0, callStack: [{ name: 'main', pc: 0, locals: [], stackBase: 0, recursive: false }], opStack: [], heapUsed: '1.2 KB', gcGen: 0 },
+        { pc: 0, callStack: [{ name: 'main', pc: 0, locals: [], stackBase: 0, recursive: false }], opStack: [{ type: 'int', value: 5 }], heapUsed: '1.2 KB', gcGen: 0 },
+        { pc: 1, callStack: [{ name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false }], opStack: [], heapUsed: '1.2 KB', gcGen: 0 },
+        { pc: 9, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 2, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [{ type: 'int', value: 5 }], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 4, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [{ type: 'int', value: 5 }, { type: 'int', value: 1 }], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 8, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [{ type: 'int', value: 4 }], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 9, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 4 }], returnPc: 14, stackBase: 2, recursive: true, recursionId: 1 }
+        ], opStack: [], heapUsed: '1.6 KB', gcGen: 0 },
+        { pc: 9, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 4 }], returnPc: 14, stackBase: 2, recursive: true },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 3 }], returnPc: 14, stackBase: 3, recursive: true, recursionId: 2 }
+        ], opStack: [], heapUsed: '1.8 KB', gcGen: 0 },
+        { pc: 9, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 4 }], returnPc: 14, stackBase: 2, recursive: true },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 3 }], returnPc: 14, stackBase: 3, recursive: true },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 2 }], returnPc: 14, stackBase: 4, recursive: true, recursionId: 3 }
+        ], opStack: [], heapUsed: '2.0 KB', gcGen: 0 },
+        { pc: 16, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 4 }], returnPc: 14, stackBase: 2, recursive: true },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 3 }], returnPc: 14, stackBase: 3, recursive: true }
+        ], opStack: [{ type: 'int', value: 1 }], heapUsed: '1.8 KB', gcGen: 0, jitCompiled: false },
+        { pc: 16, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 4 }], returnPc: 14, stackBase: 2, recursive: true }
+        ], opStack: [{ type: 'int', value: 2 }], heapUsed: '1.6 KB', gcGen: 0 },
+        { pc: 16, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [{ type: 'int', value: 3 }], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 14, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false },
+            { name: 'fib', pc: 2, locals: [{ name: 'n', value: 5 }], returnPc: 15, stackBase: 1, recursive: false }
+        ], opStack: [{ type: 'int', value: 3 }, { type: 'int', value: 2 }], heapUsed: '1.4 KB', gcGen: 0 },
+        { pc: 15, callStack: [
+            { name: 'main', pc: 0, locals: [{ name: 'n', value: 5 }], stackBase: 0, recursive: false }
+        ], opStack: [{ type: 'int', value: 5 }], heapUsed: '1.2 KB', gcGen: 1, jitCompiled: true },
+    ];
+    
+    return traces;
+}
+
+// File loading
+function loadTraceFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            traceData = JSON.parse(e.target.result);
+            currentStep = 0;
+            selectedFrame = 0;
+            renderStep();
+        } catch (err) {
+            alert('Invalid trace file: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'n') stepNext();
+    if (e.key === 'ArrowLeft' || e.key === 'p') stepPrev();
+    if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+    if (e.key === 'Home') stepBack();
+    if (e.key === 'End') stepEnd();
+});
+
+// Init
+window.addEventListener('load', loadDemoTrace);
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+show "[Data Structures] Using lists and dictionaries..."
+
+let lst = [10, 20, 30]
+let d = {"name": "GlowLang", "types": lst}
+
+show "Dictionary: ", d
+show "First element in dictionary list: ", d["types"][0]
+
+let sum = 0
+for each val in d["types"]:
+    sum = sum + val
+end
+show "Sum of list: ", sum

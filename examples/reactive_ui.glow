@@ -1,0 +1,18 @@
+show "[Reactive UI] Initializing reactive signal monitors..."
+
+let button_clicked = 0
+let click_count = 0
+
+whenever button_clicked > 0:
+    click_count = click_count + 1
+    show "[UI EVENT] Click event detected! Click count: ", click_count
+    button_clicked = 0
+end
+
+show "Simulating user clicks..."
+button_clicked = 1
+os.sleep(50)
+button_clicked = 1
+os.sleep(50)
+button_clicked = 1
+os.sleep(50)

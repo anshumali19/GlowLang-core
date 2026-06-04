@@ -1,0 +1,22 @@
+show "[Concurrency Demo] Starting concurrent workers..."
+
+let shared_data = [0]
+
+func worker(id):
+    let i = 0
+    while i < 5:
+        os.sleep(10)
+        shared_data[0] = shared_data[0] + 1
+        show "Worker ", id, " incremented sum: ", shared_data[0]
+        i = i + 1
+    end
+end
+
+let i = 0
+while i < 3:
+    spawn worker(i)
+    i = i + 1
+end
+
+os.sleep(150)
+show "Final shared sum: ", shared_data[0]

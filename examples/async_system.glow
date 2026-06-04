@@ -1,0 +1,18 @@
+show "[Async System] Initializing asynchronous scheduler..."
+
+func worker(id, delay):
+    let i = 0
+    while i < 3:
+        os.sleep(delay)
+        show "Worker ", id, " tick: ", i
+        i = i + 1
+    end
+    show "Worker ", id, " finished"
+end
+
+spawn worker(1, 10)
+spawn worker(2, 20)
+
+show "[Async System] Tasks spawned. Waiting for completion..."
+os.sleep(100)
+show "[Async System] All tasks completed."

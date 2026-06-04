@@ -1,0 +1,7 @@
+import "lib/json_utils.glow"
+
+show "[Package Example] Using JSON utilities package..."
+let data = {"name": "GlowLang", "version": 1.0, "details": {"active": true}}
+let helper = JSONHelper(data)
+show "Name: ", helper.get("name")
+show "Active status: ", helper.get("details.active")
