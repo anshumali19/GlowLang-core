@@ -207,6 +207,8 @@ extern Value jit_call_helper_name(const char *name, int argc, Value *args, struc
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
 extern Value packed_array_get_jit(Value v_pa, Value v_idx);
 extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
+extern Value glow_index_jit(Value coll, Value v_idx);
+extern void glow_store_index_jit(Value coll, Value v_idx, Value v_val);
 extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
 extern Value value_from_double(double d);
 

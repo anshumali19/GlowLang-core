@@ -23,6 +23,8 @@ static int compiling_line = 0;
 Bytecode *compiling_bc = NULL;
 Class *last_compiling_class = NULL;
 Trait *last_compiling_trait = NULL;
+static const char *compiling_class_name = NULL;
+static const char *compiling_trait_name = NULL;
 
 Node* node_new(NodeType t) { Node *n = arena_alloc(sizeof(Node)); memset(n, 0, sizeof(Node)); n->type = t; n->line = line_num; return n; }
 Node* newIntNode(int64_t v) { Node *n = node_new(NODE_INT_LIT); n->value = value_int(v); return n; }
@@ -187,7 +189,7 @@ static void analyze_escapes(Bytecode *bc) {
     if (!bc) return;
     unsigned char *escapes = calloc(bc->local_count + 256, 1);
     
-    // Pass 1: Identify all registers that escape
+    // Pass 1: Identify all registers that escape directly
     for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
         switch (pc->op) {
@@ -209,6 +211,46 @@ static void analyze_escapes(Bytecode *bc) {
                 break;
             }
             default: break;
+        }
+    }
+
+    // Pass 1.5: Backward propagation of escapes (run multiple iterations to handle dependencies)
+    for (int iter = 0; iter < 10; iter++) {
+        for (int i = bc->count - 1; i >= 0; i--) {
+            Instruction *pc = &bc->code[i];
+            switch (pc->op) {
+                case OP_MOVE:
+                    if (escapes[pc->r0]) escapes[pc->r1] = 1;
+                    break;
+                case OP_LIST_LITERAL:
+                    if (escapes[pc->r0]) {
+                        for (int j = 0; j < pc->arg; j++) {
+                            escapes[pc->r1 + j] = 1;
+                        }
+                    }
+                    break;
+                case OP_DICT_LITERAL:
+                    if (escapes[pc->r0]) {
+                        for (int j = 0; j < 2 * pc->arg; j++) {
+                            escapes[pc->r1 + j] = 1;
+                        }
+                    }
+                    break;
+                case OP_STORE_INDEX:
+                    // If the collection object escapes, then the value stored inside it also escapes.
+                    if (escapes[pc->r0]) escapes[pc->r2] = 1;
+                    break;
+                case OP_SET_PROPERTY:
+                    // If the object escapes, the value assigned to its property escapes.
+                    if (escapes[pc->r0]) escapes[pc->r1] = 1;
+                    break;
+                case OP_LIST_PUSH:
+                    // If the list escapes, the pushed item escapes.
+                    if (escapes[pc->r0]) escapes[pc->r1] = 1;
+                    break;
+                default:
+                    break;
+            }
         }
     }
     
@@ -546,7 +588,17 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_FUNC_DEF: {
-            FuncEntry *fe = func_table_add(n->name); 
+            const char *func_name = n->name;
+            if (compiling_class_name) {
+                char buf[512];
+                snprintf(buf, sizeof(buf), "%s::%s", compiling_class_name, n->name);
+                func_name = intern_string(buf);
+            } else if (compiling_trait_name) {
+                char buf[512];
+                snprintf(buf, sizeof(buf), "%s::%s", compiling_trait_name, n->name);
+                func_name = intern_string(buf);
+            }
+            FuncEntry *fe = func_table_add(func_name); 
             if (fe->body) bc_free(fe->body);
             if (fe->specs) {
                 for (int i=0; i<fe->spec_count; i++) {
@@ -561,7 +613,7 @@ static void compile_stmt(Node *n) {
             }
             if (fe->local_names) free(fe->local_names);
             fe->local_names = NULL; fe->local_count = 0; fe->local_capacity = 0;
-
+ 
             fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; 
             FuncEntry *pf = compiling_func; compiling_func = fe;
@@ -581,7 +633,7 @@ static void compile_stmt(Node *n) {
             optimize_bytecode(compiling_bc);
             analyze_escapes(compiling_bc);
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free;
-            bc_emit(compiling_bc, (last_compiling_class || last_compiling_trait) ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)n->name); 
+            bc_emit(compiling_bc, (last_compiling_class || last_compiling_trait) ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)func_name); 
             break;
         }
         case NODE_SHOW: {
@@ -622,6 +674,8 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_CLASS: {
+            const char *old_class = compiling_class_name;
+            compiling_class_name = n->name;
             Class *pc = last_compiling_class; last_compiling_class = (Class*)1;
             if (n->parent_name) {
                 int r = next_free_reg++;
@@ -630,9 +684,21 @@ static void compile_stmt(Node *n) {
                 compiling_bc->code[idx].r0 = r;
             }
             bc_emit(compiling_bc, OP_CLASS_DEF, n->parent_name ? 1 : 0, (intptr_t)n->name);
-            compile_stmt(n->left); last_compiling_class = pc; break;
+            compile_stmt(n->left); 
+            last_compiling_class = pc; 
+            compiling_class_name = old_class;
+            break;
         }
-        case NODE_TRAIT: { Trait *pt = last_compiling_trait; last_compiling_trait = (Trait*)1; bc_emit(compiling_bc, OP_TRAIT_DEF, 0, (intptr_t)n->name); compile_stmt(n->left); last_compiling_trait = pt; break; }
+        case NODE_TRAIT: { 
+            const char *old_trait = compiling_trait_name;
+            compiling_trait_name = n->name;
+            Trait *pt = last_compiling_trait; last_compiling_trait = (Trait*)1; 
+            bc_emit(compiling_bc, OP_TRAIT_DEF, 0, (intptr_t)n->name); 
+            compile_stmt(n->left); 
+            last_compiling_trait = pt; 
+            compiling_trait_name = old_trait;
+            break; 
+        }
         case NODE_USE_TRAIT: bc_emit(compiling_bc, OP_USE_TRAIT, 0, (intptr_t)n->name); break;
         case NODE_TRY_CATCH: {
             int start_pc = compiling_bc->count;
