@@ -560,15 +560,27 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             
             // 1. PIC Lookup
             if (pc->cache[0].key == (void*)sig && pc->cache[0].val) {
-                typedef Value (*JITFunc)(Value *R, int *pc_idx);
-                JITFunc f = (JITFunc)pc->cache[0].val;
-                int deopt_pc = 0;
-                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
-                if (IS_DEOPT(res)) {
-                    res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                bool cache_valid = false;
+                for (int i = 0; i < fe->spec_count; i++) {
+                    if (fe->specs[i].jit_code == (void*)pc->cache[0].val) {
+                        cache_valid = true;
+                        break;
+                    }
                 }
-                if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
-                pc++; DISPATCH();
+                if (!cache_valid) {
+                    pc->cache[0].key = NULL;
+                    pc->cache[0].val = 0;
+                } else {
+                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                    JITFunc f = (JITFunc)pc->cache[0].val;
+                    int deopt_pc = 0;
+                    Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (IS_DEOPT(res)) {
+                        res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                    }
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                    pc++; DISPATCH();
+                }
             }
 
             void *jit = func_get_specialization(fe, sig);
@@ -810,8 +822,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     }
     l_OP_METHOD_DEF: {
         FuncEntry *fe = func_get((const char*)pc->ptr);
-        if(vm_last_class) dict_set(vm_last_class->methods, fe->name, bound_method_new(value_none(), fe));
-        else if(vm_last_trait) dict_set(vm_last_trait->methods, fe->name, bound_method_new(value_none(), fe));
+        const char *mname = fe->name;
+        const char *colon = strstr(mname, "::");
+        if (colon) mname = colon + 2;
+        if(vm_last_class) dict_set(vm_last_class->methods, mname, bound_method_new(value_none(), fe));
+        else if(vm_last_trait) dict_set(vm_last_trait->methods, mname, bound_method_new(value_none(), fe));
         pc++; DISPATCH();
     }
     l_OP_GET_PROPERTY: {
