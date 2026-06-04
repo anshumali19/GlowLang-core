@@ -1,0 +1,8 @@
+import "lib/db.glow"
+
+let orm = Model("test.db")
+orm.create_table("users", {"name": "TEXT", "age": "INTEGER"})
+orm.insert("users", {"name": "Alice", "age": 30})
+
+let users = orm.find_all("users")
+show "Database Query Successful"

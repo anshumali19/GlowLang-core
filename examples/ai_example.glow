@@ -1,0 +1,14 @@
+import "lib/ai.glow"
+
+show "[GlowAI] Initializing Neural Network..."
+let net = SimpleNet()
+
+let input = tensor.zeros(10)
+
+show "[GlowAI] Running inference..."
+let start = os.time()
+let result = net.predict(input)
+let end_time = os.time()
+
+show "Prediction Result: ", result
+show "Inference Time: ", (end_time - start), "s"

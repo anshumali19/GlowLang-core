@@ -1,0 +1,96 @@
+show "===================================================="
+show "          GLOWLANG JIT INVALIDATION TESTING"
+show "===================================================="
+
+# 1. Type Guard Fallback & Deoptimization Test
+show "1. Testing basic type guard invalidation..."
+
+func add_values(a, b):
+    return a + b
+end
+
+# Warm up JIT with integer inputs (15 iterations)
+let i = 0
+while i < 15:
+    let temp = add_values(i, 2)
+    i = i + 1
+end
+
+# Call with float values. The JIT type guard should fail,
+# deoptimize back to interpreter, and run correctly.
+let res_float = add_values(1.5, 2.5)
+show "   Result of float addition (expected 4): ", res_float
+
+# Call with string values.
+let res_string = add_values("Hello ", "World")
+show "   Result of string addition (expected Hello World): ", res_string
+
+
+# 2. Polymorphic Shape Mutation & Property Guard Invalidation Test
+show "2. Testing shape mutation and property guard invalidation..."
+
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+end
+
+class Point3D:
+    func init(x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+    end
+end
+
+func get_coord_x(obj):
+    return obj.x
+end
+
+# Warm up get_coord_x with Point instances to JIT compile it (15 iterations)
+let j = 0
+while j < 15:
+    let p = Point(j * 1.0, j * 2.0)
+    let val = get_coord_x(p)
+    j = j + 1
+end
+
+# Call with Point3D instance. The shape guard should detect different shape,
+# invalidate/deoptimize, and correctly fetch the x coordinate.
+let p3d = Point3D(42.0, 43.0, 44.0)
+let res_x = get_coord_x(p3d)
+show "   Result of Point3D x-coordinate (expected 42): ", res_x
+
+
+# 3. Dynamic Property Injection Invalidation
+show "3. Testing dynamic property injection guard..."
+
+func get_dynamic_prop(obj):
+    return obj.extra
+end
+
+# Create instances of Point
+let pts = []
+let k = 0
+while k < 15:
+    let p = Point(k * 1.0, k * 2.0)
+    p.extra = k * 10.0
+    pts = pts + [p]
+    k = k + 1
+end
+
+# Warm up get_dynamic_prop with these points
+for each p in pts:
+    let val = get_dynamic_prop(p)
+end
+
+# Now create a point but inject a different type of property, or access it
+let p_new = Point(1.0, 2.0)
+p_new.extra = "dynamic_string"
+let res_dynamic = get_dynamic_prop(p_new)
+show "   Result of dynamic string property (expected dynamic_string): ", res_dynamic
+
+show "===================================================="
+show "          JIT INVALIDATION TESTS COMPLETED"
+show "===================================================="
