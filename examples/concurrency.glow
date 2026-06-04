@@ -2,7 +2,7 @@ show "[Concurrency Demo] Starting concurrent workers..."
 
 let shared_data = [0]
 
-func worker(id):
+action worker(id):
     let i = 0
     while i < 5:
         os.sleep(10)

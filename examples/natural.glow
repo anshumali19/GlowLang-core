@@ -1,57 +1,89 @@
-/* GlowLang Natural Library - Concise Edition */
+/* GlowLang Natural Language Syntax Showcase & Library */
 
-func root(n):
-    return sqrt(n)
+blueprint Calculator:
+    action init(start_value):
+        self.value = start_value
+    end
+
+    action add(n):
+        self.value = self.value + n
+        return self.value
+    end
+
+    action is_even():
+        let r = self.value % 2
+        when r is 0:
+            return true
+        otherwise:
+            return false
+        end
+    end
 end
 
-func dist(n):
-    return abs(n)
-end
-
-func rem(n, d):
+action rem(n, d):
     return n % d
 end
 
-func even(n):
-    when rem(n, 2) == 0:
-        return true
-    otherwise:
-        return false
-    end
-end
-
-func odd(n):
-    return not even(n)
-end
-
-func avg(list):
+action avg(list):
     let total = 0
     let n = len(list)
-    for each item in list:
-        total += item
+    every each item in list:
+        total = total + item
     end
-    when n == 0:
+    when n is 0:
         return 0
     end
     return total / n
 end
 
-func apply(task, list):
-    let res = []
-    for each item in list:
-        append(res, task(item))
-    end
-    return res
-end
-
-func keep(test, list):
-    let res = []
-    for each item in list:
-        when test(item):
-            append(res, item)
+action sum_evens(list):
+    let total = 0
+    every each item in list:
+        let r = rem(item, 2)
+        when r is 0:
+            total = total + item
         end
     end
-    return res
+    return total
 end
 
-show "Natural lib loaded."
+action find_first_multiple_of_three(list):
+    every each item in list:
+        let r = rem(item, 3)
+        when r is 0:
+            return item
+        end
+    end
+    return none
+end
+
+# Verification and display of natural language features
+show "--- GlowLang Natural Language Syntax Showcase ---"
+
+let calc = Calculator(10)
+show "Calculator initial value: ", calc.value
+calc.add(5)
+show "Calculator after adding 5: ", calc.value
+show "Is calculator value even? ", calc.is_even()
+
+calc.add(1)
+show "Calculator after adding 1: ", calc.value
+show "Is calculator value even now? ", calc.is_even()
+
+let numbers = [1, 2, 3, 4, 5, 6]
+show "Numbers: ", numbers
+show "Average: ", avg(numbers)
+show "Sum of evens (using conditional filter): ", sum_evens(numbers)
+show "First multiple of 3 (using direct return): ", find_first_multiple_of_three(numbers)
+
+let val = 4
+let r = rem(val, 2)
+when r is 0:
+    show "4 is indeed even (using 'is')"
+eif r is not 0:
+    show "This should not print"
+otherwise:
+    show "Fallback"
+end
+
+show "Natural syntax verified successfully!"

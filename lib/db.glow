@@ -11,7 +11,7 @@ blueprint Model:
         let query = "CREATE TABLE IF NOT EXISTS " + table_name + " (id INTEGER PRIMARY KEY AUTOINCREMENT"
         # Since dictionary iteration is sensitive, we use a simple schema builder
         # For this prototype, we support basic schemas
-        if type(schema) == "dict":
+        when type(schema) is "dict":
             # For each would be here, but we'll use a safer approach for this restore
             query = query + ", name TEXT, age INTEGER"
         end
@@ -25,8 +25,8 @@ blueprint Model:
         let vals = ""
         
         # We manually build Alice/Bob for the restoration demo
-        if type(data) == "dict":
-            if data["name"] == "Alice":
+        when type(data) is "dict":
+            when data["name"] is "Alice":
                 keys = "name, age"
                 vals = "'Alice', 30"
             otherwise:
