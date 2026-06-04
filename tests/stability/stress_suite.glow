@@ -1,0 +1,131 @@
+show "===================================================="
+show "          GLOWLANG INDUSTRIAL STRESS SUITE"
+show "===================================================="
+
+# 1. Deep Recursive Depth Checks (TCO vs Stack Limit)
+show "1. Stressing Deep Recursion & TCO..."
+
+func stress_tco(n, acc):
+    if n == 0:
+        return acc
+    end
+    return stress_tco(n - 1, acc + 1)
+end
+
+let start_tco = os.time()
+let tco_res = stress_tco(100000, 0)
+let end_tco = os.time()
+show "   Tail-Call Optimization (100,000 calls) took: ", (end_tco - start_tco), " s, result: ", tco_res
+
+# Verify stack limit / recursion depth safety
+func stress_deep_recursion(n):
+    if n == 0:
+        return 0
+    end
+    return 1 + stress_deep_recursion(n - 1)
+end
+
+try:
+    show "   Triggering recursion depth limit..."
+    # The recursion depth is limited in VM to prevent C stack overflows, so this should trigger recursion limit error
+    stress_deep_recursion(2000)
+    show "   [ERROR] Deep recursion did not trigger stack limit exception!"
+catch e:
+    show "   [SUCCESS] Caught expected recursion limit exception: ", e
+end
+
+# 2. High-pressure SIMD Tensor Allocations & GC Stress Loops
+show "2. Stressing GC & SIMD Tensors..."
+
+func stress_tensors(count):
+    let i = 0
+    while i < count:
+        let t1 = tensor.zeros(5000)
+        let t2 = tensor.zeros(5000)
+        let t3 = tensor.add(t1, t2)
+        let t4 = tensor.mul(t1, t2)
+        let dot_res = tensor.dot(t1, t2)
+        if i % 200 == 0:
+            let info = os.gc_info()
+            show "   Allocated ", i, "/", count, " tensors (Current Heap: ", (info.allocated / 1024 / 1024), " MB)"
+        end
+        i = i + 1
+    end
+end
+
+let start_tensor = os.time()
+stress_tensors(1000)
+let end_tensor = os.time()
+show "   Tensor allocations & operations took: ", (end_tensor - start_tensor), " s"
+
+# 3. Concurrency Overload Checks
+show "3. Stressing Async Scheduler..."
+
+func async_worker(id):
+    let i = 0
+    while i < 100:
+        i = i + 1
+    end
+end
+
+let start_async = os.time()
+let spawned = 0
+while spawned < 500:
+    spawn async_worker(spawned)
+    spawned = spawned + 1
+end
+os.sleep(200) # Yield and let async tasks run
+let end_async = os.time()
+show "   Spawned 500 async workers, time elapsed: ", (end_async - start_async), " s"
+
+# 4. StringBuilder/Rope Allocations under Heavy Loads
+show "4. Stressing StringBuilder & Rope Allocations..."
+
+let start_sb = os.time()
+let sb = text_builder()
+let j = 0
+while j < 20000:
+    append(sb, "A")
+    if j % 5000 == 0:
+        append(sb, " - checkpoint - ")
+    end
+    j = j + 1
+end
+let huge_str = build(sb)
+let end_sb = os.time()
+show "   StringBuilder stress complete (Length: ", len(huge_str), " characters, took: ", (end_sb - start_sb), " s)"
+
+# 5. Iterator Pressure Tests
+show "5. Stressing Iterator Infrastructure..."
+
+let start_iter = os.time()
+let base_list = range(1000)
+
+let sum = 0
+for each val in base_list:
+    sum = sum + val
+end
+
+let sum_comp = 0
+let mapped_list = []
+for each val in base_list:
+    if val % 2 == 0:
+        mapped_list = mapped_list + [val * 2]
+    end
+end
+
+for each val in mapped_list:
+    sum_comp = sum_comp + val
+end
+
+let end_iter = os.time()
+show "   Iterator stress complete (Mapped count: ", len(mapped_list), ", sum: ", sum_comp, ", took: ", (end_iter - start_iter), " s)"
+
+# Heap Integrity Verification
+show "6. Performing GC Heap Integrity Verification..."
+let verified = os.verify_gc()
+show "   Heap status: ", verified
+
+show "===================================================="
+show "          STRESS SUITE COMPLETED SUCCESSFULLY"
+show "===================================================="

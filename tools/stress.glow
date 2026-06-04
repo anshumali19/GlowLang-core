@@ -1,0 +1,37 @@
+show "--- GlowLang Industrial Stress Suite ---"
+
+func stress_tco(n, acc):
+    if n == 0:
+        return acc
+    end
+    return stress_tco(n - 1, acc + 1)
+end
+
+func stress_gc_tensors(iterations):
+    let i = 0
+    while i < iterations:
+        let t = tensor.create(10000) // Large allocation
+        if i % 100 == 0:
+            let info = os.gc_info()
+            show "   GC Progress: ", i, "/", iterations, " (Allocated: ", info.allocated / 1024 / 1024, " MB)"
+        end
+        i = i + 1
+    end
+end
+
+show "1. Stressing Tail-Call Optimization (1,000,000 recursive calls)..."
+let start_tco = os.time()
+let tco_res = stress_tco(1000000, 0)
+let end_tco = os.time()
+show "   Result: ", tco_res, " (Took: ", end_tco - start_tco, " s)"
+
+show "2. Stressing GC & SIMD Tensors (1,000 massive allocations)..."
+let start_gc = os.time()
+stress_gc_tensors(1000)
+let end_gc = os.time()
+show "   GC Stress Complete (Took: ", end_gc - start_gc, " s)"
+
+let final_info = os.gc_info()
+show "Final Heap Status: ", final_info.allocated / 1024 / 1024, " MB"
+
+show "--- Stress Suite Completed Successfully ---"

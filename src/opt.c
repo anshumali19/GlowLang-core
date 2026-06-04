@@ -210,28 +210,48 @@ void optimize_bytecode(Bytecode *bc) {
             }
         }
     }
-    // Pass 5: Tail Call & Self-Call Fast Optimization (Early Decision)
+    // Pass 4.5: Devirtualize CALL_VALUE
     for (int i = 0; i < bc->count - 1; i++) {
+        Instruction *load = &bc->code[i];
+        Instruction *call = &bc->code[i+1];
+        if (load->op == OP_LOAD_VAR && call->op == OP_CALL_VALUE && load->r0 == call->r1) {
+            const char *name = global_table.names[load->arg];
+            call->op = OP_CALL;
+            call->ptr = (intptr_t)name;
+            load->op = OP_NOP;
+        }
+    }
+    
+    // Pass 5: Tail Call & Self-Call Fast Optimization (Early Decision)
+    for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
 
-        // 1. TCO: OP_CALL + OP_RETURN -> OP_TAIL_CALL
-        if (pc->op == OP_CALL && bc->code[i+1].op == OP_RETURN && pc->r0 == bc->code[i+1].r0) {
-            pc->op = OP_TAIL_CALL;
-            bc->code[i+1].op = OP_NOP;
+        if (pc->op == OP_CALL || pc->op == OP_CALL_VALUE || pc->op == OP_CALL_SELF_FAST) {
+            // Look ahead for RETURN, skipping NOPs
+            int next_idx = i + 1;
+            while (next_idx < bc->count && bc->code[next_idx].op == OP_NOP) next_idx++;
+            
+            if (next_idx < bc->count && bc->code[next_idx].op == OP_RETURN && pc->r0 == bc->code[next_idx].r0) {
+                pc->op = OP_TAIL_CALL;
+                bc->code[next_idx].op = OP_NOP;
+                continue;
+            }
         }
 
-        // 2. Self-Call Fast Path
+        // 2. Self-Call Fast Path (if not already TCO'd)
         if (pc->op == OP_CALL) {
              const char *name = (const char*)pc->ptr;
-             if (bc->owner && bc->owner->name && strcmp(name, bc->owner->name) == 0) {
+             if (name && bc->owner && bc->owner->name && strcmp(name, bc->owner->name) == 0) {
                  pc->op = OP_CALL_SELF_FAST;
+                 
+                 // Re-check for TCO after patching to SELF_FAST
+                 int next_idx = i + 1;
+                 while (next_idx < bc->count && bc->code[next_idx].op == OP_NOP) next_idx++;
+                 if (next_idx < bc->count && bc->code[next_idx].op == OP_RETURN && pc->r0 == bc->code[next_idx].r0) {
+                     pc->op = OP_TAIL_CALL;
+                     bc->code[next_idx].op = OP_NOP;
+                 }
              }
-        }
-
-        // Handle TCO for Self-Call as well
-        if (pc->op == OP_CALL_SELF_FAST && bc->code[i+1].op == OP_RETURN && pc->r0 == bc->code[i+1].r0) {
-            pc->op = OP_TAIL_CALL;
-            bc->code[i+1].op = OP_NOP;
         }
     }
 

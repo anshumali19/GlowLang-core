@@ -1,0 +1,1 @@
+let t = tensor.zeros("invalid_type")

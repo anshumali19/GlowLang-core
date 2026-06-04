@@ -60,6 +60,7 @@ void intern_table_init(void) {
 int line_num = 1;
 %}
 
+%option noinput nounput
 %x COMMENT
 
 %%
@@ -112,6 +113,7 @@ int line_num = 1;
 "extends"              { return EXTENDS; }
 "use"                  { return USE; }
 "spawn"                { return SPAWN; }
+"whenever"             { return WHENEVER; }
 "end"                  { return END; }
 
 "+="                   { return PLUS_ASSIGN; }
@@ -170,6 +172,7 @@ f\"([^"\\]|\\.)*\" {
     char *out = strdup(yytext + 2);
     out[strlen(out)-1] = '\0';
     yylval.str_val = intern_string(out);
+    free(out);
     return FSTRING;
 }
 
@@ -209,8 +212,8 @@ f\"([^"\\]|\\.)*\" {
 \n                     { line_num++; return NEWLINE; }
 [ \t\r]+               ;
 
-"//".*                 ;
-"#".*                  ;
+"//"[^\n]*             ;
+"#"[^\n]*              ;
 
 "/*"                   { BEGIN(COMMENT); }
 <COMMENT>"*/"          { BEGIN(INITIAL); }

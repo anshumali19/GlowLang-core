@@ -1,0 +1,13 @@
+import "lib/db.glow"
+
+let orm = Model("test.db")
+orm.create_table("users", {"name": "TEXT", "age": "INTEGER"})
+
+orm.insert("users", {"name": "Alice", "age": 30})
+orm.insert("users", {"name": "Bob", "age": 25})
+
+let users = orm.find_all("users")
+show "Users in database:"
+for each u in users:
+    show "  - ", u["name"], " (", u["age"], ")"
+end
