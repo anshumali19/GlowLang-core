@@ -301,14 +301,14 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             }
             case OP_INDEX: {
                 emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)packed_array_get_jit);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_index_jit);
                 jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_STORE_INDEX: {
                 emit_mov_rdi_reg(&buf, pc->r0); emit_mov_rsi_reg(&buf, pc->r1); emit_mov_rdx_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)packed_array_set_jit);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_store_index_jit);
                 jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
                 break;
             }

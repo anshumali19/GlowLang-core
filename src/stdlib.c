@@ -115,6 +115,42 @@ void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val) {
     else ((double*)pa->data)[idx] = val_to_double(v_val);
 }
 
+Value glow_index_jit(Value coll, Value v_idx) {
+    if (GET_TYPE(coll) == VAL_LIST) {
+        int i = (int)AS_INT(v_idx);
+        List *l = AS_LIST(coll);
+        if (i < 0) i += l->size;
+        if (i >= 0 && i < l->size) return l->items[i];
+        return value_none();
+    } else if (GET_TYPE(coll) == VAL_OBJECT) {
+        if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
+            return packed_array_get_jit(coll, v_idx);
+        }
+        return value_none();
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        return dict_get(AS_DICT(coll), AS_STRING(v_idx));
+    }
+    return value_none();
+}
+
+void glow_store_index_jit(Value coll, Value v_idx, Value v_val) {
+    if (GET_TYPE(coll) == VAL_LIST) {
+        int i = (int)AS_INT(v_idx);
+        List *l = AS_LIST(coll);
+        if (i < 0) i += l->size;
+        if (i >= 0 && i < l->size) {
+            l->items[i] = v_val;
+            gc_write_barrier((GCObject*)l, v_val);
+        }
+    } else if (GET_TYPE(coll) == VAL_OBJECT) {
+        if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
+            packed_array_set_jit(coll, v_idx, v_val);
+        }
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        dict_set(AS_DICT(coll), AS_STRING(v_idx), v_val);
+    }
+}
+
 void simd_add_helper(Value v_a, Value v_b, Value v_target) {
     PackedArray *pa = AS_PACKED_ARRAY(v_a), *pb = AS_PACKED_ARRAY(v_b), *pt = AS_PACKED_ARRAY(v_target);
     int size = pa->size;
@@ -451,7 +487,17 @@ void packed_array_set(PackedArray *pa, int idx, Value v) {
     else ((double*)pa->data)[idx] = val_to_double(v);
 }
 
-static Shape* shape_new(Shape *p, const char *n, int o) { Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE); s->parent = p; s->name = n; s->offset = o; s->transitions = dict_new(4); return s; }
+static Shape* shape_new(Shape *p, const char *n, int o) { 
+    Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE); 
+    s->parent = p; 
+    s->name = n; 
+    s->offset = o; 
+    s->transitions = NULL;
+    vm_stack[vm_stack_top++] = value_obj(s);
+    s->transitions = dict_new(4); 
+    vm_stack_top--;
+    return s; 
+}
 #if 0
 static Shape* shape_get_next(Shape* curr, const char *name) { 
     for (int i=0; i<curr->transitions->size; i++) 
@@ -466,17 +512,27 @@ Class* class_new(const char *name, Class *parent) {
     Class *c = gc_alloc(sizeof(Class), OBJ_CLASS); 
     c->name = strdup(name); 
     c->parent = parent; 
-    c->methods = dict_new(8); 
-    c->root_shape = shape_new(NULL, "__root__", -1); 
+    c->methods = NULL;
+    c->root_shape = NULL;
     c->stable_shape = NULL;
     c->instances_created = 0;
+    
+    vm_stack[vm_stack_top++] = value_class(c);
+    c->methods = dict_new(8); 
+    vm_stack[vm_stack_top++] = value_dict(c->methods);
+    c->root_shape = shape_new(NULL, "__root__", -1); 
+    vm_stack_top -= 2;
     return c; 
 }
 Instance* instance_new(Class *k) {
     Instance *i = gc_alloc(sizeof(Instance), OBJ_INSTANCE);
     i->klass = k;
-    i->properties = dict_new(8);
+    i->properties = NULL;
     k->instances_created++;
+    
+    vm_stack[vm_stack_top++] = value_instance(i);
+    i->properties = dict_new(8);
+    vm_stack_top--;
     return i;
 }
 
@@ -502,7 +558,15 @@ void instance_set(Instance *inst, const char *name, Value val) {
     gc_write_barrier((GCObject*)inst, val);
 }
 
-Trait* trait_new(const char *name) { Trait *t = gc_alloc(sizeof(Trait), OBJ_TRAIT); t->name = strdup(name); t->methods = dict_new(8); return t; }
+Trait* trait_new(const char *name) { 
+    Trait *t = gc_alloc(sizeof(Trait), OBJ_TRAIT); 
+    t->name = strdup(name); 
+    t->methods = NULL;
+    vm_stack[vm_stack_top++] = value_trait(t);
+    t->methods = dict_new(8); 
+    vm_stack_top--;
+    return t; 
+}
 Value bound_method_new(Value inst, FuncEntry *m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = m; bm->native_method = NULL; return value_bound_method(bm); }
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = NULL; bm->native_method = native_m; return value_bound_method(bm); }
 Value native_func_new(const char *name, NativeFuncPtr ptr) { NativeFunc *nf = gc_alloc(sizeof(NativeFunc), OBJ_NATIVE_FUNC); nf->name = name; nf->func = ptr; return value_native_func(nf); }
@@ -1370,23 +1434,32 @@ static Value native_sqlite_query(int argc, Value *args) {
 
     List *rows = list_new(8);
     int cols = sqlite3_column_count(res);
+    
+    vm_stack[vm_stack_top++] = value_list(rows);
 
     while (sqlite3_step(res) == SQLITE_ROW) {
         Dict *row = dict_new(cols);
+        vm_stack[vm_stack_top++] = value_dict(row);
         for (int i = 0; i < cols; i++) {
             const char *col_name = sqlite3_column_name(res, i);
             const char *interned = intern_string(col_name);
-            Value val;
+            Value val = value_none();
             int type = sqlite3_column_type(res, i);
             if (type == SQLITE_INTEGER) val = value_int(sqlite3_column_int64(res, i));
             else if (type == SQLITE_FLOAT) val = value_float(sqlite3_column_double(res, i));
-            else if (type == SQLITE_TEXT) val = value_string_copy((const char*)sqlite3_column_text(res, i));
-            else val = value_none();
+            else if (type == SQLITE_TEXT) {
+                Value s_val = value_string_copy((const char*)sqlite3_column_text(res, i));
+                vm_stack[vm_stack_top++] = s_val;
+                val = s_val;
+                vm_stack_top--;
+            }
             dict_set(row, interned, val);
         }
         list_push(rows, value_dict(row));
+        vm_stack_top--;
     }
     sqlite3_finalize(res);
+    vm_stack_top--;
     return value_list(rows);
 }
 

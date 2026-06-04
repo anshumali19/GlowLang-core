@@ -147,7 +147,7 @@ end
             f.write(test_code)
 
         try:
-            retcode, stdout, stderr = self.run_test(temp_file, "Memory Growth")
+            retcode, stdout, stderr = self.run_test(temp_file, "Memory Growth", extra_env={"GLOWLANG_GC_STRESS": "1"})
 
             if retcode != 0 and retcode != 1:
                 print(f"  [WARN] Test exited with code {retcode}")
@@ -200,7 +200,7 @@ end
             return
 
         asan_verifier = GCVerifier(ASAN_BINARY)
-        retcode, stdout, stderr = asan_verifier.run_test(GC_TEST, "ASan GC")
+        retcode, stdout, stderr = asan_verifier.run_test(GC_TEST, "ASan GC", extra_env={"GLOWLANG_GC_STRESS": "1"})
 
         if "ERROR: AddressSanitizer" in stderr:
             print(f"  [FAIL] ASan detected memory error:")
@@ -253,7 +253,7 @@ show "FINAL_STATUS:", final
             f.write(test_code)
 
         try:
-            retcode, stdout, stderr = self.run_test(temp_file, "GC Cycles")
+            retcode, stdout, stderr = self.run_test(temp_file, "GC Cycles", extra_env={"GLOWLANG_GC_STRESS": "1"})
 
             if retcode < 0:
                 print(f"  [FAIL] Crashed during GC stress cycles (signal {retcode})")
@@ -331,7 +331,7 @@ show "HEAP_AFTER_CLOSURES:", gc
             f.write(test_code)
 
         try:
-            retcode, stdout, stderr = self.run_test(temp_file, "Closure GC")
+            retcode, stdout, stderr = self.run_test(temp_file, "Closure GC", extra_env={"GLOWLANG_GC_STRESS": "1"})
 
             if retcode < 0:
                 print(f"  [FAIL] Crashed during closure GC test (signal {retcode})")

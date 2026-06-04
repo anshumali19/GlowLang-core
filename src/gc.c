@@ -164,7 +164,11 @@ void gc_minor_collect(void) {
 
     GCObject **p = &gc_objects;
     while (*p) {
-        if ((*p)->generation == 1) { p = &((*p)->next); continue; } 
+        if ((*p)->generation == 1) { 
+            (*p)->marked = 0;
+            p = &((*p)->next); 
+            continue; 
+        }
         if (!(*p)->marked) {
             GCObject *unmarked = *p; *p = unmarked->next;
             if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
@@ -196,6 +200,14 @@ static void gc_collect(void) { gc_full_collect(); }
 #endif
 
 void* gc_alloc(size_t sz, ObjType type) {
+    static bool checked_env = false;
+    if (!checked_env) {
+        checked_env = true;
+        char *stress = getenv("GLOWLANG_GC_STRESS");
+        if (stress && strcmp(stress, "1") == 0) {
+            gc_threshold = 128 * 1024;
+        }
+    }
     if (gc_allocated > gc_threshold) gc_full_collect();
     else if (gc_allocated > gc_threshold / 2) gc_minor_collect();
     
