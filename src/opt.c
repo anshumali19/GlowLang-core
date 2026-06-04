@@ -216,9 +216,12 @@ void optimize_bytecode(Bytecode *bc) {
         Instruction *call = &bc->code[i+1];
         if (load->op == OP_LOAD_VAR && call->op == OP_CALL_VALUE && load->r0 == call->r1) {
             const char *name = global_table.names[load->arg];
-            call->op = OP_CALL;
-            call->ptr = (intptr_t)name;
-            load->op = OP_NOP;
+            FuncEntry *fe = func_get(name);
+            if (fe && fe->body) {
+                call->op = OP_CALL;
+                call->ptr = (intptr_t)name;
+                load->op = OP_NOP;
+            }
         }
     }
     

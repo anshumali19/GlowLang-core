@@ -227,3 +227,20 @@ f\"([^"\\]|\\.)*\" {
 int yywrap(void) {
     return 1;
 }
+
+void lexer_cleanup(void) {
+    #ifdef YY_CURRENT_BUFFER
+    if (YY_CURRENT_BUFFER) {
+        yy_delete_buffer(YY_CURRENT_BUFFER);
+    }
+    #endif
+    yylex_destroy();
+}
+
+YY_BUFFER_STATE get_current_buffer(void) {
+    #ifdef YY_CURRENT_BUFFER
+    return YY_CURRENT_BUFFER;
+    #else
+    return NULL;
+    #endif
+}

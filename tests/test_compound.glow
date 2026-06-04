@@ -1,0 +1,30 @@
+# Test compound assignments
+
+show "=== Testing local compound assignment ==="
+func test_local():
+    let x = 10
+    x += 5
+    show "x += 5:", x
+    x -= 3
+    show "x -= 3:", x
+    x *= 2
+    show "x *= 2:", x
+    x /= 4
+    show "x /= 4:", x
+    x %= 3
+    show "x %= 3:", x
+end
+test_local()
+
+show "=== Testing global compound assignment ==="
+global_x = 100
+global_x += 50
+show "global_x += 50:", global_x
+global_x -= 30
+show "global_x -= 30:", global_x
+global_x *= 2
+show "global_x *= 2:", global_x
+global_x /= 4
+show "global_x /= 4:", global_x
+global_x %= 7
+show "global_x %= 7:", global_x

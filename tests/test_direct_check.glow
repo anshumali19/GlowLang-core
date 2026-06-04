@@ -1,0 +1,7 @@
+let db = sqlite.open("orm_test.db")
+let rows = sqlite.query(db, "SELECT * FROM users")
+show "Direct rows:", rows
+for each row in rows:
+    show "Row name:", row["name"], "Age:", row["age"]
+end
+sqlite.close(db)

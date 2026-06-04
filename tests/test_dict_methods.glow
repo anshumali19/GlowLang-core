@@ -1,0 +1,23 @@
+# Test native dictionary methods
+
+let d = {"name": "Alice", "age": 30}
+
+show "=== Testing has ==="
+show "has name:", d.has("name")
+show "has gender:", d.has("gender")
+
+show "=== Testing keys and values ==="
+show "keys:", d.keys()
+show "values:", d.values()
+
+show "=== Testing remove ==="
+let removed = d.remove("age")
+show "removed value:", removed
+show "after remove keys:", d.keys()
+
+show "=== Testing merge ==="
+let d2 = {"gender": "female", "city": "NYC"}
+let d3 = d.merge(d2)
+show "after merge keys:", d3.keys()
+show "after merge values:", d3.values()
+show "original d has gender:", d.has("gender")

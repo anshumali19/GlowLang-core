@@ -1,0 +1,22 @@
+# Test dynamic ORM database tool
+
+use "lib/db.glow"
+
+show "=== Testing ORM Model ==="
+let m = Model("orm_test.db")
+
+let schema = {"name": "TEXT", "age": "INTEGER"}
+m.create_table("users", schema)
+
+let u1 = {"name": "Charlie", "age": 28}
+m.insert("users", u1)
+
+let u2 = {"name": "Diana", "age": 35}
+m.insert("users", u2)
+
+let rows = m.find_all("users")
+show "ORM Rows count:", len(rows)
+
+for each row in rows:
+    show "User row - Name:", row["name"], "Age:", row["age"]
+end

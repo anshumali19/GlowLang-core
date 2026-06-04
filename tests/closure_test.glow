@@ -1,9 +1,9 @@
 let x = 100
-let f = lambda y: x + y
+let f = lambda(y): x + y
 show "f(5) (global capture):", f(5)
 
 func outer(a):
-    let g = lambda b: a + b
+    let g = lambda(b): a + b
     return g
 end
 let h = outer(10)

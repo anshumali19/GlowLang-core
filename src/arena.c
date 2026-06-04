@@ -12,6 +12,13 @@ typedef struct ArenaChunk {
 
 static __thread ArenaChunk *arena_head = NULL;
 
+typedef struct LargeAllocation {
+    struct LargeAllocation *next;
+    void *ptr;
+} LargeAllocation;
+
+static __thread LargeAllocation *large_allocations = NULL;
+
 void arena_init(void) {
     if (!arena_head) {
         arena_head = calloc(1, sizeof(ArenaChunk));
@@ -26,7 +33,16 @@ void *arena_alloc(size_t size) {
         /* Large allocations bypass the bump pointer and are not strictly managed by the block 
            in a real system, but for now we just allocate them raw. To avoid leaks in a pure arena, 
            we'd link them. For simplicity, we assume AST nodes and strings are small. */
-        return calloc(1, size);
+        void *ptr = calloc(1, size);
+        if (ptr) {
+            LargeAllocation *la = malloc(sizeof(LargeAllocation));
+            if (la) {
+                la->ptr = ptr;
+                la->next = large_allocations;
+                large_allocations = la;
+            }
+        }
+        return ptr;
     }
     
     if (!arena_head) {
@@ -61,4 +77,13 @@ void arena_free_all(void) {
         curr = next;
     }
     arena_head = NULL;
+
+    LargeAllocation *la = large_allocations;
+    while (la) {
+        LargeAllocation *next = la->next;
+        free(la->ptr);
+        free(la);
+        la = next;
+    }
+    large_allocations = NULL;
 }
