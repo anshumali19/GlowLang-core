@@ -1,26 +1,30 @@
 public class DsaNQueens {
-    static boolean isSafe(int[] board, int row, int col, int n) {
-        for (int i = 0; i < col; i++) {
-            if (board[i] == row) return false;
-            if (board[i] - i == row - col) return false;
-            if (board[i] + i == row + col) return false;
+    static boolean isSafe(int[] board, int row, int col) {
+        for (int i = 0; i < row; i++) {
+            if (board[i] == col || Math.abs(board[i] - col) == Math.abs(i - row))
+                return false;
         }
         return true;
     }
-    static int solve(int[] board, int col, int n) {
-        if (col >= n) return 1;
-        int count = 0;
-        for (int row = 0; row < n; row++) {
-            if (isSafe(board, row, col, n)) {
+    static int nqCount = 0;
+    static void backtrack(int[] board, int row, int n) {
+        if (row == n) {
+            nqCount++;
+            return;
+        }
+        for (int col = 0; col < n; col++) {
+            if (isSafe(board, row, col)) {
                 board[row] = col;
-                count += solve(board, col + 1, n);
+                backtrack(board, row + 1, n);
+                board[row] = -1;
             }
         }
-        return count;
     }
     public static void main(String[] args) {
-        int n = 8;
+        int n = 11;
         int[] board = new int[n];
-        System.out.println(solve(board, 0, n));
+        for (int i = 0; i < n; i++) board[i] = -1;
+        backtrack(board, 0, n);
+        System.out.println(nqCount);
     }
 }

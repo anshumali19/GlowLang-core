@@ -1,12 +1,7 @@
-#include <iostream>
-using namespace std;
-
+#include <stdio.h>
 int main() {
-    int i = 0, total = 0;
-    while (i < 100000) {
-        total += i;
-        i++;
-    }
-    cout << total << endl;
+    long long total = 0;
+    for (int i = 0; i < 10000000; i++) total += i;
+    printf("%lld\n", total);
     return 0;
 }

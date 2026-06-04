@@ -1,16 +1,17 @@
-func fib(n):
-    if n < 2:
-        return n
+blueprint Fibonacci:
+    action calculate(n):
+        when n <= 1:
+            return n
+        otherwise:
+            return self.calculate(n - 1) + self.calculate(n - 2)
+        end
     end
-    return fib(n - 1) + fib(n - 2)
 end
-
-i = 0
-total = 0
-
-while i < 20:
-    total = total + fib(i)
+let calculator = Fibonacci()
+let total = 0
+let i = 0
+while i <= 30:
+    total = total + calculator.calculate(i)
     i = i + 1
 end
-
-print total
+show total

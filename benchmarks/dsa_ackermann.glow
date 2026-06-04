@@ -1,17 +1,13 @@
-func ack(m, n):
-    if m == 0:
-        return n + 1
+blueprint Ackermann:
+    action calculate(m, n):
+        when m is 0:
+            return n + 1
+        end
+        when n is 0:
+            return self.calculate(m - 1, 1)
+        end
+        return self.calculate(m - 1, self.calculate(m, n - 1))
     end
-    if n == 0:
-        return ack(m - 1, 1)
-    end
-    return ack(m - 1, ack(m, n - 1))
 end
-
-let m = 3
-let n = 7
-let start = os.time()
-let result = ack(m, n)
-let t_finish = os.time()
-show "Ackermann(", m, ",", n, "): ", result
-show "Time: ", t_finish - start
+let ackObj = Ackermann()
+show ackObj.calculate(3, 8)
