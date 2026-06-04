@@ -1,0 +1,20 @@
+# Test fs module functions
+show "--- fs.exists ---"
+show fs.exists("Makefile")
+show fs.exists("nonexistent_file_xyz")
+
+show "--- fs.size ---"
+show fs.size("Makefile")
+
+show "--- fs.mkdir / fs.remove ---"
+fs.mkdir("__test_dir_gl")
+show fs.exists("__test_dir_gl")
+fs.remove("__test_dir_gl")
+show fs.exists("__test_dir_gl")
+
+show "--- fs.read / fs.write ---"
+fs.write("__test_file_gl.txt", "hello glowlang")
+content = fs.read("__test_file_gl.txt")
+show content
+fs.remove("__test_file_gl.txt")
+show "fs tests passed"

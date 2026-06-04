@@ -1,0 +1,3 @@
+use "fa.glow"
+print f
+print f()

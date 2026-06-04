@@ -1,0 +1,11 @@
+blueprint WorkerPool:
+    action init(count):
+        self.count = count
+        self.tasks = []
+    end
+
+    action submit(task):
+        self.tasks = self.tasks + [task]
+        spawn task()
+    end
+end

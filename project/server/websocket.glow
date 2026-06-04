@@ -1,0 +1,21 @@
+# WebSocket Subsystem simulation
+
+blueprint WebSocket:
+    action init(url):
+        self.url = url
+        self.connected = false
+    end
+
+    action connect():
+        show "[WS] Connecting to ", self.url
+        self.connected = true
+    end
+
+    action send(msg):
+        when self.connected:
+            show "[WS] Sending: ", msg
+        otherwise:
+            show "[WS] Error: Not connected"
+        end
+    end
+end

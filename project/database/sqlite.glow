@@ -1,0 +1,21 @@
+# GlowNet SQLite Wrapper
+# Industrial Stress Project - Database Subsystem
+
+blueprint SQLiteDB:
+    action init(path):
+        self.path = path
+        self.handle = sqlite.open(path)
+    end
+
+    action execute(sql_stmt):
+        return sqlite.exec(self.handle, sql_stmt)
+    end
+
+    action query(sql_stmt):
+        return sqlite.query(self.handle, sql_stmt)
+    end
+
+    action close():
+        let _ = sqlite.close(self.handle)
+    end
+end

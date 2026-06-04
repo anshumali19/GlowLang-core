@@ -1,0 +1,4 @@
+func main():
+    show "GlowLang Restoration Check"
+end
+main()

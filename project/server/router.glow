@@ -1,0 +1,19 @@
+# GlowNet HTTP Router
+# Handles path registration and dispatching
+
+let routes = {}
+
+func add_route(path, handler):
+    routes[path] = handler
+    show "[Router] Registered: ", path
+end
+
+func dispatch(request):
+    let path = request["path"]
+    when routes.contains(path):
+        let handler = routes[path]
+        return handler(request)
+    otherwise:
+        return {"status": 404, "body": "Not Found"}
+    end
+end

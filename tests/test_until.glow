@@ -1,0 +1,6 @@
+# Test until loop (runs while condition is false, stops when true)
+x = 0
+until x == 5:
+    x = x + 1
+end
+show "until result:", x
