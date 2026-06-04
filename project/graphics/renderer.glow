@@ -1,0 +1,16 @@
+# Graphics Renderer simulation
+
+blueprint Renderer:
+    action init(width, height):
+        self.w = width
+        self.h = height
+        self.frame = 0
+    end
+
+    action render(scene):
+        self.frame = self.frame + 1
+        show "[Renderer] Rendering frame ", self.frame
+        # Simulate GPU dispatch
+        return true
+    end
+end

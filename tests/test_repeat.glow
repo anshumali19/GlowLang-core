@@ -1,0 +1,6 @@
+# Test repeat N times loop
+total = 0
+repeat 10 times:
+    total = total + 1
+end
+show "repeat result:", total

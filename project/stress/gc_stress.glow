@@ -1,0 +1,40 @@
+# GlowNet GC Stress Test
+# Generates high memory pressure to test Generational GC stability
+
+blueprint Node:
+    action init(val, next):
+        self.val = val
+        self.next = next
+    end
+end
+
+func run_gc_stress():
+    show "[Stress] Starting GC Pressure Test..."
+    let start = os.time()
+    
+    # 1. Linked List Allocation (High Object Pressure)
+    let head = nil
+    for i from 0 to 100000:
+        let next_head = Node(i, head)
+        next_head.init(i, head)
+        head = next_head
+        when i % 10000 == 0:
+            show "[GC] Allocated ", i, " nodes"
+        end
+    end
+    
+    # 2. Large String Concatenation (Heap Fragmentation Test)
+    let s = ""
+    for i from 0 to 10000:
+        s = s + "leak"
+    end
+    
+    # 3. Floating Garabge
+    for i from 0 to 1000:
+        let garbage = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        let more_garbage = {"a": 1, "b": 2}
+    end
+    
+    let end_time = os.time()
+    show "[Stress] GC Pressure Test Completed in ", (end_time - start), "s"
+end

@@ -1,0 +1,3 @@
+break value_string_copy
+run
+bt

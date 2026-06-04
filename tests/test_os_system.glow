@@ -1,0 +1,4 @@
+# Test os.system
+result = os.system("echo ok > /dev/null")
+show "os.system exit:", result
+show "os.system test passed"

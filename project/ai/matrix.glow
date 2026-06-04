@@ -1,0 +1,33 @@
+# Matrix Subsystem
+# Handles basic matrix operations
+
+blueprint Matrix:
+    action init(rows, cols):
+        self.rows = rows
+        self.cols = cols
+        self.data = []
+        for i from 0 to (rows * cols):
+            self.data = self.data + [0.0]
+        end
+    end
+
+    action get(r, c):
+        return self.data[r * self.cols + c]
+    end
+
+    action set(r, c, val):
+        self.data[r * self.cols + c] = val
+    end
+
+    action multiply(other):
+        when self.cols == other.rows:
+            # Native Vectorized Fast-Path
+            let res_data = matrix_mul(self, other)
+            let res = Matrix(self.rows, other.cols)
+            res.init(self.rows, other.cols)
+            res.data = res_data
+            return res
+        end
+        return nil
+    end
+end

@@ -1,0 +1,22 @@
+# HTTP Server Runtime
+
+blueprint HttpServer:
+    action init(port):
+        self.port = port
+        self.running = false
+    end
+
+    action start():
+        self.running = true
+        show "[Server] Listening on port ", self.port
+        # Simulation of event loop
+    end
+
+    action shutdown():
+        self.running = false
+        show "[Server] Stopped"
+    end
+end
+
+let server = HttpServer(8080)
+server.init(8080)

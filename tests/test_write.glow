@@ -1,0 +1,5 @@
+# Test write keyword (prints without newline)
+write "hello "
+write "world"
+show ""
+show "write test passed"

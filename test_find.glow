@@ -1,0 +1,1 @@
+show "abcdef".find("cd")
