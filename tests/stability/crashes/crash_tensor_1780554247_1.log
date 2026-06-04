@@ -1,0 +1,11 @@
+=== GLOWLANG FUZZ CRASH REPORT ===
+Category: tensor
+Exit Code: -999
+Signalled: True
+Reproduction Command: ./bin/glowlang ./tests/stability/crashes/crash_tensor_1780554247_1.glow
+
+--- STDERR ---
+Timeout Expired
+
+--- STDOUT ---
+

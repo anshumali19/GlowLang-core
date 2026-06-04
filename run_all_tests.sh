@@ -1,5 +1,5 @@
 #!/bin/bash
-BIN="./bin/glowlang"
+BIN="${GLOWLANG_BIN:-./bin/glowlang}"
 TEST_DIR="tests"
 PASSED=0
 FAILED=0

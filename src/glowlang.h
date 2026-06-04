@@ -38,7 +38,7 @@ typedef struct FuncEntry FuncEntry;
  *  GC & OBJECTS
  * ================================================================ */
 typedef enum {
-    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER
+    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE
 } ObjType;
 
 typedef struct GCObject {
@@ -52,6 +52,11 @@ typedef struct GCObject {
     void *block_ptr;
     size_t sz;
 } GCObject;
+
+typedef struct {
+    GCObject obj;
+    void *db;
+} SQLiteHandle;
 
 typedef enum {
     PACKED_INT64,
@@ -90,6 +95,18 @@ typedef struct RopeNode {
 
 typedef struct {
     GCObject obj;
+    Value iterable;
+    int index;
+} Iterator;
+
+typedef struct {
+    GCObject obj;
+    void *stmt;
+    int done;
+} SQLiteIter;
+
+typedef struct {
+    GCObject obj;
     char *buffer;
     int size;
     int capacity;
@@ -99,8 +116,13 @@ typedef struct {
 #define MASK_TYPE     ((uint64_t)0x0007000000000000)
 #define MASK_PAYLOAD  ((uint64_t)0x0000FFFFFFFFFFFF)
 
+#define IS_DEOPT(v)      ((v) == (MASK_NAN | ((uint64_t)VAL_DEOPT << 48)))
+#define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
+
 /* Extract bits to type */
-#define GET_TYPE(v)   ( (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (((v) & MASK_TYPE) >> 48) )
+static inline ValueType GET_TYPE(Value v) {
+    return (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (ValueType)(((v) & MASK_TYPE) >> 48);
+}
 #define GET_OBJ_TYPE(v) (((GCObject*)(uintptr_t)((v) & MASK_PAYLOAD))->type)
 
 static inline size_t rope_length(Value v) {
@@ -317,6 +339,7 @@ struct Instruction {
     unsigned short r0, r1, r2;
     unsigned char type; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
     unsigned char is_stack_alloc;
+    unsigned char is_method;
     int line;
     const char *file;
     void *trace;
@@ -489,9 +512,7 @@ struct Class {
 struct Instance {
     GCObject obj;
     struct Class *klass;
-    Shape *shape;
-    Value *fields;
-    int field_capacity;
+    Dict *properties;
 };
 
 struct List {
@@ -507,7 +528,7 @@ struct Dict {
     int refcount;
     int size;
     int capacity;
-    const char **keys;
+    Value *keys;
     Value *values;
 };
 

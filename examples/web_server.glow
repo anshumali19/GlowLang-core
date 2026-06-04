@@ -1,0 +1,15 @@
+import "lib/web.glow"
+
+func home(req):
+    return "<h1>Welcome to GlowWeb</h1><p>Running on the industrial GlowLang runtime.</p>"
+end
+
+func hello(req):
+    return "<h1>Hello!</h1><p>GlowLang is fast, stable, and professional.</p>"
+end
+
+let app = Server(8080)
+app.route("/", home)
+app.route("/hello", hello)
+
+app.start()

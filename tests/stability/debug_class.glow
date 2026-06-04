@@ -1,0 +1,14 @@
+class Point3D:
+    func init(x, y, z):
+        show "Inside init, self=", self
+        show "Inside init, params x=", x, " y=", y, " z=", z
+        self.x = x
+        self.y = y
+        self.z = z
+        show "Inside init after set, self.x=", self.x
+    end
+end
+
+let p3d = Point3D(42.0, 43.0, 44.0)
+show "Main, p3d=", p3d
+show "Main, p3d.x=", p3d.x

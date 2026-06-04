@@ -1,462 +1,569 @@
-# GlowLang — Full Ecosystem & Production Expansion Prompt
+# GlowLang Production ROI Phase — Stability, Tooling & Ecosystem Prompt
 
-You are working on GlowLang, a production-grade adaptive programming language runtime with:
+You are working on GlowLang, a production-grade adaptive runtime ecosystem featuring:
 
-* Register-Based Virtual Machine
+* Register-Based VM
 * Direct-Threaded Dispatch
-* Type-Specialized JIT
-* Polymorphic Inline Caches (PICs)
-* Hidden Classes / Shapes
-* Register-Based Upvalues
-* Static Method Inlining
-* Escape Analysis
-* Scalar Replacement
-* Trace Compilation
-* Speculative Optimization
-* Bump Allocation
-* Generational Garbage Collector
-* Method Specialization
-* Global Slotting
-* Direct JIT-to-JIT Call Linking
-* Packed Arrays
-* SIMD Foundations
+* Adaptive Type-Specialized JIT
+* SIMD Tensor Engine
+* Rope/StringBuilder Engine
+* Generic Iterable Infrastructure
+* Reactive `whenever`
+* Async Runtime
+* Thread-Local Runtime Safety
+* WASM Backend
+* ARM64 Foundation
+* AI/Matrix Engine
+* Package Manager (`gdu`)
 * Natural-Language-Like Syntax
 
-GlowLang is already highly optimized and benchmark-competitive.
+GlowLang has now reached:
 
-The goal now is to transform GlowLang into a fully capable ecosystem language that supports:
+* runtime maturity
+* optimization maturity
+* semantic stability
+* fast-path isolation maturity
 
-* AI/ML
-* web development
-* networking
-* async systems
-* databases
-* native interop
-* tooling
-* deployment
-* large-scale application development
+The goal now is NOT:
 
-while STRICTLY preserving the current architecture and language identity.
+* more aggressive benchmark chasing
+* global runtime mutation
+* architectural rewrites
+* speculative language redesign
 
----
+The goal now is:
 
-# CRITICAL SAFETY RULES (HIGHEST PRIORITY)
+# Production ROI Phase
 
-## DO NOT TOUCH STABLE SYSTEMS
+focused ONLY on:
 
-If a feature, runtime component, optimization pass, allocator, compiler phase, JIT system, syntax behavior, GC subsystem, package workflow, module loader, or runtime architecture already exists and works correctly, then DO NOT rewrite, redesign, replace, destabilize, or modify it unnecessarily.
+1. Stability Hardening
+2. Tooling
+3. Ecosystem Infrastructure
+4. Developer Experience
 
-If something already exists:
+while preserving:
 
-* leave it intact
-* preserve compatibility
-* preserve performance
-* preserve semantics
-* preserve syntax behavior
-
-Only implement missing functionality or measurable improvements.
+* runtime integrity
+* semantic correctness
+* fast-path isolation
+* production stability
 
 ---
 
-# DO NOT HARM THE LANGUAGE
+# ABSOLUTE ENGINEERING RULES (TOP PRIORITY)
+
+## DO NOT TOUCH EXISTING STABLE RUNTIME SYSTEMS
+
+If a subsystem already:
+
+* works correctly
+* is benchmark-verified
+* is production-safe
+* is architecture-stable
+* is isolation-safe
+
+then LEAVE IT COMPLETELY UNTOUCHED.
 
 DO NOT:
 
-* break existing syntax
-* change the Natural Language Like philosophy
-* introduce Python-like syntax cloning
-* introduce unnecessary complexity
-* rewrite working architecture
-* destabilize the JIT
-* damage runtime performance
-* alter stable GC systems
-* break package compatibility
-* weaken startup speed
-* increase memory overhead unnecessarily
-* introduce unsafe optimizations without guard systems
-* sacrifice readability for engineering complexity
+* redesign VM semantics
+* mutate parser behavior
+* alter language syntax
+* rewrite JIT architecture
+* redesign GC globally
+* modify closure semantics
+* alter iterator semantics
+* redesign async semantics
+* globally mutate fast-path architecture
+* rewrite module loading
+* redesign tensor internals
+* change package syntax
+* add experimental language paradigms
 
-GlowLang must remain:
+This phase is:
 
-* lightweight
-* readable
-* expressive
-* fast-starting
-* adaptive
-* production-stable
+# ecosystem hardening and professionalization ONLY.
 
 ---
 
-# PACKAGE MANAGER STANDARD
+# PHASE 1 — STABILITY HARDENING
 
-GlowLang already has an official package manager:
+# Goal
 
-# gdu
+Transform GlowLang from:
 
-This MUST remain the official ecosystem manager.
-
-Example usage:
-
-```bash id="jlwm1a"
-gdu install numpy
-gdu install ai
-gdu install web
-gdu install postgres
-```
-
-Do NOT redesign or replace `gdu`.
-
-Expand it carefully.
-
----
-
-# MODULE SYSTEM REQUIREMENTS
-
-GlowLang imports must remain natural and lightweight.
-
-Preferred examples:
-
-```glow id="jlwm1b"
-use math
-```
-
-```glow id="jlwm1c"
-use matrix from ai
-```
-
-```glow id="jlwm1d"
-using graphics as gfx
-```
-
-Avoid:
-
-* excessive nesting
-* Python-style clutter
-* JavaScript-style import complexity
-* verbose module syntax
-
----
-
-# ECOSYSTEM EXPANSION TASKS
-
-Implement missing ecosystem capabilities while preserving all existing architecture.
-
----
-
-# AI / MACHINE LEARNING SYSTEMS
-
-Implement:
-
-* Tensor runtime
-* PackedTensor structures
-* Matrix engine
-* SIMD tensor acceleration
-* CUDA/OpenCL interoperability
-* AI numeric kernels
-* Automatic differentiation
-* ONNX model loading
-* Neural-network primitives
-* Scientific computing APIs
-
-Goal:
-GlowLang should support:
-
-* AI workloads
-* ML pipelines
-* vector computation
-* numerical simulations
-* data processing
-
----
-
-# WEB DEVELOPMENT STACK
-
-Implement:
-
-* HTTP server runtime
-* Async networking layer
-* Routing system
-* Middleware engine
-* WebSocket support
-* REST API framework
-* JSON serialization
-* Database connectors
-* Template rendering
-* ORM/query layer
-
-Goal:
-GlowLang should support:
-
-* backend APIs
-* real-time networking
-* scalable web services
-* modern web applications
-
----
-
-# ASYNC & CONCURRENCY RUNTIME
-
-Implement:
-
-* Coroutine scheduler
-* Async runtime
-* Event loop
-* Timers
-* Non-blocking I/O
-* Socket runtime
-* Multithreading support
-* Lock-free queues
-* Task scheduling
-* Concurrent runtime primitives
-
-Goal:
-GlowLang should scale efficiently for:
-
-* servers
-* networking
-* concurrent workloads
-* async applications
-
----
-
-# DATABASE ECOSYSTEM
-
-Implement:
-
-* PostgreSQL driver
-* SQLite runtime integration
-* Redis client
-* Query builder
-* ORM system
-* Migration tooling
-* Connection pooling
-
----
-
-# GUI & GRAPHICS SYSTEMS
-
-Implement:
-
-* Windowing toolkit
-* Graphics bindings
-* Event-driven UI system
-* Rendering APIs
-* Lightweight GUI framework
-
----
-
-# GAME DEVELOPMENT CAPABILITIES
-
-Implement:
-
-* Game loop framework
-* ECS architecture support
-* OpenGL/Vulkan bindings
-* Audio runtime
-* Physics bindings
-* Input systems
-
----
-
-# TOOLING & DEVELOPER EXPERIENCE
-
-Implement:
-
-* Language Server Protocol (LSP)
-* VSCode integration
-* Debugger
-* Runtime profiler
-* Stack traces
-* Runtime introspection
-* Formatter
-* Package documentation generator
-* Interactive REPL improvements
-
----
-
-# PLATFORM & DEPLOYMENT SYSTEMS
-
-Implement:
-
-* ARM64 backend
-* WebAssembly backend
-* AOT compilation
-* Cross-compilation
-* Binary packaging
-* Runtime snapshots
-* Fast startup images
-* Docker/deployment tooling
-
----
-
-# ADVANCED OPTIMIZATION SYSTEMS
-
-Implement/refine:
-
-* Object Layout Optimization
-* Hidden Class Transition Pruning
-* Cache Locality Optimization
-* Branch Prediction Optimization
-* Advanced Register Allocation Refinement
-* SIMD / Vectorization Backend
-* Packed Typed Arrays
-* Profile-Guided Optimization (PGO)
-* Runtime Profiling Infrastructure
-* Adaptive Tiered Compilation Refinement
-* JIT Guard Optimization
-* Concurrent / Incremental GC
-* Write Barrier Optimization
-* Devirtualization
-* Inline Cached Method Dispatch Refinement
-* Object Storage Compaction
-* Fast String Engine
-* Rope String Implementation
-* String Interning System
-* Native FFI System
-* Coroutine / Async Runtime
-* Multithreading Runtime
-* Lock-Free Runtime Structures
-* ARM64 Native Backend
-* WebAssembly Backend
-* Ahead-of-Time (AOT) Compilation
-* Bytecode Optimization Passes
-* Constant Folding Expansion
-* Dead Code Elimination Expansion
-* Loop Unrolling
-* Hot Loop Trace Refinement
-* Fast Module Loader
-* Native Package Manager Expansion
-* Incremental Compiler Pipeline
-* REPL Optimization Layer
-* Debugger + Runtime Introspection
-* Optimized Closure Representation
-* Zero-Cost Exception Handling
-* Runtime Snapshotting / Fast Startup Images
-* AI/ML Numeric Runtime Optimizations
-
----
-
-# TESTING REQUIREMENTS (EXTREMELY IMPORTANT)
-
-After implementing ANY feature:
-
-You MUST rigorously test it.
-
-Do NOT create:
-
-* fake implementations
-* shell-only demos
-* placeholder systems
-* mock outputs
-* skeleton APIs
-* non-functional wrappers
-
-Every implemented feature must:
-
-* function fully
-* execute correctly
-* integrate with the runtime
-* survive stress testing
-* survive edge-case testing
-* survive concurrency testing
-* survive memory pressure testing
-* survive long-running execution
-* preserve compatibility with existing systems
-
----
-
-# REQUIRED TESTING PROCESS
-
-For EVERY implemented system:
-
-1. Unit tests
-2. Integration tests
-3. Stress tests
-4. Performance tests
-5. Concurrency tests
-6. Memory integrity tests
-7. Runtime stability tests
-8. JIT correctness tests
-9. GC safety tests
-10. Real-world workload tests
-
-Verify:
-
-* actual execution
-* actual correctness
-* actual runtime behavior
-
-NOT just printed shell output.
-
----
-
-# BENCHMARK REQUIREMENTS
-
-After implementation and testing:
-
-Run comprehensive benchmarks against all languages installed on the Linux system, including but not limited to:
-
-* C
-* C++
-* Go
-* Java
-* Node.js
-* Python
-* Rust (if installed)
-* C#/.NET (if installed)
-
-Benchmark categories must include:
-
-* tight loops
-* recursion
-* graph algorithms
-* object-heavy workloads
-* async networking
-* AI/numeric workloads
-* SIMD workloads
-* string processing
-* allocation-heavy workloads
-* multithreaded workloads
-
-Generate:
-
-* reproducible benchmark reports
-* memory usage analysis
-* startup latency analysis
-* throughput analysis
-* GC behavior analysis
-* scalability analysis
-
----
-
-# FINAL ENGINEERING RULE
-
-GlowLang is already production-grade.
-
-DO NOT destroy stability chasing theoretical optimizations.
-
-Priority order:
-
-1. Stability
-2. Correctness
-3. Runtime Safety
-4. Backward Compatibility
-5. Maintainability
-6. Performance
-7. Ecosystem Growth
-8. Developer Experience
-
-All improvements must be:
-
-* incremental
-* benchmark-verified
-* architecture-aware
+* feature-complete
+  into:
+* industrially hardened
+* reliability-tested
 * production-safe
-* minimally disruptive
 
-GlowLang must continue to feel:
+---
 
-# “Readable like human language.
+# REQUIRED IMPLEMENTATIONS
 
-Executed like a native runtime.”
+## 1. Runtime Fuzzing Infrastructure
+
+Implement:
+
+* lexer fuzzing
+* parser fuzzing
+* bytecode fuzzing
+* malformed module fuzzing
+* malformed tensor fuzzing
+* malformed async state fuzzing
+
+Goal:
+
+* detect undefined behavior
+* detect runtime crashes
+* detect parser corruption
+* detect VM edge-case instability
+
+Requirements:
+
+* automated fuzz runner
+* isolated execution
+* reproducible crash logs
+* corpus minimization support
+
+DO NOT:
+
+* mutate runtime semantics
+* bypass safety systems
+
+---
+
+## 2. Stress Testing Infrastructure
+
+Implement:
+
+* long-running execution tests
+* recursive stress tests
+* tensor allocation stress tests
+* async overload tests
+* module scaling tests
+* rope/string stress tests
+* iterator pressure tests
+
+Goal:
+
+* verify runtime durability
+* validate long-term memory integrity
+
+---
+
+## 3. GC Verification System
+
+Implement:
+
+* heap integrity validation
+* dangling reference detection
+* closure lifetime validation
+* iterator lifetime validation
+* rope ownership validation
+* tensor allocation tracing
+
+Goal:
+
+* guarantee memory safety
+* prevent hidden corruption
+
+---
+
+## 4. Race Condition Testing
+
+Implement:
+
+* multithread contention tests
+* async scheduler collision tests
+* thread-local isolation validation
+* lock-free structure verification
+
+Goal:
+
+* detect runtime-global leakage
+* verify concurrency correctness
+
+---
+
+## 5. JIT Invalidation Testing
+
+Implement:
+
+* guard invalidation tests
+* deoptimization verification
+* polymorphic shape mutation tests
+* recursive JIT fallback testing
+* fast-path rollback verification
+
+Goal:
+
+* guarantee adaptive runtime correctness
+
+---
+
+# PHASE 2 — TOOLING
+
+# Goal
+
+Build a professional developer tooling ecosystem.
+
+---
+
+# REQUIRED IMPLEMENTATIONS
+
+## 1. LSP (Language Server Protocol)
+
+Implement:
+
+* autocomplete
+* diagnostics
+* semantic highlighting
+* hover information
+* go-to-definition
+* symbol indexing
+* inline documentation
+
+Goal:
+
+* professional IDE support
+
+---
+
+## 2. VSCode Extension
+
+Implement:
+
+* syntax highlighting
+* debugger integration
+* profiler integration
+* GlowLang runner
+* package manager integration
+* WASM playground integration
+
+Goal:
+
+* production-grade editor experience
+
+---
+
+## 3. Debugger Polish
+
+Improve:
+
+* async stack traces
+* closure inspection
+* tensor inspection
+* thread inspection
+* JIT-aware stack visualization
+
+Goal:
+
+* industrial debugging quality
+
+---
+
+## 4. Profiler UI
+
+Implement:
+
+* hot-path visualization
+* allocation graphs
+* GC timeline visualization
+* async scheduler tracing
+* tensor workload profiling
+* JIT specialization visibility
+
+Goal:
+
+* runtime observability
+
+---
+
+## 5. Stack Visualizer
+
+Implement:
+
+* VM frame visualization
+* recursion maps
+* async execution maps
+* deoptimization traces
+
+Goal:
+
+* deep runtime introspection
+
+---
+
+# PHASE 3 — ECOSYSTEM
+
+# Goal
+
+Expand GlowLang into a scalable industrial ecosystem.
+
+---
+
+# REQUIRED IMPLEMENTATIONS
+
+## 1. Official Package Registry
+
+Expand `gdu` with:
+
+* package publishing
+* dependency resolution
+* semantic versioning
+* package verification
+* registry indexing
+* package search
+
+Goal:
+
+* scalable package ecosystem
+
+DO NOT redesign `gdu`.
+
+---
+
+## 2. Native Web Framework
+
+Implement:
+
+* routing
+* middleware
+* async handlers
+* websocket support
+* JSON APIs
+* static file serving
+
+Goal:
+
+* modern backend ecosystem
+
+Maintain:
+
+* Natural-Language-Like readability
+* isolated runtime semantics
+
+---
+
+## 3. ORM & Database Toolkit
+
+Implement:
+
+* schema mapping
+* query builder
+* migrations
+* connection pooling
+* async database support
+
+Goal:
+
+* production database workflows
+
+---
+
+## 4. HTTP Toolkit
+
+Implement:
+
+* request builders
+* response builders
+* JSON middleware
+* streaming APIs
+* HTTP client support
+
+Goal:
+
+* complete networking ecosystem
+
+---
+
+## 5. AI Libraries
+
+Expand:
+
+* tensor helpers
+* vector utilities
+* inference pipelines
+* dataset loaders
+* matrix APIs
+
+Goal:
+
+* practical AI/ML ecosystem support
+
+DO NOT redesign tensor internals.
+
+---
+
+# PHASE 4 — DEVELOPER EXPERIENCE
+
+# Goal
+
+Make GlowLang approachable, learnable, and deployable.
+
+---
+
+# REQUIRED IMPLEMENTATIONS
+
+## 1. Documentation Expansion
+
+Create:
+
+* architecture guides
+* runtime internals docs
+* async tutorials
+* AI tutorials
+* web tutorials
+* optimization guides
+* deployment guides
+
+Goal:
+
+* production onboarding
+
+---
+
+## 2. Examples Ecosystem
+
+Create:
+
+* web APIs
+* async systems
+* AI demos
+* WASM demos
+* concurrency examples
+* database examples
+* package manager examples
+
+Goal:
+
+* practical learning resources
+
+---
+
+## 3. Interactive Playground
+
+Implement:
+
+* browser execution
+* WASM runtime integration
+* live examples
+* package demos
+* profiler visualization
+
+Goal:
+
+* zero-install GlowLang experience
+
+---
+
+## 4. WASM Showcase Demos
+
+Create:
+
+* browser tensor demos
+* async demos
+* visualization examples
+* web framework demos
+
+Goal:
+
+* demonstrate portability and runtime sophistication
+
+---
+
+# BENCHMARK DISCIPLINE REQUIREMENTS
+
+All future benchmarks MUST:
+
+* use equivalent algorithms
+* use equivalent datasets
+* use repeated-run averaging
+* validate timer precision
+* prevent dead-code elimination
+* verify actual computation occurred
+* control warmup behavior
+
+DO NOT:
+
+* publish unrealistic benchmark claims
+* compare non-equivalent implementations
+* rely on micro-benchmark artifacts
+
+Priority:
+
+# technical credibility over hype.
+
+---
+
+# TESTING REQUIREMENTS (MANDATORY)
+
+After EVERY implementation:
+
+You MUST perform:
+
+* correctness testing
+* fuzz testing
+* stress testing
+* concurrency testing
+* GC verification
+* async validation
+* JIT invalidation testing
+* long-running execution tests
+
+GlowNet must remain:
+
+* fully operational
+* concurrency-safe
+* memory-safe
+* benchmark-stable
+* semantically stable
+
+---
+
+# DISCOVERY RULE
+
+If any instability or missing architecture is discovered:
+
+DO NOT automatically redesign the runtime.
+
+Instead:
+
+1. detect it
+2. isolate it
+3. benchmark impact
+4. document it
+5. add it to a future-update report
+
+and STOP implementation until approval.
+
+---
+
+# FINAL GOAL
+
+GlowLang should evolve into:
+
+# a professionally hardened adaptive runtime ecosystem
+
+with:
+
+* production-grade tooling
+* industrial stability
+* scalable package infrastructure
+* professional debugging/profiling
+* modern web + AI ecosystem support
+* high-quality developer experience
+
+while preserving:
+
+* runtime integrity
+* fast-path isolation
+* semantic correctness
+* Natural-Language-Like readability
+* ecosystem stability
+
+WITHOUT destabilizing the existing runtime architecture.
 

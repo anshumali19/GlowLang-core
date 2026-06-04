@@ -28,6 +28,7 @@
 #include "lsp.h"
 #include "jit.h"
 #include "opt.h"
+#include <sqlite3.h>
 
 /* VM State */
 static __thread Value *vm_stack = NULL;
@@ -45,6 +46,8 @@ static __thread int vm_stack_top = 0; // The highest active register for GC scan
 #define POP() (vm_stack[--sp])
 
 /* Forward declarations */
+extern __thread int profiling_active;
+extern __thread int trace_mode;
 extern const char *intern_string(const char *s);
 extern void intern_cleanup(void);
 extern void intern_table_init(void);
@@ -55,7 +58,9 @@ void yyerror(const char *s);
 
 static void gc_mark_value(Value v);
 static void gc_mark_object(GCObject *obj);
+#if 0
 static void gc_collect(void);
+#endif
 static void* gc_alloc(size_t sz, ObjType type);
 void print_value(Value v);
 static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg);
@@ -63,9 +68,13 @@ static void var_set(const char *name, Value value);
 static Value var_get(const char *name);
 FuncEntry* func_get(const char *name);
 static Instance* instance_new(Class *k);
+static Value class_get_method(Class *k, const char *n);
+static Value instance_get(Instance *inst, const char *name);
+static void instance_set(Instance *inst, const char *name, Value val);
 static Value bound_method_new(Value instance, FuncEntry *method);
 
 Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
+    (void)argc;
     if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     if (fe && fe->body) {
         TypeSignature sig = compute_signature(args, fe->param_count);
@@ -108,7 +117,12 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
             Closure *c = AS_CLOSURE(callee);
             if (c->body) return run_bytecode(c->body, NULL, c, (int)(args - vm_stack));
         }
-        if (ot == OBJ_NATIVE_FUNC) return AS_NATIVE_FUNC(callee)->func(argc, args);
+        if (ot == OBJ_NATIVE_FUNC) {
+            if (pc && pc->is_method) {
+                args++;
+            }
+            return AS_NATIVE_FUNC(callee)->func(argc, args);
+        }
     }
     return value_none();
 }
@@ -534,7 +548,10 @@ static void gc_mark_object(GCObject *obj) {
     obj->marked = 1;
     switch (obj->type) {
         case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) gc_mark_value(l->items[i]); break; }
-        case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->size; i++) gc_mark_value(d->values[i]); break; }
+        case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; gc_mark_value(it->iterable); break; }
+        case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->size; i++) { gc_mark_value(d->keys[i]); gc_mark_value(d->values[i]); } break; }
+        case OBJ_SQLITE_ITER: break; 
+        case OBJ_SQLITE_HANDLE: break;
         case OBJ_CLASS: { 
             Class *c = (Class*)obj; 
             gc_mark_object((GCObject*)c->methods); 
@@ -548,7 +565,12 @@ static void gc_mark_object(GCObject *obj) {
             gc_mark_object((GCObject*)s->transitions);
             break;
         }
-        case OBJ_INSTANCE: { Instance *ins = (Instance*)obj; gc_mark_object((GCObject*)ins->klass); gc_mark_object((GCObject*)ins->shape); if(ins->fields) { int lim = ins->shape ? ins->shape->offset : -1; for(int i=0; i<=lim; i++) gc_mark_value(ins->fields[i]); } break; }
+        case OBJ_INSTANCE: { 
+            Instance *ins = (Instance*)obj; 
+            gc_mark_object((GCObject*)ins->klass); 
+            gc_mark_object((GCObject*)ins->properties); 
+            break; 
+        }
         case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; gc_mark_value(bm->instance); break; }
         case OBJ_ROPE: {
             RopeNode *rn = (RopeNode*)obj;
@@ -570,13 +592,13 @@ static void gc_mark_value(Value v) {
 }
 
 static void gc_full_collect(void) {
+    pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     pthread_mutex_lock(&threads_mutex);
     for (int i=0; i<active_stack_count; i++) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);
         int stk_sp = *(active_stacks[i].top_ptr);
         if (stk) {
-            // Safety check for main stack
             int lim = (stk_sp > 1000000) ? 1000000 : stk_sp;
             for (int j=0; j<lim; j++) gc_mark_value(stk[j]);
         }
@@ -589,7 +611,9 @@ static void gc_full_collect(void) {
             GCObject *unmarked = *p; *p = unmarked->next;
             if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
             else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
-            else if (unmarked->type == OBJ_INSTANCE) free(((Instance*)unmarked)->fields);
+            else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
+            else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close(((SQLiteHandle*)unmarked)->db); }
+            else if (unmarked->type == OBJ_INSTANCE) { /* No fields array to free, Dict is handled as OBJ_DICT */ }
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
             else if (unmarked->type == OBJ_PACKED_ARRAY) free(((PackedArray*)unmarked)->data);
@@ -603,9 +627,11 @@ static void gc_full_collect(void) {
         }
     }
     while (gc_remembered_set) { RememberedSet *next = gc_remembered_set->next; gc_remembered_set->obj->in_remembered_set = 0; free(gc_remembered_set); gc_remembered_set = next; }
+    pthread_mutex_unlock(&gc_mutex);
 }
 
 static void gc_minor_collect(void) {
+    pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     pthread_mutex_lock(&threads_mutex);
     for (int i=0; i<active_stack_count; i++) {
@@ -618,18 +644,19 @@ static void gc_minor_collect(void) {
         gc_mark_value(*(active_stacks[i].pending_exc_ptr));
     }
     pthread_mutex_unlock(&threads_mutex);
-    RememberSetScan:;
     RememberedSet *rs = gc_remembered_set;
     while (rs) { gc_mark_object(rs->obj); rs = rs->next; }
 
     GCObject **p = &gc_objects;
     while (*p) {
-        if ((*p)->generation == 1) { p = &((*p)->next); continue; } // Skip old gen sweep
+        if ((*p)->generation == 1) { p = &((*p)->next); continue; } 
         if (!(*p)->marked) {
             GCObject *unmarked = *p; *p = unmarked->next;
             if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
             else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
-            else if (unmarked->type == OBJ_INSTANCE) free(((Instance*)unmarked)->fields);
+            else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
+            else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close(((SQLiteHandle*)unmarked)->db); }
+            else if (unmarked->type == OBJ_INSTANCE) { }
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
             else if (unmarked->type == OBJ_PACKED_ARRAY) free(((PackedArray*)unmarked)->data);
@@ -638,18 +665,21 @@ static void gc_minor_collect(void) {
             if (unmarked->is_block_allocated) { ((GCBlock*)unmarked->block_ptr)->live_count--; } else { free(unmarked); }
         } else {
             (*p)->marked = 0;
-            (*p)->generation = 1; // Promote survivors
             p = &((*p)->next);
         }
     }
+    pthread_mutex_unlock(&gc_mutex);
 }
 
+#if 0
 static void gc_collect(void) { gc_full_collect(); }
+#endif
 
 static void* gc_alloc(size_t sz, ObjType type) {
-    pthread_mutex_lock(&gc_mutex);
     if (gc_allocated > gc_threshold) gc_full_collect();
     else if (gc_allocated > gc_threshold / 2) gc_minor_collect();
+    
+    pthread_mutex_lock(&gc_mutex);
     
     sz = (sz + 7) & ~7;
     GCObject *obj = NULL;
@@ -694,16 +724,69 @@ static void* gc_alloc_stack(size_t sz, ObjType type) {
 }
 
 /* Helpers */
-static Dict* dict_new(int sz) { Dict *d = gc_alloc(sizeof(Dict), OBJ_DICT); d->capacity = sz; d->keys = calloc(sz, sizeof(char*)); d->values = calloc(sz, sizeof(Value)); return d; }
-static void dict_set(Dict *d, const char *key, Value val) {
-    gc_write_barrier((GCObject*)d, val);
-    for (int i=0; i<d->size; i++) if (strcmp(d->keys[i], key) == 0) { d->values[i] = val; return; }
-    if (d->size >= d->capacity) { d->capacity = (d->capacity==0)?8:d->capacity*2; d->keys = realloc(d->keys, sizeof(char*)*d->capacity); d->values = realloc(d->values, sizeof(Value)*d->capacity); }
-    d->keys[d->size] = key; d->values[d->size] = val; d->size++;
+static uint32_t hash_string(const char *s) {
+    uint32_t hash = 2166136261u;
+    for (int i=0; s[i]; i++) { hash ^= (uint8_t)s[i]; hash *= 16777619u; }
+    return hash;
 }
+
+static Dict* dict_new(int sz) {
+    int cap = 8; while (cap < sz) cap *= 2;
+    Dict *d = gc_alloc(sizeof(Dict), OBJ_DICT);
+    d->capacity = cap; d->size = 0;
+    d->keys = calloc(cap, sizeof(Value));
+    d->values = calloc(cap, sizeof(Value));
+    for (int i=0; i<cap; i++) d->keys[i] = value_none();
+    return d;
+}
+
+static void dict_set(Dict *d, const char *key, Value val) {
+    if (!key) return;
+    const char *interned = intern_string(key);
+    gc_write_barrier((GCObject*)d, val);
+    uint32_t h = hash_string(interned);
+    int idx = h & (d->capacity - 1);
+    
+    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
+        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) {
+            d->values[idx] = val; return;
+        }
+        idx = (idx + 1) & (d->capacity - 1);
+    }
+    
+    if (d->size * 2 >= d->capacity) {
+        int old_cap = d->capacity;
+        Value *old_keys = d->keys;
+        Value *old_values = d->values;
+        d->capacity *= 2;
+        d->keys = calloc(d->capacity, sizeof(Value));
+        d->values = calloc(d->capacity, sizeof(Value));
+        for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
+        d->size = 0;
+        for (int i=0; i<old_cap; i++) {
+            if (GET_TYPE(old_keys[i]) != VAL_NONE) {
+                dict_set(d, (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD), old_values[i]);
+            }
+        }
+        free(old_keys); free(old_values);
+        dict_set(d, interned, val);
+        return;
+    }
+    
+    d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
+    d->values[idx] = val;
+    d->size++;
+}
+
 static Value dict_get(Dict *d, const char *key) {
-    if (!d) return value_none();
-    for (int i = 0; i < d->size; i++) if (strcmp(d->keys[i], key) == 0) return d->values[i];
+    if (!d || d->capacity == 0 || !key) return value_none();
+    const char *interned = intern_string(key);
+    uint32_t h = hash_string(interned);
+    int idx = h & (d->capacity - 1);
+    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
+        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return d->values[idx];
+        idx = (idx + 1) & (d->capacity - 1);
+    }
     return value_none();
 }
 static List* list_new(int sz) { List *l = gc_alloc(sizeof(List), OBJ_LIST); l->size = 0; l->capacity = sz; l->items = sz > 0 ? calloc(sz, sizeof(Value)) : NULL; return l; }
@@ -715,21 +798,26 @@ static void list_push(List *l, Value v) {
 static PackedArray* packed_array_new(PackedType type, int capacity) {
     PackedArray *pa = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
     pa->type = type;
-    pa->size = capacity;
-    pa->capacity = capacity;
     size_t elem_sz = (type == PACKED_INT64) ? sizeof(int64_t) : sizeof(double);
     if (capacity > 0) {
         if (posix_memalign(&pa->data, 32, capacity * elem_sz) != 0) {
             pa->data = NULL;
+            pa->size = 0;
+            pa->capacity = 0;
         } else {
+            pa->size = capacity;
+            pa->capacity = capacity;
             memset(pa->data, 0, capacity * elem_sz);
         }
     } else {
         pa->data = NULL;
+        pa->size = 0;
+        pa->capacity = 0;
     }
     return pa;
 }
 
+#if 0
 static void packed_array_push(PackedArray *pa, Value v) {
     if (pa->size >= pa->capacity) {
         pa->capacity = (pa->capacity == 0) ? 4 : pa->capacity * 2;
@@ -742,6 +830,7 @@ static void packed_array_push(PackedArray *pa, Value v) {
         ((double*)pa->data)[pa->size++] = AS_FLOAT(v);
     }
 }
+#endif
 
 static Value packed_array_get(PackedArray *pa, int idx) {
     if (idx < 0 || idx >= pa->size) return value_none();
@@ -756,7 +845,16 @@ static void packed_array_set(PackedArray *pa, int idx, Value v) {
 }
 
 static Shape* shape_new(Shape *p, const char *n, int o) { Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE); s->parent = p; s->name = n; s->offset = o; s->transitions = dict_new(4); return s; }
-static Shape* shape_get_next(Shape* curr, const char *name) { for (int i=0; i<curr->transitions->size; i++) if (strcmp(curr->transitions->keys[i], name) == 0) return (Shape*)(uintptr_t)(curr->transitions->values[i] & MASK_PAYLOAD); Shape *next = shape_new(curr, name, curr->offset + 1); dict_set(curr->transitions, name, value_obj(next)); return next; }
+#if 0
+static Shape* shape_get_next(Shape* curr, const char *name) { 
+    for (int i=0; i<curr->transitions->size; i++) 
+        if (strcmp(AS_STRING(curr->transitions->keys[i]), name) == 0) 
+            return (Shape*)(uintptr_t)(curr->transitions->values[i] & MASK_PAYLOAD); 
+    Shape *next = shape_new(curr, name, curr->offset + 1); 
+    dict_set(curr->transitions, name, value_obj(next)); 
+    return next; 
+}
+#endif
 static Class* class_new(const char *name, Class *parent) { 
     Class *c = gc_alloc(sizeof(Class), OBJ_CLASS); 
     c->name = strdup(name); 
@@ -770,39 +868,32 @@ static Class* class_new(const char *name, Class *parent) {
 static Instance* instance_new(Class *k) {
     Instance *i = gc_alloc(sizeof(Instance), OBJ_INSTANCE);
     i->klass = k;
+    i->properties = dict_new(8);
     k->instances_created++;
-    if (k->stable_shape) {
-        i->shape = k->stable_shape;
-        i->field_capacity = i->shape->offset + 1;
-        if (i->field_capacity < 8) i->field_capacity = 8;
-        i->fields = calloc(i->field_capacity, sizeof(Value));
-    } else {
-        i->shape = k->root_shape;
-        i->field_capacity = 8;
-        i->fields = calloc(8, sizeof(Value));
-    }
-    for(int j=0; j<i->field_capacity; j++) i->fields[j] = value_none();
     return i;
 }
-static Value class_get_method(Class *k, const char *n) { while(k) { Value m = dict_get(k->methods, n); if((m & MASK_PAYLOAD) != 0) return m; k=k->parent; } return value_none(); }
+
+static Value class_get_method(Class *k, const char *n) { 
+    while(k) { 
+        Value m = dict_get(k->methods, n); 
+        if(GET_TYPE(m) != VAL_NONE) return m; 
+        k=k->parent; 
+    } 
+    return value_none(); 
+}
+
 static Value instance_get(Instance *inst, const char *name) {
-    Shape *s = inst->shape; while (s && s->name && strcmp(s->name, "__root__") != 0) { if (strcmp(s->name, name) == 0) return inst->fields[s->offset]; s = s->parent; }
+    if (trace_mode) printf("DEBUG: instance_get(%s) on Inst %p, Props %p\n", name, (void*)inst, (void*)inst->properties);
+    Value v = dict_get(inst->properties, name);
+    if (GET_TYPE(v) != VAL_NONE) return v;
     return class_get_method(inst->klass, name);
 }
+
 static void instance_set(Instance *inst, const char *name, Value val) {
-    gc_write_barrier((GCObject*)inst, val);
-    Shape *s = inst->shape; while (s && s->name && strcmp(s->name, "__root__") != 0) { if (strcmp(s->name, name) == 0) { inst->fields[s->offset] = val; return; } s = s->parent; }
-    
-    inst->shape = shape_get_next(inst->shape, name);
-
-    /* Transition Pruning: if we reach a certain depth after many instances, promote it */
-    if (inst->shape->offset >= 2 && inst->klass->instances_created > 50 && !inst->klass->stable_shape) {
-        inst->klass->stable_shape = inst->shape;
-    }
-
-    if (inst->shape->offset >= inst->field_capacity) { int old = inst->field_capacity; inst->field_capacity *= 2; inst->fields = realloc(inst->fields, sizeof(Value)*inst->field_capacity); for(int j=old; j<inst->field_capacity; j++) inst->fields[j] = value_none(); }
-    inst->fields[inst->shape->offset] = val;
+    if (trace_mode) printf("DEBUG: instance_set(%s) on Inst %p, Props %p, val 0x%lx\n", name, (void*)inst, (void*)inst->properties, (unsigned long)val);
+    dict_set(inst->properties, name, val);
 }
+
 static Trait* trait_new(const char *name) { Trait *t = gc_alloc(sizeof(Trait), OBJ_TRAIT); t->name = strdup(name); t->methods = dict_new(8); return t; }
 static Value bound_method_new(Value inst, FuncEntry *m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = m; return value_bound_method(bm); }
 static Value native_func_new(const char *name, NativeFuncPtr ptr) { NativeFunc *nf = gc_alloc(sizeof(NativeFunc), OBJ_NATIVE_FUNC); nf->name = name; nf->func = ptr; return value_native_func(nf); }
@@ -822,18 +913,49 @@ static Node* newIfNode(Node *c, Node *t, Node *e) { Node *n = node_new(NODE_IF);
 static Node* newWhileNode(Node *c, Node *b) { Node *n = node_new(NODE_WHILE); n->left = c; n->right = b; return n; }
 static Node* newShowNode(Node **is, int c) { Node *n = node_new(NODE_SHOW); n->print_items = is; n->print_count = c; return n; }
 static Node* newExprStmtNode(Node *e) { Node *n = node_new(NODE_EXPR_STMT); n->left = e; return n; }
-static Node* newCallExprNode(Node *e, Node **as, int c) { Node *n = node_new(NODE_CALL_EXPR); n->left = e; n->call_args = as; n->call_arg_count = c; return n; }
+static Node* newCallExprNode(Node *e, Node **as, int c) {
+    Node *n = node_new(NODE_CALL_EXPR);
+    n->left = e;
+    n->call_args = as;
+    n->call_arg_count = c;
+    return n;
+}
+#if 0
 static Node* newIndexAssignNode(Node *c, Node *i, Node *v) { Node *n = node_new(NODE_INDEX_ASSIGN); n->left = c; n->right = i; n->third = v; return n; }
+#endif
 
 /* Compiler */
 static Bytecode *compiling_bc = NULL;
 static Class *last_compiling_class = NULL;
 static Trait *last_compiling_trait = NULL;
+/* Global State */
+__thread int profiling_active = 0;
+__thread int trace_mode = 0;
 static int next_free_reg = 0;
 static int global_lambda_count = 0;
 static int compiling_line = 0;
 static const char *compiling_file = NULL;
-static __thread int profiling_active = 0;
+
+static void visualize_stack(int base_reg, int local_count) {
+    printf("   Stack: [");
+    for (int i = 0; i < local_count; i++) {
+        Value v = vm_stack[base_reg + i];
+        if (i > 0) printf(", ");
+        if (v == 0) printf("nil");
+        else if (((v) & MASK_NAN) != MASK_NAN) printf("%g", AS_FLOAT(v));
+        else {
+            uint64_t type = ((v) & MASK_TYPE) >> 48;
+            if (type == VAL_INT) printf("%ld", (long)AS_INT(v));
+            else if (type == VAL_BOOL) printf(AS_BOOL(v) ? "true" : "false");
+            else if (type == VAL_STRING) {
+                const char *s = AS_STRING(v);
+                if (strlen(s) > 10) printf("\"%.7s...\"", s);
+                else printf("\"%s\"", s);
+            } else printf("<obj>");
+        }
+    }
+    printf("]\n");
+}
 
 static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     if (bc->count >= bc->capacity) { bc->capacity = (bc->capacity == 0) ? 1024 : bc->capacity * 2; bc->code = realloc(bc->code, sizeof(Instruction)*bc->capacity); }
@@ -853,6 +975,7 @@ static int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
     bc->code[idx].r2 = 0;
     bc->code[idx].type = 0;
     bc->code[idx].is_stack_alloc = 0;
+    bc->code[idx].is_method = 0;
     bc->code[idx].line = compiling_line;
     bc->code[idx].file = compiling_file;
     bc->code[idx].trace = NULL;
@@ -870,6 +993,39 @@ static int bc_emit_reg(Bytecode *bc, OpCode op, int r0, int r1, int r2) {
     bc->code[idx].r2 = (unsigned short)r2;
     return idx;
 }
+static void bc_free(Bytecode *bc) {
+    if (!bc) return;
+    if (bc->code) free(bc->code);
+    if (bc->exception_table) free(bc->exception_table);
+    if (bc->jit_code) munmap(bc->jit_code, bc->jit_size);
+    free(bc);
+}
+
+static void func_entry_cleanup(FuncEntry *fe) {
+    if (!fe || !fe->used) return;
+    // fe->params is arena-allocated and will be reclaimed by arena_free_all(), do not free it.
+    fe->params = NULL;
+    if (fe->local_names) {
+        free(fe->local_names);
+        fe->local_names = NULL;
+    }
+    if (fe->body) {
+        bc_free(fe->body);
+        fe->body = NULL;
+    }
+    if (fe->specs) {
+        for (int i = 0; i < fe->spec_count; i++) {
+            if (fe->specs[i].jit_code && fe->specs[i].jit_code != (void*)1) {
+                munmap(fe->specs[i].jit_code, fe->specs[i].jit_size);
+            }
+        }
+        free(fe->specs);
+        fe->specs = NULL;
+    }
+    fe->used = 0;
+}
+
+
 static Bytecode* bc_new(FuncEntry *owner) { 
     Bytecode *bc = calloc(1, sizeof(Bytecode)); 
     bc->capacity = 1024; 
@@ -891,7 +1047,6 @@ static void bc_add_handler(Bytecode *bc, int start, int end, int handler) {
 static void func_add_local(FuncEntry *fe, const char *name) {
     if (!fe || !name) return;
     for (int i=0; i<fe->local_count; i++) if (strcmp(fe->local_names[i], name) == 0) return;
-    for (int i=0; i<fe->param_count; i++) if (strcmp(fe->params[i], name) == 0) return;
     if (fe->local_count >= fe->local_capacity) {
         fe->local_capacity = (fe->local_capacity == 0) ? 8 : fe->local_capacity * 2;
         fe->local_names = realloc(fe->local_names, sizeof(char*) * fe->local_capacity);
@@ -903,11 +1058,8 @@ static FuncEntry *compiling_func = NULL;
 
 static int get_local_reg(const char *name) {
     if (!compiling_func) return -1;
-    for (int i=0; i<compiling_func->param_count; i++) {
-        if (strcmp(compiling_func->params[i], name) == 0) return i;
-    }
     for (int i=0; i<compiling_func->local_count; i++) {
-        if (strcmp(compiling_func->local_names[i], name) == 0) return compiling_func->param_count + i;
+        if (strcmp(compiling_func->local_names[i], name) == 0) return i;
     }
     return -1;
 }
@@ -953,6 +1105,7 @@ static void analyze_escapes(Bytecode *bc) {
 
 static int compile_expr(Node *n, int target_reg);
 
+#if 0
 static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_arg_reg) {
     if (!fe || !fe->body || fe->body->count > 20 || fe->body->count == 0) return false;
     
@@ -987,13 +1140,17 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
 
     return true;
 }
+#endif
 
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
     if (compiling_func && n->name) {
-        if (n->type == NODE_VAR || n->type == NODE_ASSIGN || n->type == NODE_LET) {
-            func_add_local(compiling_func, n->name);
+        if (n->type == NODE_VAR || n->type == NODE_ASSIGN || n->type == NODE_LET || n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE) {
+            if (get_local_reg(n->name) == -1) {
+                func_add_local(compiling_func, n->name);
+                next_free_reg++;
+            }
         }
     }
     
@@ -1073,6 +1230,37 @@ static void compile_stmt(Node *n) {
             compiling_bc->code[jf].arg = compiling_bc->count;
             break;
         }
+        case NODE_FOR_EACH: {
+            int coll_reg = compile_expr(n->left, -1);
+            
+            // 1. Ensure loop variable is local and get its register
+            if (compiling_func && get_local_reg(n->name) == -1) {
+                func_add_local(compiling_func, n->name);
+                next_free_reg++;
+            }
+            int var_reg = get_local_reg(n->name);
+            
+            // 2. Allocate internal iterator state register
+            int iter_reg = next_free_reg++;
+            
+            bc_emit_reg(compiling_bc, OP_ITER_START, iter_reg, coll_reg, 0);
+            int loop_start = compiling_bc->count;
+            
+            // 3. Directly load the next value into the loop variable's register
+            int val_reg = var_reg != -1 ? var_reg : next_free_reg++;
+            int jf_idx = bc_emit_reg(compiling_bc, OP_ITER_NEXT, val_reg, iter_reg, 0);
+            
+            if (var_reg == -1) {
+                int g_slot = global_get_slot(n->name);
+                int s_idx = bc_emit(compiling_bc, OP_STORE_VAR, g_slot, 0);
+                compiling_bc->code[s_idx].r0 = val_reg;
+            }
+            
+            compile_stmt(n->right);
+            bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
+            compiling_bc->code[jf_idx].arg = compiling_bc->count;
+            break;
+        }
         case NODE_RETURN: {
             int r = compile_expr(n->left, -1);
             int idx = bc_emit(compiling_bc, OP_RETURN, 0, 0);
@@ -1080,10 +1268,35 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_FUNC_DEF: {
-            FuncEntry *fe = func_table_add(n->name); fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
+            FuncEntry *fe = func_table_add(n->name); 
+            if (fe->body) bc_free(fe->body);
+            if (fe->specs) {
+                for (int i=0; i<fe->spec_count; i++) {
+                    if (fe->specs[i].jit_code && fe->specs[i].jit_code != (void*)1) {
+                        munmap(fe->specs[i].jit_code, fe->specs[i].jit_size);
+                    }
+                }
+                free(fe->specs);
+                fe->specs = NULL;
+                fe->spec_count = 0;
+                fe->spec_capacity = 0;
+            }
+            if (fe->local_names) free(fe->local_names);
+            fe->local_names = NULL; fe->local_count = 0; fe->local_capacity = 0;
+
+            fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; 
             FuncEntry *pf = compiling_func; compiling_func = fe;
-            int old_free = next_free_reg; next_free_reg = fe->param_count + fe->local_count;
+            int old_free = next_free_reg; 
+            
+            if (last_compiling_class || last_compiling_trait) {
+                func_add_local(fe, "self");
+            }
+            for (int i=0; i<fe->param_count; i++) {
+                func_add_local(fe, n->func_params[i]);
+            }
+            
+            next_free_reg = fe->local_count;
             compile_stmt(n->left); 
             fe->body->local_count = next_free_reg;
             bc_emit(compiling_bc, OP_RETURN, 0, 0); 
@@ -1327,37 +1540,48 @@ static int compile_expr(Node *n, int target_reg) {
         case NODE_CALL_EXPR:
         case NODE_CALL: {
             int ac = n->call_arg_count;
-            if (n->type == NODE_CALL && n->name) {
-                if (strcmp(n->name, "type") == 0 && ac == 1) {
-                    int arg = compile_expr(n->call_args[0], -1);
-                    if (target_reg == -1) reg = next_free_reg++;
-                    bc_emit_reg(compiling_bc, OP_TYPE, reg, arg, 0);
-                    break;
+            int start_reg = next_free_reg;
+            
+            // 1. Identify method status
+            bool is_method = (n->type == NODE_CALL_EXPR && n->left->type == NODE_INDEX && n->left->name != NULL);
+            
+            // 2. Reserve the entire callee frame block immediately
+            int callee_frame_base = start_reg;
+            if (is_method) {
+                next_free_reg += (ac + 1);
+                // Compile the instance (receiver) directly into Local 0 of the new frame
+                compile_expr(n->left->left, callee_frame_base);
+                // Compile arguments starting at Local 1
+                for (int i=0; i<ac; i++) {
+                    compile_expr(n->call_args[i], callee_frame_base + i + 1);
                 }
-                if (strcmp(n->name, "len") == 0 && ac == 1) {
-                    int arg = compile_expr(n->call_args[0], -1);
-                    if (target_reg == -1) reg = next_free_reg++;
-                    bc_emit_reg(compiling_bc, OP_LEN, reg, arg, 0);
-                    break;
+            } else {
+                next_free_reg += ac;
+                // Compile arguments starting at Local 0
+                for (int i=0; i<ac; i++) {
+                    compile_expr(n->call_args[i], callee_frame_base + i);
                 }
             }
-            int base = next_free_reg;
-            next_free_reg += ac + 1;
-            for (int i=0; i<ac; i++) compile_expr(n->call_args[i], base + i);
-            int callee_reg = base + ac;
-            if (n->type == NODE_CALL) {
-                FuncEntry *fe = func_get(n->name);
-                if (try_inline(fe, reg, ac, base)) break;
+            
+            // 3. Resolve the callee into a register outside the frame block
+            int callee_obj_reg = next_free_reg++;
+            if (n->type == NODE_CALL && n->name) {
                 int slot = global_get_slot(n->name);
                 int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-                compiling_bc->code[idx].r0 = callee_reg;
+                compiling_bc->code[idx].r0 = callee_obj_reg;
             } else {
-                compile_expr(n->left, callee_reg);
+                compile_expr(n->left, callee_obj_reg);
             }
+            
+            // 4. Emit the call
             int idx = bc_emit(compiling_bc, (n->type == NODE_CALL) ? OP_CALL : OP_CALL_VALUE, ac, (intptr_t)n->name);
             compiling_bc->code[idx].r0 = reg;
-            compiling_bc->code[idx].r1 = callee_reg;
-            compiling_bc->code[idx].r2 = base;
+            compiling_bc->code[idx].r1 = callee_obj_reg;
+            compiling_bc->code[idx].r2 = callee_frame_base;
+            compiling_bc->code[idx].is_method = is_method;
+            
+            // 5. Restore the register pool
+            next_free_reg = start_reg;
             break;
         }
         case NODE_INDEX: {
@@ -1382,6 +1606,7 @@ static int compile_expr(Node *n, int target_reg) {
             int idx = bc_emit(compiling_bc, OP_LIST_LITERAL, n->element_count, 0);
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = base;
+            next_free_reg = base; // Restore pool
             break;
         }
         case NODE_DICT_LITERAL: {
@@ -1394,6 +1619,7 @@ static int compile_expr(Node *n, int target_reg) {
             int idx = bc_emit(compiling_bc, OP_DICT_LITERAL, n->dict_count, 0);
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = base;
+            next_free_reg = base; // Restore pool
             break;
         }
         case NODE_LAMBDA: {
@@ -1507,10 +1733,14 @@ static __thread const char *error_file = NULL;
 static __thread int error_line = 0;
 
 char* format_stack_trace(void) {
-    char *buf = malloc(4096);
+    int max_frames = 30;
+    int frames_to_show = call_stack_ptr;
+    if (frames_to_show > max_frames) frames_to_show = max_frames;
+    
+    char *buf = malloc((frames_to_show + 3) * 256);
     buf[0] = '\0';
     strcat(buf, "Stack Trace:\n");
-    for (int i = call_stack_ptr - 1; i >= 0; i--) {
+    for (int i = call_stack_ptr - 1; i >= call_stack_ptr - frames_to_show; i--) {
         FuncEntry *fe = call_stack[i].fe;
         Instruction *pc = call_stack[i].pc;
         int line = pc ? pc->line : 0;
@@ -1518,6 +1748,11 @@ char* format_stack_trace(void) {
         char frame[256];
         snprintf(frame, 256, "  at %s (%s:%d)\n", fe ? fe->name : "<unknown>", file, line);
         strcat(buf, frame);
+    }
+    if (call_stack_ptr > max_frames) {
+        char extra[128];
+        snprintf(extra, 128, "  ... and %d more frames\n", call_stack_ptr - max_frames);
+        strcat(buf, extra);
     }
     return buf;
 }
@@ -1547,17 +1782,19 @@ void print_error_line(const char *file, int line) {
 void print_error_trace(Value exception) {
     fprintf(stderr, "Uncaught Exception: ");
     if (exception == 0) { fprintf(stderr, "none"); }
-    else if ((exception & MASK_NAN) != MASK_NAN) { fprintf(stderr, "%g", AS_FLOAT(exception)); }
+    else if (((exception) & MASK_NAN) != MASK_NAN) { fprintf(stderr, "%g", AS_FLOAT(exception)); }
     else {
-        uint64_t type = (exception & MASK_TYPE) >> 48;
+        uint64_t type = ((exception) & MASK_TYPE) >> 48;
         if (type == VAL_INT) fprintf(stderr, "%ld", (long)AS_INT(exception));
         else if (type == VAL_BOOL) fprintf(stderr, AS_BOOL(exception) ? "true" : "false");
         else if (type == VAL_STRING) fprintf(stderr, "%s", AS_STRING(exception));
-        else {
+        else if (type == VAL_OBJECT && (exception & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(exception);
             if (ot == OBJ_CLASS) fprintf(stderr, "<class %s>", AS_CLASS(exception)->name);
             else if (ot == OBJ_INSTANCE) fprintf(stderr, "<instance of %s>", AS_INSTANCE(exception)->klass->name);
             else fprintf(stderr, "<object>");
+        } else {
+            fprintf(stderr, "<unknown value type>");
         }
     }
     fprintf(stderr, "\n\n");
@@ -1577,10 +1814,39 @@ void print_error_trace(Value exception) {
     }
 }
 
+static const char *op_names[] = {
+    "CONST_INT", "CONST_FLOAT", "CONST_STRING", "CONST_BOOL", "LOAD_VAR", "STORE_VAR",
+    "ADD", "SUB", "MUL", "DIV", "MOD", "POW", "NEG", "LT", "GT", "LTE", "GTE", "EQ", "NEQ",
+    "AND", "OR", "NOT", "JUMP", "JUMP_IF_FALSE", "JUMP_IF_TRUE", "LEN", "RANGE", "TYPE",
+    "APPEND", "INPUT", "SHOW", "WRITE", "LIST_LITERAL", "DICT_LITERAL", "INDEX", "SLICE",
+    "STORE_INDEX", "FUNC_DEF", "CALL", "CALL_SELF_FAST", "TAIL_CALL", "RETURN",
+    "FOR_EACH", "FOR_EACH_PAIR", "STOP", "SKIP", "POP", "PUSH_SCOPE", "POP_SCOPE",
+    "STORE_LET", "LOAD_LOCAL", "STORE_LOCAL", "DICT_KEYS", "DICT_VALUES", "DICT_HAS",
+    "DICT_REMOVE", "DICT_MERGE", "MATH_ABS", "MATH_MIN", "MATH_MAX", "MATH_ROUND",
+    "MATH_FLOOR", "MATH_CEIL", "MATH_SQRT", "STR_UPPER", "STR_LOWER", "STR_TRIM",
+    "STR_FIND", "STR_REPLACE", "STR_STARTSWITH", "STR_ENDSWITH", "STR_SPLIT",
+    "LIST_PUSH", "LIST_POP", "LIST_INSERT", "LIST_REMOVE", "LIST_CONTAINS", "LIST_SORT",
+    "LIST_REVERSE", "FILE_READ", "FILE_WRITE", "FILE_APPEND", "FSTRING", "LIST_COMP",
+    "THROW", "TRY_START", "TRY_END", "LAMBDA", "CALL_VALUE", "CLASS_DEF", "METHOD_DEF",
+    "TRAIT_DEF", "USE_TRAIT", "GET_PROPERTY", "SET_PROPERTY", "SPAWN", "MOVE", "NOP",
+    "TRACE_ENTER", "PACKED_ADD", "PACKED_SUB", "PACKED_MUL", "PACKED_LOAD", "PACKED_STORE",
+    "PACKED_FUSED_MUL_ADD", "MATRIX_MUL", "SIMD_ADD", "USE_FILE", "ITER_START", "ITER_NEXT"
+};
+
+static void print_bytecode(Bytecode *bc) {
+    if (!bc) return;
+    for (int i = 0; i < bc->count; i++) {
+        Instruction *pc = &bc->code[i];
+        const char *name = (pc->op < sizeof(op_names)/sizeof(op_names[0])) ? op_names[pc->op] : "UNKNOWN";
+        printf("%04d: %-15s r0:%d r1:%d r2:%d arg:%d ptr:%p\n", i, name, pc->r0, pc->r1, pc->r2, pc->arg, (void*)pc->ptr);
+    }
+}
+
 static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
     static __thread int call_depth = 0;
-    if (++call_depth > 10000) {
-        fprintf(stderr, "ERROR: Maximum recursion depth exceeded\n");
+    if (++call_depth > 1000) {
+        pending_exception = value_string_copy("Maximum recursion depth exceeded");
+        has_exception = 1;
         call_depth--;
         return value_none();
     }
@@ -1590,10 +1856,14 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
 
     size_t old_arena_used = stack_arena_used;
     int old_top = vm_stack_top;
-    if (base_reg + bc->local_count > vm_stack_top) vm_stack_top = base_reg + bc->local_count;
+    
+    // Ensure the entire call frame and its incoming arguments are rooted for the GC
+    if (base_reg + bc->local_count + 16 > vm_stack_top) {
+        vm_stack_top = base_reg + bc->local_count + 16;
+    }
 
-    static __thread long total_instructions = 0;
-    static __thread Trace *recording_trace = NULL;
+    // static __thread long total_instructions = 0;
+    // static __thread Trace *recording_trace = NULL;
 
     Instruction *pc = start_pc ? start_pc : bc->code;
 
@@ -1605,7 +1875,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
-        if (GET_TYPE(res) == VAL_DEOPT) {
+        if (IS_DEOPT(res)) {
             pc = &bc->code[deopt_pc];
             goto l_RESUME_INTERP;
         }
@@ -1625,6 +1895,15 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
     }
     if (base_reg + bc->local_count > vm_stack_top) vm_stack_top = base_reg + bc->local_count;
+
+    // Clear locals but preserve parameters and 'self' (which are the first local_count registers)
+    int param_count = (bc->owner) ? bc->owner->param_count : 0;
+    bool is_action = (bc->owner && bc->owner->local_count > 0 && strcmp(bc->owner->local_names[0], "self") == 0);
+    int preserved = is_action ? param_count + 1 : param_count;
+    
+    for (int i = preserved; i < bc->local_count; i++) {
+        vm_stack[base_reg + i] = value_none();
+    }
 
     static void* dt[] = {
         &&l_OP_CONST_INT, &&l_OP_CONST_FLOAT, &&l_OP_CONST_STRING, &&l_OP_CONST_BOOL,
@@ -1679,6 +1958,10 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
 #define R(idx) vm_stack[base_reg + (idx)]
 #define DISPATCH() { \
     if (profiling_active) pc->exec_count++; \
+    if (trace_mode) { \
+        printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
+        visualize_stack(base_reg, bc->local_count); \
+    } \
     if (has_exception) goto l_OP_THROW; \
     goto *dt[pc->op]; \
 }
@@ -1797,6 +2080,10 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_FUNC_DEF: pc++; DISPATCH();
     l_OP_CALL: {
         int ac = pc->arg; const char *n = (const char*)pc->ptr;
+        if (!n) {
+            pending_exception = value_string_copy("Attempted to call a null function name");
+            has_exception = 1; goto l_OP_THROW;
+        }
         FuncEntry *fe = func_get(n);
         call_stack[my_frame_idx].pc = pc; // Update current frame PC
         if (fe && fe->body) {
@@ -1808,7 +2095,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 JITFunc f = (JITFunc)pc->cache[0].val;
                 int deopt_pc = 0;
                 Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
-                if (GET_TYPE(res) == VAL_DEOPT) {
+                if (IS_DEOPT(res)) {
                     res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                 }
                 if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
@@ -1825,13 +2112,13 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 JITFunc f = (JITFunc)jit;
                 int deopt_pc = 0;
                 Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
-                if (GET_TYPE(res) == VAL_DEOPT) {
+                if (IS_DEOPT(res)) {
                     res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                 }
                 if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
             } else {
                 fe->used++;
-                if (fe->used > 100 && fe->spec_count < 8) {
+                if (fe->used > 10 && fe->spec_count < 8) {
                     void *jit_check = func_get_specialization(fe, sig);
                     if (!jit_check) {
                         jit_compile_specialized(fe, sig);
@@ -1847,8 +2134,53 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
             Value v = var_get(n);
             if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
                 ObjType ot = GET_OBJ_TYPE(v);
-                if (ot == OBJ_CLASS) { R(pc->r0) = value_instance(instance_new(AS_CLASS(v))); }
-                else if (ot == OBJ_NATIVE_FUNC) { R(pc->r0) = AS_NATIVE_FUNC(v)->func(ac, &R(pc->r2)); }
+                if (ot == OBJ_CLASS) {
+                    Value inst = value_instance(instance_new(AS_CLASS(v)));
+                    R(pc->r0) = inst;
+                    Value init_method = class_get_method(AS_CLASS(v), "init");
+                    if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
+                        Value temp[256];
+                        int count = (ac > 255) ? 255 : ac;
+                        for (int i=0; i<count; i++) temp[i] = R(pc->r2 + i);
+                        
+                        int callee_base = base_reg + pc->r2;
+                        if (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) {
+                            int old_size = vm_stack_size;
+                            while (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                            for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+                        }
+                        
+                        vm_stack[callee_base] = inst; // self
+                        for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+
+                        Value old_self = var_get("self");
+                        var_set("self", inst);
+                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                        if (ife && ife->body) {
+                            run_bytecode(ife->body, NULL, NULL, callee_base);
+                        }
+                        var_set("self", old_self);
+                    }
+                }
+                else if (ot == OBJ_BOUND_METHOD) {
+                    BoundMethod *bm = AS_BOUND_METHOD(v);
+                    if (bm->method && bm->method->body) {
+                        Value old_self = var_get("self");
+                        var_set("self", bm->instance);
+                        Value res = run_bytecode(bm->method->body, NULL, NULL, base_reg + pc->r2);
+                        var_set("self", old_self);
+                        if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                    }
+                }
+                else if (ot == OBJ_NATIVE_FUNC) {
+                    Value *args = &R(pc->r2);
+                    int argc = ac;
+                    if (pc->is_method) {
+                        args++;
+                    }
+                    R(pc->r0) = AS_NATIVE_FUNC(v)->func(argc, args);
+                }
                 else R(pc->r0) = value_none();
             } else {
                 char msg[256]; snprintf(msg, 256, "Function '%s' not found", n);
@@ -1860,7 +2192,8 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         pc++; DISPATCH();
     }
     l_OP_CALL_SELF_FAST: {
-        int ac = pc->arg; FuncEntry *fe = bc->owner;
+        // int ac = pc->arg; 
+        FuncEntry *fe = bc->owner;
         if (fe && fe->body) {
             TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
             void *jit = func_get_specialization(fe, sig);
@@ -1868,7 +2201,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc f = (JITFunc)jit; int deopt_pc = 0;
                 Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
-                if (GET_TYPE(res) == VAL_DEOPT) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                 if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
             } else {
                 Value res = run_bytecode(fe->body, NULL, NULL, base_reg + pc->r2);
@@ -1879,7 +2212,26 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     }
     l_OP_TAIL_CALL: {
         int ac = pc->arg; const char *n = (const char*)pc->ptr;
-        FuncEntry *fe = func_get(n);
+        FuncEntry *fe = NULL;
+        Value callee = 0;
+        if (n) fe = func_get(n);
+        else {
+            callee = R(pc->r1);
+            if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
+                ObjType ot = GET_OBJ_TYPE(callee);
+                if (ot == OBJ_BOUND_METHOD) fe = AS_BOUND_METHOD(callee)->method;
+                else if (ot == OBJ_NATIVE_FUNC) {
+                    Value *args = &R(pc->r2);
+                    int argc = ac;
+                    if (pc->is_method) {
+                        args++;
+                    }
+                    R(pc->r0) = AS_NATIVE_FUNC(callee)->func(argc, args);
+                    goto l_FINISH;
+                }
+            }
+        }
+        
         if (fe && fe->body) {
             int needed = fe->param_count;
             if (fe->body->local_count > needed) needed = fe->body->local_count;
@@ -1903,7 +2255,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 int deopt_pc = 0;
                 Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
-                if (GET_TYPE(res) == VAL_DEOPT) { pc = &bc->code[deopt_pc]; goto l_RESUME_INTERP; }
+                if (IS_DEOPT(res)) { pc = &bc->code[deopt_pc]; goto l_RESUME_INTERP; }
                 R(0) = res; goto l_FINISH;
             }
             goto l_RESUME_INTERP;
@@ -1961,37 +2313,11 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     }
     l_OP_GET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r1);
+        printf("DEBUG INTERP GET_PROPERTY: prop=%s, obj_reg=%d, obj_val=0x%lx, obj_type=%d\n", n, pc->r1, (unsigned long)o, (int)GET_TYPE(o));
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(o);
             if(ot==OBJ_INSTANCE) {
-                Instance *inst = AS_INSTANCE(o);
-                int found_cache = 0;
-                for (int i=0; i<4; i++) {
-                    if (pc->cache[i].key == inst->shape) {
-                        R(pc->r0) = inst->fields[pc->cache[i].val];
-                        found_cache = 1; break;
-                    }
-                }
-                if (!found_cache) {
-                    Shape *s = inst->shape;
-                    int found = 0;
-                    while (s && s->name && strcmp(s->name, "__root__") != 0) {
-                        if (strcmp(s->name, n) == 0) {
-                            R(pc->r0) = inst->fields[s->offset];
-                            pc->cache[pc->cache_next].key = inst->shape;
-                            pc->cache[pc->cache_next].val = s->offset;
-                            pc->cache_next = (pc->cache_next + 1) % 4;
-                            found = 1; break;
-                        }
-                        s = s->parent;
-                    }
-                    if (!found) {
-                        Value v = class_get_method(inst->klass, n);
-                        if(GET_TYPE(v)==VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v)==OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance)==VAL_NONE)
-                            v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
-                        R(pc->r0) = v;
-                    }
-                }
+                R(pc->r0) = instance_get(AS_INSTANCE(o), n);
             } else R(pc->r0) = value_none();
         } else if(GET_TYPE(o)==VAL_DICT) R(pc->r0) = dict_get(AS_DICT(o), n);
         else R(pc->r0) = value_none(); pc++; DISPATCH();
@@ -1999,31 +2325,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_SET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r0); Value v = R(pc->r1);
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) {
-            Instance *inst = AS_INSTANCE(o);
-            int found_cache = 0;
-            for (int i=0; i<4; i++) {
-                if (pc->cache[i].key == inst->shape) {
-                    gc_write_barrier((GCObject*)inst, v);
-                    inst->fields[pc->cache[i].val] = v;
-                    found_cache = 1; break;
-                }
-            }
-            if (!found_cache) {
-                Shape *s = inst->shape;
-                int found = 0;
-                while (s && s->name && strcmp(s->name, "__root__") != 0) {
-                    if (strcmp(s->name, n) == 0) {
-                        gc_write_barrier((GCObject*)inst, v);
-                        inst->fields[s->offset] = v;
-                        pc->cache[pc->cache_next].key = inst->shape;
-                        pc->cache[pc->cache_next].val = s->offset;
-                        pc->cache_next = (pc->cache_next + 1) % 4;
-                        found = 1; break;
-                    }
-                    s = s->parent;
-                }
-                if (!found) instance_set(inst, n, v);
-            }
+            instance_set(AS_INSTANCE(o), n, v);
         }
         else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
         pc++; DISPATCH();
@@ -2033,35 +2335,49 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         call_stack[my_frame_idx].pc = pc; // Update current frame PC
         if(GET_TYPE(callee)==VAL_OBJECT && (callee & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(callee);
-            if(ot==OBJ_CLASS) { R(pc->r0) = value_instance(instance_new(AS_CLASS(callee))); }
+            if(ot==OBJ_CLASS) {
+                Value inst = value_instance(instance_new(AS_CLASS(callee)));
+                R(pc->r0) = inst;
+                Value init_method = class_get_method(AS_CLASS(callee), "init");
+                if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
+                    Value temp[256];
+                    int count = (ac > 255) ? 255 : ac;
+                    for (int i=0; i<count; i++) temp[i] = R(pc->r2 + i);
+
+                    int callee_base = base_reg + pc->r2;
+                    if (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) {
+                        int old_size = vm_stack_size;
+                        while (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                        for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+                    }
+                    vm_stack[callee_base] = inst; // self at R0
+                    for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+
+                    Value old_self = var_get("self");
+                    var_set("self", inst);
+                    FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                    if (ife && ife->body) {
+                        run_bytecode(ife->body, NULL, NULL, callee_base);
+                    }
+                    var_set("self", old_self);
+                }
+            }
             else if(ot==OBJ_BOUND_METHOD) {
                 BoundMethod *bm = AS_BOUND_METHOD(callee);
                 if(bm->method && bm->method->body) {
-                    Value old_self = var_get("self");
-                    var_set("self", bm->instance);
-                    TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], bm->method->param_count);
-                    void *jit = func_get_specialization(bm->method, sig);
-                    if (jit && jit != (void*)1) {
-                        typedef Value (*JITFunc)(Value *R, int *pc_idx);
-                        JITFunc f = (JITFunc)jit;
-                        int deopt_pc = 0;
-                        call_stack_push(bm->method, NULL);
-                        Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
-                        call_stack_pop();
-                        if (GET_TYPE(res) == VAL_DEOPT) {
-                            res = run_bytecode(bm->method->body, &bm->method->body->code[deopt_pc], NULL, base_reg + pc->r2);
-                        }
-                        var_set("self", old_self);
-                        if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
-                    } else {
-                        bm->method->used++;
-                        if (bm->method->used > 100 && bm->method->spec_count < 8) {
-                            jit_compile_specialized(bm->method, sig);
-                        }
-                        Value res = run_bytecode(bm->method->body, NULL, NULL, base_reg + pc->r2);
-                        var_set("self", old_self);
-                        if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                    int callee_base = base_reg + pc->r2;
+                    if (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) {
+                        int old_size = vm_stack_size;
+                        while (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                        for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                     }
+                    if (GET_TYPE(bm->instance) != VAL_NONE) {
+                        vm_stack[callee_base] = bm->instance; // self at R0
+                    }
+                    Value res = run_bytecode(bm->method->body, NULL, NULL, callee_base);
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                 } else R(pc->r0) = value_none();
             } else if(ot==OBJ_CLOSURE) {
                 Closure *c = AS_CLOSURE(callee);
@@ -2070,7 +2386,12 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                     if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                 } else R(pc->r0) = value_none();
             } else if (ot == OBJ_NATIVE_FUNC) {
-                R(pc->r0) = AS_NATIVE_FUNC(callee)->func(ac, &R(pc->r2));
+                Value *args = &R(pc->r2);
+                int argc = ac;
+                if (pc->is_method) {
+                    args++;
+                }
+                R(pc->r0) = AS_NATIVE_FUNC(callee)->func(argc, args);
             } else {
                 pending_exception = value_string_copy("Object is not callable");
                 has_exception = 1;
@@ -2100,7 +2421,17 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
                 R(pc->r0) = packed_array_get(AS_PACKED_ARRAY(coll), (int)AS_INT(idx_arg));
             } else R(pc->r0) = value_none();
         } else if (GET_TYPE(coll) == VAL_DICT) {
-            R(pc->r0) = dict_get(AS_DICT(coll), AS_STRING(idx_arg));
+            Value v = dict_get(AS_DICT(coll), AS_STRING(idx_arg));
+            // If we're accessing a function in a dictionary, treat it as a bound method
+            // so that l_OP_CALL_VALUE handles arguments correctly.
+            if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
+                ObjType ot = GET_OBJ_TYPE(v);
+                if (ot == OBJ_NATIVE_FUNC || ot == OBJ_BOUND_METHOD) {
+                    // For dicts, we don't bind 'self' unless it's explicitly done.
+                    // But we must return the callable.
+                }
+            }
+            R(pc->r0) = v;
         } else R(pc->r0) = value_none();
         pc++; DISPATCH();
     }
@@ -2148,12 +2479,25 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_STOP: goto l_FINISH;
     l_OP_SKIP: pc++; DISPATCH();
     l_OP_TRAIT_DEF: { const char *n = (const char*)pc->ptr; Value t = value_trait(trait_new(n)); var_set(n, t); vm_last_trait = AS_TRAIT(t); pc++; DISPATCH(); }
-    l_OP_USE_TRAIT: { Value tv = var_get((const char*)pc->ptr); if (GET_TYPE(tv) == VAL_OBJECT && (tv & MASK_PAYLOAD) && GET_OBJ_TYPE(tv) == OBJ_TRAIT && vm_last_class) { Trait *t = AS_TRAIT(tv); for (int i=0; i<t->methods->size; i++) dict_set(vm_last_class->methods, t->methods->keys[i], t->methods->values[i]); } pc++; DISPATCH(); }
+    l_OP_USE_TRAIT: { 
+        Value tv = var_get((const char*)pc->ptr); 
+        if (GET_TYPE(tv) == VAL_OBJECT && (tv & MASK_PAYLOAD) && GET_OBJ_TYPE(tv) == OBJ_TRAIT && vm_last_class) { 
+            Trait *t = AS_TRAIT(tv); 
+            for (int i=0; i<t->methods->size; i++) {
+                dict_set(vm_last_class->methods, AS_STRING(t->methods->keys[i]), t->methods->values[i]); 
+            }
+        } 
+        pc++; DISPATCH(); 
+    }
     l_OP_INPUT: pc++; DISPATCH();
     l_OP_WRITE: pc++; DISPATCH();
     l_OP_DICT_LITERAL: {
         int n = pc->arg; Dict *d = pc->is_stack_alloc ? gc_alloc_stack(sizeof(Dict), OBJ_DICT) : gc_alloc(sizeof(Dict), OBJ_DICT);
-        d->capacity = n; d->keys = calloc(n, sizeof(char*)); d->values = calloc(n, sizeof(Value)); d->size = 0;
+        d->capacity = 8; while(d->capacity < n*2) d->capacity *= 2;
+        d->keys = calloc(d->capacity, sizeof(Value));
+        d->values = calloc(d->capacity, sizeof(Value));
+        for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
+        d->size = 0;
         for (int i=0; i<n; i++) {
             Value k = R(pc->r1 + i * 2);
             Value v = R(pc->r1 + i * 2 + 1);
@@ -2247,7 +2591,7 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
         typedef Value (*TraceFunc)(Value *R, int *pc_off);
         int off = 0;
         Value res = ((TraceFunc)t->jit_code)(&vm_stack[base_reg], &off);
-        if (GET_TYPE(res) == VAL_TRACE_EXIT) { pc = bc->code + off; goto *dt[pc->op]; }
+        if (IS_TRACE_EXIT(res)) { pc = bc->code + off; goto *dt[pc->op]; }
         pc->op = pc->original_op; goto *dt[pc->op];
     }
     l_OP_USE_FILE: {
@@ -2343,13 +2687,71 @@ static Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_
     l_OP_PACKED_STORE:
     l_OP_PACKED_FUSED_MUL_ADD:
     l_OP_MATRIX_MUL:
-    l_OP_ITER_START:
-    l_OP_ITER_NEXT:
-    l_OP_NOP: pc++; DISPATCH();
-    l_RECORD_STEP: {
+    l_OP_ITER_START: {
+        Value coll = R(pc->r1);
+        if (GET_TYPE(coll) == VAL_OBJECT && (coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_SQLITE_ITER) {
+            R(pc->r0) = coll;
+        } else {
+            Iterator *it = gc_alloc(sizeof(Iterator), OBJ_ITERATOR);
+            it->iterable = coll;
+            it->index = 0;
+            R(pc->r0) = make_value(VAL_OBJECT, (uintptr_t)it);
+        }
         pc++; DISPATCH();
     }
-    l_OP_DEFAULT: pc++; DISPATCH();
+    l_OP_ITER_NEXT: {
+        Value vit = R(pc->r1);
+        if (GET_TYPE(vit) != VAL_OBJECT || !(vit & MASK_PAYLOAD)) { pc = bc->code + pc->arg; DISPATCH(); }
+        GCObject *obj = (GCObject*)(uintptr_t)(vit & MASK_PAYLOAD);
+        
+        if (obj->type == OBJ_ITERATOR) {
+            Iterator *it = (Iterator*)obj;
+            Value coll = it->iterable;
+            int type = GET_TYPE(coll);
+            if (type == VAL_LIST) {
+                 List *l = AS_LIST(coll);
+                 if (it->index < l->size) {
+                     R(pc->r0) = l->items[it->index++];
+                     pc++; DISPATCH();
+                 }
+            } else if (type == VAL_DICT) {
+                 Dict *d = AS_DICT(coll);
+                 while (it->index < d->capacity && (d->keys[it->index] == 0 || GET_TYPE(d->keys[it->index]) == VAL_NONE)) it->index++;
+                 if (it->index < d->capacity) {
+                     R(pc->r0) = d->keys[it->index++];
+                     pc++; DISPATCH();
+                 }
+            }
+        } else if (obj->type == OBJ_SQLITE_ITER) {
+            SQLiteIter *it = (SQLiteIter*)obj;
+            if (!it->done) {
+                int rc = sqlite3_step(it->stmt);
+                if (rc == SQLITE_ROW) {
+                    int cols = sqlite3_column_count(it->stmt);
+                    Dict *row = dict_new(cols);
+                    for (int i = 0; i < cols; i++) {
+                        const char *name = sqlite3_column_name(it->stmt, i);
+                        int type = sqlite3_column_type(it->stmt, i);
+                        Value v;
+                        if (type == SQLITE_INTEGER) v = value_int(sqlite3_column_int64(it->stmt, i));
+                        else if (type == SQLITE_FLOAT) v = value_float(sqlite3_column_double(it->stmt, i));
+                        else if (type == SQLITE_TEXT) v = value_string_copy((const char*)sqlite3_column_text(it->stmt, i));
+                        else v = value_none();
+                        dict_set(row, name, v);
+                    }
+                    R(pc->r0) = value_dict(row);
+                    pc++; DISPATCH();
+                } else {
+                    it->done = 1;
+                    sqlite3_finalize(it->stmt);
+                    it->stmt = NULL;
+                }
+            }
+        }
+        
+        pc = bc->code + pc->arg; DISPATCH();
+    }
+    l_OP_NOP: pc++; DISPATCH();
 
 l_FINISH:
     if (has_exception && call_depth == 1) {
@@ -2409,6 +2811,117 @@ static Value native_len(int argc, Value *args) {
     return value_int(0); 
 }
 static Value native_range(int argc, Value *args) { int n = (argc > 0) ? (int)AS_INT(args[0]) : 0; List *l = list_new(n); for (int i = 0; i < n; i++) list_push(l, value_int(i)); return value_list(l); }
+static Value native_verify_gc(int argc, Value *args) {
+    (void)argc; (void)args;
+    pthread_mutex_lock(&gc_mutex);
+    GCObject *curr = gc_objects;
+    while (curr) {
+        if (curr->type > OBJ_SQLITE_HANDLE) {
+            fprintf(stderr, "Heap Corruption Detected: Invalid object type %d at %p\n", curr->type, (void*)curr);
+            abort();
+        }
+        if (curr->sz <= 0 || curr->sz > 1024 * 1024 * 1024) {
+            fprintf(stderr, "Heap Corruption Detected: Invalid size %zu for object type %d at %p\n", curr->sz, curr->type, (void*)curr);
+            abort();
+        }
+        switch (curr->type) {
+            case OBJ_LIST: {
+                List *l = (List*)curr;
+                if (l->items == NULL && l->capacity > 0) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL items for List with capacity %d at %p\n", l->capacity, (void*)curr);
+                    abort();
+                }
+                if (l->size < 0 || l->capacity < 0 || l->size > l->capacity) {
+                    fprintf(stderr, "Heap Corruption Detected: List invalid size/capacity %d/%d at %p\n", l->size, l->capacity, (void*)curr);
+                    abort();
+                }
+                break;
+            }
+            case OBJ_DICT: {
+                Dict *d = (Dict*)curr;
+                if (d->keys == NULL && d->capacity > 0) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL keys for Dict at %p\n", (void*)curr);
+                    abort();
+                }
+                if (d->values == NULL && d->capacity > 0) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL values for Dict at %p\n", (void*)curr);
+                    abort();
+                }
+                if (d->size < 0 || d->capacity < 0 || d->size > d->capacity) {
+                    fprintf(stderr, "Heap Corruption Detected: Dict invalid size/capacity %d/%d at %p\n", d->size, d->capacity, (void*)curr);
+                    abort();
+                }
+                break;
+            }
+            case OBJ_PACKED_ARRAY: {
+                PackedArray *pa = (PackedArray*)curr;
+                if (pa->data == NULL && pa->capacity > 0) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL data for PackedArray at %p\n", (void*)curr);
+                    abort();
+                }
+                if (pa->size < 0 || pa->capacity < 0 || pa->size > pa->capacity) {
+                    fprintf(stderr, "Heap Corruption Detected: PackedArray invalid size/capacity %d/%d at %p\n", pa->size, pa->capacity, (void*)curr);
+                    abort();
+                }
+                break;
+            }
+            case OBJ_STRING_BUILDER: {
+                StringBuilder *sb = (StringBuilder*)curr;
+                if (sb->buffer == NULL && sb->capacity > 0) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL buffer for StringBuilder at %p\n", (void*)curr);
+                    abort();
+                }
+                if (sb->size < 0 || sb->capacity < 0 || sb->size >= sb->capacity) {
+                    fprintf(stderr, "Heap Corruption Detected: StringBuilder invalid size/capacity %d/%d at %p\n", sb->size, sb->capacity, (void*)curr);
+                    abort();
+                }
+                break;
+            }
+            case OBJ_ROPE: {
+                RopeNode *rn = (RopeNode*)curr;
+                if (!rn->is_leaf) {
+                    if (rn->internal.left) {
+                        GCObject *left_obj = (GCObject*)rn->internal.left;
+                        if (left_obj->type != OBJ_STRING && left_obj->type != OBJ_ROPE) {
+                            fprintf(stderr, "Heap Corruption Detected: Invalid RopeNode left child type %d at %p\n", left_obj->type, (void*)curr);
+                            abort();
+                        }
+                    }
+                    if (rn->internal.right) {
+                        GCObject *right_obj = (GCObject*)rn->internal.right;
+                        if (right_obj->type != OBJ_STRING && right_obj->type != OBJ_ROPE) {
+                            fprintf(stderr, "Heap Corruption Detected: Invalid RopeNode right child type %d at %p\n", right_obj->type, (void*)curr);
+                            abort();
+                        }
+                    }
+                }
+                break;
+            }
+            case OBJ_CLOSURE: {
+                Closure *cl = (Closure*)curr;
+                if (cl->body == NULL) {
+                    fprintf(stderr, "Heap Corruption Detected: NULL body for Closure at %p\n", (void*)curr);
+                    abort();
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        curr = curr->next;
+    }
+    pthread_mutex_unlock(&gc_mutex);
+    return value_bool(1);
+}
+
+static Value native_os_gc_info(int argc, Value *args) {
+    (void)argc; (void)args;
+    Dict *d = dict_new(2);
+    dict_set(d, "allocated", value_int(gc_allocated));
+    dict_set(d, "threshold", value_int(gc_threshold));
+    return value_dict(d);
+}
+
 static Value os_exit(int argc, Value *args) { exit(argc > 0 ? AS_INT(args[0]) : 0); return value_none(); }
 #include <math.h>
 #include <openssl/sha.h>
@@ -2441,6 +2954,7 @@ static void json_append_str(const char *s, StringBuilder *sb) {
 }
 
 static void json_stringify_helper(Value v, StringBuilder *sb) {
+    // For now, keep it simple but use the efficient append
     if (v == 0) { json_append_str("null", sb); return; }
     if ((v & MASK_NAN) != MASK_NAN) { 
         char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v)); json_append_str(tmp, sb); return; 
@@ -2463,14 +2977,12 @@ static void json_stringify_helper(Value v, StringBuilder *sb) {
     } else if (type == VAL_DICT) {
         json_append_str("{", sb);
         Dict *d = AS_DICT(v);
-        int first = 1;
-        for (int i = 0; i < d->capacity; i++) {
-            if (d->keys[i]) {
-                if (!first) json_append_str(", ", sb);
-                json_append_str("\"", sb); json_append_str(d->keys[i], sb); json_append_str("\": ", sb);
-                json_stringify_helper(d->values[i], sb);
-                first = 0;
-            }
+        for (int i = 0; i < d->size; i++) {
+            if (i > 0) json_append_str(", ", sb);
+            json_append_str("\"", sb); 
+            json_append_str(AS_STRING(d->keys[i]), sb); 
+            json_append_str("\": ", sb);
+            json_stringify_helper(d->values[i], sb);
         }
         json_append_str("}", sb);
     } else {
@@ -2552,7 +3064,7 @@ static Value native_json_stringify(int argc, Value *args) {
     return res;
 }
 
-static Value os_time(int argc, Value *args) { struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
+static Value os_time(int argc, Value *args) { (void)argc; (void)args; struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
 static SSL_CTX *ssl_ctx = NULL;
 static void ssl_init_native() { SSL_library_init(); OpenSSL_add_all_algorithms(); SSL_load_error_strings(); ssl_ctx = SSL_CTX_new(TLS_server_method()); }
@@ -2740,27 +3252,56 @@ static Value native_packed_dot(int argc, Value *args) {
     return value_none();
 }
 
-#include <sqlite3.h>
-
 static Value native_sqlite_open(int argc, Value *args) {
     if (argc < 1) return value_none();
     sqlite3 *db;
-    if (sqlite3_open(AS_STRING(args[0]), &db) != SQLITE_OK) return value_none();
-    return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)db);
+    const char *path = AS_STRING(args[0]);
+    if (sqlite3_open(path, &db) != SQLITE_OK) return value_none();
+    SQLiteHandle *h = gc_alloc(sizeof(SQLiteHandle), OBJ_SQLITE_HANDLE);
+    h->db = db;
+    if (trace_mode) printf("DEBUG: sqlite.open(%s) -> Handle %p, Object %p\n", path, (void*)db, (void*)h);
+    return make_value(VAL_OBJECT, (uintptr_t)h);
 }
 
 static Value native_sqlite_exec(int argc, Value *args) {
     if (argc < 2) return value_int(-1);
-    sqlite3 *db = (sqlite3*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) {
+        printf("Error: sqlite.exec requires a SQLite handle. Raw: 0x%lx (Type: %d, ObjType: %d)\n", 
+               (unsigned long)args[0], (int)GET_TYPE(args[0]), (args[0] & MASK_PAYLOAD) ? (int)GET_OBJ_TYPE(args[0]) : -1);
+        return value_int(-2);
+    }
+    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    sqlite3 *db = (sqlite3*)h->db;
+    const char *sql = AS_STRING(args[1]);
     char *err_msg = 0;
-    int rc = sqlite3_exec(db, AS_STRING(args[1]), 0, 0, &err_msg);
-    if (rc != SQLITE_OK) { sqlite3_free(err_msg); return value_int(rc); }
+    int rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
+    if (rc != SQLITE_OK) { 
+        if (err_msg) { printf("SQLite Error: %s\n", err_msg); sqlite3_free(err_msg); }
+        return value_int(rc); 
+    }
     return value_int(0);
+}
+
+static Value native_sqlite_step_query(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
+    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    sqlite3 *db = (sqlite3*)h->db;
+    const char *sql = AS_STRING(args[1]);
+    sqlite3_stmt *res;
+    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
+    
+    SQLiteIter *it = gc_alloc(sizeof(SQLiteIter), OBJ_SQLITE_ITER);
+    it->stmt = res;
+    it->done = 0;
+    return make_value(VAL_OBJECT, (uintptr_t)it);
 }
 
 static Value native_sqlite_query(int argc, Value *args) {
     if (argc < 2) return value_none();
-    sqlite3 *db = (sqlite3*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
+    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    sqlite3 *db = (sqlite3*)h->db;
     const char *sql = AS_STRING(args[1]);
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
@@ -2772,13 +3313,14 @@ static Value native_sqlite_query(int argc, Value *args) {
         Dict *row = dict_new(cols);
         for (int i = 0; i < cols; i++) {
             const char *col_name = sqlite3_column_name(res, i);
+            const char *interned = intern_string(col_name);
             Value val;
             int type = sqlite3_column_type(res, i);
             if (type == SQLITE_INTEGER) val = value_int(sqlite3_column_int64(res, i));
             else if (type == SQLITE_FLOAT) val = value_float(sqlite3_column_double(res, i));
             else if (type == SQLITE_TEXT) val = value_string_copy((const char*)sqlite3_column_text(res, i));
             else val = value_none();
-            dict_set(row, col_name, val);
+            dict_set(row, interned, val);
         }
         list_push(rows, value_dict(row));
     }
@@ -2822,29 +3364,48 @@ static Value native_redis_get(int argc, Value *args) {
     char cmd[1024];
     int len = sprintf(cmd, "*2\r\n$3\r\nGET\r\n$%zu\r\n%s\r\n", strlen(key), key);
     if (write(fd, cmd, len) < 0) return value_none();
-    char buf[4096]; int n = read(fd, buf, 4095);
-    if (n <= 0 || buf[0] == '-') return value_none();
-    if (buf[0] == '$') {
-        char *p = strchr(buf, '\r') + 2;
-        char *end = strstr(p, "\r\n");
-        if (end) *end = 0;
-        return value_string_copy(p);
+    
+    char head[1];
+    if (read(fd, head, 1) <= 0) return value_none();
+    if (head[0] == '$') {
+        char len_buf[32]; int i=0;
+        while (i < 31 && read(fd, &len_buf[i], 1) > 0 && len_buf[i] != '\r') i++;
+        len_buf[i] = 0;
+        int bulk_len = atoi(len_buf);
+        if (bulk_len == -1) { char nl[1]; if (read(fd, nl, 1) > 0) {} return value_none(); }
+        char nl[1]; if (read(fd, nl, 1) > 0) {} // skip \n
+        
+        char *data = malloc(bulk_len + 1);
+        int total = 0;
+        while (total < bulk_len) {
+            int n = read(fd, data + total, bulk_len - total);
+            if (n <= 0) break;
+            total += n;
+        }
+        data[total] = 0;
+        char crlf[2]; if (read(fd, crlf, 2) > 0) {} // skip \r\n
+        Value res = value_string_copy(data);
+        free(data);
+        return res;
     }
     return value_none();
 }
 
 static Value native_sqlite_close(int argc, Value *args) {
     if (argc < 1) return value_int(-1);
-    sqlite3 *db = (sqlite3*)(uintptr_t)(args[0] & MASK_PAYLOAD);
-    return value_int(sqlite3_close(db));
+    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_int(-2);
+    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    return value_int(sqlite3_close(h->db));
 }
 
 static Value native_stacktrace(int argc, Value *args) {
+    (void)argc; (void)args;
     print_stack_trace();
     return value_none();
 }
 
 static Value native_profile_start(int argc, Value *args) {
+    (void)argc; (void)args;
     profiling_active = 1;
     return value_none();
 }
@@ -2855,6 +3416,7 @@ static int profile_compare(const void *a, const void *b) {
 }
 
 static Value native_profile_stop(int argc, Value *args) {
+    (void)argc; (void)args;
     profiling_active = 0;
     typedef struct { const char *file; int line; long count; } ProfileEntry;
     int max_entries = 10000;
@@ -2937,22 +3499,31 @@ static Value os_sleep(int argc, Value *args) {
 }
 
 static Value native_tensor_create(int argc, Value *args) {
-    int sz = (argc > 0) ? (int)AS_INT(args[0]) : 0;
+    if (argc < 1 || (GET_TYPE(args[0]) != VAL_INT && GET_TYPE(args[0]) != VAL_FLOAT)) return value_none();
+    int sz = (int)val_to_double(args[0]);
+    if (sz < 0 || sz > 10000000) return value_none();
     return value_packed(packed_array_new(PACKED_FLOAT64, sz));
 }
 
 static Value native_tensor_zeros(int argc, Value *args) {
-    int sz = (argc > 0) ? (int)AS_INT(args[0]) : 0;
+    if (argc < 1 || (GET_TYPE(args[0]) != VAL_INT && GET_TYPE(args[0]) != VAL_FLOAT)) return value_none();
+    int sz = (int)val_to_double(args[0]);
+    if (sz < 0 || sz > 10000000) return value_none();
     PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
-    memset(pa->data, 0, sz * sizeof(double));
+    if (pa->data && sz > 0) {
+        memset(pa->data, 0, sz * sizeof(double));
+    }
     return value_packed(pa);
 }
 
 static Value native_tensor_transpose(int argc, Value *args) {
     if (argc < 3) return value_none(); // tensor, rows, cols
+    if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     PackedArray *src = AS_PACKED_ARRAY(args[0]);
     int rows = (int)val_to_double(args[1]), cols = (int)val_to_double(args[2]);
+    if (rows < 0 || cols < 0 || rows * cols > src->size) return value_none();
     PackedArray *res = packed_array_new(src->type, src->size);
+    if (!res->data) return value_none();
     if (src->type == PACKED_FLOAT64) {
         double *s = (double*)src->data, *r = (double*)res->data;
         for (int i = 0; i < rows; i++) for (int j = 0; j < cols; j++) r[j * rows + i] = s[i * cols + j];
@@ -2964,12 +3535,20 @@ static Value native_tensor_transpose(int argc, Value *args) {
 
 static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
+    if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    if (GET_TYPE(args[3]) != VAL_OBJECT || !(args[3] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[3]) != OBJ_PACKED_ARRAY) return value_none();
+    
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
     int rA = (int)val_to_double(args[1]), cA = (int)val_to_double(args[2]);
     PackedArray *pb = AS_PACKED_ARRAY(args[3]);
     int rB = (int)val_to_double(args[4]), cB = (int)val_to_double(args[5]);
+    
+    if (rA < 0 || cA < 0 || rB < 0 || cB < 0) return value_none();
+    if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
+    
     PackedArray *res = packed_array_new(pa->type, rA * cB);
+    if (!res || !res->data) return value_none();
     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
     
     for (int i = 0; i < rA; i++) {
@@ -3000,6 +3579,7 @@ static GC gui_gc;
 static int gui_screen;
 
 static Value native_gui_open(int argc, Value *args) {
+    (void)argc; (void)args;
     gui_display = XOpenDisplay(NULL);
     if (!gui_display) return value_bool(0);
     gui_screen = DefaultScreen(gui_display);
@@ -3012,6 +3592,7 @@ static Value native_gui_open(int argc, Value *args) {
 }
 
 static Value native_gui_clear(int argc, Value *args) {
+    (void)argc; (void)args;
     if (!gui_display) return value_none();
     XClearWindow(gui_display, gui_window);
     return value_none();
@@ -3027,6 +3608,7 @@ static Value native_gui_rect(int argc, Value *args) {
 }
 
 static Value native_gui_poll(int argc, Value *args) {
+    (void)argc; (void)args;
     if (!gui_display) return value_none();
     if (XPending(gui_display)) {
         XEvent ev; XNextEvent(gui_display, &ev);
@@ -3084,6 +3666,7 @@ static Value native_os_getenv(int argc, Value *args) {
 }
 
 static Value native_string_builder_new(int argc, Value *args) {
+    (void)argc; (void)args;
     StringBuilder *sb = gc_alloc(sizeof(StringBuilder), OBJ_STRING_BUILDER);
     sb->capacity = 32;
     sb->size = 0;
@@ -3108,13 +3691,71 @@ static Value native_string_builder_append(int argc, Value *args) {
 }
 
 static Value native_string_builder_build(int argc, Value *args) {
+    (void)argc; (void)args;
     StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
     return value_string_copy(sb->buffer);
 }
 
+static Value native_type(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    uint64_t t = GET_TYPE(args[0]);
+    if (t == VAL_INT) return value_string_copy("int");
+    if (t == VAL_FLOAT) return value_string_copy("float");
+    if (t == VAL_BOOL) return value_string_copy("bool");
+    if (t == VAL_STRING) return value_string_copy("string");
+    if (t == VAL_LIST) return value_string_copy("list");
+    if (t == VAL_DICT) return value_string_copy("dict");
+    if (t == VAL_OBJECT) {
+        if (!(args[0] & MASK_PAYLOAD)) return value_string_copy("object");
+        ObjType ot = GET_OBJ_TYPE(args[0]);
+        if (ot == OBJ_CLASS) return value_string_copy("class");
+        if (ot == OBJ_INSTANCE) return value_string_copy("instance");
+        if (ot == OBJ_BOUND_METHOD) return value_string_copy("method");
+        if (ot == OBJ_NATIVE_FUNC) return value_string_copy("native_func");
+        return value_string_copy("object");
+    }
+    return value_string_copy("unknown");
+}
+
+static Value native_dump_stack(int argc, Value *args) {
+    int start = 0;
+    if (argc > 0) start = (int)AS_INT(args[0]);
+    int count = 20;
+    if (argc > 1) count = (int)AS_INT(args[1]);
+    printf("DEBUG STACK [abs %d to %d]:\n", start, start + count);
+    for (int i=0; i<count; i++) {
+        int idx = start + i;
+        if (idx >= vm_stack_size) break;
+        Value v = vm_stack[idx];
+        printf("  [%d]: ", idx);
+        if (v == 0) printf("nil\n");
+        else if (((v) & MASK_NAN) != MASK_NAN) printf("float(%g)\n", AS_FLOAT(v));
+        else {
+            uint64_t t = GET_TYPE(v);
+            if (t == VAL_INT) printf("int(%ld)\n", (long)AS_INT(v));
+            else if (t == VAL_STRING) printf("string(\"%s\")\n", AS_STRING(v));
+            else if (t == VAL_BOOL) printf("bool(%s)\n", AS_BOOL(v) ? "true" : "false");
+            else if (t == VAL_LIST) printf("list(size=%d)\n", AS_LIST(v)->size);
+            else if (t == VAL_DICT) printf("dict(size=%d)\n", AS_DICT(v)->size);
+            else if (t == VAL_OBJECT) printf("obj(type=%d)\n", (int)GET_OBJ_TYPE(v));
+            else printf("unknown(0x%lx)\n", (unsigned long)v);
+        }
+    }
+    return value_none();
+}
+
 static void std_init(void) {
     var_set("len", native_func_new("len", native_len));
+    var_set("type", native_func_new("type", native_type));
     var_set("range", native_func_new("range", native_range));
+    
+    Dict *debug = dict_new(4);
+    dict_set(debug, "dump_stack", native_func_new("dump_stack", native_dump_stack));
+    dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
+    dict_set(debug, "profile_start", native_func_new("profile_start", native_profile_start));
+    dict_set(debug, "profile_stop", native_func_new("profile_stop", native_profile_stop));
+    var_set("debug", value_dict(debug));
+    
     var_set("packed_int", native_func_new("packed_int", native_packed_int));
     var_set("packed_float", native_func_new("packed_float", native_packed_float));
     var_set("packed_add", native_func_new("packed_add", native_packed_add));
@@ -3123,12 +3764,6 @@ static void std_init(void) {
     var_set("text_builder", native_func_new("text_builder", native_string_builder_new));
     var_set("append", native_func_new("append", native_string_builder_append));
     var_set("build", native_func_new("build", native_string_builder_build));
-
-    Dict *debug = dict_new(4);
-    dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
-    dict_set(debug, "profile_start", native_func_new("profile_start", native_profile_start));
-    dict_set(debug, "profile_stop", native_func_new("profile_stop", native_profile_stop));
-    var_set("debug", value_dict(debug));
 
     Dict *math = dict_new(4);
     dict_set(math, "sin", native_func_new("sin", math_sin));
@@ -3162,6 +3797,7 @@ static void std_init(void) {
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
     dict_set(sqlite, "exec", native_func_new("exec", native_sqlite_exec));
     dict_set(sqlite, "query", native_func_new("query", native_sqlite_query));
+    dict_set(sqlite, "step_query", native_func_new("step_query", native_sqlite_step_query));
     dict_set(sqlite, "close", native_func_new("close", native_sqlite_close));
     var_set("sqlite", value_dict(sqlite));
 
@@ -3183,6 +3819,8 @@ static void std_init(void) {
     dict_set(os, "time", native_func_new("time", os_time)); 
     dict_set(os, "sleep", native_func_new("sleep", os_sleep)); 
     dict_set(os, "getenv", native_func_new("getenv", native_os_getenv));
+    dict_set(os, "gc_info", native_func_new("gc_info", native_os_gc_info));
+    dict_set(os, "verify_gc", native_func_new("verify_gc", native_verify_gc));
     var_set("os", value_dict(os));
 
     Dict *fs = dict_new(4);
@@ -3205,73 +3843,301 @@ static void std_init(void) {
     var_set("json", value_dict(json));
 }
 
+static void func_table_cleanup(void) {
+    if (func_table) {
+        for (int i = 0; i < func_table_size; i++) {
+            if (func_table[i].used) {
+                func_entry_cleanup(&func_table[i]);
+            }
+        }
+        free(func_table);
+        func_table = NULL;
+    }
+    func_entry_cleanup(&main_fe);
+}
+
+static void std_cleanup(void) {
+    // 1. Clear all global table values so they can be GC'd
+    for (int i = 0; i < global_table.count; i++) {
+        global_table.values[i] = value_none();
+    }
+    
+    // 2. Perform a full garbage collection sweep to free now-unreferenced objects
+    gc_full_collect();
+    
+    // 3. Free the global_table allocations
+    if (global_table.names) {
+        free(global_table.names);
+        global_table.names = NULL;
+    }
+    if (global_table.values) {
+        free(global_table.values);
+        global_table.values = NULL;
+    }
+    global_table.count = 0;
+    global_table.capacity = 0;
+
+    // 4. Clean up main thread VM stack
+    vm_stack_cleanup();
+
+    // 5. Clean up func table
+    func_table_cleanup();
+
+    // 6. Clean up string interning and thread-local arena
+    intern_cleanup();
+    arena_free_all();
+}
+
 Node *root = NULL;
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+void dump_all_bc() {
+    printf("Main:\n");
+    if (main_fe.body) {
+        print_bytecode(main_fe.body);
+    }
+    for (int i = 0; i < func_table_size; i++) {
+        if (func_table && func_table[i].used && func_table[i].body) {
+            printf("\nFunction '%s':\n", func_table[i].name);
+            print_bytecode(func_table[i].body);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
+#else
+int glow_main(int argc, char **argv) {
+#endif
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
     next_free_reg = 0;
-    if (argc > 1) {
-        if (strcmp(argv[1], "--lsp") == 0) { handle_client(0); return 0; }
-        yyin = fopen(argv[1], "r");
-        if(yyin) { 
-            compiling_file = argv[1];
-            yyparse(); 
-            if(root) { 
-                Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0; 
-                main_fe.body = main_bc;
-                compile(root); 
-                main_bc->local_count = next_free_reg;
-                bc_emit(main_bc, OP_RETURN, 0, 0); 
-                optimize_bytecode(main_bc); 
-                run_bytecode(main_bc, NULL, NULL, 0);
-                if (has_exception) {
-                    print_error_trace(pending_exception);
-                }
-            } 
-            fclose(yyin); 
-        }
-    } else {
-        printf("GlowLang v1.0 Interactive REPL\nType 'exit' to quit.\n");
-        char line_buf[4096];
-        compiling_file = "<stdin>";
-        
-        Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
-        main_fe.body = main_bc;
 
-        while (1) {
-            printf("glow> ");
-            if (!fgets(line_buf, sizeof(line_buf), stdin)) break;
-            if (strncmp(line_buf, "exit", 4) == 0) break;
-            
-            root = NULL;
-            glow_clear_errors();
-            
-            YY_BUFFER_STATE bp = yy_scan_string(line_buf);
-            yyparse();
-            yy_delete_buffer(bp);
-            
-            if (glow_error_count == 0 && root) {
-                int old_count = main_bc->count;
-                compile(root);
-                
-                if (main_bc->count > old_count) {
-                    main_bc->local_count = next_free_reg;
-                    int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
-                    
-                    Instruction *start_pc = &main_bc->code[old_count];
-                    Value res = run_bytecode(main_bc, start_pc, NULL, 0);
-                    
-                    if (has_exception) {
-                        print_error_trace(pending_exception);
-                        has_exception = 0;
-                    } else if (res != 0 && GET_TYPE(res) != VAL_NONE) {
-                        print_value(res);
-                        printf("\n");
+    // 1. Check for Embedded Package
+    char self_path[1024];
+    ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path)-1);
+    if (len != -1) {
+        self_path[len] = '\0';
+        FILE *f = fopen(self_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsize = ftell(f);
+            fseek(f, -12, SEEK_END); // Marker is 12 bytes: "GLOW_ARCHIVE"
+            char marker[13];
+            if (fread(marker, 1, 12, f) == 12) {
+                marker[12] = '\0';
+                if (strcmp(marker, "GLOW_ARCHIVE") == 0) {
+                    fseek(f, -20, SEEK_END); // Read size (long)
+                    long script_size = 0;
+                    if (fread(&script_size, sizeof(long), 1, f) == 1) {
+                        fseek(f, fsize - 20 - script_size, SEEK_SET);
+                        char *script = malloc(script_size + 1);
+                        if (fread(script, 1, script_size, f) == (size_t)script_size) {
+                            script[script_size] = '\0';
+                            fclose(f);
+
+                            compiling_file = "<embedded>";
+                            YY_BUFFER_STATE bp = yy_scan_string(script);
+                            yyparse(); yy_delete_buffer(bp);
+                            free(script);
+                            if (root) {
+                                Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
+                                main_fe.body = main_bc; compile(root);
+                                main_bc->local_count = next_free_reg;
+                                bc_emit(main_bc, OP_RETURN, 0, 0);
+                                optimize_bytecode(main_bc);
+                                run_bytecode(main_bc, NULL, NULL, 0);
+                                if (has_exception) print_error_trace(pending_exception);
+                            }
+                            std_cleanup(); return 0;
+                        } else {
+                            free(script);
+                        }
                     }
-                    
-                    main_bc->count = ret_idx; // Remove temporary return
                 }
+            }
+            fclose(f);
+        }
+    }
+
+    if (argc == 1) {
+        // Default to REPL
+        goto l_REPL;
+    }
+
+    const char *subcommand = argv[1];
+    if (strcmp(subcommand, "--help") == 0 || strcmp(subcommand, "-h") == 0 || strcmp(subcommand, "help") == 0) {
+        printf("GlowLang v1.0 - Production Runtime\n");
+        printf("Usage: glow <subcommand> [args]\n\n");
+        printf("Subcommands:\n");
+        printf("  run <file.glow>   Execute a GlowLang script (default)\n");
+        printf("  repl              Launch the interactive development shell\n");
+        printf("  check <file.glow> Perform syntax and static analysis only\n");
+        printf("  trace <file.glow> Execute with frame-by-frame VM tracing\n");
+        printf("  package <src>     Create a standalone executable binary\n");
+        printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
+        printf("  --lsp             Start the Language Server Protocol (LSP) mode\n\n");
+        printf("Options:\n");
+        printf("  -o <output>       Specify output file for 'package' subcommand\n");
+        return 0;
+    }
+
+    if (strcmp(subcommand, "package") == 0) {
+        if (argc < 3) { fprintf(stderr, "Usage: glow package <file.glow> [-o output]\n"); return 1; }
+        const char *src_file = argv[2];
+        const char *out_file = "app.bin";
+        if (argc > 4 && strcmp(argv[3], "-o") == 0) out_file = argv[4];
+
+        FILE *fsrc = fopen(src_file, "rb");
+        if (!fsrc) { fprintf(stderr, "Error: Could not open source '%s'\n", src_file); return 1; }
+        fseek(fsrc, 0, SEEK_END); long src_size = ftell(fsrc); fseek(fsrc, 0, SEEK_SET);
+        char *src_buf = malloc(src_size);
+        if (fread(src_buf, 1, src_size, fsrc) != (size_t)src_size) {
+            // Silence warning and handle partial read
+        }
+        fclose(fsrc);
+
+        char self_path[1024];
+        ssize_t self_len = readlink("/proc/self/exe", self_path, sizeof(self_path)-1);
+        if (self_len == -1) { free(src_buf); return 1; }
+        self_path[self_len] = '\0';
+        FILE *fself = fopen(self_path, "rb");
+        if (!fself) { free(src_buf); return 1; }
+        
+        FILE *fout = fopen(out_file, "wb");
+        if (!fout) { fclose(fself); free(src_buf); return 1; }
+        
+        char buf[8192]; size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), fself)) > 0) fwrite(buf, 1, n, fout);
+        fclose(fself);
+
+        fwrite(src_buf, 1, src_size, fout);
+        fwrite(&src_size, sizeof(long), 1, fout);
+        fwrite("GLOW_ARCHIVE", 1, 12, fout);
+        fclose(fout);
+        free(src_buf);
+        
+        char chmod_cmd[1024]; snprintf(chmod_cmd, 1024, "chmod +x %s", out_file);
+        if (system(chmod_cmd) == -1) {
+            // handle error
+        }
+        printf("Package created: %s\n", out_file);
+        return 0;
+    }
+
+    if (strcmp(subcommand, "repl") == 0) {
+        goto l_REPL;
+    } else if (strcmp(subcommand, "check") == 0 || strcmp(subcommand, "run") == 0 || strcmp(subcommand, "trace") == 0 || strcmp(subcommand, "--dump-bc") == 0) {
+        int dump_bc = 0;
+        int check_only = (strcmp(subcommand, "check") == 0);
+        if (strcmp(subcommand, "trace") == 0) trace_mode = 1;
+        const char *filename = NULL;
+
+        if (strcmp(subcommand, "--dump-bc") == 0) {
+            dump_bc = 1;
+            filename = (argc > 2) ? argv[2] : NULL;
+        } else {
+            filename = (argc > 2) ? argv[2] : NULL;
+        }
+
+        if (!filename && !check_only) {
+            // If 'run' was used without filename, maybe it was 'glow file.glow' (old style)
+            filename = subcommand;
+        }
+
+        if (filename) {
+            yyin = fopen(filename, "r");
+            if (yyin) {
+                compiling_file = filename;
+                yyparse();
+                if (root) {
+                    if (main_fe.body) bc_free(main_fe.body);
+                    Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
+                    main_fe.body = main_bc;
+                    compile(root);
+                    main_bc->local_count = next_free_reg;
+                    bc_emit(main_bc, OP_RETURN, 0, 0);
+                    optimize_bytecode(main_bc);
+
+                    if (dump_bc) {
+                        for (int i=0; i<func_table_size; i++) {
+                            if (func_table[i].used && func_table[i].body) {
+                                printf("Function: %s\n", func_table[i].name);
+                                print_bytecode(func_table[i].body);
+                            }
+                        }
+                        printf("Main:\n");
+                        print_bytecode(main_bc);
+                    }
+
+                    if (!check_only) {
+                        run_bytecode(main_bc, NULL, NULL, 0);
+                        if (has_exception) print_error_trace(pending_exception);
+                    } else {
+                        printf("Syntax Check: OK\n");
+                    }
+                }
+                fclose(yyin);
+            } else {
+                fprintf(stderr, "Error: Could not open file '%s'\n", filename);
+                return 1;
+            }
+        }
+    } else if (strcmp(subcommand, "--lsp") == 0) {
+        handle_client(0);
+        return 0;
+    } else {
+        // Old style: glow file.glow
+        const char *filename = subcommand;
+        yyin = fopen(filename, "r");
+        if (yyin) {
+            compiling_file = filename;
+            yyparse();
+            if (root) {
+                if (main_fe.body) bc_free(main_fe.body);
+                Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
+                main_fe.body = main_bc;
+                compile(root);
+                main_bc->local_count = next_free_reg;
+                bc_emit(main_bc, OP_RETURN, 0, 0);
+                optimize_bytecode(main_bc);
+                run_bytecode(main_bc, NULL, NULL, 0);
+                if (has_exception) print_error_trace(pending_exception);
+            }
+            fclose(yyin);
+        } else {
+            fprintf(stderr, "Usage: glow [run|repl|check] <file>\n");
+            return 1;
+        }
+    }
+
+    std_cleanup();
+    return 0;
+
+l_REPL:
+    printf("GlowLang v1.0 Interactive REPL\nType 'exit' to quit.\n");
+    char line_buf[4096];
+    compiling_file = "<stdin>";
+    while (1) {
+        printf("glow> ");
+        if (!fgets(line_buf, sizeof(line_buf), stdin)) break;
+        if (strncmp(line_buf, "exit", 4) == 0) break;
+        root = NULL; glow_clear_errors();
+        YY_BUFFER_STATE bp = yy_scan_string(line_buf);
+        yyparse(); yy_delete_buffer(bp);
+        if (glow_error_count == 0 && root) {
+            if (!main_fe.body) main_fe.body = bc_new(&main_fe);
+            Bytecode *main_bc = main_fe.body; compiling_bc = main_bc;
+            int old_count = main_bc->count;
+            compile(root);
+            if (main_bc->count > old_count) {
+                main_bc->local_count = next_free_reg;
+                int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
+                Instruction *start_pc = &main_bc->code[old_count];
+                Value res = run_bytecode(main_bc, start_pc, NULL, 0);
+                if (has_exception) { print_error_trace(pending_exception); has_exception = 0; }
+                else if (res != 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
+                main_bc->count = ret_idx;
             }
         }
     }
+    std_cleanup();
     return 0;
 }
