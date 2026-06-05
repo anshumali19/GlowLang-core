@@ -1,0 +1,19 @@
+blueprint B1:
+    action init():
+    end
+    action say():
+        show "B1"
+    end
+end
+
+blueprint B2:
+    action init():
+    end
+    action make_b1():
+        return B1()
+    end
+end
+
+let b2 = B2()
+let b1 = b2.make_b1()
+b1.say()

@@ -1,0 +1,81 @@
+# GlowORM End-to-End Integration Test
+use "lib/orm.glow"
+
+show "=== Running GlowORM Integration Test ==="
+
+let db_file = "integration_orm.db"
+
+# Cleanup any leftover tables from previous runs using a temporary connection
+let temp_db = sqlite.open(db_file)
+sqlite.exec(temp_db, "DROP TABLE IF EXISTS profiles")
+sqlite.exec(temp_db, "DROP TABLE IF EXISTS posts")
+sqlite.exec(temp_db, "DROP TABLE IF EXISTS users")
+sqlite.exec(temp_db, "DROP TABLE IF EXISTS _migrations")
+sqlite.close(temp_db)
+
+# 1. Initialize ORM
+let db = ORM(db_file)
+
+let m1 = Migration(1, "Create tables")
+m1.up("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, age INTEGER, role TEXT DEFAULT 'member')")
+m1.up("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, user_id INTEGER, FOREIGN KEY(user_id) REFERENCES users(id))")
+m1.down("DROP TABLE posts")
+m1.down("DROP TABLE users")
+
+db.add_migration(m1)
+db.run_migrations()
+
+# Verify tables exist
+let u_count = db.count("users")
+show "Initial users count: ", u_count
+
+# 2. Test Rollback
+db.rollback(0)
+show "Rollback completed."
+
+# Re-run migrations
+db.run_migrations()
+show "Re-run migrations completed."
+
+# 3. Test Automatic Registration and Migration of Schema
+let profile_schema = Schema("profiles")
+profile_schema.string("bio", {})
+profile_schema.integer("user_id", {"foreign_key": "users(id)"})
+db.register(profile_schema)
+db.migrate()
+
+# 4. CRUD Operations
+# Insertions
+db.insert("users", {"name": "Alice", "age": 30, "role": "admin"})
+db.insert("users", {"name": "Bob", "age": 25})
+db.insert("users", {"name": "Charlie", "age": 35})
+
+let count = db.count("users")
+show "Users count after inserts: ", count
+
+# Query builder search
+let q1 = db.find("users").where_eq("name", "Alice")
+let res1 = db.exec_query(q1)
+show "Alice age: ", res1[0]["age"]
+show "Alice role: ", res1[0]["role"]
+
+# Query builder order by and limit
+let q2 = db.find("users").where_in("name", ["Alice", "Bob", "Charlie"]).order_by("age", "DESC").limit(2)
+let res2 = db.exec_query(q2)
+show "First oldest user: ", res2[0]["name"], " age: ", res2[0]["age"]
+show "Second oldest user: ", res2[1]["name"], " age: ", res2[1]["age"]
+
+# Update
+db.update("users", {"age": 31}, "name = 'Alice'")
+let q3 = db.find("users").where_eq("name", "Alice")
+let res3 = db.exec_query(q3)
+show "Alice new age: ", res3[0]["age"]
+
+# Delete
+db.delete("users", "name = 'Bob'")
+let count2 = db.count("users")
+show "Users count after Bob deleted: ", count2
+
+# Close and clean up
+db.close()
+show "=== GlowORM Integration Test Passed ==="

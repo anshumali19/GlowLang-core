@@ -1,0 +1,14 @@
+
+let s = "hello world"
+# Test replace
+let r = s.replace("world", "glow")
+show "replace:", r
+
+# Test trim 
+let t = "  hello  "
+show "trim:", t.trim()
+
+# Test upper/lower
+show "upper:", s.upper()
+show "lower:", s.lower()
+

@@ -1,0 +1,107 @@
+# Web CRUD API Example — Full REST API with GlowWeb
+# Demonstrates: Router, middleware, JSON API, CRUD operations
+use "lib/web.glow"
+
+show "=== GlowWeb CRUD API Example ==="
+
+# ─── In-memory data store ───
+let users = []
+let next_id = [1]
+
+# ─── Route Handlers ───
+
+# GET /api/users — List all users
+func list_users(req, res):
+    show "[API] GET /api/users"
+    json_ok(res, {"users": users, "count": len(users)})
+end
+
+# POST /api/users — Create a user
+func create_user(req, res):
+    show "[API] POST /api/users"
+    let body = req.json_body()
+    when body is none:
+        json_error(res, 400, "Request body required")
+        return none
+    end
+    let user = {
+        "id": next_id[0],
+        "name": body["name"],
+        "email": body["email"]
+    }
+    next_id[0] = next_id[0] + 1
+    append(users, user)
+    json_created(res, user)
+end
+
+# GET /api/health — Health check
+func health_check(req, res):
+    json_ok(res, {"status": "healthy", "users_count": len(users)})
+end
+
+# ─── Middleware ───
+func logger_middleware(req, res):
+    show "[LOG] " + req.method + " " + req.path
+end
+
+func cors_middleware(req, res):
+    res.header("Access-Control-Allow-Origin", "*")
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+end
+
+# ─── Demo: Build and show the API setup ───
+show ""
+show "Building CRUD API..."
+
+let app = Server(3000)
+
+# Register middleware
+app.use_before(logger_middleware)
+app.use_before(cors_middleware)
+
+# Register routes
+app.get("/api/health", health_check)
+app.get("/api/users", list_users)
+app.post("/api/users", create_user)
+
+show "Routes registered: " + len(app.router.routes)
+show "Middleware hooks: " + len(app.middleware.before_hooks) + " before, " + len(app.middleware.after_hooks) + " after"
+
+# ─── Simulate request processing (without starting server) ───
+show ""
+show "--- Simulating API Requests ---"
+
+# Simulate POST to create user
+let post_raw = "POST /api/users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\": \"Alice\", \"email\": \"alice@example.com\"}"
+let post_req = Request(post_raw)
+let post_res = Response()
+app.middleware.run_before(post_req, post_res)
+create_user(post_req, post_res)
+show "POST response:", post_res.body
+
+# Create second user
+let post_raw2 = "POST /api/users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\": \"Bob\", \"email\": \"bob@example.com\"}"
+let post_req2 = Request(post_raw2)
+let post_res2 = Response()
+create_user(post_req2, post_res2)
+show "POST response 2:", post_res2.body
+
+# Simulate GET to list users
+let get_raw = "GET /api/users HTTP/1.1\r\n\r\n"
+let get_req = Request(get_raw)
+let get_res = Response()
+app.middleware.run_before(get_req, get_res)
+list_users(get_req, get_res)
+show "GET response:", get_res.body
+
+# Simulate health check
+let health_raw = "GET /api/health HTTP/1.1\r\n\r\n"
+let health_req = Request(health_raw)
+let health_res = Response()
+health_check(health_req, health_res)
+show "Health response:", health_res.body
+
+show ""
+show "=== CRUD API Example Complete ==="
+show "To start the server, uncomment: app.start_server()"
+# app.start_server()  # Uncomment to run the actual server

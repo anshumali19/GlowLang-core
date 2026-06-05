@@ -325,7 +325,8 @@ typedef enum {
     OP_SIMD_ADD,
     OP_USE_FILE,
     OP_ITER_START,
-    OP_ITER_NEXT
+    OP_ITER_NEXT,
+    OP_IN
 } OpCode;
 
 typedef struct {
@@ -574,6 +575,7 @@ Node* newUntilNode(Node *c, Node *b);
 Node* newRepeatNode(Node *c, Node *b);
 Node* newCompoundAssignNode(NodeType t, const char *s, Node *e);
 Node* newShowNode(Node **is, int c);
+Node* newWriteNode(Node **is, int c);
 Node* newExprStmtNode(Node *e);
 Node* newCallExprNode(Node *e, Node **as, int c);
 
@@ -616,6 +618,7 @@ extern __thread int sp;
 extern __thread int vm_stack_top;
 extern __thread Value pending_exception;
 extern __thread int has_exception;
+extern __thread int runtime_error_thrown;
 extern __thread char *exception_stack_trace;
 extern __thread const char *error_file;
 extern __thread int error_line;

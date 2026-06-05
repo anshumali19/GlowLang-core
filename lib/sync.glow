@@ -1,0 +1,223 @@
+# GlowSync — Concurrency Primitives for GlowLang
+# Usage:
+#   use "lib/sync.glow"
+#   let mutex = Mutex()
+#   let wg = WaitGroup()
+
+# Mutex — simple lock using a shared flag + os.sleep spin-wait
+blueprint Mutex:
+    action init():
+        self.locked = false
+        self.owner = ""
+        self.spin_ms = 1
+    end
+
+    action lock():
+        while self.locked:
+            os.sleep(self.spin_ms)
+        end
+        self.locked = true
+    end
+
+    action unlock():
+        self.locked = false
+        self.owner = ""
+    end
+
+    action try_lock():
+        if not self.locked:
+            self.locked = true
+            return true
+        end
+        return false
+    end
+
+    action is_locked():
+        return self.locked
+    end
+end
+
+# AtomicCounter — thread-safe counter with a guard flag
+blueprint AtomicCounter:
+    action init(initial):
+        self.value = initial
+        self.guard = false
+        self.spin_ms = 1
+    end
+
+    action _acquire():
+        while self.guard:
+            os.sleep(self.spin_ms)
+        end
+        self.guard = true
+    end
+
+    action _release():
+        self.guard = false
+    end
+
+    action increment():
+        self._acquire()
+        self.value = self.value + 1
+        let v = self.value
+        self._release()
+        return v
+    end
+
+    action decrement():
+        self._acquire()
+        self.value = self.value - 1
+        let v = self.value
+        self._release()
+        return v
+    end
+
+    action add(n):
+        self._acquire()
+        self.value = self.value + n
+        let v = self.value
+        self._release()
+        return v
+    end
+
+    action get():
+        return self.value
+    end
+
+    action set(val):
+        self._acquire()
+        self.value = val
+        self._release()
+    end
+end
+
+# WaitGroup — track completion of spawned tasks
+blueprint WaitGroup:
+    action init():
+        self.counter = AtomicCounter(0)
+        self.spin_ms = 5
+    end
+
+    action add(n):
+        self.counter.add(n)
+    end
+
+    action done():
+        self.counter.decrement()
+    end
+
+    action wait():
+        while self.counter.get() > 0:
+            os.sleep(self.spin_ms)
+        end
+    end
+
+    action count():
+        return self.counter.get()
+    end
+end
+
+# Barrier — wait for N tasks to reach a synchronization point
+blueprint Barrier:
+    action init(n):
+        self.target = n
+        self.arrived = AtomicCounter(0)
+        self.spin_ms = 5
+    end
+
+    action arrive():
+        self.arrived.increment()
+    end
+
+    action wait():
+        self.arrived.increment()
+        while self.arrived.get() < self.target:
+            os.sleep(self.spin_ms)
+        end
+    end
+
+    action is_complete():
+        return self.arrived.get() >= self.target
+    end
+
+    action reset():
+        self.arrived.set(0)
+    end
+end
+
+# Channel — simple thread-safe message passing
+blueprint Channel:
+    action init():
+        self.buffer = []
+        self.guard = false
+        self.spin_ms = 1
+        self.closed = false
+    end
+
+    action _acquire():
+        while self.guard:
+            os.sleep(self.spin_ms)
+        end
+        self.guard = true
+    end
+
+    action _release():
+        self.guard = false
+    end
+
+    action send(value):
+        self._acquire()
+        append(self.buffer, value)
+        self._release()
+    end
+
+    action receive():
+        while true:
+            self._acquire()
+            if len(self.buffer) > 0:
+                # Get first item (simple shift)
+                let val = self.buffer[0]
+                let new_buf = []
+                let i = 1
+                while i < len(self.buffer):
+                    append(new_buf, self.buffer[i])
+                    i = i + 1
+                end
+                self.buffer = new_buf
+                self._release()
+                return val
+            end
+            self._release()
+            if self.closed:
+                return none
+            end
+            os.sleep(self.spin_ms)
+        end
+    end
+
+    action try_receive():
+        self._acquire()
+        if len(self.buffer) > 0:
+            let val = self.buffer[0]
+            let new_buf = []
+            let i = 1
+            while i < len(self.buffer):
+                append(new_buf, self.buffer[i])
+                i = i + 1
+            end
+            self.buffer = new_buf
+            self._release()
+            return val
+        end
+        self._release()
+        return none
+    end
+
+    action close():
+        self.closed = true
+    end
+
+    action size():
+        return len(self.buffer)
+    end
+end

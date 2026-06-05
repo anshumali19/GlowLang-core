@@ -1,0 +1,125 @@
+# GlowLang ORM-backed CRUD System
+# Demonstrates: SQLite, blueprints, CRUD operations, query building
+
+show "=== GlowLang CRUD Application ==="
+
+# Database connection
+let db = sqlite.open("crud_app.db")
+
+# Schema setup
+sqlite.exec(db, "DROP TABLE IF EXISTS products")
+sqlite.exec(db, "CREATE TABLE products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT, price REAL, stock INTEGER, active INTEGER DEFAULT 1)")
+
+# Product Model
+blueprint ProductModel:
+    action init(database):
+        self.db = database
+    end
+
+    action create(name, category, price, stock):
+        let sql = "INSERT INTO products (name, category, price, stock) VALUES ('" + name + "', '" + category + "', " + price + ", " + stock + ")"
+        sqlite.exec(self.db, sql)
+        show "[CREATE] Product: " + name + " ($" + price + ")"
+    end
+
+    action find_all():
+        return sqlite.query(self.db, "SELECT * FROM products WHERE active = 1")
+    end
+
+    action find_by_category(cat):
+        return sqlite.query(self.db, "SELECT * FROM products WHERE category = '" + cat + "' AND active = 1")
+    end
+
+    action find_by_id(pid):
+        let rows = sqlite.query(self.db, "SELECT * FROM products WHERE id = " + pid)
+        when len(rows) > 0:
+            return rows[0]
+        end
+        return none
+    end
+
+    action update_price(pid, new_price):
+        sqlite.exec(self.db, "UPDATE products SET price = " + new_price + " WHERE id = " + pid)
+        show "[UPDATE] Product #" + pid + " price -> $" + new_price
+    end
+
+    action update_stock(pid, qty):
+        sqlite.exec(self.db, "UPDATE products SET stock = stock + " + qty + " WHERE id = " + pid)
+        show "[UPDATE] Product #" + pid + " stock +" + qty
+    end
+
+    action soft_delete(pid):
+        sqlite.exec(self.db, "UPDATE products SET active = 0 WHERE id = " + pid)
+        show "[DELETE] Product #" + pid + " (soft deleted)"
+    end
+
+    action count():
+        let rows = sqlite.query(self.db, "SELECT COUNT(*) as cnt FROM products WHERE active = 1")
+        when len(rows) > 0:
+            return rows[0]["cnt"]
+        end
+        return 0
+    end
+
+    action count_by_category(cat):
+        let rows = sqlite.query(self.db, "SELECT COUNT(*) as cnt FROM products WHERE category = '" + cat + "' AND active = 1")
+        when len(rows) > 0:
+            return rows[0]["cnt"]
+        end
+        return 0
+    end
+end
+
+# Initialize model
+let products = ProductModel(db)
+
+# CREATE - Seed data
+show ""
+show "--- Creating Products ---"
+products.create("Laptop", "Electronics", 999.99, 50)
+products.create("Mouse", "Electronics", 29.99, 200)
+products.create("Keyboard", "Electronics", 79.99, 150)
+products.create("Desk", "Furniture", 299.99, 30)
+products.create("Chair", "Furniture", 199.99, 45)
+products.create("Monitor", "Electronics", 449.99, 75)
+products.create("Headphones", "Electronics", 149.99, 120)
+products.create("Bookshelf", "Furniture", 89.99, 60)
+
+# READ - List all
+show ""
+show "--- All Products ---"
+let all = products.find_all()
+for each p in all:
+    show "  #" + p["id"] + " " + p["name"] + " (" + p["category"] + ") $" + p["price"] + " [stock: " + p["stock"] + "]"
+end
+
+# READ - By category
+show ""
+show "--- Electronics ---"
+let electronics = products.find_by_category("Electronics")
+for each p in electronics:
+    show "  " + p["name"] + " - $" + p["price"]
+end
+
+# UPDATE
+show ""
+show "--- Updating Products ---"
+products.update_price(1, 899.99)
+products.update_stock(2, 50)
+
+# DELETE
+show ""
+show "--- Deleting Products ---"
+products.soft_delete(8)
+
+# Summary
+show ""
+show "--- Summary ---"
+show "Total active products: " + products.count()
+show "Electronics count: " + products.count_by_category("Electronics")
+show "Furniture count: " + products.count_by_category("Furniture")
+
+# Cleanup
+sqlite.close(db)
+show ""
+show "=== CRUD Application Complete ==="

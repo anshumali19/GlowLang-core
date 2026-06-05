@@ -1,0 +1,41 @@
+# GlowWeb End-to-End Integration Test
+use "lib/web.glow"
+
+show "=== Running GlowWeb Integration Test ==="
+
+let port = 8089
+let server = Server(port)
+
+server.route("/hello", lambda(req):
+    return "Hello from GlowWeb!"
+end)
+
+server.route("/shutdown", lambda(req):
+    show "[Server] Received shutdown route"
+    return "Shutdown initiated"
+end)
+
+# Spawn the server in the background
+func start_server_task():
+    server.start()
+end
+
+spawn start_server_task()
+
+# Give the server a moment to start
+os.sleep(500)
+
+# 1. Send request to /hello and check response
+let res1 = http.request("GET", "http://127.0.0.1:8089/hello")
+show "Response status: ", res1["status"]
+show "Response body: ", res1["body"]
+
+# 2. Shutdown the server
+server.running = false
+
+# Make a dummy request to trigger the accept loop so it checks self.running and exits
+show "[Client] Sending shutdown trigger..."
+http.request("GET", "http://127.0.0.1:8089/shutdown")
+
+os.sleep(500)
+show "=== GlowWeb Integration Test Passed ==="

@@ -1,18 +1,119 @@
-# GlowAI — Practical AI & Matrix Ecosystem
+# GlowAI — Production AI & Neural Network Library
+# Provides: Layer, SimpleNet, NeuralNet, Optimizer, LossFunction, TrainingLoop
+# Data preprocessing: normalize, one_hot_encode
+# Model persistence: save_model, load_model
+
+# ============================================================
+# Math Helpers (using only verified working functions)
+# ============================================================
+
+func ai_abs(x):
+    if x < 0:
+        return 0 - x
+    end
+    return x
+end
+
+func ai_exp(x):
+    # e^x using math.pow with e ≈ 2.718281828
+    return math.pow(2.718281828, x)
+end
+
+func ai_max(a, b):
+    if a > b:
+        return a
+    end
+    return b
+end
+
+func ai_min(a, b):
+    if a < b:
+        return a
+    end
+    return b
+end
+
+# ============================================================
+# Activation Functions
+# ============================================================
+
+func relu(x):
+    if x > 0:
+        return x
+    end
+    return 0.0
+end
+
+func sigmoid(x):
+    return 1.0 / (1.0 + ai_exp(0 - x))
+end
+
+func tanh_act(x):
+    let e2x = ai_exp(2.0 * x)
+    return (e2x - 1.0) / (e2x + 1.0)
+end
+
+func relu_deriv(x):
+    if x > 0:
+        return 1.0
+    end
+    return 0.0
+end
+
+func sigmoid_deriv(x):
+    let s = sigmoid(x)
+    return s * (1.0 - s)
+end
+
+# ============================================================
+# Layer Blueprint (original, preserved)
+# ============================================================
 
 blueprint Layer:
     action init(in_dim, out_dim):
+        self.in_dim = in_dim
+        self.out_dim = out_dim
         self.weights = tensor.create(in_dim * out_dim)
         self.bias = tensor.zeros(out_dim)
+        self.activation = "none"
+        # Initialize weights with small values
+        for i from 0 to in_dim * out_dim - 1:
+            # Simple initialization: small values centered at 0
+            let val = 0.01 * (i % 7 - 3)
+            tensor.set(self.weights, i, val)
+        end
     end
 
-    action forward(in_val):
-        # input: tensor of in_dim
-        # result = input * weights + bias
-        # Note: simplified for 1D vectors in this example
-        return tensor.add(tensor.dot(in_val, self.weights), self.bias)
+    action set_activation(act_name):
+        self.activation = act_name
+        return self
+    end
+
+    action forward(inp):
+        # Matrix multiply: inp (1 x in_dim) * weights (in_dim x out_dim) = output (1 x out_dim)
+        let output = tensor.zeros(self.out_dim)
+        for j from 0 to self.out_dim - 1:
+            let sum = tensor.get(self.bias, j)
+            for i from 0 to self.in_dim - 1:
+                sum = sum + tensor.get(inp, i) * tensor.get(self.weights, i * self.out_dim + j)
+            end
+            # Apply activation
+            if self.activation == "relu":
+                sum = relu(sum)
+            eif self.activation == "sigmoid":
+                sum = sigmoid(sum)
+            eif self.activation == "tanh":
+                sum = tanh_act(sum)
+            end
+            tensor.set(output, j, sum)
+        end
+        return output
     end
 end
+
+# ============================================================
+# SimpleNet Blueprint (original, preserved)
+# ============================================================
 
 blueprint SimpleNet:
     action init():
@@ -25,3 +126,443 @@ blueprint SimpleNet:
         return self.l2.forward(x)
     end
 end
+
+# ============================================================
+# NeuralNet — Multi-layer configurable network
+# ============================================================
+
+blueprint NeuralNet:
+    action init(layer_sizes):
+        # layer_sizes: list of ints, e.g. [10, 8, 4, 1]
+        self.layer_sizes = layer_sizes
+        self.layers = []
+        self.num_layers = len(layer_sizes) - 1
+
+        # Create layers
+        for i from 0 to self.num_layers - 1:
+            let layer = Layer(layer_sizes[i], layer_sizes[i + 1])
+            # Default: relu for hidden, none for output
+            if i < self.num_layers - 1:
+                layer.set_activation("relu")
+            end
+            append(self.layers, layer)
+        end
+        show "[NeuralNet] Created with " + self.num_layers + " layers: " + layer_sizes
+    end
+
+    action set_layer_activation(layer_idx, act_name):
+        self.layers[layer_idx].set_activation(act_name)
+        return self
+    end
+
+    action forward(inp):
+        let current = inp
+        for each layer in self.layers:
+            current = layer.forward(current)
+        end
+        return current
+    end
+
+    action predict(inp):
+        return self.forward(inp)
+    end
+
+    action get_layer(idx):
+        return self.layers[idx]
+    end
+
+    action summary():
+        show "=== NeuralNet Summary ==="
+        show "Layers: " + self.num_layers
+        for i from 0 to self.num_layers - 1:
+            let l = self.layers[i]
+            show "  Layer " + i + ": " + l.in_dim + " -> " + l.out_dim + " [" + l.activation + "]"
+        end
+        show "========================="
+    end
+end
+
+# ============================================================
+# Loss Functions
+# ============================================================
+
+blueprint LossFunction:
+    action init(loss_type):
+        # loss_type: "mse" or "cross_entropy"
+        self.loss_type = loss_type
+    end
+
+    action compute(predicted, target, size):
+        if self.loss_type == "mse":
+            return self.mse(predicted, target, size)
+        eif self.loss_type == "cross_entropy":
+            return self.cross_entropy(predicted, target, size)
+        end
+        return 0.0
+    end
+
+    action mse(predicted, target, size):
+        # Mean Squared Error
+        let total = 0.0
+        for i from 0 to size - 1:
+            let diff = tensor.get(predicted, i) - tensor.get(target, i)
+            total = total + diff * diff
+        end
+        return total / size
+    end
+
+    action cross_entropy(predicted, target, size):
+        # Binary cross-entropy (clamped to avoid log(0))
+        let total = 0.0
+        let eps = 0.0000001
+        for i from 0 to size - 1:
+            let p = tensor.get(predicted, i)
+            let t = tensor.get(target, i)
+            # Clamp prediction
+            p = ai_max(eps, ai_min(1.0 - eps, p))
+            # -[t*log(p) + (1-t)*log(1-p)]
+            # Approximate log using math: log(x) ≈ series or use ln via math
+            let log_p = self.approx_log(p)
+            let log_1p = self.approx_log(1.0 - p)
+            total = total + (0 - (t * log_p + (1.0 - t) * log_1p))
+        end
+        return total / size
+    end
+
+    action approx_log(x):
+        # Natural log approximation using repeated sqrt and identity:
+        # ln(x) = 2 * (y-1)/(y+1) + 2/3 * ((y-1)/(y+1))^3 where y = sqrt(x)
+        # Simpler: use the relation ln(x) = (x-1) - (x-1)^2/2 + (x-1)^3/3 for x near 1
+        # For better range, scale x to be near 1
+        let result = 0.0
+        let scale = 0
+        let v = x
+        while v > 2.0:
+            v = math.sqrt(v)
+            scale = scale + 1
+        end
+        while v < 0.5:
+            v = v * 2.718281828
+            scale = scale - 1
+        end
+        # Taylor series around 1: ln(v) ≈ (v-1) - (v-1)^2/2 + (v-1)^3/3 - ...
+        let d = v - 1.0
+        result = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
+        # Undo scaling: each sqrt doubles, each exp adds 1
+        result = result * math.pow(2, scale)
+        return result
+    end
+
+    action gradient(predicted, target, size):
+        # Gradient of loss w.r.t. predicted
+        let grad = tensor.create(size)
+        if self.loss_type == "mse":
+            for i from 0 to size - 1:
+                let diff = tensor.get(predicted, i) - tensor.get(target, i)
+                tensor.set(grad, i, 2.0 * diff / size)
+            end
+        eif self.loss_type == "cross_entropy":
+            let eps = 0.0000001
+            for i from 0 to size - 1:
+                let p = ai_max(eps, ai_min(1.0 - eps, tensor.get(predicted, i)))
+                let t = tensor.get(target, i)
+                tensor.set(grad, i, (p - t) / (p * (1.0 - p) + eps))
+            end
+        end
+        return grad
+    end
+end
+
+# ============================================================
+# Optimizer — SGD with learning rate
+# ============================================================
+
+blueprint Optimizer:
+    action init(learning_rate):
+        self.lr = learning_rate
+        self.step_count = 0
+    end
+
+    action set_lr(lr):
+        self.lr = lr
+        return self
+    end
+
+    action update_layer(layer, grad_output, layer_inputut):
+        # Simple SGD: update weights and biases
+        # grad_output: gradient at the output of this layer (size = out_dim)
+        # layer_inputut: the inp that was fed to this layer (size = in_dim)
+
+        # Update weights: w -= lr * (inp^T * grad_output)
+        for i from 0 to layer.in_dim - 1:
+            for j from 0 to layer.out_dim - 1:
+                let g = tensor.get(layer_inputut, i) * tensor.get(grad_output, j)
+                let old_w = tensor.get(layer.weights, i * layer.out_dim + j)
+                tensor.set(layer.weights, i * layer.out_dim + j, old_w - self.lr * g)
+            end
+        end
+
+        # Update bias: b -= lr * grad_output
+        for j from 0 to layer.out_dim - 1:
+            let old_b = tensor.get(layer.bias, j)
+            tensor.set(layer.bias, j, old_b - self.lr * tensor.get(grad_output, j))
+        end
+
+        self.step_count = self.step_count + 1
+    end
+
+    action update_network(net, inputs, grad_output):
+        # Update all layers in reverse order (backprop)
+        let current_grad = grad_output
+
+        # Forward pass to cache layer inputs
+        let layer_inpututs = []
+        let current = inputs
+        for each layer in net.layers:
+            append(layer_inpututs, current)
+            current = layer.forward(current)
+        end
+
+        # Backward pass through layers (reverse order)
+        let layer_idx = net.num_layers - 1
+        while layer_idx >= 0:
+            let layer = net.layers[layer_idx]
+            let l_input = layer_inpututs[layer_idx]
+
+            # Update this layer
+            self.update_layer(layer, current_grad, l_input)
+
+            # Propagate gradient back: grad_input = weights^T * grad_output
+            if layer_idx > 0:
+                let new_grad = tensor.zeros(layer.in_dim)
+                for i from 0 to layer.in_dim - 1:
+                    let g = 0.0
+                    for j from 0 to layer.out_dim - 1:
+                        g = g + tensor.get(layer.weights, i * layer.out_dim + j) * tensor.get(current_grad, j)
+                    end
+                    # Apply activation derivative for ReLU
+                    if layer.activation == "relu":
+                        let inp_val = tensor.get(l_input, i)
+                        g = g * relu_deriv(inp_val)
+                    end
+                    tensor.set(new_grad, i, g)
+                end
+                current_grad = new_grad
+            end
+
+            layer_idx = layer_idx - 1
+        end
+    end
+end
+
+# ============================================================
+# Training Loop
+# ============================================================
+
+blueprint TrainingLoop:
+    action init(net, optimizer, loss_fn):
+        self.net = net
+        self.optimizer = optimizer
+        self.loss_fn = loss_fn
+        self.history = []
+    end
+
+    action train(inputs_list, targets_list, epochs, output_size):
+        # inputs_list: list of inp tensors
+        # targets_list: list of target tensors
+        # epochs: number of training epochs
+        # output_size: size of the output tensor
+        let num_samples = len(inputs_list)
+        show "[Training] Starting " + epochs + " epochs on " + num_samples + " samples"
+
+        for epoch from 0 to epochs - 1:
+            let epoch_loss = 0.0
+
+            for sample_idx from 0 to num_samples - 1:
+                let inp = inputs_list[sample_idx]
+                let target = targets_list[sample_idx]
+
+                # Forward pass
+                let predicted = self.net.forward(inp)
+
+                # Compute loss
+                let loss = self.loss_fn.compute(predicted, target, output_size)
+                epoch_loss = epoch_loss + loss
+
+                # Compute gradient
+                let grad = self.loss_fn.gradient(predicted, target, output_size)
+
+                # Backward pass and update
+                self.optimizer.update_network(self.net, inp, grad)
+            end
+
+            let avg_loss = epoch_loss / num_samples
+            append(self.history, avg_loss)
+
+            # Print every 10 epochs or at the end
+            if epoch % 10 == 0 or epoch == epochs - 1:
+                show "[Epoch " + epoch + "/" + epochs + "] Loss: " + avg_loss
+            end
+        end
+
+        show "[Training] Complete. Final loss: " + self.history[len(self.history) - 1]
+        return self.history
+    end
+
+    action get_history():
+        return self.history
+    end
+end
+
+# ============================================================
+# Data Preprocessing Helpers
+# ============================================================
+
+func normalize_tensor(t, size):
+    # Z-score normalization
+    let sum = 0.0
+    for i from 0 to size - 1:
+        sum = sum + tensor.get(t, i)
+    end
+    let mean = sum / size
+
+    let var_sum = 0.0
+    for i from 0 to size - 1:
+        let diff = tensor.get(t, i) - mean
+        var_sum = var_sum + diff * diff
+    end
+    let std = math.sqrt(var_sum / size)
+    if std == 0:
+        std = 1.0
+    end
+
+    let result = tensor.create(size)
+    for i from 0 to size - 1:
+        tensor.set(result, i, (tensor.get(t, i) - mean) / std)
+    end
+    return result
+end
+
+func min_max_normalize(t, size):
+    # Min-max normalization to [0, 1]
+    let mn = tensor.get(t, 0)
+    let mx = tensor.get(t, 0)
+    for i from 1 to size - 1:
+        let v = tensor.get(t, i)
+        if v < mn:
+            mn = v
+        end
+        if v > mx:
+            mx = v
+        end
+    end
+    let range = mx - mn
+    if range == 0:
+        range = 1.0
+    end
+    let result = tensor.create(size)
+    for i from 0 to size - 1:
+        tensor.set(result, i, (tensor.get(t, i) - mn) / range)
+    end
+    return result
+end
+
+func one_hot_encode(value, num_classes):
+    # Create a one-hot encoded tensor
+    let t = tensor.zeros(num_classes)
+    if value >= 0 and value < num_classes:
+        tensor.set(t, value, 1.0)
+    end
+    return t
+end
+
+func tensor_to_list(t, size):
+    let result = []
+    for i from 0 to size - 1:
+        append(result, tensor.get(t, i))
+    end
+    return result
+end
+
+func list_to_tensor(lst):
+    let t = tensor.create(len(lst))
+    let i = 0
+    for each val in lst:
+        tensor.set(t, i, val)
+        i = i + 1
+    end
+    return t
+end
+
+# ============================================================
+# Model Save/Load (serialize weights to file)
+# ============================================================
+
+func save_model(net, filepath):
+    # Serialize all layer weights and biases to a JSON file
+    let model_data = []
+    for each layer in net.layers:
+        let layer_data = {}
+        layer_data["in_dim"] = layer.in_dim
+        layer_data["out_dim"] = layer.out_dim
+        layer_data["activation"] = layer.activation
+
+        # Save weights
+        let weights = []
+        let w_size = layer.in_dim * layer.out_dim
+        for i from 0 to w_size - 1:
+            append(weights, tensor.get(layer.weights, i))
+        end
+        layer_data["weights"] = weights
+
+        # Save biases
+        let biases = []
+        for i from 0 to layer.out_dim - 1:
+            append(biases, tensor.get(layer.bias, i))
+        end
+        layer_data["biases"] = biases
+
+        append(model_data, layer_data)
+    end
+
+    let json_str = json.stringify(model_data)
+    fs.write(filepath, json_str)
+    show "[Model] Saved to " + filepath
+end
+
+func load_model(net, filepath):
+    # Load weights from a JSON file into an existing network
+    let json_str = fs.read(filepath)
+    let model_data = json.parse(json_str)
+
+    let layer_idx = 0
+    for each layer_data in model_data:
+        let layer = net.layers[layer_idx]
+
+        # Load weights
+        let weights = layer_data["weights"]
+        let i = 0
+        for each w in weights:
+            tensor.set(layer.weights, i, w)
+            i = i + 1
+        end
+
+        # Load biases
+        let biases = layer_data["biases"]
+        i = 0
+        for each b in biases:
+            tensor.set(layer.bias, i, b)
+            i = i + 1
+        end
+
+        # Set activation
+        layer.set_activation(layer_data["activation"])
+
+        layer_idx = layer_idx + 1
+    end
+
+    show "[Model] Loaded from " + filepath
+    return net
+end
+
+show "[GlowAI] Library loaded"

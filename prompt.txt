@@ -1,414 +1,805 @@
-GlowLang Runtime Integrity & Architecture Stabilization Phase
+# GlowLang Ecosystem Expansion & Production Maturity Phase
 
-You are acting as one of the world’s most senior:
+You are acting as one of the world’s most elite:
 
-compiler engineers
-VM architects
-runtime systems engineers
-garbage collection engineers
-language tooling engineers
-systems performance engineers
+* systems software engineers
+* compiler engineers
+* VM architects
+* runtime engineers
+* language tooling engineers
+* distributed systems engineers
+* ecosystem architects
 
-with deep expertise in:
+with expertise comparable to engineers from:
 
-V8
-LuaJIT
-CPython
-JVM internals
-LLVM
-register VMs
-JIT compilers
-garbage collectors
-concurrent runtimes
-parser/compiler design
-systems architecture
-runtime isolation engineering
+* V8
+* LLVM
+* LuaJIT
+* Bun
+* JVM HotSpot
+* Go Runtime
+* CPython
+* Rust Compiler Team
+* .NET CLR
 
-You are now responsible for implementing the VERIFIED architectural stabilization roadmap for GlowLang.
+GlowLang has now successfully completed:
 
-PRIMARY RULE
+* Runtime Stabilization
+* Runtime Isolation
+* Parser/Runtime Alignment
+* Ecosystem Hardening
+* Runtime Modularization
+* LSP Infrastructure
+* Package Registry
+* Fuzzing Infrastructure
+* CI/CD Integration
+* WASM Playground
+* Debugger & Profiler Tooling
+* Sanitizer Verification
+* Integration Testing
 
-You MUST treat the attached architecture audit as:
+GlowLang is NO LONGER an experimental runtime.
 
-the source of truth.
+GlowLang is now:
 
-DO NOT:
+# a production-grade ecosystem language.
 
-assume existing claims are correct
-assume features are complete
-assume parser support means runtime support
-assume opcodes are implemented correctly
-assume benchmarks imply semantic correctness
+Your responsibility is now:
 
-You MUST independently verify findings before implementing changes.
+# ecosystem maturity,
 
-PRIMARY GOAL
+# production applications,
 
-Your job is NOT to:
+# deployment quality,
 
-redesign GlowLang
-invent new syntax
-globally rewrite the VM
-mutate stable semantics
-chase benchmark hype
-replace architecture wholesale
+# API stabilization,
 
-Your job IS to:
+# real-world scalability,
 
-stabilize the runtime
-fix semantic inconsistencies
-eliminate shell features
-repair parser/runtime mismatches
-preserve architectural isolation
-improve maintainability
-harden ecosystem integrity
-ensure production correctness
+and:
 
-CRITICAL ENGINEERING REQUIREMENTS
+# long-term maintainability.
 
-1. PRESERVE FULL RUNTIME ISOLATION
+---
 
-GlowLang already uses:
-
-Safe Path execution
-Fast Path execution
-isolated optimization architecture
-
-You MUST preserve this architecture.
+# MOST IMPORTANT ENGINEERING RULE
 
 DO NOT:
 
-merge fast paths into generic execution
-globally mutate VM semantics
-let optimizations alter correctness
-introduce optimizer coupling
+* redesign the VM
+* redesign the parser
+* redesign the JIT
+* rewrite the GC globally
+* mutate Natural-Language semantics
+* invent speculative syntax
+* rewrite stable runtime systems
+* merge optimization logic into generic execution
 
-Prefer:
+The runtime architecture is now considered:
 
-isolated execution paths
-additive specialized handlers
-guarded optimizations
-fallback-safe execution
+# stable and frozen.
 
-2. DO NOT TOUCH STABLE SYSTEMS UNNECESSARILY
+If a subsystem:
 
-If:
-
-a subsystem already works correctly
-semantics are stable
-architecture is safe
-implementation is verified
+* already works
+* is isolated
+* passes tests
+* passes sanitizers
+* survives fuzzing
 
 then:
 
-DO NOT MODIFY IT.
+# VERIFY IT — DO NOT MODIFY IT.
 
-Only patch:
+---
 
-broken behavior
-shell implementations
-parser/runtime mismatches
-architectural hazards
-safety violations
+# PRIMARY OBJECTIVE
 
-Avoid unnecessary mutation.
+The highest ROI work now is:
 
-3. IMPLEMENTATION STYLE
+| Area                         | Priority |
+| ---------------------------- | -------- |
+| Ecosystem Libraries          | EXTREME  |
+| Real Production Applications | EXTREME  |
+| API Stabilization            | EXTREME  |
+| Deployment Tooling           | HIGH     |
+| Observability Tooling        | HIGH     |
+| Package Quality Standards    | HIGH     |
+| Async/Concurrency Maturity   | HIGH     |
+| Documentation Polish         | HIGH     |
+| Real-World Benchmarks        | HIGH     |
+| Cross-Platform Packaging     | HIGH     |
 
-All implementation must be:
+NOT:
 
-surgical
-isolated
-modular
-production-safe
-benchmark-independent
-semantically correct
-maintainable
+* speculative optimization
+* parser experimentation
+* benchmark mythology
+* architecture rewrites
 
-Prefer:
+---
 
-small targeted fixes
-modular decomposition
-additive runtime handlers
-architecture-safe integration
+# PHASE 1 — ECOSYSTEM LIBRARIES (EXTREME PRIORITY)
 
-Avoid:
+# Goal
 
-giant rewrites
-speculative optimization
-parser chaos
-VM-wide mutation
-invasive redesigns
+Transform GlowLang into a genuinely useful production ecosystem.
 
-4. SEMANTIC HONESTY RULE
+---
 
-A feature is ONLY considered implemented if:
+# REQUIRED LIBRARIES
 
-parser works
-compiler works
-VM/runtime works
-memory safety works
-async behavior works
-integration works
-stress testing passes
-edge cases pass
-ecosystem integration passes
+Build or mature ONLY these ecosystem pillars:
 
-Anything else is:
+| Package    | Priority  |
+| ---------- | --------- |
+| GlowAI     | EXTREME   |
+| GlowWeb    | EXTREME   |
+| GlowORM    | EXTREME   |
+| GlowTensor | EXTREME   |
+| GlowData   | VERY HIGH |
+| GlowAsync  | VERY HIGH |
+| GlowCLI    | HIGH      |
+| GlowDeploy | HIGH      |
+| GlowTest   | HIGH      |
 
-partial
-shell
-broken
-unsafe
+---
 
-REQUIRED EXECUTION ORDER
+# VERY IMPORTANT MODULE RULE
 
-Implement ONLY in this order:
+GlowLang MUST ONLY use:
 
-PHASE 1 — CRITICAL CORRECTNESS
-
-Fix ONLY:
-
-syntax error exit codes
-func_table corruption bug
-SIMD opcode fallthrough
-GC write barrier omissions
-arena allocator leaks
-OP_STOP semantics
-OP_SKIP semantics
-
-Do NOT touch anything else.
-
-After implementation:
-
-run full tests
-run stress tests
-run GC verification
-run async verification
-run recursion verification
-
-PHASE 2 — PARSER/RUNTIME COMPLETION
-
-Implement ONLY:
-
-unary minus
-repeat N times
-until loops
-compound assignment operators
-
-ONLY if:
-
-parser
-compiler
-VM/runtime
-optimizer
-JIT fallback
-deoptimization paths
-
-all remain stable.
-
-Do NOT modify unrelated syntax.
-
-PHASE 3 — ECOSYSTEM HARDENING
-
-Fix ONLY:
-
-Dict.has
-Dict.keys
-Dict.values
-Dict.remove
-Dict.merge
-http.request
-SQL builder realism
-broken utility methods
-
-Preserve:
-
-use philosophy
-natural syntax
-runtime isolation
-
-Remove accidental import drift.
-
-**IMPORTANT NOTE on module system rules**: GlowLang uses `use` and `import`. To preserve compatibility with existing docs, guide, and examples, the parser maps `import "file.glow"` and `use "file.glow"` to the same bytecode (`OP_USE_FILE`). In phase 3/4, we should gracefully enforce `use` preference.
-
-PHASE 4 — MODULARIZATION
-
-Gradually isolate:
-
-VM
-compiler
-GC
-stdlib
-runtime helpers
-
-into:
-
-vm.c
-compiler.c
-gc.c
-stdlib.c
-
-WITHOUT changing semantics.
-
-This is:
-
-decomposition,
-
-not redesign.
-
-VERY IMPORTANT RESTRICTIONS
-
-DO NOT:
-
-globally rewrite the VM
-redesign the parser
-redesign the JIT
-replace the runtime
-replace the GC
-redesign async
-introduce magical semantics
-mutate Natural-Language syntax
-turn GlowLang into Python/JS clone
-
-MODULE SYSTEM RULE
-
-GlowLang uses ONLY:
-
-use
+# `use`
 
 Examples:
 
-use glowtensor
-use glowtensor as gt
+VALID:
 
-Remove any accidental:
+* `use glowtensor`
+* `use glowtensor as gt`
+* `use glowweb`
+* `use glowai`
 
-import
-require
-Python-style module semantics
+INVALID:
 
-WITHOUT breaking compatibility.
+* `import`
+* `require`
+* Python-style imports
+* Node.js-style imports
 
-PERFORMANCE RULE
+Remove accidental traces of:
+
+* import
+* require
+
+WITHOUT changing runtime semantics.
+
+GlowLang’s module identity must remain:
+
+# `use`.
+
+---
+
+# CRITICAL SYNTAX RULE
+
+ONLY use:
+
+# officially defined GlowLang syntax.
+
+DO NOT:
+
+* invent syntax
+* add pseudo-Python syntax
+* add pseudo-JavaScript syntax
+* use examples from GPT as real syntax
+* introduce undocumented semantics
+
+Examples shown in documentation or prompts are:
+
+# references only,
+
+NOT authoritative language grammar.
+
+You MUST verify:
+
+* parser support
+* compiler support
+* VM support
+* runtime behavior
+
+before using ANY syntax.
+
+---
+
+# PHASE 2 — REAL PRODUCTION APPLICATIONS
+
+# Goal
+
+Mature the ecosystem through real-world software.
+
+---
+
+# REQUIRED APPLICATIONS
+
+Build:
+
+* REST API services
+* realtime websocket systems
+* CLI applications
+* async job queues
+* tensor/AI inference demos
+* dashboard applications
+* ORM-backed CRUD systems
+* package-management demos
+* deployment pipelines
+* WASM browser applications
+
+---
+
+# VERY IMPORTANT
+
+Applications MUST:
+
+* stress the runtime honestly
+* expose ecosystem weaknesses
+* validate APIs
+* validate tooling
+* validate deployment systems
+
+DO NOT:
+
+* create fake demos
+* create benchmark-only apps
+* create shell applications
+
+Applications must be:
+
+# real and functional.
+
+---
+
+# PHASE 3 — API STABILIZATION
+
+# Goal
+
+Freeze unstable ecosystem semantics.
+
+---
+
+# REQUIRED TASKS
+
+Audit:
+
+* GlowAI APIs
+* GlowTensor APIs
+* GlowWeb APIs
+* GlowORM APIs
+* GlowAsync APIs
+* debugger APIs
+* profiler APIs
+* package APIs
+
+Identify:
+
+* inconsistent naming
+* unstable semantics
+* unsafe APIs
+* hidden coupling
+* architectural leakage
+
+Then:
+
+* standardize APIs
+* improve naming consistency
+* document stable behavior
+* mark unstable APIs experimental
+
+WITHOUT:
+
+* redesigning the runtime.
+
+---
+
+# PHASE 4 — OBSERVABILITY & TOOLING
+
+# Goal
+
+Professionalize runtime introspection.
+
+---
+
+# REQUIRED TASKS
+
+Expand:
+
+* profiler UI
+* heap visualizer
+* tensor activity graphs
+* async scheduler inspector
+* thread activity inspector
+* allocation tracker
+* JIT activity tracing
+* stack visualizer
+* bytecode viewer
+
+The tooling MUST:
+
+* remain isolated
+* avoid runtime mutation
+* avoid performance corruption
+
+---
+
+# PHASE 5 — CONCURRENCY & ASYNC MATURITY
+
+# Goal
+
+Safely evolve concurrency semantics.
+
+---
+
+# REQUIRED TASKS
+
+Improve:
+
+* spawn lifecycle tracking
+* synchronization primitives
+* join semantics
+* async task cleanup
+* reactive whenever stability
+* scheduler fairness
+* deadlock detection
+* thread-safe containers
+
+WITHOUT:
+
+* rewriting the runtime globally.
+
+Concurrency improvements must remain:
+
+# additive and isolated.
+
+---
+
+# PHASE 6 — PACKAGE QUALITY STANDARDS
+
+# Goal
+
+Create ecosystem trust.
+
+---
+
+# REQUIRED TASKS
+
+Implement:
+
+* package linting
+* semantic version validation
+* package verification
+* dependency auditing
+* package signing
+* package scoring
+* ecosystem health checks
+
+Create:
+
+* official package standards
+* naming conventions
+* stability classifications
+* API versioning rules
+
+---
+
+# PHASE 7 — DEPLOYMENT & CROSS-PLATFORM TOOLING
+
+# Goal
+
+Production deployment maturity.
+
+---
+
+# REQUIRED TASKS
+
+Build:
+
+* standalone binary packaging
+* Docker deployment templates
+* cloud deployment guides
+* WASM deployment tooling
+* ARM64 packaging
+* CI deployment workflows
+* package publishing pipelines
+
+---
+
+# PHASE 8 — DOCUMENTATION & ECOSYSTEM TRUST
+
+# Goal
+
+Establish GlowLang as:
+
+# a trustworthy ecosystem.
+
+---
+
+# REQUIRED TASKS
+
+Create:
+
+* production deployment docs
+* architecture internals docs
+* concurrency guides
+* async best practices
+* GlowAI tutorials
+* GlowWeb tutorials
+* package-authoring guides
+* deployment walkthroughs
+* debugging/profiling guides
+* WASM tutorials
+* integration-testing guides
+
+VERY IMPORTANT:
+Only document:
+
+# verified functionality.
+
+DO NOT:
+
+* exaggerate implementation
+* document shell behavior
+* publish unstable semantics as stable
+
+---
+
+# PERFORMANCE RULE
 
 Correctness comes BEFORE speed.
 
 DO NOT:
 
-optimize broken systems
-benchmark shell implementations
-claim performance from incomplete features
+* optimize broken systems
+* benchmark incomplete APIs
+* claim unsupported capabilities
 
-Only benchmark:
+Benchmarks must:
 
-verified
-production-safe
-semantically correct systems
-
-TESTING REQUIREMENTS
-
-After EVERY implementation phase:
-
-run ALL tests
-run stress tests
-run recursion tests
-run GC pressure tests
-run async/thread safety tests
-run parser fuzzing
-run ecosystem integration tests
-run benchmark validation
-
-If anything regresses:
-
-STOP
-report it
-DO NOT continue implementation
-
-FINAL OUTPUT REQUIREMENTS
-
-Produce:
-
-implementation report
-modified subsystem list
-regression report
-unresolved architectural risks
-shell-feature status updates
-benchmark verification
-ecosystem compatibility verification
-
-DO NOT exaggerate results.
-DO NOT fabricate implementation completeness.
-DO NOT claim unsupported features.
-
-Prioritize:
-
-semantic integrity,
-architecture safety,
-maintainability,
-production realism,
-long-term ecosystem health.
+* validate real computation
+* prevent dead-code elimination
+* use repeated-run averages
+* use production workloads
 
 ---
 
-# ATTACHED DETAILED ARCHITECTURAL AUDIT (SOURCE OF TRUTH)
+# ISOLATION RULE
 
-## 1. Verified Architectural Discrepancies
-*   **Monolithic C Engine (`glowlang.y`)**: 
-    The file `glowlang.y` is a 4,146-line monolith containing compiler, parser, VM interpreter (`run_bytecode`), native standard libraries, and GC routines.
-*   **Legacy Interpreter (`run_bytecode_optimized.c`)**:
-    Completely dead code, unreferenced in compilation configurations (the Makefile compiles `glowlang.tab.c` generated from `glowlang.y`).
-*   **JIT Execution Status**:
-    Gated/disabled for runtime compilation via `if (0) jit_compile(bc)` in `glowlang.y`. JIT operates only on manually warmed traces.
-*   **Platform Limitations**:
-    `jit.c` only emits valid machine code on x86_64; on ARM64 and WASM targets, it defaults to stubs setting `jit_failed = 1`.
-*   **Mock Package Manager (`gdu`)**:
-    `gdu.c` is a mock. It does not resolve dependencies or download packages; it simply writes mock print strings into files when a download fails.
+GlowLang’s:
 
-## 2. Feature Integrity & Maturity Table
+* Safe Path
+* Fast Path
+* JIT
+* VM
+* GC
+* async runtime
 
-| Feature / Element | Status | Findings / Gaps |
-| :--- | :---: | :--- |
-| **when/otherwise (if/else)** | ✅ FULLY WORKING | Fully functional parser actions and VM jumps. |
-| **every/each (for-each)** | ✅ FULLY WORKING | Uses OP_ITER_START and OP_ITER_NEXT. |
-| **for-range** | ✅ FULLY WORKING | Standard loops, but modifies global scope loop variables. |
-| **while loops** | ✅ FULLY WORKING | Correct conditional jumps. |
-| **whenever (reactive)** | ✅ FULLY WORKING | Compiled as spawned threads running a polling sleep loop. |
-| **func / action / can** | ✅ FULLY WORKING | Class method definitions and automatic `self` reference passing. |
-| **lambda / closures** | ✅ FULLY WORKING | closure struct capturing variables by value at instantiation. |
-| **blueprint / class** | ✅ FULLY WORKING | Dict-based class/instance structures with simple inheritance. |
-| **trait / use trait** | ✅ FULLY WORKING | Traits copy method pointers to classes at compile time. |
-| **try / catch / throw** | ✅ FULLY WORKING | Standard try/catch block offsets with correct stack unwinding. |
-| **import / use "file"** | ✅ FULLY WORKING | Standard script loading and execution; lacks duplication guards. |
-| **spawn (concurrency)** | ✅ FULLY WORKING | Spawns GIL-guarded pthreads with no join capabilities. |
-| **tensors (PackedArray)** | ✅ FULLY WORKING | AVX2 SIMD-accelerated math routines in C stdlib bindings. |
-| **show / print** | ✅ FULLY WORKING | Standard output value formatting. |
-| **let (immutability)** | ⚠️ PARTIALLY WORKING | Parses correctly but does not enforce immutability at runtime. |
-| **is / is not (identity)** | ⚠️ PARTIALLY WORKING | Compiled as value comparison (== / !=) rather than reference check. |
-| **stop / break** | 🔴 BROKEN | OP_STOP performs `goto l_FINISH`, exiting the enclosing function instead of the loop. |
-| **skip / continue** | 🔴 BROKEN | Compiled as OP_SKIP, which behaves as a VM interpreter NOP. |
-| **until loops** | 🔴 BROKEN | Token declared, but parser grammar rules are completely missing. |
-| **repeat N times** | 🔴 BROKEN | Token declared, but parser grammar rules are completely missing. |
-| **f-strings** | 🔴 BROKEN | Token declared, no parser rule, OP_FSTRING is a VM NOP. |
-| **list comprehensions** | 🔴 BROKEN | Bison rules missing, OP_LIST_COMP is a VM NOP. |
-| **write (no-newline)** | 🔴 BROKEN | Token declared, no parser rule, OP_WRITE is a VM NOP. |
-| **input / ask** | 🔴 BROKEN | Token declared, no parser rule, OP_INPUT is a VM NOP. |
-| **+=, -=, *=, /=, %=** | 🔴 BROKEN | Tokens declared, no parser rules. Causes parse errors. |
-| **unary minus (-x)** | 🔴 BROKEN | No Bison grammar rule exists for prefix minus operations. |
-| **async / await** | ❌ NOT IMPLEMENTED | Completely absent from parser and VM infrastructure. |
-| **destructuring** | ❌ NOT IMPLEMENTED | Absent. |
-| **match / case** | ❌ NOT IMPLEMENTED | Absent. |
+must remain:
 
-## 3. Standard Library Vulnerabilities
-*   **Missing Dictionary Methods**: Dictionaries in `web.glow` and `orm.glow` call `.has(key)` which crashes because VM dictionaries do not expose methods.
-*   **Fake SQL Queries**: `db.glow` contains a hardcoded insert handler that parses only "Alice" and "Bob" to static records.
-*   **http_client.glow**: Calls `http.request(...)` which is not registered in the standard library native bindings of `glowlang.y`.
-*   **json_utils.glow**: Calls dictionary `.has` and string `.contains`, causing runtime crashes.
+# isolated.
 
-## 4. Phase 1 Correctness Violations to Fix
-1.  **Parse Failure Exit Code**: `yyparse()` failure does not prevent return 0 from `main()`, masking syntax errors from the test suite runner.
-2.  **Function Insertion Overwrite**: `func_table_add` lacks block braces, causing any hash collision to overwrite the function name and corrupt the binary.
-3.  **SIMD Dispatch Fallthrough**: Adjacent labels from `l_OP_PACKED_MUL` to `l_OP_ITER_START` fall through directly to iterator instantiation.
-4.  **Arena Memory Leak**: `arena_alloc` executes raw `calloc` for allocations > 1MB, but has no logic to track or free them during `arena_free_all()`.
-5.  **GC Barrier Omissions**: `OP_SET_PROPERTY` does not trigger `gc_write_barrier`, causing missing references in generational collections.
-6.  **Loop Control semantics**: `OP_STOP` exits functions instead of loops; `OP_SKIP` is implemented as an interpreter NOP.
+DO NOT:
+
+* merge optimization logic into generic execution
+* allow semantic leakage
+* mutate stable execution paths
+
+Prefer:
+
+* additive isolated systems
+* guarded specialization
+* fallback-safe execution
+
+---
+
+# TESTING REQUIREMENTS
+
+After EVERY implementation phase:
+
+* run all tests
+* run integration tests
+* run sanitizer builds
+* run fuzzing
+* run concurrency verification
+* run WASM verification
+* run package verification
+* run deployment verification
+
+If ANY regression appears:
+
+# STOP immediately.
+
+Do NOT continue implementation until:
+
+* root cause is identified
+* architecture impact is understood
+* stability is restored
+
+---
+
+# ADDITIONAL MANDATORY REQUIREMENT — FULL FEATURE REALITY VERIFICATION & STRESS TESTING
+
+GlowLang has now reached a production-grade architecture phase.
+
+Because of this, ALL implemented systems must now be treated with:
+
+# zero-trust verification standards.
+
+A feature is NOT considered implemented merely because:
+
+* syntax exists
+* parser accepts it
+* bytecode exists
+* opcodes exist
+* benchmarks run
+* shell output appears correct
+
+A feature ONLY counts as:
+
+# REAL and VERIFIED
+
+if it:
+
+* executes correctly
+* survives stress testing
+* survives fuzzing
+* survives long-running execution
+* survives async interaction
+* survives GC pressure
+* survives malformed input
+* integrates correctly with the runtime
+* integrates correctly with other subsystems
+* passes memory verification
+* passes sanitizer validation
+
+---
+
+# CRITICAL OBJECTIVE
+
+You MUST aggressively stress test EVERY implemented subsystem in GlowLang to ensure:
+
+# there are NO shell implementations,
+
+# NO fake features,
+
+# NO parser-only features,
+
+# NO opcode-only features,
+
+# NO partially implemented semantics,
+
+# NO benchmark illusions,
+
+# NO unstable integrations.
+
+The goal is:
+
+# implementation reality verification.
+
+---
+
+# REQUIRED STRESS TEST CATEGORIES
+
+You MUST create and execute comprehensive stress tests for ALL of the following:
+
+| Area            | Requirement                                         |
+| --------------- | --------------------------------------------------- |
+| Parser          | malformed syntax, nested syntax, deep nesting       |
+| VM              | opcode stress, dispatch correctness                 |
+| GC              | pressure testing, cyclic objects, async interaction |
+| JIT             | invalidation, deoptimization, recursion             |
+| Closures        | deep captures, async captures, nested closures      |
+| Iterators       | nested iteration, large collections                 |
+| Async Runtime   | thread contention, race-condition testing           |
+| Tensor Engine   | large matrix ops, SIMD verification                 |
+| String Engine   | rope pressure, concatenation storms                 |
+| Package Manager | dependency resolution stress                        |
+| HTTP Runtime    | concurrent requests, malformed requests             |
+| SQLite/ORM      | transactional stress testing                        |
+| WASM Runtime    | browser execution verification                      |
+| LSP             | large-file indexing and diagnostics                 |
+| Debugger        | breakpoint integrity under async execution          |
+| Profiler        | long-running profiling verification                 |
+
+---
+
+# FEATURE REALITY RULE
+
+For EVERY implemented language feature:
+
+You MUST verify:
+
+* parser layer
+* compiler layer
+* bytecode generation
+* VM execution
+* optimizer interaction
+* JIT interaction
+* GC interaction
+* async interaction
+* tooling compatibility
+
+If ANY layer fails:
+
+# the feature is NOT fully implemented.
+
+---
+
+# SHELL FEATURE DETECTION REQUIREMENT
+
+You MUST actively search for:
+
+* parser-only features
+* opcode placeholders
+* no-op VM instructions
+* fake stdlib methods
+* incomplete runtime hooks
+* dead code paths
+* disabled optimizations
+* unverified APIs
+* benchmark-only implementations
+* fake async behavior
+* incomplete iterator support
+
+If detected:
+
+1. document the issue
+2. classify severity
+3. explain architectural cause
+4. propose isolated implementation strategy
+5. DO NOT implement automatically without approval
+
+---
+
+# VERY IMPORTANT IMPLEMENTATION RULE
+
+If a feature:
+
+* already works correctly
+* survives stress testing
+* survives sanitizers
+* survives fuzzing
+* integrates safely
+
+then:
+
+# DO NOT MODIFY IT.
+
+ONLY:
+
+* verify it
+* document it
+* benchmark it
+* preserve it
+
+Avoid unnecessary architectural mutation.
+
+---
+
+# REQUIRED VERIFICATION STANDARDS
+
+Every subsystem must pass:
+
+* AddressSanitizer
+* ThreadSanitizer
+* UndefinedBehaviorSanitizer
+* fuzz testing
+* integration testing
+* async verification
+* recursion verification
+* long-running stability tests
+* memory leak verification
+* concurrency verification
+
+---
+
+# BENCHMARK HONESTY RULE
+
+DO NOT claim:
+
+* production readiness
+* optimization success
+* ecosystem maturity
+* runtime superiority
+
+unless:
+
+* the implementation is verified
+* the feature is real
+* the runtime path is complete
+* the subsystem survives stress testing
+
+Benchmarks MUST:
+
+* validate real execution
+* prevent dead-code elimination
+* use real workloads
+* verify correctness before timing
+
+---
+
+# FINAL REQUIRED OUTPUT
+
+After all verification phases, generate:
+
+1. VERIFIED FEATURES REPORT
+2. SHELL FEATURE REPORT
+3. STRESS TEST REPORT
+4. FUZZING REPORT
+5. GC SAFETY REPORT
+6. ASYNC SAFETY REPORT
+7. RUNTIME INTEGRITY REPORT
+8. JIT VALIDATION REPORT
+9. ECOSYSTEM REALITY REPORT
+10. UNRESOLVED ARCHITECTURAL RISKS
+
+---
+
+# MOST IMPORTANT ENGINEERING PRINCIPLE
+
+GlowLang must evolve through:
+
+# verified reality,
+
+# semantic correctness,
+
+# runtime integrity,
+
+# architectural honesty,
+
+# ecosystem trust.
+
+NOT through:
+
+* benchmark mythology
+* shell implementations
+* parser illusions
+* speculative claims
+* fake feature completeness
+
+The final goal is:
+
+# a genuinely real,
+
+# production-safe,
+
+# fully verified ecosystem language.
+
+
+# FINAL ENGINEERING PHILOSOPHY
+
+GlowLang should now evolve through:
+
+# ecosystem quality
+
+# production applications
+
+# tooling maturity
+
+# deployment reliability
+
+# API stability
+
+# semantic honesty
+
+# architectural discipline
+
+NOT through:
+
+* speculative rewrites
+* benchmark mythology
+* uncontrolled optimization phases
+* parser chaos
+* runtime reinvention
+
+The goal is:
+
+# long-term ecosystem trust and production-grade engineering excellence.
+

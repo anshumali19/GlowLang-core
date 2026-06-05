@@ -1,1 +1,34 @@
-.aider*
+# Build artifacts
+bin/
+*.o
+src/lex.yy.c
+src/glowlang.tab.c
+src/glowlang.tab.h
+
+# Database files
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+trace.log
+
+# Package cache
+.glow_pkg/.cache/
+
+# Temp files
+*.tmp
+*.swp
+*~
+
+# Build tools
+node_modules/
+package-lock.json

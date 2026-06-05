@@ -1,0 +1,3 @@
+use "lib/web.glow"
+let server = Server(8089)
+show "server port directly:", server.port

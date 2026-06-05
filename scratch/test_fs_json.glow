@@ -1,0 +1,30 @@
+# Test fs and json
+let data = {"name": "test", "values": [1, 2, 3]}
+let json_str = json.stringify(data)
+show "json: " + json_str
+
+# Write and read file
+fs.write("scratch/test_output.txt", "hello world")
+let content = fs.read("scratch/test_output.txt")
+show "read: " + content
+
+# Test math
+show "sqrt(16): " + sqrt(16)
+show "abs(-5): " + abs(-5)
+show "floor(3.7): " + floor(3.7)
+show "ceil(3.2): " + ceil(3.2)
+
+# Test string operations
+let s = "hello,world,foo"
+let parts = str.split(s, ",")
+show "split: ", parts
+show "upper: " + str.upper("hello")
+show "contains: " + str.contains(s, "world")
+
+# Test type conversion
+show "int: " + int("42")
+show "float: " + float("3.14")
+show "string: " + string(42)
+show "type: " + type(42)
+show "type: " + type("hi")
+show "type: " + type(3.14)

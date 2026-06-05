@@ -1,0 +1,44 @@
+name: GlowLang CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc
+
+      - name: Build GlowLang
+        run: make clean && make
+
+      - name: Run test suite
+        run: ./run_all_tests.sh
+
+      - name: Build with AddressSanitizer
+        run: |
+          flex -o src/lex.yy.c src/glowlang.l
+          bison -Wnone -d -o src/glowlang.tab.c src/glowlang.y
+          gcc src/lex.yy.c src/glowlang.tab.c src/lsp.c src/arena.c src/jit.c \
+              src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c \
+              -o bin/glowlang_asan \
+              -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 \
+              -fsanitize=address -fno-omit-frame-pointer \
+              -lfl -lsqlite3 -lX11
+
+      - name: Run tests under ASan
+        run: ASAN_OPTIONS=detect_leaks=0 GLOWLANG_BIN=./bin/glowlang_asan ./run_all_tests.sh
+
+      - name: Run parser fuzzer
+        run: make fuzz-parser
+
+      - name: Cleanup
+        run: rm -f src/lex.yy.c src/glowlang.tab.c src/glowlang.tab.h

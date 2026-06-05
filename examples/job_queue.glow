@@ -1,0 +1,155 @@
+# GlowLang Async Job Queue System
+# Demonstrates: spawn, shared state, queue pattern, worker pool
+
+show "=== GlowLang Job Queue System ==="
+
+# Job Queue Implementation
+blueprint JobQueue:
+    action init(name):
+        self.name = name
+        self.jobs = []
+        self.completed = []
+        self.failed = []
+        self.running = false
+        self.next_id = 1
+    end
+
+    action add_job(task_name, priority):
+        let job = {}
+        job["id"] = self.next_id
+        job["task"] = task_name
+        job["priority"] = priority
+        job["status"] = "pending"
+        job["created"] = os.time()
+        append(self.jobs, job)
+        self.next_id = self.next_id + 1
+        show "[Queue:" + self.name + "] Added job #" + job["id"] + ": " + task_name
+        return job["id"]
+    end
+
+    action process_next():
+        when len(self.jobs) > 0:
+            let job = self.jobs[0]
+            # Remove first job (shift)
+            let new_jobs = []
+            let i = 1
+            while i < len(self.jobs):
+                append(new_jobs, self.jobs[i])
+                i = i + 1
+            end
+            self.jobs = new_jobs
+
+            job["status"] = "running"
+            show "[Worker] Processing job #" + job["id"] + ": " + job["task"]
+
+            # Simulate work
+            try:
+                # Different processing times based on priority
+                when job["priority"] == "high":
+                    os.sleep(50)
+                eif job["priority"] == "medium":
+                    os.sleep(30)
+                otherwise:
+                    os.sleep(10)
+                end
+                job["status"] = "completed"
+                job["finished"] = os.time()
+                append(self.completed, job)
+                show "[Worker] Completed job #" + job["id"]
+            catch e:
+                job["status"] = "failed"
+                job["error"] = e
+                append(self.failed, job)
+                show "[Worker] Failed job #" + job["id"] + ": " + e
+            end
+            return true
+        end
+        return false
+    end
+
+    action process_all():
+        show "[Queue:" + self.name + "] Processing all " + len(self.jobs) + " jobs..."
+        while len(self.jobs) > 0:
+            self.process_next()
+        end
+        show "[Queue:" + self.name + "] All jobs processed"
+    end
+
+    action summary():
+        show ""
+        show "=== Queue Summary: " + self.name + " ==="
+        show "  Pending:   " + len(self.jobs)
+        show "  Completed: " + len(self.completed)
+        show "  Failed:    " + len(self.failed)
+    end
+end
+
+# Task definitions
+func email_task(recipient):
+    show "  Sending email to: " + recipient
+    return true
+end
+
+func report_task(report_name):
+    show "  Generating report: " + report_name
+    return true
+end
+
+func cleanup_task():
+    show "  Running cleanup..."
+    return true
+end
+
+# Create queue and add jobs
+let queue = JobQueue("main")
+
+queue.add_job("send_email:alice@example.com", "high")
+queue.add_job("send_email:bob@example.com", "high")
+queue.add_job("generate_report:monthly", "medium")
+queue.add_job("generate_report:weekly", "medium")
+queue.add_job("cleanup_temp_files", "low")
+queue.add_job("send_email:charlie@example.com", "high")
+queue.add_job("backup_database", "medium")
+queue.add_job("cleanup_logs", "low")
+
+# Process all jobs
+queue.process_all()
+
+# Show summary
+queue.summary()
+
+# Scheduler demonstration
+show ""
+show "--- Scheduled Tasks Demo ---"
+
+blueprint Scheduler:
+    action init():
+        self.tasks = []
+    end
+
+    action every_n(name, count, task_func):
+        show "[Scheduler] Registered: " + name + " (run " + count + " times)"
+        let i = 0
+        while i < count:
+            task_func()
+            i = i + 1
+        end
+        show "[Scheduler] Completed: " + name
+    end
+end
+
+let scheduler = Scheduler()
+
+func heartbeat():
+    show "  💓 heartbeat"
+end
+
+func metrics_collect():
+    show "  📊 collecting metrics"
+end
+
+scheduler.every_n("heartbeat", 3, heartbeat)
+scheduler.every_n("metrics", 2, metrics_collect)
+
+show ""
+show "=== Job Queue System Complete ==="

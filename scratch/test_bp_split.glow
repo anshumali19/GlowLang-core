@@ -1,0 +1,13 @@
+
+blueprint Test:
+    action init():
+        self.data = "a,b,c"
+    end
+    action do_split():
+        let parts = self.data.split(",")
+        show parts
+    end
+end
+let t = Test()
+t.do_split()
+

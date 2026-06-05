@@ -1,0 +1,47 @@
+# ORM & Database Demo
+# Demonstrates SQLite ORM operations in GlowLang
+
+show "=== GlowLang ORM Demo ==="
+
+# Create a database
+db = orm.connect("demo.db")
+
+# Create table
+orm.exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
+
+# Insert records
+orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Alice', 'alice@example.com', 30)")
+orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Bob', 'bob@example.com', 25)")
+orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Charlie', 'charlie@example.com', 35)")
+
+show "Inserted 3 users"
+
+# Query all users
+results = orm.query(db, "SELECT * FROM users")
+show "All users:"
+every row in results:
+    show "  " + row
+end
+
+# Query with condition
+young = orm.query(db, "SELECT name, age FROM users WHERE age < 30")
+show ""
+show "Users under 30:"
+every row in young:
+    show "  " + row
+end
+
+# Update
+orm.exec(db, "UPDATE users SET age = 31 WHERE name = 'Alice'")
+show ""
+show "Updated Alice's age to 31"
+
+# Count
+count = orm.query(db, "SELECT COUNT(*) as total FROM users")
+show "Total users: " + count
+
+# Cleanup
+orm.close(db)
+fs.remove("demo.db")
+show ""
+show "Database demo complete."

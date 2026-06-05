@@ -1,0 +1,252 @@
+%YAML 1.2
+# ============================================================
+# GlowLang Syntax Definition for Sublime Text
+# ============================================================
+#
+# Installation:
+#   1. Open Sublime Text
+#   2. Go to Preferences > Browse Packages...
+#   3. Create a folder called "GlowLang" in the Packages directory
+#   4. Copy this file into that folder
+#   5. Restart Sublime Text
+#
+# GlowLang files (.glow) will be automatically detected.
+#
+# ============================================================
+---
+name: GlowLang
+file_extensions:
+  - glow
+scope: source.glowlang
+
+variables:
+  identifier: '[A-Za-z_][A-Za-z0-9_]*'
+  digits: '[0-9]+'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: fstrings
+    - include: numbers
+    - include: keywords
+    - include: control-flow
+    - include: class-definition
+    - include: function-definition
+    - include: builtin-functions
+    - include: modules
+    - include: operators
+    - include: punctuation
+    - include: identifiers
+
+  # --------------------------------------------------------
+  # Comments
+  # --------------------------------------------------------
+  comments:
+    # Single-line comment
+    - match: //
+      scope: punctuation.definition.comment.glowlang
+      push:
+        - meta_scope: comment.line.double-slash.glowlang
+        - match: $\n?
+          pop: true
+
+    # Multi-line comment
+    - match: /\*
+      scope: punctuation.definition.comment.begin.glowlang
+      push:
+        - meta_scope: comment.block.glowlang
+        - match: \*/
+          scope: punctuation.definition.comment.end.glowlang
+          pop: true
+
+  # --------------------------------------------------------
+  # Strings
+  # --------------------------------------------------------
+  strings:
+    # Double-quoted string
+    - match: '"'
+      scope: punctuation.definition.string.begin.glowlang
+      push:
+        - meta_scope: string.quoted.double.glowlang
+        - match: \\.
+          scope: constant.character.escape.glowlang
+        - match: '"'
+          scope: punctuation.definition.string.end.glowlang
+          pop: true
+
+    # Single-quoted string
+    - match: "'"
+      scope: punctuation.definition.string.begin.glowlang
+      push:
+        - meta_scope: string.quoted.single.glowlang
+        - match: \\.
+          scope: constant.character.escape.glowlang
+        - match: "'"
+          scope: punctuation.definition.string.end.glowlang
+          pop: true
+
+  # --------------------------------------------------------
+  # F-strings (interpolated strings)
+  # --------------------------------------------------------
+  fstrings:
+    - match: 'f"'
+      scope: punctuation.definition.string.begin.glowlang
+      push:
+        - meta_scope: string.interpolated.glowlang
+        - match: \\.
+          scope: constant.character.escape.glowlang
+        - match: '\{'
+          scope: punctuation.section.interpolation.begin.glowlang
+          push:
+            - clear_scopes: 1
+            - meta_scope: meta.interpolation.glowlang
+            - match: '\}'
+              scope: punctuation.section.interpolation.end.glowlang
+              pop: true
+            - include: main
+        - match: '"'
+          scope: punctuation.definition.string.end.glowlang
+          pop: true
+
+    - match: "f'"
+      scope: punctuation.definition.string.begin.glowlang
+      push:
+        - meta_scope: string.interpolated.glowlang
+        - match: \\.
+          scope: constant.character.escape.glowlang
+        - match: '\{'
+          scope: punctuation.section.interpolation.begin.glowlang
+          push:
+            - clear_scopes: 1
+            - meta_scope: meta.interpolation.glowlang
+            - match: '\}'
+              scope: punctuation.section.interpolation.end.glowlang
+              pop: true
+            - include: main
+        - match: "'"
+          scope: punctuation.definition.string.end.glowlang
+          pop: true
+
+  # --------------------------------------------------------
+  # Numbers
+  # --------------------------------------------------------
+  numbers:
+    # Float
+    - match: '\b{{digits}}\.{{digits}}([eE][+-]?{{digits}})?\b'
+      scope: constant.numeric.float.glowlang
+
+    # Integer
+    - match: '\b{{digits}}\b'
+      scope: constant.numeric.integer.glowlang
+
+    # Float starting with dot
+    - match: '\.{{digits}}([eE][+-]?{{digits}})?\b'
+      scope: constant.numeric.float.glowlang
+
+  # --------------------------------------------------------
+  # Keywords
+  # --------------------------------------------------------
+  keywords:
+    # Boolean literals
+    - match: '\b(true|false)\b'
+      scope: constant.language.boolean.glowlang
+
+    # Control flow keywords
+    - match: '\b(when|whenever|eif|otherwise|while|until|repeat|for|each|in|stop|skip|end|times|from|to)\b'
+      scope: keyword.control.glowlang
+
+    # Declaration keywords
+    - match: '\b(func|lambda|return|let|class|trait|extends|use|spawn|blueprint|action|every|can)\b'
+      scope: keyword.declaration.glowlang
+
+    # Error handling
+    - match: '\b(try|catch|throw)\b'
+      scope: keyword.control.exception.glowlang
+
+    # I/O keywords
+    - match: '\b(show|write|input)\b'
+      scope: keyword.other.io.glowlang
+
+    # Logical operators as keywords
+    - match: '\b(and|or|not|is|is_not)\b'
+      scope: keyword.operator.logical.glowlang
+
+  # --------------------------------------------------------
+  # Control Flow
+  # --------------------------------------------------------
+  control-flow:
+    - match: '\b(when|while|until|repeat|for)\b'
+      scope: keyword.control.flow.glowlang
+
+  # --------------------------------------------------------
+  # Function & Class Definitions
+  # --------------------------------------------------------
+  function-definition:
+    - match: '\b(func|action)\s+({{identifier}})'
+      captures:
+        1: keyword.declaration.function.glowlang
+        2: entity.name.function.glowlang
+
+  class-definition:
+    - match: '\b(class|blueprint|trait)\s+({{identifier}})'
+      captures:
+        1: keyword.declaration.class.glowlang
+        2: entity.name.class.glowlang
+
+    - match: '\b(extends)\s+({{identifier}})'
+      captures:
+        1: keyword.declaration.extends.glowlang
+        2: entity.other.inherited-class.glowlang
+
+  # --------------------------------------------------------
+  # Built-in Functions
+  # --------------------------------------------------------
+  builtin-functions:
+    - match: '\b(len|type|range|append|push|pop|sort|reverse|keys|values|has|remove|merge|upper|lower|trim|find|replace|starts_with|ends_with|split)\b'
+      scope: support.function.builtin.glowlang
+
+  # --------------------------------------------------------
+  # Modules
+  # --------------------------------------------------------
+  modules:
+    - match: '\b(os|math|fs|json|http|tensor)\b'
+      scope: support.module.glowlang
+
+  # --------------------------------------------------------
+  # Operators
+  # --------------------------------------------------------
+  operators:
+    # Compound assignment
+    - match: '[+\-*/%]='
+      scope: keyword.operator.assignment.compound.glowlang
+
+    # Comparison
+    - match: '==|!=|<=|>=|<|>'
+      scope: keyword.operator.comparison.glowlang
+
+    # Assignment
+    - match: '='
+      scope: keyword.operator.assignment.glowlang
+
+    # Exponentiation
+    - match: '\*\*'
+      scope: keyword.operator.arithmetic.glowlang
+
+    # Arithmetic
+    - match: '[+\-*/%]'
+      scope: keyword.operator.arithmetic.glowlang
+
+  # --------------------------------------------------------
+  # Punctuation
+  # --------------------------------------------------------
+  punctuation:
+    - match: '[(){}[\],;.]'
+      scope: punctuation.glowlang
+
+  # --------------------------------------------------------
+  # Identifiers (catch-all)
+  # --------------------------------------------------------
+  identifiers:
+    - match: '{{identifier}}'
+      scope: variable.other.glowlang

@@ -1,0 +1,335 @@
+# ═══════════════════════════════════════════════════════════════════
+#  edge_cases.glow — Fuzz Corpus: Edge-case programs
+#  Tests boundary conditions, extreme inputs, and error paths.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 1. Empty program ──
+# (this section is intentionally blank)
+
+# ── 2. Single newline ──
+
+# ── 3. Very deep nesting (if) ──
+if true:
+    if true:
+        if true:
+            if true:
+                if true:
+                    if true:
+                        if true:
+                            if true:
+                                if true:
+                                    if true:
+                                        show "deep"
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+# ── 4. Very deep nesting (while) ──
+let d1 = 0
+while d1 < 1:
+    let d2 = 0
+    while d2 < 1:
+        let d3 = 0
+        while d3 < 1:
+            let d4 = 0
+            while d4 < 1:
+                let d5 = 0
+                while d5 < 1:
+                    d5 = d5 + 1
+                end
+                d4 = d4 + 1
+            end
+            d3 = d3 + 1
+        end
+        d2 = d2 + 1
+    end
+    d1 = d1 + 1
+end
+
+# ── 5. Very long identifier ──
+let abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789_long_var = 42
+show abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789_long_var
+
+# ── 6. Unicode in strings ──
+let emoji = "Hello 🌟 World 🔥 GlowLang ✨"
+show emoji
+let chinese = "你好世界"
+show chinese
+let arabic = "مرحبا"
+show arabic
+let mixed = "café résumé naïve"
+show mixed
+
+# ── 7. Empty string ──
+let empty_str = ""
+show len(empty_str)
+
+# ── 8. String with only spaces ──
+let spaces = "     "
+show len(spaces)
+
+# ── 9. String with special characters ──
+let special = "tab\there\nnewline"
+
+# ── 10. Maximum list size (large-ish) ──
+let big_list = []
+let idx = 0
+while idx < 1000:
+    append(big_list, idx)
+    idx = idx + 1
+end
+show len(big_list)
+
+# ── 11. Division by zero ──
+try:
+    let div_result = 10 / 0
+catch e:
+    show "Division by zero caught:", e
+end
+
+# ── 12. Modulo by zero ──
+try:
+    let mod_result = 10 % 0
+catch e:
+    show "Modulo by zero caught:", e
+end
+
+# ── 13. Stack overflow recursion ──
+func infinite_recurse(n):
+    return infinite_recurse(n + 1)
+end
+try:
+    infinite_recurse(0)
+catch e:
+    show "Stack overflow caught:", e
+end
+
+# ── 14. Very large integer ──
+let big_int = 999999999999999
+
+# ── 15. Negative zero float ──
+let neg_zero = -0.0
+
+# ── 16. Very small float ──
+let tiny = 0.000000001
+
+# ── 17. Very large float ──
+let huge = 99999999.99999999
+
+# ── 18. Empty list operations ──
+let empty_list = []
+show len(empty_list)
+try:
+    show empty_list[0]
+catch e:
+    show "Empty list index caught:", e
+end
+
+# ── 19. Nested list ──
+let nested_list = [[1, 2], [3, [4, 5]], [6]]
+show nested_list
+
+# ── 20. Dict with many entries ──
+let big_dict = {}
+let di = 0
+while di < 100:
+    big_dict[f"key_{di}"] = di * 2
+    di = di + 1
+end
+
+# ── 21. Access non-existent dict key ──
+try:
+    let bad_access = big_dict["nonexistent_key_xyz"]
+catch e:
+    show "Missing key caught:", e
+end
+
+# ── 22. Reassign variable types ──
+let morph = 42
+morph = "now a string"
+morph = [1, 2, 3]
+morph = true
+morph = none
+
+# ── 23. Function with no arguments ──
+func no_args():
+    return 42
+end
+show no_args()
+
+# ── 24. Function with many arguments ──
+func many_args(a, b, c, d, e, f, g, h):
+    return a + b + c + d + e + f + g + h
+end
+show many_args(1, 2, 3, 4, 5, 6, 7, 8)
+
+# ── 25. Return without value ──
+func void_func():
+    return
+end
+void_func()
+
+# ── 26. Chained string concatenation ──
+let chain = "a" + "b" + "c" + "d" + "e" + "f" + "g" + "h"
+show chain
+
+# ── 27. Multiple throw/catch levels ──
+try:
+    try:
+        try:
+            throw "level 3"
+        catch e3:
+            throw "level 2: " + e3
+        end
+    catch e2:
+        throw "level 1: " + e2
+    end
+catch e1:
+    show "final:", e1
+end
+
+# ── 28. Boolean edge cases ──
+let b1 = true and true
+let b2 = false or false
+let b3 = not not not true
+let b4 = (true or false) and (false or true)
+
+# ── 29. Loop with immediate stop ──
+while true:
+    stop
+end
+
+# ── 30. Nested loops with skip ──
+every outer from 1 to 3:
+    every inner from 1 to 3:
+        if inner == 2:
+            skip
+        end
+    end
+end
+
+# ── 31. String of only quotes (escaped) ──
+let quotes = "he said \"hello\" to her"
+
+# ── 32. List of mixed types ──
+let mixed_list = [1, "two", 3.0, true, none, [4, 5]]
+
+# ── 33. Dict with various value types ──
+let mixed_dict = {"int": 1, "str": "hello", "bool": true, "none": none}
+
+# ── 34. Reassign function ──
+func temp():
+    return 1
+end
+let old = temp()
+func temp():
+    return 2
+end
+let new_val = temp()
+
+# ── 35. Self-referential class ──
+class SelfRef:
+    func init():
+        self.val = 0
+    end
+    func set(v):
+        self.val = v
+    end
+    func get():
+        return self.val
+    end
+end
+let sr = SelfRef()
+sr.init()
+sr.set(99)
+show sr.get()
+
+# ── 36. Class with many methods ──
+class BigClass:
+    func m1(): return 1 end
+    func m2(): return 2 end
+    func m3(): return 3 end
+    func m4(): return 4 end
+    func m5(): return 5 end
+end
+let bc = BigClass()
+
+# ── 37. Lambda immediately invoked ──
+let result = (lambda(x): x * x)(7)
+show result
+
+# ── 38. Nested lambda ──
+let outer_fn = lambda(x): lambda(y): x + y
+let inner_fn = outer_fn(10)
+show inner_fn(5)
+
+# ── 39. List comprehension with filter ──
+let filtered = [x for x in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] if x % 2 == 0]
+show filtered
+
+# ── 40. Compound assignment edge cases ──
+let compound = 100
+compound += 0
+compound -= 0
+compound *= 1
+compound += -50
+
+# ── 41. Zero-iteration loop ──
+let never = 0
+while never > 0:
+    show "never runs"
+end
+
+# ── 42. Single-element list ──
+let single = [42]
+show single[0]
+
+# ── 43. Single-entry dict ──
+let single_dict = {"only": 1}
+show single_dict["only"]
+
+# ── 44. String multiplication via loop ──
+let repeated = ""
+let ri = 0
+while ri < 50:
+    repeated = repeated + "x"
+    ri = ri + 1
+end
+show len(repeated)
+
+# ── 45. Power of zero ──
+let pow_zero = 0 ** 0
+show pow_zero
+
+# ── 46. Negative power ──
+let neg_pow = 2 ** -1
+
+# ── 47. Comparison chains (manual) ──
+let chain_result = (1 < 2) and (2 < 3) and (3 < 4)
+show chain_result
+
+# ── 48. Deeply nested function calls ──
+func wrap1(x): return x end
+func wrap2(x): return wrap1(x) end
+func wrap3(x): return wrap2(x) end
+func wrap4(x): return wrap3(x) end
+func wrap5(x): return wrap4(x) end
+show wrap5(42)
+
+# ── 49. Try with no throw ──
+try:
+    let safe = 42
+    show safe
+catch e:
+    show "should not reach here"
+end
+
+# ── 50. Multiple show in one line (multi-arg) ──
+show "a", "b", "c", 1, 2, 3

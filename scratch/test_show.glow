@@ -1,0 +1,42 @@
+let lst = [1,2,3]
+show lst
+show "list: ", lst
+show "count: " + len(lst)
+
+# Test if-else
+let val = 10
+if val > 5:
+    show "high"
+else:
+    show "low"
+end
+
+# Test eif
+let n = 2
+if n == 1:
+    show "one"
+eif n == 2:
+    show "two"
+else:
+    show "other"
+end
+
+# Test try-catch
+try:
+    let bad = 1 / 0
+catch e:
+    show "caught: " + e
+end
+
+# Test return from func
+func add(a, b):
+    return a + b
+end
+show "sum: " + add(3, 4)
+
+# Test while
+let c = 0
+while c < 3:
+    c = c + 1
+end
+show "counted to: " + c

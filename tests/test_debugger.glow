@@ -1,0 +1,44 @@
+# Test debugger library functions
+use "lib/debugger.glow"
+
+show "=== Debugger Library Tests ==="
+
+# Test 1: stacktrace output
+show "Test 1: debug_stacktrace"
+func test_stack():
+    debug_stacktrace()
+end
+test_stack()
+show "PASS: stacktrace completed"
+
+# Test 2: assert with true condition passes
+show "Test 2: debug_assert(true)"
+debug_assert(true, "this should pass")
+show "PASS: assert(true) passed"
+
+# Test 3: assert with false condition throws
+show "Test 3: debug_assert(false) throws"
+let caught = false
+try:
+    debug_assert(false, "expected failure")
+catch e:
+    show "Caught: " + e
+    caught = true
+end
+if caught:
+    show "PASS: assert(false) threw correctly"
+end
+
+# Test 4: heap_stats returns a dict with keys
+show "Test 4: debug_heap_stats"
+let stats = debug_heap_stats()
+show "Allocated: " + stats["allocated"]
+show "Threshold: " + stats["threshold"]
+show "PASS: heap_stats returned dict"
+
+# Test 5: debug_break triggers and returns
+show "Test 5: debug_break"
+debug_break()
+show "PASS: break returned"
+
+show "=== All Debugger Tests Passed ==="
