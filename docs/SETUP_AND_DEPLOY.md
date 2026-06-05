@@ -40,7 +40,7 @@ brew install flex bison sqlite openssl
 ## Building GlowLang
 
 ```bash
-git clone https://github.com/AnshuMishra1122003/GlowLang.git
+git clone https://github.com/anshumali19/GlowLang.git
 cd GlowLang
 make all
 ```
