@@ -17,7 +17,7 @@ func tensor_ones(shape):
         size = size * dim
     end
     let t = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(t, i, 1.0)
     end
     return t
@@ -29,7 +29,7 @@ func tensor_rand(shape):
         size = size * dim
     end
     let t = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(t, i, random())
     end
     return t
@@ -55,7 +55,7 @@ end
 
 func tensor_fill(size, value):
     let t = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(t, i, value)
     end
     return t
@@ -74,7 +74,7 @@ end
 # Tensor Math Operations
 func tensor_sum(t, size):
     let total = 0.0
-    for i from 0 to size:
+    for i from 0 to size - 1:
         total = total + tensor.get(t, i)
     end
     return total
@@ -86,7 +86,7 @@ end
 
 func tensor_max(t, size):
     let m = tensor.get(t, 0)
-    for i from 1 to size:
+    for i from 1 to size - 1:
         let v = tensor.get(t, i)
         when v > m:
             m = v
@@ -97,7 +97,7 @@ end
 
 func tensor_min(t, size):
     let m = tensor.get(t, 0)
-    for i from 1 to size:
+    for i from 1 to size - 1:
         let v = tensor.get(t, i)
         when v < m:
             m = v
@@ -109,7 +109,7 @@ end
 func tensor_argmax(t, size):
     let m = tensor.get(t, 0)
     let idx = 0
-    for i from 1 to size:
+    for i from 1 to size - 1:
         let v = tensor.get(t, i)
         when v > m:
             m = v
@@ -122,7 +122,7 @@ end
 func tensor_argmin(t, size):
     let m = tensor.get(t, 0)
     let idx = 0
-    for i from 1 to size:
+    for i from 1 to size - 1:
         let v = tensor.get(t, i)
         when v < m:
             m = v
@@ -135,7 +135,7 @@ end
 func tensor_variance(t, size):
     let m = tensor_mean(t, size)
     let var_sum = 0.0
-    for i from 0 to size:
+    for i from 0 to size - 1:
         let diff = tensor.get(t, i) - m
         var_sum = var_sum + diff * diff
     end
@@ -149,7 +149,7 @@ end
 # Element-wise Operations
 func tensor_scale(t, size, scalar):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(t, i) * scalar)
     end
     return result
@@ -157,7 +157,7 @@ end
 
 func tensor_add_scalar(t, size, scalar):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(t, i) + scalar)
     end
     return result
@@ -165,7 +165,7 @@ end
 
 func tensor_multiply(a, b, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(a, i) * tensor.get(b, i))
     end
     return result
@@ -173,7 +173,7 @@ end
 
 func tensor_add_tensors(a, b, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(a, i) + tensor.get(b, i))
     end
     return result
@@ -181,7 +181,7 @@ end
 
 func tensor_subtract(a, b, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(a, i) - tensor.get(b, i))
     end
     return result
@@ -190,7 +190,7 @@ end
 # Activation Functions
 func tensor_relu(t, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         let v = tensor.get(t, i)
         when v > 0:
             tensor.set(result, i, v)
@@ -203,7 +203,7 @@ end
 
 func tensor_sigmoid(t, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         let v = tensor.get(t, i)
         tensor.set(result, i, 1.0 / (1.0 + exp(0.0 - v)))
     end
@@ -212,7 +212,7 @@ end
 
 func tensor_tanh(t, size):
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         let v = tensor.get(t, i)
         let ev = exp(2.0 * v)
         tensor.set(result, i, (ev - 1.0) / (ev + 1.0))
@@ -224,12 +224,12 @@ func tensor_softmax(t, size):
     let max_val = tensor_max(t, size)
     let result = tensor.create(size)
     let sum_exp = 0.0
-    for i from 0 to size:
+    for i from 0 to size - 1:
         let v = exp(tensor.get(t, i) - max_val)
         tensor.set(result, i, v)
         sum_exp = sum_exp + v
     end
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, tensor.get(result, i) / sum_exp)
     end
     return result
@@ -243,7 +243,7 @@ func tensor_normalize(t, size):
         s = 1.0
     end
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, (tensor.get(t, i) - m) / s)
     end
     return result
@@ -257,7 +257,7 @@ func tensor_min_max_normalize(t, size):
         range = 1.0
     end
     let result = tensor.create(size)
-    for i from 0 to size:
+    for i from 0 to size - 1:
         tensor.set(result, i, (tensor.get(t, i) - mn) / range)
     end
     return result
@@ -267,10 +267,10 @@ end
 func mat_multiply(a, b, m, n, p):
     # a: m×n, b: n×p → result: m×p
     let result = tensor.zeros(m * p)
-    for i from 0 to m:
-        for j from 0 to p:
+    for i from 0 to m - 1:
+        for j from 0 to p - 1:
             let sum = 0.0
-            for k from 0 to n:
+            for k from 0 to n - 1:
                 sum = sum + tensor.get(a, i * n + k) * tensor.get(b, k * p + j)
             end
             tensor.set(result, i * p + j, sum)
@@ -281,8 +281,8 @@ end
 
 func mat_transpose(a, rows, cols):
     let result = tensor.create(rows * cols)
-    for i from 0 to rows:
-        for j from 0 to cols:
+    for i from 0 to rows - 1:
+        for j from 0 to cols - 1:
             tensor.set(result, j * rows + i, tensor.get(a, i * cols + j))
         end
     end
@@ -292,7 +292,7 @@ end
 # Tensor printing
 func tensor_to_list(t, size):
     let result = []
-    for i from 0 to size:
+    for i from 0 to size - 1:
         append(result, tensor.get(t, i))
     end
     return result

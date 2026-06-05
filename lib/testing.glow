@@ -1,0 +1,141 @@
+# GlowTest — Testing Framework for GlowLang
+# Usage:
+#   use "lib/testing.glow"
+#   let suite = TestSuite("My Tests")
+#   suite.add("test name", my_test_func)
+#   suite.run()
+
+# Assertion functions
+func assert_equal(actual, expected, msg):
+    if actual != expected:
+        throw "ASSERT_EQUAL FAILED: " + msg + " | expected: " + string(expected) + " got: " + string(actual)
+    end
+    return true
+end
+
+func assert_true(cond, msg):
+    if not cond:
+        throw "ASSERT_TRUE FAILED: " + msg
+    end
+    return true
+end
+
+func assert_false(cond, msg):
+    if cond:
+        throw "ASSERT_FALSE FAILED: " + msg
+    end
+    return true
+end
+
+func assert_throws(f, msg):
+    let threw = false
+    try:
+        f()
+    catch e:
+        threw = true
+    end
+    if not threw:
+        throw "ASSERT_THROWS FAILED: " + msg + " | expected exception but none was thrown"
+    end
+    return true
+end
+
+func assert_not_equal(actual, expected, msg):
+    if actual == expected:
+        throw "ASSERT_NOT_EQUAL FAILED: " + msg + " | values are equal: " + string(actual)
+    end
+    return true
+end
+
+func assert_greater(a, b, msg):
+    if a <= b:
+        throw "ASSERT_GREATER FAILED: " + msg + " | " + string(a) + " is not > " + string(b)
+    end
+    return true
+end
+
+func assert_less(a, b, msg):
+    if a >= b:
+        throw "ASSERT_LESS FAILED: " + msg + " | " + string(a) + " is not < " + string(b)
+    end
+    return true
+end
+
+# TestSuite blueprint
+blueprint TestSuite:
+    action init(name):
+        self.name = name
+        self.tests = []
+        self.test_names = []
+        self.passed = 0
+        self.failed = 0
+        self.errors = []
+        self.total_time = 0
+    end
+
+    action add(test_name, test_func):
+        append(self.tests, test_func)
+        append(self.test_names, test_name)
+    end
+
+    action run():
+        show "========================================="
+        show "  GlowTest Suite: " + self.name
+        show "========================================="
+        show ""
+
+        let suite_start = os.time()
+        let i = 0
+        while i < len(self.tests):
+            let tname = self.test_names[i]
+            let tfunc = self.tests[i]
+            let t1 = os.time()
+            try:
+                tfunc()
+                let t2 = os.time()
+                let elapsed = t2 - t1
+                self.total_time = self.total_time + elapsed
+                self.passed = self.passed + 1
+                show "  PASS  " + tname + " (" + string(elapsed) + "s)"
+            catch err:
+                let t2 = os.time()
+                let elapsed = t2 - t1
+                self.total_time = self.total_time + elapsed
+                self.failed = self.failed + 1
+                append(self.errors, tname + ": " + err)
+                show "  FAIL  " + tname + " (" + string(elapsed) + "s)"
+                show "        -> " + err
+            end
+            i = i + 1
+        end
+
+        show ""
+        show "========================================="
+        let total = self.passed + self.failed
+        show "  Results: " + string(self.passed) + "/" + string(total) + " passed"
+        show "  Time:    " + string(self.total_time) + "s"
+
+        if self.failed > 0:
+            show "  Status:  FAILED"
+            show ""
+            show "  Failures:"
+            for each e in self.errors:
+                show "    - " + e
+            end
+        otherwise:
+            show "  Status:  ALL PASSED"
+        end
+        show "========================================="
+        return self.failed == 0
+    end
+
+    action summary():
+        let result = {}
+        result["suite"] = self.name
+        result["passed"] = self.passed
+        result["failed"] = self.failed
+        result["total"] = self.passed + self.failed
+        result["time"] = self.total_time
+        return result
+    end
+end

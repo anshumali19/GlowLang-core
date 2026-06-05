@@ -1,0 +1,5 @@
+
+let s = "hello world"
+let parts = str.split(s, " ")
+show parts
+

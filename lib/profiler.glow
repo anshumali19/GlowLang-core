@@ -1,0 +1,46 @@
+# GlowLang Profiler Library
+# High-level profiling utilities for timing and memory analysis
+#
+# Usage:
+#   use "lib/profiler.glow"
+#   let elapsed = profiler_time("my_func", my_func)
+#   let mem = profiler_memory()
+
+func profiler_start():
+    # Begin native instruction-level profiling
+    debug.profile_start()
+    return true
+end
+
+func profiler_stop():
+    # Stop profiling and print hot-spot report
+    debug.profile_stop()
+    return true
+end
+
+func profiler_report():
+    # Collects and displays profiling data with GC stats
+    show "=== GlowLang Profiler Report ==="
+    let gc = os.gc_info()
+    show "GC Allocated: " + gc["allocated"]
+    show "GC Threshold: " + gc["threshold"]
+    show "================================"
+    return gc
+end
+
+func profiler_time(name, f):
+    # Times a function call and reports duration
+    # Returns elapsed time in seconds (float)
+    let t1 = os.time()
+    let result = f()
+    let t2 = os.time()
+    let elapsed = t2 - t1
+    show "[PROFILE] " + name + ": " + elapsed + "s"
+    return elapsed
+end
+
+func profiler_memory():
+    # Returns current GC allocated bytes as an integer
+    let gc = os.gc_info()
+    return gc["allocated"]
+end

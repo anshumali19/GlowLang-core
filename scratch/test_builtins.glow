@@ -1,0 +1,11 @@
+# These are likely compiled as opcodes, not callable
+# Let's test what random() and exp() look like
+# Check if they're maybe parsed specially
+
+# Test random  
+let r = random()
+show "random: " + r
+
+# Test exp
+let e = exp(1)
+show "exp: " + e

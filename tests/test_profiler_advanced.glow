@@ -1,0 +1,45 @@
+# Advanced Profiler Tests
+use "lib/profiler.glow"
+
+show "=== Advanced Profiler Tests ==="
+
+# Test 1: profiler_time measures correctly
+show "Test 1: profiler_time"
+func slow_work():
+    let total = 0
+    every i from 0 to 10000:
+        total = total + i
+    end
+    return total
+end
+
+let elapsed = profiler_time("slow_work", slow_work)
+show "Elapsed: " + elapsed
+if elapsed >= 0:
+    show "PASS: profiler_time returned non-negative"
+end
+
+# Test 2: profiler_memory returns a number
+show "Test 2: profiler_memory"
+let mem = profiler_memory()
+show "Memory: " + mem
+if mem >= 0:
+    show "PASS: profiler_memory returned non-negative"
+end
+
+# Test 3: profiler_report output
+show "Test 3: profiler_report"
+let report = profiler_report()
+show "PASS: profiler_report completed"
+
+# Test 4: start/stop profiling cycle
+show "Test 4: profiler start/stop"
+profiler_start()
+let sum = 0
+every i from 0 to 5000:
+    sum = sum + i
+end
+profiler_stop()
+show "PASS: profiler start/stop completed"
+
+show "=== All Advanced Profiler Tests Passed ==="

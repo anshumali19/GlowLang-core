@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="GlowLang WASM Playground — Write and run GlowLang code directly in your browser.">
+    <title>GlowLang Playground</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header id="toolbar">
+        <div class="brand">
+            <span class="logo">✦</span>
+            <h1>GlowLang <span class="version">v1.0</span></h1>
+        </div>
+        <div class="actions">
+            <select id="examples-select" aria-label="Example programs">
+                <option value="">Load Example…</option>
+                <option value="hello">Hello World</option>
+                <option value="fibonacci">Fibonacci</option>
+                <option value="factorial">Factorial</option>
+                <option value="list_ops">List Operations</option>
+                <option value="dict_ops">Dictionary Operations</option>
+                <option value="classes">Classes &amp; Traits</option>
+                <option value="closures">Closures &amp; Lambdas</option>
+                <option value="natural">Natural Language Syntax</option>
+                <option value="fstrings">F-Strings &amp; Slices</option>
+                <option value="listcomp">List Comprehensions</option>
+                <option value="trycatch">Error Handling</option>
+                <option value="spawn">Concurrency (spawn)</option>
+            </select>
+            <button id="run-btn" title="Run (Ctrl+Enter)">▶ Run</button>
+            <button id="clear-btn" title="Clear output">Clear</button>
+            <button id="theme-toggle" title="Toggle theme">◑</button>
+        </div>
+    </header>
+
+    <main id="workspace">
+        <section id="editor-panel" class="panel">
+            <div class="panel-header">Editor</div>
+            <div class="editor-wrap">
+                <div id="line-numbers" aria-hidden="true"></div>
+                <textarea id="code-editor" spellcheck="false" autocomplete="off"
+                    placeholder="Write GlowLang code here…">show "Hello from GlowLang!"
+
+func greet(name):
+    show "Welcome, " + name + "!"
+end
+
+greet("World")
+
+# Natural language syntax
+x = 42
+when x > 10:
+    show "x is greater than 10"
+end
+</textarea>
+            </div>
+        </section>
+
+        <div id="gutter"></div>
+
+        <section id="output-panel" class="panel">
+            <div class="panel-header">Output</div>
+            <pre id="output"></pre>
+        </section>
+    </main>
+
+    <footer id="status-bar">
+        <span id="status">Ready</span>
+        <span class="right">GlowLang Playground — Powered by WebAssembly</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================
+  GlowLang File Type Definition for JetBrains IDEs
+  ============================================================
+
+  Installation:
+    1. Open your JetBrains IDE (IntelliJ, PyCharm, WebStorm, etc.)
+    2. Go to File > Settings > Editor > File Types
+    3. Click the "+" button to add a new file type
+    4. Import this XML file, or manually configure:
+       - Name: GlowLang
+       - Line comment: //
+       - Block comment start: /*
+       - Block comment end: */
+       - File extensions: glow
+    5. Alternatively, place this file in:
+       ~/.config/JetBrains/<product>/filetypes/GlowLang.xml
+
+  ============================================================
+-->
+<filetype binary="false" default_extension="glow" description="GlowLang Programming Language" name="GlowLang">
+
+  <!-- General options -->
+  <highlighting>
+    <options>
+      <option name="LINE_COMMENT" value="//" />
+      <option name="COMMENT_START" value="/*" />
+      <option name="COMMENT_END" value="*/" />
+      <option name="HEX_PREFIX" value="0x" />
+      <option name="NUM_POSTFIXES" value="" />
+      <option name="HAS_BRACES" value="false" />
+      <option name="HAS_BRACKETS" value="true" />
+      <option name="HAS_PARENS" value="true" />
+      <option name="HAS_STRING_ESCAPES" value="true" />
+    </options>
+
+    <!-- ======================================================
+         Keyword Set 1: Control Flow & Declarations
+         ====================================================== -->
+    <keywords keywords="action;and;blueprint;can;catch;class;each;eif;end;every;extends;false;for;from;func;in;input;is;is_not;lambda;let;not;or;otherwise;repeat;return;show;skip;spawn;stop;throw;times;to;trait;true;try;until;use;when;whenever;while;write" ignore_case="false" />
+
+    <!-- ======================================================
+         Keyword Set 2: Built-in Functions
+         ====================================================== -->
+    <keywords2 keywords="append;ends_with;find;has;keys;len;lower;merge;pop;push;range;remove;replace;reverse;sort;split;starts_with;trim;type;upper;values" />
+
+    <!-- ======================================================
+         Keyword Set 3: Built-in Modules
+         ====================================================== -->
+    <keywords3 keywords="fs;http;json;math;os;tensor" />
+
+    <!-- ======================================================
+         Keyword Set 4: Module Functions
+         ====================================================== -->
+    <keywords4 keywords="abs;ceil;create;dot;exists;exit;floor;get;list;max;min;mkdir;ones;parse;post;read;remove;round;size;sleep;sqrt;stringify;system;time;write;zeros" />
+
+  </highlighting>
+
+  <!-- File extension mapping -->
+  <extensionMap>
+    <mapping ext="glow" />
+  </extensionMap>
+
+</filetype>

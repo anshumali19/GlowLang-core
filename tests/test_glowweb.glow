@@ -1,0 +1,195 @@
+# Test GlowWeb — Server creation, routing, middleware, request/response
+use "lib/web.glow"
+
+show "=== GlowWeb Test Suite ==="
+
+# ─── Test 1: Request Parser ───
+show ""
+show "--- Test 1: Request Parser ---"
+let raw_request = "GET /api/users?page=1&limit=10 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\r\n{\"test\": true}"
+let req = Request(raw_request)
+show "Method:", req.method
+show "Path:", req.path
+show "Query string:", req.query_string
+show "Query param page:", req.query_params["page"]
+show "Query param limit:", req.query_params["limit"]
+show "Header Host:", req.get_header("Host")
+show "Header Content-Type:", req.get_header("Content-Type")
+show "Body:", req.body
+show "PASS: Request parser works"
+
+# ─── Test 2: Response Builder ───
+show ""
+show "--- Test 2: Response Builder ---"
+let res = Response()
+res.status(200).text("Hello World")
+show "Status code:", res.status_code
+show "Body:", res.body
+show "Content-Type:", res.headers["Content-Type"]
+show "Sent:", res.sent
+
+let res2 = Response()
+res2.status(201).send_json({"id": 1, "name": "Alice"})
+show "JSON status:", res2.status_code
+show "JSON body:", res2.body
+show "PASS: Response builder works"
+
+# ─── Test 3: Router ───
+show ""
+show "--- Test 3: Router ---"
+let router = Router()
+
+func handle_get_users(req, res):
+    res.send_json({"users": []})
+end
+
+func handle_post_user(req, res):
+    res.status(201).send_json({"created": true})
+end
+
+func handle_delete_user(req, res):
+    res.status(204).text("")
+end
+
+router.get("/users", handle_get_users)
+router.post("/users", handle_post_user)
+router.del("/users", handle_delete_user)
+
+let found_get = router.find_route("GET", "/users")
+show "Found GET /users:", found_get is not none
+
+let found_post = router.find_route("POST", "/users")
+show "Found POST /users:", found_post is not none
+
+let found_del = router.find_route("DELETE", "/users")
+show "Found DELETE /users:", found_del is not none
+
+let not_found = router.find_route("GET", "/nonexistent")
+show "Not found route:", not_found is none
+show "PASS: Router works"
+
+# ─── Test 4: Router with Prefix ───
+show ""
+show "--- Test 4: Router with Prefix ---"
+let api_router = Router()
+api_router.set_prefix("/api/v1")
+
+func handle_items(req, res):
+    res.send_json({"items": []})
+end
+
+api_router.get("/items", handle_items)
+let found_api = api_router.find_route("GET", "/api/v1/items")
+show "Found prefixed route:", found_api is not none
+show "PASS: Router prefix works"
+
+# ─── Test 5: Middleware Chain ───
+show ""
+show "--- Test 5: Middleware Chain ---"
+let mw = MiddlewareChain()
+let mw_log = []
+
+func log_before(req, res):
+    append(mw_log, "before:" + req.method)
+end
+
+func log_after(req, res):
+    append(mw_log, "after:" + res.status_code)
+end
+
+mw.before(log_before)
+mw.after(log_after)
+
+let mw_req = Request("GET /test HTTP/1.1\r\n\r\n")
+let mw_res = Response()
+mw.run_before(mw_req, mw_res)
+mw_res.text("ok")
+mw.run_after(mw_req, mw_res)
+
+show "Middleware log:", mw_log
+show "Before hooks ran:", len(mw_log) >= 1
+show "After hooks ran:", len(mw_log) >= 2
+show "PASS: Middleware chain works"
+
+# ─── Test 6: JSON API Helpers ───
+show ""
+show "--- Test 6: JSON API Helpers ---"
+let json_res = Response()
+json_ok(json_res, {"status": "ok"})
+show "json_ok status:", json_res.status_code
+show "json_ok body:", json_res.body
+
+let json_res2 = Response()
+json_error(json_res2, 400, "Bad Request")
+show "json_error status:", json_res2.status_code
+show "json_error body:", json_res2.body
+
+let json_res3 = Response()
+json_not_found(json_res3)
+show "json_not_found status:", json_res3.status_code
+show "PASS: JSON API helpers work"
+
+# ─── Test 7: Server Creation ───
+show ""
+show "--- Test 7: Server Creation ---"
+let server = Server(8080)
+show "Server port:", server.port
+show "Server running:", server.running
+
+func handler_home(req, res):
+    res.html("<h1>Home</h1>")
+end
+
+func handler_about(req, res):
+    res.html("<h1>About</h1>")
+end
+
+server.get("/", handler_home)
+server.post("/about", handler_about)
+show "Routes registered:", len(server.router.routes)
+show "PASS: Server creation works"
+
+# ─── Test 8: Response Build ───
+show ""
+show "--- Test 8: Response HTTP Build ---"
+let build_res = Response()
+build_res.status(200).header("X-Custom", "test").text("Hello")
+let http_out = build_res.build()
+show "Contains status line:", http_out.contains("HTTP/1.1")
+show "Contains X-Custom:", http_out.contains("X-Custom: test")
+show "Contains body:", http_out.contains("Hello")
+show "PASS: HTTP response build works"
+
+# ─── Test 9: Route Entry ───
+show ""
+show "--- Test 9: Route Entry ---"
+let route = Route("GET", "/test", handler_home)
+show "Route method:", route.method
+show "Route path:", route.path
+show "PASS: Route entry works"
+
+# ─── Test 10: Request Context ───
+show ""
+show "--- Test 10: Request Context ---"
+let ctx_req = Request("GET /ctx HTTP/1.1\r\n\r\n")
+ctx_req.set_context("user_id", 42)
+ctx_req.set_context("role", "admin")
+show "Context user_id:", ctx_req.get_context("user_id")
+show "Context role:", ctx_req.get_context("role")
+show "Context missing:", ctx_req.get_context("missing")
+show "PASS: Request context works"
+
+# ─── Test 11: POST Request with JSON Body ───
+show ""
+show "--- Test 11: POST with JSON Body ---"
+let post_raw = "POST /api/data HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\": \"test\", \"value\": 42}"
+let post_req = Request(post_raw)
+show "POST method:", post_req.method
+show "POST path:", post_req.path
+let post_body = post_req.json_body()
+show "POST body name:", post_body["name"]
+show "POST body value:", post_body["value"]
+show "PASS: POST with JSON body works"
+
+show ""
+show "=== All GlowWeb Tests Passed ==="

@@ -1,0 +1,11 @@
+# tensor_utils uses sqrt(), abs(), etc. Let's check if they need the tensor_utils lib
+use "lib/tensor_utils.glow"
+let t = tensor_from_list([4.0, 9.0, 16.0])
+show tensor_to_list(t, 3)
+let s = tensor_std(t, 3)
+show "std: " + s
+
+# Test math builtins after using tensor_utils
+show sqrt(16)
+show abs(-5)
+show floor(3.7)

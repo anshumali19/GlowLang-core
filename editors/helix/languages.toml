@@ -1,0 +1,47 @@
+# ============================================================
+# GlowLang Helix Editor Configuration
+# ============================================================
+#
+# Installation:
+#   1. Copy this file to ~/.config/helix/languages.toml
+#      (or merge with your existing languages.toml)
+#   2. Copy the queries/glowlang/ directory to:
+#      ~/.config/helix/runtime/queries/glowlang/
+#   3. Ensure `glowlang` binary is in your PATH
+#   4. Restart Helix
+#
+# ============================================================
+
+[[language]]
+name = "glowlang"
+scope = "source.glowlang"
+injection-regex = "glow(lang)?"
+file-types = ["glow"]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["glowlang-lsp"]
+auto-format = false
+roots = [".git", "main.glow"]
+
+# Bracket pairs for auto-matching
+[[language.auto-pairs]]
+open = "("
+close = ")"
+[[language.auto-pairs]]
+open = "{"
+close = "}"
+[[language.auto-pairs]]
+open = "["
+close = "]"
+[[language.auto-pairs]]
+open = "\""
+close = "\""
+[[language.auto-pairs]]
+open = "'"
+close = "'"
+
+# GlowLang Language Server
+[language-server.glowlang-lsp]
+command = "glowlang"
+args = ["--lsp"]

@@ -1,0 +1,126 @@
+# GlowLang Test Suite Demo
+# Demonstrates the GlowTest framework
+use "lib/testing.glow"
+
+show "=== GlowTest Framework Demo ==="
+show ""
+show "This demo shows how to write and run tests using GlowTest."
+show ""
+
+# --- Example: Testing a math library ---
+
+func add(a, b):
+    return a + b
+end
+
+func multiply(a, b):
+    return a * b
+end
+
+func divide(a, b):
+    if b == 0:
+        throw "Division by zero"
+    end
+    return a / b
+end
+
+func factorial(n):
+    if n <= 1:
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+func fibonacci(n):
+    if n <= 0:
+        return 0
+    end
+    if n == 1:
+        return 1
+    end
+    let a = 0
+    let b = 1
+    let i = 2
+    while i <= n:
+        let temp = a + b
+        a = b
+        b = temp
+        i = i + 1
+    end
+    return b
+end
+
+# --- Write test functions ---
+
+func test_addition():
+    assert_equal(add(2, 3), 5, "2+3=5")
+    assert_equal(add(-1, 1), 0, "(-1)+1=0")
+    assert_equal(add(0, 0), 0, "0+0=0")
+end
+
+func test_multiplication():
+    assert_equal(multiply(3, 4), 12, "3*4=12")
+    assert_equal(multiply(-2, 5), -10, "(-2)*5=-10")
+    assert_equal(multiply(0, 100), 0, "0*100=0")
+end
+
+func test_division():
+    assert_equal(divide(10, 2), 5, "10/2=5")
+    assert_equal(divide(7, 2), 3.5, "7/2=3.5")
+end
+
+func test_division_by_zero():
+    let f = lambda(): divide(1, 0)
+    assert_throws(f, "division by zero should throw")
+end
+
+func test_factorial():
+    assert_equal(factorial(0), 1, "0!=1")
+    assert_equal(factorial(1), 1, "1!=1")
+    assert_equal(factorial(5), 120, "5!=120")
+    assert_equal(factorial(10), 3628800, "10!=3628800")
+end
+
+func test_fibonacci():
+    assert_equal(fibonacci(0), 0, "fib(0)=0")
+    assert_equal(fibonacci(1), 1, "fib(1)=1")
+    assert_equal(fibonacci(5), 5, "fib(5)=5")
+    assert_equal(fibonacci(10), 55, "fib(10)=55")
+end
+
+func test_comparison_ops():
+    assert_true(5 > 3, "5 > 3")
+    assert_true(2 < 8, "2 < 8")
+    assert_false(10 < 5, "10 not < 5")
+    assert_greater(100, 99, "100 > 99")
+    assert_less(1, 2, "1 < 2")
+end
+
+func test_string_operations():
+    assert_equal("hello" + " " + "world", "hello world", "string concat")
+    assert_equal(len("test"), 4, "len of test")
+    assert_not_equal("a", "b", "a != b")
+end
+
+# --- Create and run test suite ---
+
+let suite = TestSuite("Math Library Tests")
+
+suite.add("Addition", test_addition)
+suite.add("Multiplication", test_multiplication)
+suite.add("Division", test_division)
+suite.add("Division by zero", test_division_by_zero)
+suite.add("Factorial", test_factorial)
+suite.add("Fibonacci", test_fibonacci)
+suite.add("Comparison operations", test_comparison_ops)
+suite.add("String operations", test_string_operations)
+
+let all_passed = suite.run()
+
+show ""
+let summary = suite.summary()
+show "Suite: " + summary["suite"]
+show "Total: " + string(summary["total"])
+show "Passed: " + string(summary["passed"])
+show "Failed: " + string(summary["failed"])
+show "Time: " + string(summary["time"]) + "s"

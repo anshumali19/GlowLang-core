@@ -1,0 +1,34 @@
+# Test everything step by step
+# 1. Dict methods
+let d = {"x": 1, "y": 2}
+show d.keys()
+show d.has("x")
+show d.has("z")
+
+# 2. Tensor ops
+let t = tensor.create(3)
+tensor.set(t, 0, 10)
+tensor.set(t, 1, 20)
+tensor.set(t, 2, 30)
+show tensor.get(t, 0)
+show tensor.get(t, 1)
+show t
+
+# 3. Math
+show math.sqrt(9)
+show math.pow(2, 8)
+
+# 4. Negative numbers
+let neg = 0 - 5
+show neg
+
+# 5. For each
+let items = [10, 20, 30]
+let total = 0
+for each item in items:
+    total = total + item
+end
+show "total: " + total
+
+# 6. Modulo
+show 10 % 3

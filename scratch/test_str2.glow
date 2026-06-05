@@ -1,0 +1,17 @@
+let s = "hello,world,foo"
+let parts = s.split(",")
+show parts
+show s.contains("world")
+show s.contains("xyz")
+
+# Test len, type, int, float, string
+show len("hello")
+show len([1,2,3])
+show type("hello")
+show type(42)
+show type(3.14)
+show type([1,2])
+show type({"a": 1})
+show int("42")
+show float("3.14")
+show string(42)

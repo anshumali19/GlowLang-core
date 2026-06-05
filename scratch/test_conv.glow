@@ -1,0 +1,16 @@
+# Test number conversion
+let x = 42
+let s = string(x)
+show s
+show type(s)
+
+# Let's test if there are opcode-based conversions
+# Maybe int() and float() are parsed as keywords?
+let a = 3 + 4
+show a
+
+# test dict iteration patterns
+let d = {"x": 1, "y": 2, "z": 3}
+for each key in d.keys():
+    show key + " => " + d[key]
+end

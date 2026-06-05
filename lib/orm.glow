@@ -483,4 +483,181 @@ blueprint ORM:
         sqlite.close(self.db)
         show "[ORM] Connection closed"
     end
+
+    # ─── Transaction Support ───
+    action begin():
+        sqlite.exec(self.db, "BEGIN TRANSACTION")
+        return self
+    end
+
+    action commit():
+        sqlite.exec(self.db, "COMMIT")
+        return self
+    end
+
+    action rollback_tx():
+        sqlite.exec(self.db, "ROLLBACK")
+        return self
+    end
+
+    action transaction(callback):
+        self.begin()
+        try:
+            callback(self)
+            self.commit()
+            return true
+        catch e:
+            self.rollback_tx()
+            show "[ORM] Transaction rolled back: " + e
+            return false
+        end
+    end
+
+    # ─── Batch Insert ───
+    action batch_insert(table, records):
+        let count = 0
+        self.begin()
+        try:
+            for each data in records:
+                let keys = ""
+                let vals = ""
+                let first = true
+                for each key in data:
+                    when not first:
+                        keys = keys + ", "
+                        vals = vals + ", "
+                    end
+                    keys = keys + key
+                    when type(data[key]) == "string":
+                        vals = vals + "'" + data[key] + "'"
+                    eif data[key] is none:
+                        vals = vals + "NULL"
+                    otherwise:
+                        vals = vals + data[key]
+                    end
+                    first = false
+                end
+                let sql = "INSERT INTO " + table + " (" + keys + ") VALUES (" + vals + ")"
+                sqlite.exec(self.db, sql)
+                count = count + 1
+            end
+            self.commit()
+            show "[ORM] Batch inserted " + count + " records into " + table
+        catch e:
+            self.rollback_tx()
+            show "[ORM] Batch insert failed: " + e
+        end
+        return count
+    end
+
+    # ─── Update by Condition ───
+    action update_where(table, data, conditions):
+        let set_parts = ""
+        let first = true
+        for each key in data:
+            when not first:
+                set_parts = set_parts + ", "
+            end
+            when type(data[key]) == "string":
+                set_parts = set_parts + key + " = '" + data[key] + "'"
+            eif data[key] is none:
+                set_parts = set_parts + key + " = NULL"
+            otherwise:
+                set_parts = set_parts + key + " = " + data[key]
+            end
+            first = false
+        end
+        let where_parts = ""
+        let wfirst = true
+        for each cond in conditions:
+            when not wfirst:
+                where_parts = where_parts + " AND "
+            end
+            where_parts = where_parts + cond
+            wfirst = false
+        end
+        let sql = "UPDATE " + table + " SET " + set_parts + " WHERE " + where_parts
+        sqlite.exec(self.db, sql)
+        return self
+    end
+
+    # ─── Delete by Condition ───
+    action delete_where(table, conditions):
+        let where_parts = ""
+        let first = true
+        for each cond in conditions:
+            when not first:
+                where_parts = where_parts + " AND "
+            end
+            where_parts = where_parts + cond
+            first = false
+        end
+        let sql = "DELETE FROM " + table + " WHERE " + where_parts
+        sqlite.exec(self.db, sql)
+        return self
+    end
+
+    # ─── Count with Conditions ───
+    action count_where(table, conditions):
+        let sql = "SELECT COUNT(*) as count FROM " + table
+        when len(conditions) > 0:
+            sql = sql + " WHERE "
+            let first = true
+            for each cond in conditions:
+                when not first:
+                    sql = sql + " AND "
+                end
+                sql = sql + cond
+                first = false
+            end
+        end
+        let result = sqlite.query(self.db, sql)
+        return result[0]["count"]
+    end
+
+    # ─── Exists Helper ───
+    action exists(table, conditions):
+        let c = self.count_where(table, conditions)
+        return c > 0
+    end
+
+    # ─── Raw Exec (no return) ───
+    action exec_sql(sql):
+        sqlite.exec(self.db, sql)
+        return self
+    end
+end
+
+# ─── Transaction Helper Blueprint ───
+blueprint Transaction:
+    action init(orm_instance):
+        self.orm = orm_instance
+        self.active = false
+    end
+
+    action begin():
+        self.orm.begin()
+        self.active = true
+        return self
+    end
+
+    action commit():
+        when self.active:
+            self.orm.commit()
+            self.active = false
+        end
+        return self
+    end
+
+    action rollback():
+        when self.active:
+            self.orm.rollback_tx()
+            self.active = false
+        end
+        return self
+    end
+
+    action is_active():
+        return self.active
+    end
 end

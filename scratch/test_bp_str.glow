@@ -1,0 +1,16 @@
+
+blueprint Test:
+    action init():
+        self.data = "hello world"
+    end
+    action check():
+        let s = self.data
+        let parts = s.split(" ")
+        show parts
+        let has = "world" is in s
+        show "contains:", has
+    end
+end
+let t = Test()
+t.check()
+
