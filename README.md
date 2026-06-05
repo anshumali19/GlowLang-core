@@ -39,7 +39,7 @@
 sudo apt-get install gcc flex bison libsqlite3-dev libssl-dev libfl-dev libx11-dev make
 
 # Build
-git clone https://github.com/AnshuMishra1122003/GlowLang.git
+git clone https://github.com/anshumali19/GlowLang.git
 cd GlowLang
 make all
 
