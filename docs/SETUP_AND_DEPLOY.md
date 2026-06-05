@@ -399,7 +399,7 @@ docker run -p 8080:8080 my-app main.glow
 
 ## Links
 
-- **Repository**: https://github.com/AnshuMishra1122003/GlowLang
+- **Repository**: https://github.com/anshumali19/GlowLang.git
 - **VSCode Extension**: `editors/glowlang-vscode/`
 - **Documentation**: `docs/`
 - **Examples**: `examples/`
