@@ -1,0 +1,286 @@
+# ═══════════════════════════════════════════════════════════════════
+#  valid_programs.glow — Fuzz Corpus: 55 syntactically valid programs
+#  covering all GlowLang language features.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 1. Integer assignment ──
+x = 42
+
+# ── 2. Float assignment ──
+pi = 3.14159
+
+# ── 3. String assignment ──
+name = "GlowLang"
+
+# ── 4. Boolean assignment ──
+flag = true
+
+# ── 5. None assignment ──
+nothing = none
+
+# ── 6. Let binding ──
+let immutable_val = 100
+
+# ── 7. Arithmetic ──
+result = (10 + 20) * 3 - 5
+
+# ── 8. Modulo ──
+remainder = 17 % 5
+
+# ── 9. Power ──
+squared = 2 ** 10
+
+# ── 10. Negation ──
+neg = -42
+
+# ── 11. Comparison operators ──
+let cmp1 = 5 < 10
+let cmp2 = 10 > 5
+let cmp3 = 5 <= 5
+let cmp4 = 5 >= 5
+let cmp5 = 5 == 5
+let cmp6 = 5 != 10
+
+# ── 12. Logical operators ──
+let logic1 = true and false
+let logic2 = true or false
+let logic3 = not false
+
+# ── 13. If statement ──
+if 1 < 2:
+    show "one is less"
+end
+
+# ── 14. If-else ──
+if 5 > 10:
+    show "nope"
+else:
+    show "yes"
+end
+
+# ── 15. While loop ──
+let i = 0
+while i < 5:
+    i = i + 1
+end
+
+# ── 16. Until loop ──
+let j = 0
+until j == 3:
+    j = j + 1
+end
+
+# ── 17. Repeat loop ──
+repeat 3:
+    show "repeat"
+end
+
+# ── 18. Every loop (for-range) ──
+every k from 1 to 5:
+    show k
+end
+
+# ── 19. For-each loop ──
+let items = [10, 20, 30]
+every item in items:
+    show item
+end
+
+# ── 20. Function definition ──
+func add(a, b):
+    return a + b
+end
+show add(3, 4)
+
+# ── 21. Action keyword (alias for func) ──
+action greet(name):
+    show "Hello, " + name
+end
+greet("World")
+
+# ── 22. Recursive function ──
+func factorial(n):
+    if n <= 1:
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+show factorial(5)
+
+# ── 23. Lambda expression ──
+let double_it = lambda(x): x * 2
+show double_it(21)
+
+# ── 24. List literal ──
+let nums = [1, 2, 3, 4, 5]
+
+# ── 25. Empty list ──
+let empty = []
+
+# ── 26. List indexing ──
+show nums[0]
+
+# ── 27. List append ──
+append(nums, 6)
+
+# ── 28. List length ──
+show len(nums)
+
+# ── 29. List slicing ──
+let sl = nums[1:3]
+
+# ── 30. List comprehension ──
+let squares = [x * x for x in [1, 2, 3, 4]]
+
+# ── 31. Dict literal ──
+let person = {"name": "Alice", "age": 30}
+
+# ── 32. Empty dict ──
+let empty_dict = {}
+
+# ── 33. Dict access ──
+show person["name"]
+
+# ── 34. Nested dict ──
+let nested = {"outer": {"inner": 42}}
+
+# ── 35. String concatenation ──
+let full = "Hello" + " " + "World"
+
+# ── 36. String indexing ──
+let ch = "abcdef"[2]
+
+# ── 37. String length ──
+show len("GlowLang")
+
+# ── 38. F-string ──
+let val = 42
+let fstr = f"The value is {val}"
+
+# ── 39. Show statement ──
+show "Hello from show"
+
+# ── 40. Write statement (no newline) ──
+write "no newline"
+
+# ── 41. Type builtin ──
+show type(42)
+show type("str")
+show type([1])
+
+# ── 42. Range builtin ──
+let r = range(5)
+
+# ── 43. Class definition ──
+class Animal:
+    func set_name(n):
+        self.name = n
+    end
+    func speak():
+        show self.name + " speaks"
+    end
+end
+let a = Animal()
+a.set_name("Dog")
+a.speak()
+
+# ── 44. Blueprint keyword (class alias) ──
+blueprint Vehicle:
+    can set_type(t):
+        self.type = t
+    end
+    can describe():
+        show "Vehicle: " + self.type
+    end
+end
+let v = Vehicle()
+v.set_type("Car")
+v.describe()
+
+# ── 45. Trait definition + use ──
+trait Printable:
+    func display():
+        show "Displaying trait"
+    end
+end
+class Widget:
+    use Printable
+end
+let w = Widget()
+w.display()
+
+# ── 46. Try-catch ──
+try:
+    show "trying"
+catch e:
+    show "caught:", e
+end
+
+# ── 47. Throw ──
+try:
+    throw "test error"
+catch e:
+    show "Got:", e
+end
+
+# ── 48. Nested try-catch ──
+try:
+    try:
+        throw "inner"
+    catch e1:
+        show "inner caught:", e1
+        throw "outer"
+    end
+catch e2:
+    show "outer caught:", e2
+end
+
+# ── 49. Compound assignment ──
+let counter = 0
+counter += 10
+counter -= 3
+counter *= 2
+
+# ── 50. Stop (break) in loop ──
+let s = 0
+while true:
+    s = s + 1
+    if s > 5:
+        stop
+    end
+end
+
+# ── 51. Skip (continue) in loop ──
+every n from 1 to 10:
+    if n % 2 == 0:
+        skip
+    end
+    show n
+end
+
+# ── 52. Math operations ──
+let abs_val = abs(-42)
+let min_val = min(3, 7)
+let max_val = max(3, 7)
+
+# ── 53. Input (commented since interactive) ──
+# let user_input = input("Enter: ")
+
+# ── 54. Spawn (concurrent) ──
+func bg_task():
+    let t = 0
+    while t < 3:
+        t = t + 1
+    end
+end
+spawn bg_task()
+
+# ── 55. When / is syntax ──
+let p = 5
+let q = 5
+when p is q:
+    show "p equals q"
+end
+when p is not 10:
+    show "p is not 10"
+end

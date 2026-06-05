@@ -32,6 +32,7 @@ extern void lexer_cleanup(void);
 %type <node_list> expr_list arg_list
 %type <dict_list> dict_elements
 %type <str_list> param_list
+%type <str_val> member_name
 
 %left OR_OP
 %left AND_OP
@@ -55,6 +56,8 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | FOR EACH ID IN expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
     | FOR ID IN expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $2; $$->left = $4; $$->right = $7; }
     | FOR ID FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $4; $$->right = $6; $$->third = $9; }
+    | FOR ID IN FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $5; $$->right = $7; $$->third = $10; }
+    | FOR EACH ID IN FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $3; $$->left = $6; $$->right = $8; $$->third = $11; }
     | FUNC ID '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, $8); }
     | FUNC ID '(' ')' COLON NEWLINE lines END { $$ = newFuncNode($2, 0, NULL, $7); }
     | CLASS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->left = $5; }
@@ -76,6 +79,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | SPAWN expr { $$ = node_new(NODE_SPAWN); $$->left = $2; }
     | LET ID ASSIGN expr { $$ = node_new(NODE_LET); $$->name = $2; $$->left = $4; }
     | SHOW expr_list { $$ = newShowNode($2.nodes, $2.count); }
+    | WRITE expr_list { $$ = newWriteNode($2.nodes, $2.count); }
     | expr { $$ = newExprStmtNode($1); };
 
 expr_list: expr { $$.count = 1; $$.nodes = arena_alloc(sizeof(Node*)); $$.nodes[0] = $1; } | expr_list COMMA expr { $$.nodes = arena_realloc($$.nodes, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.nodes[$1.count] = $3; $$.count = $1.count + 1; };
@@ -85,12 +89,44 @@ condition: expr;
 eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = newSeqNode($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
-expr: term | expr PLUS term { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS term { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr LT term { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT term { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE term { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE term { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP term { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP term { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP term { $$ = newBinOp(NODE_NOT, $2, NULL); };
+expr: term | expr PLUS term { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS term { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN term { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN term { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT term { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT term { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE term { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE term { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP term { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP term { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP term { $$ = newBinOp(NODE_NOT, $2, NULL); };
 term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
 unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); };
 power: postfix | postfix POW power { $$ = newBinOp(NODE_POW, $1, $3); };
-postfix: primary | postfix '.' ID { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; };
-primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr_list ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = $2.nodes; $$->element_count = $2.count; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, newReturnNode($6)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, $7); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
+postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
+       | postfix '[' expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }
+       | postfix '[' expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; }
+       | postfix '[' COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = $4; }
+       | postfix '[' COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = NULL; };
+member_name: ID { $$ = $1; }
+           | WRITE { $$ = intern_string("write"); }
+           | SHOW { $$ = intern_string("show"); }
+           ;
+primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN expr ']' {
+    $$ = node_new(NODE_LIST_COMP);
+    $$->comp_expr = $2;
+    $$->comp_var = $5;
+    $$->left = $7;
+    $$->comp_filter = NULL;
+} | '[' expr FOR EACH ID IN expr WHEN expr ']' {
+    $$ = node_new(NODE_LIST_COMP);
+    $$->comp_expr = $2;
+    $$->comp_var = $5;
+    $$->left = $7;
+    $$->comp_filter = $9;
+} | '[' expr FOR ID IN expr ']' {
+    $$ = node_new(NODE_LIST_COMP);
+    $$->comp_expr = $2;
+    $$->comp_var = $4;
+    $$->left = $6;
+    $$->comp_filter = NULL;
+} | '[' expr FOR ID IN expr WHEN expr ']' {
+    $$ = node_new(NODE_LIST_COMP);
+    $$->comp_expr = $2;
+    $$->comp_var = $4;
+    $$->left = $6;
+    $$->comp_filter = $8;
+} | '[' expr_list ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = $2.nodes; $$->element_count = $2.count; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, newReturnNode($6)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, $7); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
 
 dict_elements: expr COLON expr { $$.count = 1; $$.keys = arena_alloc(sizeof(Node*)); $$.keys[0] = $1; $$.values = arena_alloc(sizeof(Node*)); $$.values[0] = $3; } | dict_elements COMMA expr COLON expr { $$.keys = arena_realloc($$.keys, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.keys[$1.count] = $3; $$.values = arena_realloc($$.values, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.values[$1.count] = $5; $$.count = $1.count + 1; };
 
@@ -156,7 +192,9 @@ int glow_main(int argc, char **argv) {
                                 main_bc->local_count = next_free_reg;
                                 bc_emit(main_bc, OP_RETURN, 0, 0);
                                 optimize_bytecode(main_bc);
+                                pthread_mutex_lock(&glow_gil);
                                 run_bytecode(main_bc, NULL, NULL, 0);
+                                pthread_mutex_unlock(&glow_gil);
                                 if (has_exception) print_error_trace(pending_exception);
                             }
                             std_cleanup(); return 0;
@@ -287,8 +325,13 @@ int glow_main(int argc, char **argv) {
                     }
 
                     if (!check_only) {
+                        pthread_mutex_lock(&glow_gil);
                         run_bytecode(main_bc, NULL, NULL, 0);
-                        if (has_exception) print_error_trace(pending_exception);
+                        pthread_mutex_unlock(&glow_gil);
+                        if (runtime_error_thrown) {
+                            std_cleanup();
+                            return 1;
+                        }
                     } else {
                         printf("Syntax Check: OK\n");
                     }
@@ -323,8 +366,13 @@ int glow_main(int argc, char **argv) {
                 main_bc->local_count = next_free_reg;
                 bc_emit(main_bc, OP_RETURN, 0, 0);
                 optimize_bytecode(main_bc);
+                pthread_mutex_lock(&glow_gil);
                 run_bytecode(main_bc, NULL, NULL, 0);
-                if (has_exception) print_error_trace(pending_exception);
+                pthread_mutex_unlock(&glow_gil);
+                if (runtime_error_thrown) {
+                    std_cleanup();
+                    return 1;
+                }
             }
             if (yyin) fclose(yyin);
         } else {
@@ -356,7 +404,9 @@ l_REPL:
                 main_bc->local_count = next_free_reg;
                 int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
                 Instruction *start_pc = &main_bc->code[old_count];
+                pthread_mutex_lock(&glow_gil);
                 Value res = run_bytecode(main_bc, start_pc, NULL, 0);
+                pthread_mutex_unlock(&glow_gil);
                 if (has_exception) { print_error_trace(pending_exception); has_exception = 0; }
                 else if (res != 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
                 main_bc->count = ret_idx;

@@ -1,0 +1,85 @@
+# GlowLang CLI Application Example
+# Demonstrates the full GlowCLI library usage
+use "lib/cli.glow"
+
+show "=== GlowLang CLI Application Demo ==="
+show ""
+
+# 1. Create a CLI parser
+let app = ArgParser("glow-build", "GlowLang Build Tool — compile and manage Glow projects")
+
+# Define flags
+app.flag("--verbose", "Enable verbose output")
+app.flag("--release", "Build in release mode")
+app.flag("--watch", "Watch for file changes")
+
+# Define options
+app.option("--output", "Output directory", "build/")
+app.option("--target", "Build target architecture", "native")
+
+# Define positional args
+app.positional("source", "Source file to compile")
+
+# Define subcommands
+app.subcommand("build", "Compile the project")
+app.subcommand("test", "Run project tests")
+app.subcommand("clean", "Clean build artifacts")
+app.subcommand("lint", "Run the package linter")
+
+# Show help
+app.help()
+
+# 2. Simulate parsing some args
+show "--- Simulated Build Command ---"
+let args1 = ["build", "--verbose", "--release", "--output", "dist/", "main.glow"]
+let parsed = app.parse(args1)
+
+show "Subcommand: " + string(parsed["_subcommand"])
+show "Verbose: " + string(parsed["--verbose"])
+show "Release: " + string(parsed["--release"])
+show "Output: " + string(parsed["--output"])
+show "Source: " + string(parsed["source"])
+show ""
+
+# 3. Use ColorOutput
+let colors = ColorOutput()
+colors.success("Build configuration loaded")
+colors.info("Target: " + parsed["--target"])
+colors.warning("Watch mode not enabled")
+show ""
+
+# 4. Show a progress bar for build simulation
+show "Building project..."
+let bar = ProgressBar(5, 30)
+bar.set_label("Compile")
+let step = 0
+while step <= 5:
+    bar.update(step)
+    step = step + 1
+end
+show ""
+
+# 5. Display results in a table
+let table = Table()
+table.set_headers(["Step", "Status", "Time"])
+table.add_row(["Parse", "OK", "0.01s"])
+table.add_row(["Compile", "OK", "0.23s"])
+table.add_row(["Link", "OK", "0.05s"])
+table.add_row(["Optimize", "OK", "0.12s"])
+table.add_row(["Package", "OK", "0.02s"])
+table.render()
+show ""
+
+# 6. Simulate test command
+show "--- Simulated Test Command ---"
+let args2 = ["test", "--verbose"]
+let parsed2 = app.parse(args2)
+show "Subcommand: " + string(parsed2["_subcommand"])
+show "Verbose: " + string(parsed2["--verbose"])
+show ""
+
+# 7. Show a menu
+let prompt = Prompt()
+prompt.menu("Select build target:", ["Linux x86_64", "Linux ARM64", "macOS ARM64", "Windows x86_64"])
+
+colors.success("CLI demo complete!")

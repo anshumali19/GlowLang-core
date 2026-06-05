@@ -1,0 +1,57 @@
+# GlowLang Debug Library
+# High-level debugging utilities wrapping native debug.* functions
+#
+# Usage:
+#   use "lib/debugger.glow"
+#   debug_assert(x > 0, "x must be positive")
+#   let stats = debug_heap_stats()
+
+func debug_stacktrace():
+    # Prints the current call stack via native stacktrace
+    debug.stacktrace()
+    return "stacktrace printed"
+end
+
+func debug_locals():
+    # Dumps local variable values via native dump_stack
+    debug.dump_stack()
+    return "locals dumped"
+end
+
+func debug_heap_stats():
+    # Returns GC heap statistics as a dict
+    # Keys: "allocated", "threshold"
+    let info = os.gc_info()
+    let stats = {}
+    stats["allocated"] = info["allocated"]
+    stats["threshold"] = info["threshold"]
+    return stats
+end
+
+func debug_break():
+    # Triggers a breakpoint - prints marker and dumps stack
+    show "[BREAKPOINT] Hit breakpoint"
+    show "[BREAKPOINT] Stack state:"
+    debug.dump_stack()
+    return true
+end
+
+func debug_assert(cond, msg):
+    # Assertion with message - throws if condition is false
+    if cond:
+        return true
+    end
+    throw "Assertion failed: " + msg
+end
+
+func debug_profile_start():
+    # Start a profiling region
+    debug.profile_start()
+    return true
+end
+
+func debug_profile_end():
+    # End profiling region and print hot-spot report
+    debug.profile_stop()
+    return true
+end

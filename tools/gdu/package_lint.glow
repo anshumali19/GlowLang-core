@@ -1,0 +1,216 @@
+# GlowLang Package Linter — Quality Assurance Tool
+# Validates package structure, naming, versioning, and required files
+# Usage:
+#   use "tools/gdu/package_lint.glow"
+#   let linter = PackageLinter("/path/to/project")
+#   let score = linter.lint()
+
+# Validate version string (semver-like: X.Y.Z)
+func is_valid_version(v):
+    let parts = str.split(v, ".")
+    if len(parts) != 3:
+        return false
+    end
+    # Check each part is numeric
+    for each part in parts:
+        let trimmed = str.trim(part)
+        if len(trimmed) == 0:
+            return false
+        end
+    end
+    return true
+end
+
+# Check naming conventions (lowercase with underscores or hyphens)
+func is_valid_package_name(name):
+    if len(name) == 0:
+        return false
+    end
+    let lower = str.lower(name)
+    if lower != name:
+        return false
+    end
+    # Check for invalid characters
+    if str.contains(name, " "):
+        return false
+    end
+    return true
+end
+
+# PackageLinter blueprint
+blueprint PackageLinter:
+    action init(project_path):
+        self.project_path = project_path
+        self.issues = []
+        self.warnings = []
+        self.score = 100
+        self.checks_passed = 0
+        self.checks_total = 0
+    end
+
+    action _add_issue(severity, message):
+        if severity == "error":
+            append(self.issues, "[ERROR] " + message)
+            self.score = self.score - 15
+        otherwise:
+            append(self.warnings, "[WARN]  " + message)
+            self.score = self.score - 5
+        end
+    end
+
+    action _check_passed(name):
+        self.checks_passed = self.checks_passed + 1
+        self.checks_total = self.checks_total + 1
+    end
+
+    action _check_failed(name):
+        self.checks_total = self.checks_total + 1
+    end
+
+    action check_readme():
+        let readme_path = self.project_path + "/README.md"
+        if fs.exists(readme_path):
+            let content = fs.read(readme_path)
+            if len(content) < 50:
+                self._add_issue("warn", "README.md is too short (< 50 chars)")
+                self._check_failed("readme_quality")
+            otherwise:
+                self._check_passed("readme")
+            end
+        otherwise:
+            self._add_issue("error", "Missing README.md")
+            self._check_failed("readme")
+        end
+    end
+
+    action check_lib_directory():
+        let lib_path = self.project_path + "/lib"
+        if fs.exists(lib_path):
+            self._check_passed("lib_dir")
+        otherwise:
+            self._add_issue("error", "Missing lib/ directory")
+            self._check_failed("lib_dir")
+        end
+    end
+
+    action check_deps_format():
+        let deps_path = self.project_path + "/Glow.deps"
+        if fs.exists(deps_path):
+            let content = fs.read(deps_path)
+            let lines = str.split(content, "\n")
+            let line_num = 0
+            for each line in lines:
+                line_num = line_num + 1
+                let trimmed = str.trim(line)
+                if len(trimmed) > 0:
+                    # Each line should have a URL and a destination path in quotes
+                    if not str.starts_with(trimmed, "\""):
+                        self._add_issue("warn", "Glow.deps line " + string(line_num) + ": should start with quoted URL")
+                    end
+                end
+            end
+            self._check_passed("deps_format")
+        otherwise:
+            self._add_issue("warn", "No Glow.deps file found (optional)")
+            self._check_passed("deps_format")
+        end
+    end
+
+    action check_naming():
+        # Check that glow files in lib/ follow naming conventions
+        let lib_path = self.project_path + "/lib"
+        if fs.exists(lib_path):
+            let files = fs.readdir(lib_path)
+            for each f in files:
+                if str.ends_with(f, ".glow"):
+                    let name = str.replace(f, ".glow", "")
+                    if not is_valid_package_name(name):
+                        self._add_issue("warn", "lib/" + f + " does not follow naming conventions (use lowercase)")
+                    otherwise:
+                        self._check_passed("naming_" + name)
+                    end
+                end
+            end
+        end
+    end
+
+    action check_tests_exist():
+        let tests_path = self.project_path + "/tests"
+        if fs.exists(tests_path):
+            self._check_passed("tests_dir")
+        otherwise:
+            self._add_issue("warn", "No tests/ directory found")
+            self._check_failed("tests_dir")
+        end
+    end
+
+    action check_examples():
+        let examples_path = self.project_path + "/examples"
+        if fs.exists(examples_path):
+            self._check_passed("examples_dir")
+        otherwise:
+            self._add_issue("warn", "No examples/ directory found")
+            self._check_failed("examples_dir")
+        end
+    end
+
+    action lint():
+        show "========================================="
+        show "  GlowLang Package Linter"
+        show "  Path: " + self.project_path
+        show "========================================="
+        show ""
+
+        self.check_readme()
+        self.check_lib_directory()
+        self.check_deps_format()
+        self.check_naming()
+        self.check_tests_exist()
+        self.check_examples()
+
+        # Clamp score
+        if self.score < 0:
+            self.score = 0
+        end
+
+        # Print issues
+        if len(self.issues) > 0:
+            show "ERRORS:"
+            for each issue in self.issues:
+                show "  " + issue
+            end
+            show ""
+        end
+
+        if len(self.warnings) > 0:
+            show "WARNINGS:"
+            for each w in self.warnings:
+                show "  " + w
+            end
+            show ""
+        end
+
+        show "Checks passed: " + string(self.checks_passed) + "/" + string(self.checks_total)
+        show "Package Quality Score: " + string(self.score) + "/100"
+        show ""
+
+        if self.score >= 80:
+            show "Rating: EXCELLENT"
+        eif self.score >= 60:
+            show "Rating: GOOD"
+        eif self.score >= 40:
+            show "Rating: FAIR"
+        otherwise:
+            show "Rating: NEEDS IMPROVEMENT"
+        end
+        show "========================================="
+
+        return self.score
+    end
+end
+
+# Convenience function to lint current project
+func lint_package(path):
+    let linter = PackageLinter(path)
+    return linter.lint()
+end

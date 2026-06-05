@@ -1,0 +1,215 @@
+# GlowLang OOP Stress Test
+# Tests: blueprint, class, action, can, inheritance, method chaining, self
+
+show "=== OOP Stress Test ==="
+
+# Blueprint with actions
+blueprint Animal:
+    action init(name, sound):
+        self.name = name
+        self.sound = sound
+        self.energy = 100
+    end
+
+    action speak():
+        show self.name + " says " + self.sound
+        self.energy = self.energy - 10
+        return self
+    end
+
+    action eat(food):
+        show self.name + " eats " + food
+        self.energy = self.energy + 20
+        return self
+    end
+
+    action status():
+        show self.name + " energy: " + self.energy
+        return self
+    end
+end
+
+let dog = Animal("Rex", "Woof")
+dog.speak()
+dog.eat("bone")
+dog.status()
+
+# Class with can
+class Calculator:
+    can init():
+        self.result = 0
+        self.history = []
+    end
+
+    can add(n):
+        self.result = self.result + n
+        append(self.history, "+" + n)
+        return self
+    end
+
+    can sub(n):
+        self.result = self.result - n
+        append(self.history, "-" + n)
+        return self
+    end
+
+    can mul(n):
+        self.result = self.result * n
+        append(self.history, "*" + n)
+        return self
+    end
+
+    can reset():
+        self.result = 0
+        self.history = []
+        return self
+    end
+
+    can get_result():
+        return self.result
+    end
+end
+
+let calc = Calculator()
+calc.init()
+calc.add(10)
+calc.add(5)
+calc.sub(3)
+show "Calc result: ", calc.get_result()
+
+# Nested objects
+blueprint Team:
+    action init(name):
+        self.name = name
+        self.members = []
+    end
+
+    action add_member(member):
+        append(self.members, member)
+        return self
+    end
+
+    action size():
+        return len(self.members)
+    end
+
+    action show_team():
+        show "Team: " + self.name + " (" + self.size() + " members)"
+        for each m in self.members:
+            show "  - " + m
+        end
+    end
+end
+
+let team = Team("GlowLang Core")
+team.add_member("Alice")
+team.add_member("Bob")
+team.add_member("Charlie")
+team.show_team()
+
+# Blueprint with complex state
+blueprint StateMachine:
+    action init():
+        self.state = "idle"
+        self.transitions = {}
+        self.on_enter = {}
+    end
+
+    action add_transition(from_state, event, to_state):
+        let key = from_state + ":" + event
+        self.transitions[key] = to_state
+    end
+
+    action trigger(event):
+        let key = self.state + ":" + event
+        when self.transitions.has(key):
+            let old = self.state
+            self.state = self.transitions[key]
+            show "  Transition: " + old + " -> " + self.state + " (on " + event + ")"
+        otherwise:
+            show "  No transition from " + self.state + " on " + event
+        end
+    end
+
+    action current():
+        return self.state
+    end
+end
+
+let sm = StateMachine()
+sm.add_transition("idle", "start", "running")
+sm.add_transition("running", "pause", "paused")
+sm.add_transition("paused", "resume", "running")
+sm.add_transition("running", "stop", "idle")
+
+show "State Machine:"
+sm.trigger("start")
+sm.trigger("pause")
+sm.trigger("resume")
+sm.trigger("stop")
+show "Final state: " + sm.current()
+
+# Builder pattern
+blueprint QueryBuilder:
+    action init(table):
+        self.table = table
+        self.conditions = []
+        self.order_field = ""
+        self.limit_val = 0
+        self.fields_select = "*"
+    end
+
+    action select(fields):
+        self.fields_select = fields
+        return self
+    end
+
+    action where(condition):
+        append(self.conditions, condition)
+        return self
+    end
+
+    action order_by(field):
+        self.order_field = field
+        return self
+    end
+
+    action limit(n):
+        self.limit_val = n
+        return self
+    end
+
+    action build():
+        let sql = "SELECT " + self.fields_select + " FROM " + self.table
+        when len(self.conditions) > 0:
+            sql = sql + " WHERE "
+            let first = true
+            for each cond in self.conditions:
+                when not first:
+                    sql = sql + " AND "
+                end
+                sql = sql + cond
+                first = false
+            end
+        end
+        when self.order_field != "":
+            sql = sql + " ORDER BY " + self.order_field
+        end
+        when self.limit_val > 0:
+            sql = sql + " LIMIT " + self.limit_val
+        end
+        return sql
+    end
+end
+
+let q = QueryBuilder("users")
+q.select("name, age")
+q.where("age > 18")
+q.where("active = 1")
+q.order_by("name")
+q.limit(10)
+let sql = q.build()
+show "Generated SQL: " + sql
+
+show ""
+show "=== OOP Stress Test Complete ==="

@@ -1,0 +1,6 @@
+let db = sqlite.open("integration_orm.db")
+sqlite.exec(db, "DROP TABLE IF EXISTS profiles")
+show "dropped profiles"
+sqlite.query(db, "DROP TABLE IF EXISTS posts")
+show "dropped posts"
+sqlite.close(db)

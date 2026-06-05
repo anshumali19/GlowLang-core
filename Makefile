@@ -44,8 +44,52 @@ fuzz-parser: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_
 $(GDU_BIN): $(TOOLS_DIR)/gdu.c
 	$(CC) $(TOOLS_DIR)/gdu.c -o $(GDU_BIN) $(CFLAGS) -lsqlite3
 
+FUZZ_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
+FUZZ_LIBS = -lfl -lsqlite3 -lX11
+
+# Build a fuzz harness helper (call: $(call build-fuzz,harness_name))
+define build-fuzz
+	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
+	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
+	$(CC) tests/c_harness/$(1).c $(FUZZ_SRC) -o $(BIN_DIR)/$(1) $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION $(FUZZ_LIBS)
+	./$(BIN_DIR)/$(1)
+	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+endef
+
+fuzz-bytecode:
+	$(call build-fuzz,fuzz_bytecode)
+
+fuzz-runtime:
+	$(call build-fuzz,fuzz_runtime)
+
+fuzz-gc:
+	$(call build-fuzz,fuzz_gc)
+
+fuzz-string:
+	$(call build-fuzz,fuzz_string)
+
+fuzz-module:
+	$(call build-fuzz,fuzz_module)
+
+fuzz-all: fuzz-parser fuzz-bytecode fuzz-runtime fuzz-gc fuzz-string fuzz-module
+	@echo "All fuzzers completed successfully."
+
+# Standalone tools
+tools: $(GDU_BIN)
+	$(CC) tools/profiler/glow_profiler.c -o $(BIN_DIR)/glow_profiler -O2
+	$(CC) tools/inspector/glow_inspector.c -o $(BIN_DIR)/glow_inspector -O2
+	$(CC) tools/debugger/glow_debugger.c -o $(BIN_DIR)/glow_debugger -O2
+	@echo "All tools built successfully."
+
+# Full verification pipeline
+verify: all
+	./run_all_tests.sh
+	@echo "All tests passed."
+
 clean:
 	rm -f $(GLOWLANG_BIN) $(GDU_BIN) bin/glowlang.js bin/glowlang.wasm
+	rm -f bin/fuzz_* bin/glow_profiler bin/glow_inspector bin/glow_debugger
+	rm -f bin/glowlang_asan bin/glowlang_tsan
 
 wasm: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
 	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l

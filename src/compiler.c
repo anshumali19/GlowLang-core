@@ -43,6 +43,7 @@ Node* newUntilNode(Node *c, Node *b) { Node *n = node_new(NODE_UNTIL); n->left =
 Node* newRepeatNode(Node *c, Node *b) { Node *n = node_new(NODE_REPEAT); n->left = c; n->right = b; return n; }
 Node* newCompoundAssignNode(NodeType t, const char *s, Node *e) { Node *n = node_new(t); n->name = s; n->left = e; return n; }
 Node* newShowNode(Node **is, int c) { Node *n = node_new(NODE_SHOW); n->print_items = is; n->print_count = c; return n; }
+Node* newWriteNode(Node **is, int c) { Node *n = node_new(NODE_WRITE); n->print_items = is; n->print_count = c; return n; }
 Node* newExprStmtNode(Node *e) { Node *n = node_new(NODE_EXPR_STMT); n->left = e; return n; }
 Node* newCallExprNode(Node *e, Node **as, int c) {
     Node *n = node_new(NODE_CALL_EXPR);
@@ -488,11 +489,20 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_FOR_RANGE: {
+            if (compiling_func && get_local_reg(n->name) == -1) {
+                func_add_local(compiling_func, n->name);
+            }
+            int var_reg = get_local_reg(n->name);
+
             int start_val = compile_expr(n->left, -1);
             int end_val = compile_expr(n->right, -1);
-            int slot = global_get_slot(n->name);
-            int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-            compiling_bc->code[idx].r0 = start_val;
+            if (var_reg != -1) {
+                bc_emit_reg(compiling_bc, OP_MOVE, var_reg, start_val, 0);
+            } else {
+                int slot = global_get_slot(n->name);
+                int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                compiling_bc->code[idx].r0 = start_val;
+            }
             int loop_start = compiling_bc->count;
 
             if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
@@ -501,9 +511,12 @@ static void compile_stmt(Node *n) {
             loop->end_patch_count = 0;
             loop->skip_patch_count = 0;
 
-            int i_reg = next_free_reg++;
-            idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-            compiling_bc->code[idx].r0 = i_reg;
+            int i_reg = var_reg != -1 ? var_reg : next_free_reg++;
+            if (var_reg == -1) {
+                int slot = global_get_slot(n->name);
+                int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
+                compiling_bc->code[idx].r0 = i_reg;
+            }
             int cond_reg = next_free_reg++;
             bc_emit_reg(compiling_bc, OP_LTE, cond_reg, i_reg, end_val);
             int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
@@ -516,14 +529,20 @@ static void compile_stmt(Node *n) {
                 compiling_bc->code[loop->skip_patches[i]].arg = incr_start;
             }
 
-            idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-            compiling_bc->code[idx].r0 = i_reg;
+            if (var_reg == -1) {
+                int slot = global_get_slot(n->name);
+                int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
+                compiling_bc->code[idx].r0 = i_reg;
+            }
             int one_reg = next_free_reg++;
-            idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
+            int idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
             compiling_bc->code[idx].r0 = one_reg;
             bc_emit_reg(compiling_bc, OP_ADD, i_reg, i_reg, one_reg);
-            idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-            compiling_bc->code[idx].r0 = i_reg;
+            if (var_reg == -1) {
+                int slot = global_get_slot(n->name);
+                int idx2 = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                compiling_bc->code[idx2].r0 = i_reg;
+            }
             bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
             compiling_bc->code[jf].arg = compiling_bc->count;
 
@@ -643,6 +662,16 @@ static void compile_stmt(Node *n) {
                 compile_expr(n->print_items[i], start_reg + i);
             }
             int idx = bc_emit(compiling_bc, OP_SHOW, n->print_count, 0);
+            compiling_bc->code[idx].r0 = start_reg;
+            break;
+        }
+        case NODE_WRITE: {
+            int start_reg = next_free_reg;
+            next_free_reg += n->print_count;
+            for (int i=0; i<n->print_count; i++) {
+                compile_expr(n->print_items[i], start_reg + i);
+            }
+            int idx = bc_emit(compiling_bc, OP_WRITE, n->print_count, 0);
             compiling_bc->code[idx].r0 = start_reg;
             break;
         }
@@ -905,6 +934,15 @@ static int compile_expr(Node *n, int target_reg) {
             bc_emit_reg(compiling_bc, OP_NOT, reg, src, 0);
             break;
         }
+        case NODE_IN: {
+            int elem = compile_expr(n->left, -1);
+            int coll = compile_expr(n->right, -1);
+            int idx = bc_emit(compiling_bc, OP_IN, 0, 0);
+            compiling_bc->code[idx].r0 = reg;
+            compiling_bc->code[idx].r1 = elem;
+            compiling_bc->code[idx].r2 = coll;
+            break;
+        }
         case NODE_NEG: {
             int src = compile_expr(n->left, -1);
             bc_emit_reg(compiling_bc, OP_NEG, reg, src, 0);
@@ -972,6 +1010,105 @@ static int compile_expr(Node *n, int target_reg) {
             }
             break;
         }
+        case NODE_SLICE: {
+            int obj = compile_expr(n->left, -1);
+            int base = next_free_reg;
+            next_free_reg += 2;
+            
+            if (n->right) {
+                compile_expr(n->right, base);
+            } else {
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, -999999, 0);
+                compiling_bc->code[idx].r0 = base;
+            }
+            
+            if (n->third) {
+                compile_expr(n->third, base + 1);
+            } else {
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, -999999, 0);
+                compiling_bc->code[idx].r0 = base + 1;
+            }
+            
+            int idx = bc_emit(compiling_bc, OP_SLICE, 0, 0);
+            compiling_bc->code[idx].r0 = reg;
+            compiling_bc->code[idx].r1 = obj;
+            compiling_bc->code[idx].r2 = base;
+            
+            next_free_reg = base;
+            break;
+        }
+        case NODE_FSTRING: {
+            const char *str = n->name;
+            int len = strlen(str);
+            int last_reg = -1;
+            int i = 0;
+            while (i < len) {
+                if (str[i] == '{') {
+                    i++;
+                    int start = i;
+                    while (i < len && str[i] != '}') i++;
+                    if (i < len && str[i] == '}') {
+                        int var_len = i - start;
+                        char *var_name = malloc(var_len + 1);
+                        strncpy(var_name, str + start, var_len);
+                        var_name[var_len] = '\0';
+                        char *trimmed = var_name;
+                        while (*trimmed == ' ') trimmed++;
+                        int tl = strlen(trimmed);
+                        while (tl > 0 && trimmed[tl-1] == ' ') {
+                            trimmed[tl-1] = '\0';
+                            tl--;
+                        }
+                        
+                        Node *var_node = newVarNode(intern_string(trimmed));
+                        int var_reg = compile_expr(var_node, -1);
+                        free(var_name);
+                        
+                        if (last_reg == -1) {
+                            last_reg = var_reg;
+                        } else {
+                            int new_reg = next_free_reg++;
+                            int idx = bc_emit(compiling_bc, OP_ADD, 0, 0);
+                            compiling_bc->code[idx].r0 = new_reg;
+                            compiling_bc->code[idx].r1 = last_reg;
+                            compiling_bc->code[idx].r2 = var_reg;
+                            last_reg = new_reg;
+                        }
+                    }
+                    i++;
+                } else {
+                    int start = i;
+                    while (i < len && str[i] != '{') i++;
+                    int lit_len = i - start;
+                    char *lit_str = malloc(lit_len + 1);
+                    strncpy(lit_str, str + start, lit_len);
+                    lit_str[lit_len] = '\0';
+                    
+                    Node *lit_node = newStringNode(intern_string(lit_str));
+                    int lit_reg = compile_expr(lit_node, -1);
+                    free(lit_str);
+                    
+                    if (last_reg == -1) {
+                        last_reg = lit_reg;
+                    } else {
+                        int new_reg = next_free_reg++;
+                        int idx = bc_emit(compiling_bc, OP_ADD, 0, 0);
+                        compiling_bc->code[idx].r0 = new_reg;
+                        compiling_bc->code[idx].r1 = last_reg;
+                        compiling_bc->code[idx].r2 = lit_reg;
+                        last_reg = new_reg;
+                    }
+                }
+            }
+            
+            if (last_reg == -1) {
+                Node *empty_node = newStringNode(intern_string(""));
+                last_reg = compile_expr(empty_node, -1);
+            }
+            
+            bc_emit_reg(compiling_bc, OP_MOVE, reg, last_reg, 0);
+            break;
+        }
         case NODE_LIST_LITERAL: {
             int base = next_free_reg;
             next_free_reg += n->element_count;
@@ -980,6 +1117,71 @@ static int compile_expr(Node *n, int target_reg) {
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = base;
             next_free_reg = base; // Restore pool
+            break;
+        }
+        case NODE_LIST_COMP: {
+            int start_reg = next_free_reg;
+
+            // 1. Compile the collection/iterable first (e.g. n->left)
+            int coll_reg = compile_expr(n->left, -1);
+
+            // 2. Allocate the destination list literal register (which is `reg`)
+            int idx_list = bc_emit(compiling_bc, OP_LIST_LITERAL, 0, 0);
+            compiling_bc->code[idx_list].r0 = reg;
+            compiling_bc->code[idx_list].r1 = 0;
+
+            // 3. Handle loop variable (e.g. n->comp_var)
+            if (compiling_func && get_local_reg(n->comp_var) == -1) {
+                func_add_local(compiling_func, n->comp_var);
+                next_free_reg++;
+            }
+            int var_reg = get_local_reg(n->comp_var);
+
+            // 4. Allocate iterator register and value register
+            int iter_reg = next_free_reg++;
+            int val_reg = var_reg != -1 ? var_reg : next_free_reg++;
+
+            // 5. Emit iterator start
+            bc_emit_reg(compiling_bc, OP_ITER_START, iter_reg, coll_reg, 0);
+            int loop_start = compiling_bc->count;
+
+            // 6. Emit iterator next
+            int jf_idx = bc_emit_reg(compiling_bc, OP_ITER_NEXT, val_reg, iter_reg, 0);
+
+            // 7. Store in global variable if it is global
+            if (var_reg == -1) {
+                int g_slot = global_get_slot(n->comp_var);
+                int s_idx = bc_emit(compiling_bc, OP_STORE_VAR, g_slot, 0);
+                compiling_bc->code[s_idx].r0 = val_reg;
+            }
+
+            // 8. Compile filter condition if present
+            int filter_jump_idx = -1;
+            if (n->comp_filter) {
+                int cond_reg = compile_expr(n->comp_filter, -1);
+                filter_jump_idx = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+                compiling_bc->code[filter_jump_idx].r0 = cond_reg;
+            }
+
+            // 9. Evaluate the item expression
+            int val_item_reg = compile_expr(n->comp_expr, -1);
+
+            // 10. Append to the destination list
+            bc_emit_reg(compiling_bc, OP_APPEND, reg, val_item_reg, 0);
+
+            // 11. Patch filter jump destination
+            if (filter_jump_idx != -1) {
+                compiling_bc->code[filter_jump_idx].arg = compiling_bc->count;
+            }
+
+            // 12. Jump back to loop start
+            bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
+
+            // 13. Patch iterator exit jump destination
+            compiling_bc->code[jf_idx].arg = compiling_bc->count;
+
+            // 14. Restore the register pool (except the returned `reg`)
+            next_free_reg = start_reg;
             break;
         }
         case NODE_DICT_LITERAL: {

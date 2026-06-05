@@ -1,0 +1,57 @@
+# Docker Compose for GlowLang Application + SQLite
+# Usage: docker-compose up --build
+
+version: '3.8'
+
+services:
+  glowlang-app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: glowlang-app
+    ports:
+      - "8080:8080"
+    volumes:
+      - app-data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      - GLOW_ENV=production
+      - GLOW_PORT=8080
+      - GLOW_DB_PATH=/app/data/app.db
+      - GLOW_LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '1.0'
+        reservations:
+          memory: 64M
+          cpus: '0.25'
+
+  # SQLite database backup service
+  db-backup:
+    image: ubuntu:22.04
+    container_name: glowlang-db-backup
+    volumes:
+      - app-data:/data:ro
+      - backup-data:/backup
+    entrypoint: >
+      bash -c "while true; do
+        cp /data/app.db /backup/app_$$(date +%Y%m%d_%H%M%S).db 2>/dev/null || true;
+        find /backup -name '*.db' -mtime +7 -delete;
+        sleep 86400;
+      done"
+    restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local
+  backup-data:
+    driver: local

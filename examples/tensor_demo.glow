@@ -1,0 +1,49 @@
+# Tensor & ML Demo
+# Demonstrates tensor creation, operations, and matrix math
+
+show "=== GlowLang Tensor Demo ==="
+
+# Create tensors
+a = tensor.create(5)
+b = tensor.create(5)
+
+# Fill with values
+every i in from 0 to 4:
+    a[i] = i * 1.5
+    b[i] = (i + 1) * 2.0
+end
+
+show "Tensor A: " + a
+show "Tensor B: " + b
+
+# Element-wise operations
+c = a + b
+show "A + B = " + c
+
+# Dot product
+z = tensor.zeros(10)
+o = tensor.ones(10)
+show "Zeros: " + z
+show "Ones: " + o
+
+show ""
+show "=== Matrix Demo ==="
+
+# 3x3 matrix multiplication
+m1 = tensor.create(9)
+m2 = tensor.create(9)
+
+# Identity-like matrix
+m1[0] = 1.0
+m1[4] = 1.0
+m1[8] = 1.0
+
+m2[0] = 2.0
+m2[4] = 3.0
+m2[8] = 4.0
+
+show "Matrix 1 diagonal: [" + m1[0] + ", " + m1[4] + ", " + m1[8] + "]"
+show "Matrix 2 diagonal: [" + m2[0] + ", " + m2[4] + ", " + m2[8] + "]"
+
+show ""
+show "Tensor operations complete."

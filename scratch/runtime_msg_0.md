@@ -1,0 +1,1 @@
+I have completed the deep audit of the GlowLang runtime. I am now writing the full report artifact. Stand by — it will be at `/home/anshumali/.gemini/antigravity-cli/brain/813b8dac-01ca-41e2-8eb7-7bfdd5c83413/glowlang_runtime_audit.md`.

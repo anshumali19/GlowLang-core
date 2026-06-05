@@ -1,96 +1,227 @@
-# GlowLang: Natural Language, Native Speed
+<p align="center">
+  <h1 align="center">🔥 GlowLang</h1>
+  <p align="center"><strong>A production-grade programming language with natural-language syntax, SIMD tensors, built-in HTTP, SQLite ORM, JIT compilation, and a complete developer ecosystem.</strong></p>
+</p>
 
-GlowLang is an adaptive, high-performance systems programming language designed to be as readable as natural language while executing at native C/C++ speeds.
+<p align="center">
+  <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
+  <img src="https://img.shields.io/badge/tests-99%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/build-zero%20warnings-brightgreen" alt="Build">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WASM-lightgrey" alt="Platform">
+</p>
 
-```mermaid
-graph TD
-    %% Styling
-    classDef frontend fill:#2d333b,stroke:#3b82f6,stroke-width:2px,color:#adbac7
-    classDef opt fill:#2d333b,stroke:#f59e0b,stroke-width:2px,color:#adbac7
-    classDef vm fill:#2d333b,stroke:#10b981,stroke-width:2px,color:#adbac7
-    classDef jit fill:#2d333b,stroke:#ef4444,stroke-width:2px,color:#adbac7
-    classDef mem fill:#2d333b,stroke:#8b5cf6,stroke-width:2px,color:#adbac7
+---
 
-    subgraph "The GlowLang Pipeline"
-        Source[Source Code / REPL] --> Lex[Lexer - flex]
-        Lex --> Parse[Parser - bison]
-        Parse --> AST[AST Construction]
-        AST --> Compile[Bytecode Compiler]
-        
-        subgraph "Optimization Suite"
-            Compile --> Opt[AOT Optimizer]
-            Opt --> Pass1[Block Analysis]
-            Opt --> Pass2[Constant Folding]
-            Opt --> Pass3[SIMD Vectorization]
-        end
-        
-        subgraph "Execution Engine"
-            Pass3 --> VM[Register-Based VM]
-            VM --> Profile{Is Hot?}
-            Profile -- Yes --> JIT[Adaptive JIT Compiler]
-            JIT --> Native[x86-64 / ARM64 Machine Code]
-            Native -- Guard Fail --> Deopt[Deoptimization]
-            Deopt --> VM
-        end
-        
-        subgraph "Memory Management"
-            Native -.-> GC[(Generational GC)]
-            VM -.-> GC
-            GC -.-> Shapes[Hidden Classes]
-            GC -.-> Arena[Arena Allocator]
-        end
-    end
+## ✨ Features
 
-    class Source,Lex,Parse,AST,Compile frontend
-    class Opt,Pass1,Pass2,Pass3 opt
-    class VM,Profile vm
-    class JIT,Native,Deopt jit
-    class GC,Shapes,Arena mem
-```
+| Category | Capabilities |
+|----------|-------------|
+| **Natural Syntax** | `show`, `when`, `whenever`, `every`, `blueprint`, `action`, `can`, `use` |
+| **Runtime** | Register-based VM, JIT compiler, generational GC, optimizer |
+| **Concurrency** | `spawn` threads with GIL, reactive `whenever` patterns |
+| **HTTP Server** | Built-in TCP server with `http.listen`, `http.accept`, `http.send` |
+| **Database** | Native SQLite with `sqlite.open`, `sqlite.exec`, `sqlite.query` |
+| **Tensors** | SIMD-accelerated (AVX2/SSE4.2) via `tensor.create`, `tensor.add`, `tensor.dot` |
+| **AI/ML** | Neural net blueprints, matrix ops, activation functions, training loops |
+| **JSON** | Native `json.parse` and `json.stringify` |
+| **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir` |
+| **Package Manager** | `gdu` with semantic versioning, dependency resolution, SHA-256 checksums |
+| **LSP** | Language Server Protocol with completion, hover, go-to-definition, diagnostics |
+| **Editor Support** | VSCode, Neovim, Sublime Text, Helix, JetBrains |
+| **Tooling** | Debugger, profiler, heap inspector, bytecode viewer |
+| **Testing** | 99 tests, 6 fuzz harnesses, ASan/TSan verification |
 
-## Core Philosophy
-GlowLang bridges the gap between high-level human readability and low-level mechanical sympathy. It is a **production-grade systems language** featuring:
-- **Register-Based Virtual Machine**: Eliminates stack-shuffling overhead for maximum VM efficiency.
-- **Adaptive JIT Compilation**: Automatically compiles hot paths into specialized native machine code (x86-64/ARM64).
-- **SIMD Auto-Vectorization**: Collapses numeric loops into hardware-parallel instructions for AI/ML workloads.
-- **Generational GC**: Minimizes pause times via Nursery/Old-Gen tiers and precision write barriers.
-
-## Key Features
-- **Natural Syntax**: Use keywords like `blueprint`, `action`, `every`, `is`, and `is not`.
-- **Industrial Concurrency**: OS threads with a Global Interpreter Lock (GIL) and `spawn`/`can` primitives.
-- **Rich Ecosystem**: Native bindings for **SQLite**, **Redis**, **OpenSSL**, **HTTP**, and **X11 Graphics**.
-- **Modern OOP**: Hidden Classes (Shapes), Traits, and speculative property access optimization.
-
-## Quick Start
-
-### Building from Source
-Ensure you have `gcc`, `flex`, `bison`, `libssl`, and `libsqlite3` installed:
+## 🚀 Quick Start
 
 ```bash
-make
-```
+# Install dependencies (Ubuntu/Debian)
+sudo apt-get install gcc flex bison libsqlite3-dev libssl-dev libfl-dev libx11-dev make
 
-### Running a Script
-```bash
+# Build
+git clone https://github.com/AnshuMishra1122003/GlowLang.git
+cd GlowLang
+make all
+
+# Run
 ./bin/glowlang examples/hello.glow
 ```
 
-### Interactive REPL
-```bash
-./bin/glowlang
+## 📝 Hello World
+
+```
+show "Hello, World!"
+
+let name = "GlowLang"
+show "Welcome to " + name + "!"
+
+# Natural language loops
+every item in [1, 2, 3, 4, 5]:
+    show "Item: " + item
+end
 ```
 
-## The Ecosystem
-GlowLang ships with powerful native modules:
-- **`tensor`**: Matrix multiplication, transposition, and SIMD-accelerated math.
-- **`db`**: Full support for SQLite querying and native Redis caching.
-- **`gui`**: Native X11 windowing and event-driven rendering.
-- **`net`**: Scalable TCP/HTTP servers and clients.
+## 🏗️ Language Highlights
 
-## Performance Highlights
-- **1.86 Billion IPS** peak JIT performance.
-- **Fibonacci 30** in **0.048s** (Native C-tier speed).
-- **SIMD Array Add** of 1M elements in **0.003s**.
+### Natural Syntax Classes
+```
+blueprint Animal:
+    action init(name, sound):
+        self.name = name
+        self.sound = sound
+    end
+
+    action speak():
+        show self.name + " says " + self.sound
+    end
+end
+
+let dog = Animal("Rex", "Woof")
+dog.speak()
+```
+
+### HTTP Server
+```
+let server = http.listen(8080)
+show "Server on :8080"
+
+while true:
+    let client = http.accept(server)
+    let req = http.read(client)
+    http.send(client, "HTTP/1.1 200 OK\r\n\r\nHello from GlowLang!")
+    http.close(client)
+end
+```
+
+### Database (SQLite)
+```
+let db = sqlite.open("app.db")
+sqlite.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+sqlite.exec(db, "INSERT INTO users (name, age) VALUES ('Alice', 30)")
+let rows = sqlite.query(db, "SELECT * FROM users")
+for each row in rows:
+    show row["name"] + " is " + row["age"]
+end
+```
+
+### SIMD Tensors
+```
+let a = tensor.zeros(1000000)
+let b = tensor.zeros(1000000)
+let c = tensor.add(a, b)        # AVX2 accelerated
+let dot = tensor.dot(a, b)      # SIMD dot product
+```
+
+### Concurrency
+```
+func worker(id):
+    show "Worker " + id + " running"
+end
+
+spawn worker(1)
+spawn worker(2)
+os.sleep(1000)
+```
+
+## 📦 Project Structure
+
+```
+GlowLang/
+├── src/                    # Core runtime (C)
+│   ├── glowlang.y          # Parser (Bison)
+│   ├── glowlang.l          # Lexer (Flex)
+│   ├── vm.c                # Virtual machine
+│   ├── compiler.c          # Bytecode compiler
+│   ├── jit.c               # JIT compiler
+│   ├── gc.c                # Garbage collector
+│   ├── stdlib.c            # Standard library
+│   └── lsp.c               # Language Server Protocol
+├── lib/                    # GlowLang standard libraries
+│   ├── web.glow            # HTTP framework
+│   ├── orm.glow            # ORM layer
+│   ├── ai.glow             # Neural networks
+│   ├── tensor_utils.glow   # Tensor operations
+│   ├── db.glow             # Database toolkit
+│   └── ...
+├── tests/                  # Test suite (99 tests)
+├── examples/               # Example applications
+├── editors/                # Editor integrations
+├── tools/                  # Dev tools (debugger, profiler)
+├── deploy/                 # Docker & deployment configs
+├── docs/                   # Documentation
+└── Makefile
+```
+
+## 🧪 Testing
+
+```bash
+# Run all 99 tests
+make verify
+
+# Run with AddressSanitizer + ThreadSanitizer
+make test-sanitized
+
+# Run all fuzz harnesses
+make fuzz-all
+
+# Build standalone tools
+make tools
+```
+
+## 📖 Documentation
+
+- **[Setup & Deploy Guide](docs/SETUP_AND_DEPLOY.md)** — Installation, editor setup, project creation
+- **[Language Reference](docs/language_reference.md)** — Complete syntax reference
+- **[Getting Started](docs/getting_started.md)** — Tutorial for beginners
+- **[Web Development](docs/web_guide.md)** — HTTP server & APIs
+- **[AI/ML Guide](docs/ai_ml_guide.md)** — Tensors & neural networks
+- **[Concurrency Guide](docs/concurrency_guide.md)** — Spawn, threads, async patterns
+- **[Runtime Internals](docs/runtime_internals.md)** — VM, JIT, GC architecture
+- **[Production Deployment](docs/production_deployment.md)** — Docker, ARM64, CI/CD
+
+## 🛠️ Editor Support
+
+| Editor | Status | Location |
+|--------|--------|----------|
+| **VSCode** | ✅ Extension with syntax + snippets | `editors/glowlang-vscode/` |
+| **Neovim** | ✅ LSP config + syntax | `editors/neovim/` |
+| **Sublime Text** | ✅ Syntax definition | `editors/sublime/` |
+| **Helix** | ✅ Language config + highlights | `editors/helix/` |
+| **JetBrains** | ✅ File type definition | `editors/jetbrains/` |
+
+## 📊 Architecture
+
+```
+Source Code (.glow)
+    ↓
+  Lexer (Flex) → Tokens
+    ↓
+  Parser (Bison) → AST
+    ↓
+  Compiler → Bytecode
+    ↓
+  Optimizer → Optimized Bytecode
+    ↓
+  VM (Safe Path) ←→ JIT (Fast Path)
+    ↓
+  GC (Generational, Concurrent)
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch: `git checkout -b feature/amazing`
+3. Run tests: `make verify`
+4. Commit: `git commit -m 'Add amazing feature'`
+5. Push: `git push origin feature/amazing`
+6. Open a Pull Request
+
+## 📄 License
+
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
-*GlowLang: The Industrial Revolution of Natural Programming.*
+
+<p align="center">
+  Built with ❤️ by <a href="https://github.com/AnshuMishra1122003">Anshumali</a>
+</p>

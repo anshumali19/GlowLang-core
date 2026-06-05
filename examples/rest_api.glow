@@ -1,0 +1,31 @@
+# REST API Example
+# Demonstrates GlowLang HTTP routing and JSON handling
+
+use "lib/web.glow"
+use "lib/json_utils.glow"
+
+# In-memory data store
+todos = []
+
+func handle_list_todos(req):
+    return json.stringify(todos)
+end
+
+func handle_add_todo(req):
+    item = json.parse(req["body"])
+    todos.push(item)
+    return json.stringify({"status": "created", "count": len(todos)})
+end
+
+show "REST API Example"
+show "Routes:"
+show "  GET  /api/todos     - List todos"
+show "  POST /api/todos     - Add a todo"
+show ""
+
+# Simulated requests
+todos.push({"id": 1, "title": "Learn GlowLang", "done": false})
+todos.push({"id": 2, "title": "Build an API", "done": true})
+
+show "All todos: " + json.stringify(todos)
+show "Total: " + len(todos)

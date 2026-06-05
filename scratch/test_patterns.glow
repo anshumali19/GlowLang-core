@@ -1,0 +1,46 @@
+# Test blueprint with methods
+blueprint Dog:
+    action init(name):
+        self.name = name
+        self.tricks = []
+    end
+
+    action learn(trick):
+        append(self.tricks, trick)
+    end
+
+    action show_tricks():
+        show self.name + " knows: " + self.tricks
+    end
+end
+
+let d = Dog("Rex")
+d.learn("sit")
+d.learn("roll")
+d.show_tricks()
+
+# Test for from to
+for i from 0 to 4:
+    show "i=" + i
+end
+
+# Test when/otherwise
+let x = 5
+when x > 3:
+    show "big"
+otherwise:
+    show "small"
+end
+
+# Test string concat with number
+show "result: " + (2 + 3)
+
+# Test dict
+let info = {"a": 1, "b": 2}
+show info["a"]
+
+# Test list ops
+let lst = [10, 20, 30]
+append(lst, 40)
+show len(lst)
+show lst

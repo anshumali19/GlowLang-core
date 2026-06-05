@@ -315,6 +315,12 @@ FuncEntry* func_table_add(const char *name) {
                 func_table[idx].used = 1;
             }
             func_table[idx].name = name;
+            for (int i = 0; i < global_table.count; i++) {
+                if (global_table.names[i] && strcmp(global_table.names[i], name) == 0) {
+                    global_table.values[i] = bound_method_new(value_none(), &func_table[idx]);
+                    break;
+                }
+            }
             return &func_table[idx];
         }
         idx = (idx + 1) % func_table_size;
@@ -642,6 +648,12 @@ static Value native_os_gc_info(int argc, Value *args) {
 }
 
 static Value os_exit(int argc, Value *args) { exit(argc > 0 ? AS_INT(args[0]) : 0); return value_none(); }
+static Value os_system(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_int(-1);
+    const char *cmd = AS_STRING(args[0]);
+    int status = system(cmd);
+    return value_int(status);
+}
 #include <math.h>
 #include <openssl/sha.h>
 
@@ -1028,55 +1040,7 @@ static Value http_request_native(int argc, Value *args) {
         }
     }
 
-    struct hostent *he = gethostbyname(hostname);
-    if (!he) {
-        return value_none();
-    }
-
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) return value_none();
-
-    struct timeval tv;
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    memcpy(&addr.sin_addr.s_addr, he->h_addr_list[0], he->h_length);
-
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sockfd);
-        return value_none();
-    }
-
-    SSL_CTX *ctx = NULL;
-    SSL *ssl = NULL;
-    if (is_ssl) {
-        SSL_library_init();
-        ctx = SSL_CTX_new(TLS_client_method());
-        if (!ctx) {
-            close(sockfd);
-            return value_none();
-        }
-        ssl = SSL_new(ctx);
-        if (!ssl) {
-            SSL_CTX_free(ctx);
-            close(sockfd);
-            return value_none();
-        }
-        SSL_set_fd(ssl, sockfd);
-        if (SSL_connect(ssl) <= 0) {
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            close(sockfd);
-            return value_none();
-        }
-    }
-
+    // Construct the request content BEFORE releasing GIL
     char req[16384];
     int req_len = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: GlowLang/1.0\r\n", method, path, hostname);
 
@@ -1102,12 +1066,72 @@ static Value http_request_native(int argc, Value *args) {
     }
     req_len += snprintf(req + req_len, sizeof(req) - req_len, "\r\n");
 
+    pthread_mutex_unlock(&glow_gil);
+
+    struct hostent *he = gethostbyname(hostname);
+    if (!he) {
+        pthread_mutex_lock(&glow_gil);
+        return value_none();
+    }
+
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        pthread_mutex_lock(&glow_gil);
+        return value_none();
+    }
+
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    memcpy(&addr.sin_addr.s_addr, he->h_addr_list[0], he->h_length);
+
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        pthread_mutex_lock(&glow_gil);
+        return value_none();
+    }
+
+    SSL_CTX *ctx = NULL;
+    SSL *ssl = NULL;
+    if (is_ssl) {
+        SSL_library_init();
+        ctx = SSL_CTX_new(TLS_client_method());
+        if (!ctx) {
+            close(sockfd);
+            pthread_mutex_lock(&glow_gil);
+            return value_none();
+        }
+        ssl = SSL_new(ctx);
+        if (!ssl) {
+            SSL_CTX_free(ctx);
+            close(sockfd);
+            pthread_mutex_lock(&glow_gil);
+            return value_none();
+        }
+        SSL_set_fd(ssl, sockfd);
+        if (SSL_connect(ssl) <= 0) {
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            close(sockfd);
+            pthread_mutex_lock(&glow_gil);
+            return value_none();
+        }
+    }
+
     if (is_ssl) {
         SSL_write(ssl, req, req_len);
         if (body_len > 0) SSL_write(ssl, body_str, body_len);
     } else {
-        write(sockfd, req, req_len);
-        if (body_len > 0) write(sockfd, body_str, body_len);
+        ssize_t _wr = write(sockfd, req, req_len);
+        if (body_len > 0) _wr = write(sockfd, body_str, body_len);
+        (void)_wr;
     }
 
     char *resp_buf = malloc(65536);
@@ -1136,6 +1160,8 @@ static Value http_request_native(int argc, Value *args) {
         SSL_CTX_free(ctx);
     }
     close(sockfd);
+
+    pthread_mutex_lock(&glow_gil);
 
     int status = 0;
     const char *body = "";
@@ -1204,10 +1230,16 @@ static Value ssl_listen(int argc, Value *args) {
 }
 static Value ssl_accept(int argc, Value *args) {
     if (argc < 1) return value_none();
-    int server_fd = AS_INT(args[0]), client_fd = accept(server_fd, NULL, NULL);
+    int server_fd = AS_INT(args[0]);
+    pthread_mutex_unlock(&glow_gil);
+    int client_fd = accept(server_fd, NULL, NULL);
+    pthread_mutex_lock(&glow_gil);
     if (client_fd < 0) return value_none();
     SSL *ssl = SSL_new(ssl_ctx); SSL_set_fd(ssl, client_fd);
-    if (SSL_accept(ssl) <= 0) { SSL_free(ssl); close(client_fd); return value_none(); }
+    pthread_mutex_unlock(&glow_gil);
+    int accept_res = SSL_accept(ssl);
+    pthread_mutex_lock(&glow_gil);
+    if (accept_res <= 0) { SSL_free(ssl); close(client_fd); return value_none(); }
     return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)ssl);
 }
 static Value net_listen(int argc, Value *args) {
@@ -1233,14 +1265,18 @@ static Value http_accept(int argc, Value *args) {
     if (argc < 1) return value_int(-1);
     int sockfd = AS_INT(args[0]);
     struct sockaddr_in client_addr; socklen_t client_len = sizeof(client_addr);
+    pthread_mutex_unlock(&glow_gil);
     int client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_len);
+    pthread_mutex_lock(&glow_gil);
     return value_int(client_fd);
 }
 static Value http_read(int argc, Value *args) {
     if (argc < 1) return value_none();
     int fd = AS_INT(args[0]);
     char buf[4096];
+    pthread_mutex_unlock(&glow_gil);
     int n = read(fd, buf, 4095);
+    pthread_mutex_lock(&glow_gil);
     if (n <= 0) return value_none();
     buf[n] = '\0';
     return value_string_copy(buf);
@@ -1249,7 +1285,10 @@ static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
     int fd = AS_INT(args[0]);
     const char *resp = AS_STRING(args[1]);
-    if (write(fd, resp, strlen(resp)) < 0) return value_int(-1);
+    pthread_mutex_unlock(&glow_gil);
+    int res = write(fd, resp, strlen(resp));
+    pthread_mutex_lock(&glow_gil);
+    if (res < 0) return value_int(-1);
     return value_none();
 }
 
@@ -1652,6 +1691,28 @@ static Value native_tensor_zeros(int argc, Value *args) {
     return value_packed(pa);
 }
 
+static Value native_tensor_get(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY || (GET_TYPE(args[1]) != VAL_INT && GET_TYPE(args[1]) != VAL_FLOAT)) {
+        return value_none();
+    }
+    int idx = (int)val_to_double(args[1]);
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    if (idx < 0 || idx >= pa->size) return value_none();
+    return packed_array_get(pa, idx);
+}
+
+static Value native_tensor_set(int argc, Value *args) {
+    if (argc < 3 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY || (GET_TYPE(args[1]) != VAL_INT && GET_TYPE(args[1]) != VAL_FLOAT)) {
+        return value_none();
+    }
+    int idx = (int)val_to_double(args[1]);
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    if (idx >= 0 && idx < pa->size) {
+        packed_array_set(pa, idx, args[2]);
+    }
+    return value_none();
+}
+
 static Value native_tensor_transpose(int argc, Value *args) {
     if (argc < 3) return value_none(); // tensor, rows, cols
     if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
@@ -1795,6 +1856,62 @@ static Value native_fs_stat(int argc, Value *args) {
     return value_dict(d);
 }
 
+static Value native_fs_exists(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_bool(0);
+    struct stat st;
+    return value_bool(stat(AS_STRING(args[0]), &st) == 0);
+}
+
+static Value native_fs_size(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_int(0);
+    struct stat st;
+    if (stat(AS_STRING(args[0]), &st) != 0) return value_int(0);
+    return value_int(st.st_size);
+}
+
+static Value native_fs_mkdir(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_bool(0);
+    return value_bool(mkdir(AS_STRING(args[0]), 0777) == 0);
+}
+
+static Value native_fs_remove(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_bool(0);
+    const char *path = AS_STRING(args[0]);
+    struct stat st;
+    if (stat(path, &st) != 0) return value_bool(0);
+    if (S_ISDIR(st.st_mode)) {
+        return value_bool(rmdir(path) == 0);
+    } else {
+        return value_bool(unlink(path) == 0);
+    }
+}
+
+static Value native_fs_write(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_bool(0);
+    FILE *f = fopen(AS_STRING(args[0]), "w");
+    if (!f) return value_bool(0);
+    fputs(AS_STRING(args[1]), f);
+    fclose(f);
+    return value_bool(1);
+}
+
+static Value native_fs_read(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
+    FILE *f = fopen(AS_STRING(args[0]), "r");
+    if (!f) return value_none();
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return value_none(); }
+    char *buf = malloc(sz + 1);
+    size_t read_bytes = fread(buf, 1, sz, f);
+    buf[read_bytes] = '\0';
+    fclose(f);
+    Value res = value_string_copy(buf);
+    free(buf);
+    return res;
+}
+
 static Value native_os_getenv(int argc, Value *args) {
     if (argc < 1) return value_none();
     char *v = getenv(AS_STRING(args[0]));
@@ -1813,6 +1930,10 @@ static Value native_string_builder_new(int argc, Value *args) {
 
 static Value native_string_builder_append(int argc, Value *args) {
     if (argc < 2) return args[0];
+    if (GET_TYPE(args[0]) == VAL_LIST) {
+        list_push(AS_LIST(args[0]), args[1]);
+        return args[0];
+    }
     StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
     const char *s = AS_STRING(args[1]);
     int len = strlen(s);
@@ -1921,6 +2042,8 @@ void std_init(void) {
     Dict *tensor = dict_new(4);
     dict_set(tensor, "create", native_func_new("create", native_tensor_create));
     dict_set(tensor, "zeros", native_func_new("zeros", native_tensor_zeros));
+    dict_set(tensor, "get", native_func_new("get", native_tensor_get));
+    dict_set(tensor, "set", native_func_new("set", native_tensor_set));
     dict_set(tensor, "add", native_func_new("add", native_packed_add));
     dict_set(tensor, "sub", native_func_new("sub", native_packed_sub));
     dict_set(tensor, "mul", native_func_new("mul", native_packed_mul));
@@ -1957,11 +2080,19 @@ void std_init(void) {
     dict_set(os, "getenv", native_func_new("getenv", native_os_getenv));
     dict_set(os, "gc_info", native_func_new("gc_info", native_os_gc_info));
     dict_set(os, "verify_gc", native_func_new("verify_gc", native_verify_gc));
+    dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
 
     Dict *fs = dict_new(4);
     dict_set(fs, "readdir", native_func_new("readdir", native_fs_readdir));
     dict_set(fs, "stat", native_func_new("stat", native_fs_stat));
+    dict_set(fs, "exists", native_func_new("exists", native_fs_exists));
+    dict_set(fs, "size", native_func_new("size", native_fs_size));
+    dict_set(fs, "mkdir", native_func_new("mkdir", native_fs_mkdir));
+    dict_set(fs, "remove", native_func_new("remove", native_fs_remove));
+    dict_set(fs, "write", native_func_new("write", native_fs_write));
+    dict_set(fs, "read", native_func_new("read", native_fs_read));
+    dict_set(fs, "list", native_func_new("list", native_fs_readdir));
     var_set("fs", value_dict(fs));
 
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));

@@ -1,0 +1,10 @@
+
+let s = "hello world"
+show s.contains("hello")
+show s.contains("xyz")
+show s.find("world")
+show s.find("xyz")
+show s.slice(0, 5)
+show s.slice(6, 11)
+show s.split(" ")
+

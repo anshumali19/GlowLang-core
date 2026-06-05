@@ -1,0 +1,145 @@
+# Advanced ORM Example — Transactions, batch ops, query builder
+# Demonstrates production ORM patterns
+use "lib/orm.glow"
+
+show "=== Advanced ORM Usage Example ==="
+
+# ─── Setup Database ───
+let db_path = "example_orm_advanced.db"
+let orm = ORM(db_path)
+
+# Define schemas
+let products_schema = Schema("products")
+products_schema.string("name", {"required": true})
+products_schema.real("price", {"required": true})
+products_schema.integer("stock", {"required": true})
+products_schema.string("category", {})
+
+let orders_schema = Schema("orders")
+orders_schema.integer("product_id", {"required": true})
+orders_schema.integer("quantity", {"required": true})
+orders_schema.real("total", {"required": true})
+orders_schema.string("status", {"default": "pending"})
+
+orm.register(products_schema)
+orm.register(orders_schema)
+orm.migrate()
+
+# ─── 1. Batch Insert Products ───
+show ""
+show "--- 1. Batch Insert Products ---"
+let products = [
+    {"name": "Laptop", "price": 999.99, "stock": 50, "category": "electronics"},
+    {"name": "Mouse", "price": 29.99, "stock": 200, "category": "electronics"},
+    {"name": "Keyboard", "price": 79.99, "stock": 150, "category": "electronics"},
+    {"name": "Desk", "price": 299.99, "stock": 30, "category": "furniture"},
+    {"name": "Chair", "price": 199.99, "stock": 45, "category": "furniture"},
+    {"name": "Monitor", "price": 449.99, "stock": 75, "category": "electronics"}
+]
+orm.batch_insert("products", products)
+show "Product count:", orm.count("products")
+
+# ─── 2. Query Builder — Find expensive electronics ───
+show ""
+show "--- 2. Query Builder ---"
+let q = orm.find("products")
+q.select("name, price, stock")
+q.where("category = 'electronics'")
+q.where("price > 50")
+q.order_by("price", "DESC")
+let expensive = orm.exec_query(q)
+show "Expensive electronics:"
+for each p in expensive:
+    show "  " + p["name"] + " - $" + p["price"] + " (" + p["stock"] + " in stock)"
+end
+
+# ─── 3. Transaction: Process an Order ───
+show ""
+show "--- 3. Transaction: Process Order ---"
+let tx = Transaction(orm)
+tx.begin()
+show "Transaction started:", tx.is_active()
+
+# Insert order
+orm.insert("orders", {"product_id": 1, "quantity": 2, "total": 1999.98, "status": "confirmed"})
+
+# Update stock
+orm.update_where("products", {"stock": 48}, ["name = 'Laptop'"])
+
+tx.commit()
+show "Transaction committed:", not tx.is_active()
+
+# Verify
+let laptop = orm.exec_raw("SELECT stock FROM products WHERE name = 'Laptop'")
+show "Laptop stock after order:", laptop[0]["stock"]
+let order_count = orm.count("orders")
+show "Total orders:", order_count
+
+# ─── 4. Conditional Operations ───
+show ""
+show "--- 4. Conditional Operations ---"
+
+# Count by condition
+let electronics_count = orm.count_where("products", ["category = 'electronics'"])
+show "Electronics count:", electronics_count
+
+let furniture_count = orm.count_where("products", ["category = 'furniture'"])
+show "Furniture count:", furniture_count
+
+# Exists check
+let has_laptop = orm.exists("products", ["name = 'Laptop'"])
+show "Laptop exists:", has_laptop
+
+let has_tablet = orm.exists("products", ["name = 'Tablet'"])
+show "Tablet exists:", has_tablet
+
+# ─── 5. Update by Condition ───
+show ""
+show "--- 5. Update by Condition ---"
+orm.update_where("products", {"stock": 0}, ["category = 'furniture'", "stock < 35"])
+let updated = orm.exec_raw("SELECT name, stock FROM products WHERE category = 'furniture'")
+show "Furniture after stock update:"
+for each item in updated:
+    show "  " + item["name"] + " - stock: " + item["stock"]
+end
+
+# ─── 6. Delete by Condition ───
+show ""
+show "--- 6. Delete by Condition ---"
+show "Products before delete:", orm.count("products")
+orm.delete_where("products", ["stock = 0"])
+show "Products after delete (removed out of stock):", orm.count("products")
+
+# ─── 7. Raw Queries ───
+show ""
+show "--- 7. Raw Queries ---"
+let stats = orm.exec_raw("SELECT category, COUNT(*) as cnt FROM products GROUP BY category")
+show "Products by category:"
+for each s in stats:
+    show "  " + s["category"] + ": " + s["cnt"] + " products"
+end
+
+let total_value = orm.exec_raw("SELECT SUM(price * stock) as total FROM products")
+show "Total inventory value: $" + total_value[0]["total"]
+
+# ─── 8. Multiple Order Processing ───
+show ""
+show "--- 8. Batch Orders ---"
+let orders = [
+    {"product_id": 2, "quantity": 5, "total": 149.95, "status": "confirmed"},
+    {"product_id": 3, "quantity": 3, "total": 239.97, "status": "pending"},
+    {"product_id": 6, "quantity": 1, "total": 449.99, "status": "confirmed"}
+]
+orm.batch_insert("orders", orders)
+show "Total orders now:", orm.count("orders")
+
+let confirmed = orm.count_where("orders", ["status = 'confirmed'"])
+show "Confirmed orders:", confirmed
+
+let pending = orm.count_where("orders", ["status = 'pending'"])
+show "Pending orders:", pending
+
+# ─── Cleanup ───
+orm.close()
+show ""
+show "=== Advanced ORM Example Complete ==="

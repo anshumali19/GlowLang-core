@@ -1,0 +1,16 @@
+func test_loop(shape):
+    let size = 1
+    for each dim in shape:
+        size = size * dim
+    end
+    show "size: ", size
+    let t = tensor.create(size)
+    for i from 0 to size:
+        show "Setting index ", i
+        tensor.set(t, i, 1.0)
+    end
+    show "Value at 0: ", tensor.get(t, 0)
+    return t
+end
+
+test_loop([3, 3])

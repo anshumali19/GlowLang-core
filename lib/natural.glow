@@ -1,0 +1,46 @@
+# Natural language standard helpers
+
+func keep(f, list):
+    let res = []
+    for each item in list:
+        if f(item):
+            res = res + [item]
+        end
+    end
+    return res
+end
+
+func apply(f, list):
+    let res = []
+    for each item in list:
+        res = res + [f(item)]
+    end
+    return res
+end
+
+func even(n):
+    return n % 2 == 0
+end
+
+func dist(n):
+    if n < 0:
+        return -n
+    end
+    return n
+end
+
+func root(n):
+    return math.sqrt(n)
+end
+
+func avg(list):
+    let total = 0
+    let count = len(list)
+    if count == 0:
+        return 0
+    end
+    for each item in list:
+        total = total + item
+    end
+    return total / count
+end

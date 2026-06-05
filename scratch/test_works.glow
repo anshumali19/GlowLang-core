@@ -1,0 +1,16 @@
+# Test what math actually works
+show math.sqrt(25)
+show math.pow(2, 10)
+show math.sin(0)
+show math.cos(0)
+
+# Test str operations
+show str.split("a,b,c", ",")
+show str.upper("hello")
+show str.lower("HELLO")
+show str.trim("  hi  ")
+show str.contains("hello world", "world")
+show str.replace("foo bar", "foo", "baz")
+show str.starts_with("hello", "hel")
+show str.ends_with("hello", "llo")
+show str.indexOf("hello", "ll")

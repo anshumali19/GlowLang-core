@@ -1,0 +1,112 @@
+# GlowLang WebSocket-style Realtime System
+# Demonstrates: HTTP server, spawn, shared state, polling pattern
+
+show "=== GlowLang Realtime Notification System ==="
+
+# Shared message store (simulates a pub/sub channel)
+let channels = {}
+let subscribers = []
+let message_log = []
+
+# Channel management
+func create_channel(name):
+    channels[name] = []
+    show "[System] Channel created: " + name
+end
+
+func publish(channel_name, message):
+    when channels.has(channel_name):
+        append(channels[channel_name], message)
+        append(message_log, {"channel": channel_name, "message": message, "time": os.time()})
+        show "[Pub] " + channel_name + ": " + message
+    otherwise:
+        show "[Error] Channel not found: " + channel_name
+    end
+end
+
+func get_messages(channel_name):
+    when channels.has(channel_name):
+        return channels[channel_name]
+    end
+    return []
+end
+
+# Event system
+blueprint EventEmitter:
+    action init():
+        self.handlers = {}
+    end
+
+    action on(event, handler):
+        when not self.handlers.has(event):
+            self.handlers[event] = []
+        end
+        append(self.handlers[event], handler)
+    end
+
+    action emit(event, data):
+        when self.handlers.has(event):
+            for each handler in self.handlers[event]:
+                handler(data)
+            end
+        end
+    end
+end
+
+# Create channels
+create_channel("alerts")
+create_channel("updates")
+create_channel("system")
+
+# Publish some messages
+publish("alerts", "CPU usage at 85%")
+publish("alerts", "Memory usage at 92%")
+publish("updates", "Deployment v2.1 started")
+publish("system", "Health check passed")
+publish("updates", "Deployment v2.1 completed")
+
+# Read messages
+show ""
+show "--- Alert Messages ---"
+let alerts = get_messages("alerts")
+for each msg in alerts:
+    show "  * " + msg
+end
+
+show ""
+show "--- Update Messages ---"
+let updates = get_messages("updates")
+for each msg in updates:
+    show "  * " + msg
+end
+
+# Event emitter demo
+show ""
+show "--- Event Emitter Demo ---"
+let emitter = EventEmitter()
+
+func on_user_login(data):
+    show "  [Login Event] User logged in: " + data
+end
+
+func on_user_logout(data):
+    show "  [Logout Event] User logged out: " + data
+end
+
+emitter.on("login", on_user_login)
+emitter.on("logout", on_user_logout)
+
+emitter.emit("login", "alice@example.com")
+emitter.emit("login", "bob@example.com")
+emitter.emit("logout", "alice@example.com")
+
+# Message log summary
+show ""
+show "--- Message Log Summary ---"
+show "Total messages logged: " + len(message_log)
+for each entry in message_log:
+    show "  [" + entry["channel"] + "] " + entry["message"]
+end
+
+show ""
+show "=== Realtime System Demo Complete ==="

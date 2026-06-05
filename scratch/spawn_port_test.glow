@@ -1,0 +1,16 @@
+blueprint TestServer:
+    action init(port):
+        self.port = port
+    end
+    action start():
+        show "self inside start:", self
+        show "self.port inside start:", self.port
+    end
+end
+
+let s = TestServer(8089)
+func task():
+    s.start()
+end
+spawn task()
+os.sleep(500)

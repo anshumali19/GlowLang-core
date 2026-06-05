@@ -1,0 +1,151 @@
+# Async Job Queue Example — Job processing system with GlowAsync
+# Demonstrates: Tasks, TaskGroup, Channel, Periodic, Timer
+use "lib/async.glow"
+
+show "=== Async Job Queue Example ==="
+
+# ─── Job Queue using Channel ───
+let job_queue = Channel("jobs")
+let results_queue = Channel("results")
+let processed_count = [0]
+
+# ─── Submit jobs to the queue ───
+show ""
+show "--- Submitting Jobs ---"
+let job_id = 0
+while job_id < 5:
+    let job = {"id": job_id, "type": "compute", "data": job_id * 10}
+    job_queue.send(job)
+    show "Submitted job #" + job_id
+    job_id = job_id + 1
+end
+show "Jobs in queue:", job_queue.size()
+
+# ─── Process jobs sequentially ───
+show ""
+show "--- Processing Jobs ---"
+
+while job_queue.has_messages():
+    let job = job_queue.receive()
+    when job is not none:
+        show "Processing job #" + job["id"] + " with data: " + job["data"]
+        # Simulate computation
+        let result = job["data"] * 2 + 1
+        let output = {"job_id": job["id"], "result": result, "status": "done"}
+        results_queue.send(output)
+        processed_count[0] = processed_count[0] + 1
+    end
+end
+
+show "Processed:", processed_count[0], "jobs"
+
+# ─── Collect results ───
+show ""
+show "--- Collecting Results ---"
+let all_results = results_queue.drain()
+show "Total results:", len(all_results)
+for each r in all_results:
+    show "  Job #" + r["job_id"] + " => result: " + r["result"] + " (" + r["status"] + ")"
+end
+
+# ─── TaskGroup example: batch workers ───
+show ""
+show "--- TaskGroup: Batch Workers ---"
+let workers = TaskGroup("workers")
+
+let worker_results = []
+
+func worker_1():
+    show "  Worker 1: computing..."
+    let val = 100 + 1
+    append(worker_results, {"worker": 1, "result": val})
+    return val
+end
+
+func worker_2():
+    show "  Worker 2: computing..."
+    let val = 200 + 2
+    append(worker_results, {"worker": 2, "result": val})
+    return val
+end
+
+func worker_3():
+    show "  Worker 3: computing..."
+    let val = 300 + 3
+    append(worker_results, {"worker": 3, "result": val})
+    return val
+end
+
+workers.create("w1", worker_1)
+workers.create("w2", worker_2)
+workers.create("w3", worker_3)
+
+workers.run_all()
+workers.summary()
+
+show "Worker results:"
+for each wr in worker_results:
+    show "  Worker " + wr["worker"] + " => " + wr["result"]
+end
+
+# ─── Timer example: delayed job ───
+show ""
+show "--- Timer: Delayed Job ---"
+let delayed_done = [false]
+
+func delayed_job():
+    show "  Delayed job executed after 100ms"
+    delayed_done[0] = true
+end
+
+let delayed = Timer("cleanup", 100, delayed_job)
+delayed.fire_sync()
+show "Delayed job complete:", delayed_done[0]
+
+# ─── Periodic example: health monitor ───
+show ""
+show "--- Periodic: Health Monitor ---"
+let health_checks = [0]
+
+func health_monitor():
+    health_checks[0] = health_checks[0] + 1
+    show "  Health check #" + health_checks[0] + " - System OK"
+end
+
+let monitor = Periodic("health", 50, health_monitor)
+monitor.set_max(3)
+monitor.run_sync()
+show "Health checks completed:", health_checks[0]
+
+# ─── Channel pipeline: producer -> transformer -> consumer ───
+show ""
+show "--- Channel Pipeline ---"
+let raw_data = Channel("raw")
+let transformed = Channel("transformed")
+
+# Produce
+let p = 0
+while p < 4:
+    raw_data.send(p * 5)
+    p = p + 1
+end
+show "Produced:", raw_data.size(), "items"
+
+# Transform
+while raw_data.has_messages():
+    let item = raw_data.receive()
+    when item is not none:
+        transformed.send(item * 2)
+    end
+end
+show "Transformed:", transformed.size(), "items"
+
+# Consume
+let consumed = transformed.drain()
+show "Consumed results:"
+for each c in consumed:
+    show "  " + c
+end
+
+show ""
+show "=== Async Job Queue Example Complete ==="

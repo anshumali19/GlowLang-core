@@ -1,0 +1,123 @@
+# GlowLang Dashboard Application
+# Demonstrates: SQLite analytics, formatted output, statistical calculations
+
+show "=== GlowLang Analytics Dashboard ==="
+show ""
+
+# Setup database with sample data
+let db = sqlite.open("dashboard.db")
+sqlite.exec(db, "DROP TABLE IF EXISTS sales")
+sqlite.exec(db, "DROP TABLE IF EXISTS users")
+sqlite.exec(db, "CREATE TABLE sales (id INTEGER PRIMARY KEY, product TEXT, amount REAL, region TEXT, month INTEGER)")
+sqlite.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, role TEXT, active INTEGER)")
+
+# Seed sales data
+let sales_data = [
+    {"product": "Widget A", "amount": 1250.50, "region": "North", "month": 1},
+    {"product": "Widget B", "amount": 890.00, "region": "South", "month": 1},
+    {"product": "Widget A", "amount": 1100.00, "region": "East", "month": 1},
+    {"product": "Widget C", "amount": 2200.75, "region": "West", "month": 1},
+    {"product": "Widget A", "amount": 1500.00, "region": "North", "month": 2},
+    {"product": "Widget B", "amount": 1050.25, "region": "South", "month": 2},
+    {"product": "Widget C", "amount": 1800.00, "region": "East", "month": 2},
+    {"product": "Widget A", "amount": 1350.50, "region": "West", "month": 2},
+    {"product": "Widget B", "amount": 920.00, "region": "North", "month": 3},
+    {"product": "Widget C", "amount": 2500.00, "region": "South", "month": 3},
+    {"product": "Widget A", "amount": 1650.75, "region": "East", "month": 3},
+    {"product": "Widget B", "amount": 1100.00, "region": "West", "month": 3}
+]
+
+for each sale in sales_data:
+    let sql = "INSERT INTO sales (product, amount, region, month) VALUES ('" + sale["product"] + "', " + sale["amount"] + ", '" + sale["region"] + "', " + sale["month"] + ")"
+    sqlite.exec(db, sql)
+end
+
+# Seed user data
+sqlite.exec(db, "INSERT INTO users (name, role, active) VALUES ('Alice', 'admin', 1)")
+sqlite.exec(db, "INSERT INTO users (name, role, active) VALUES ('Bob', 'sales', 1)")
+sqlite.exec(db, "INSERT INTO users (name, role, active) VALUES ('Charlie', 'sales', 1)")
+sqlite.exec(db, "INSERT INTO users (name, role, active) VALUES ('Diana', 'support', 1)")
+sqlite.exec(db, "INSERT INTO users (name, role, active) VALUES ('Eve', 'sales', 0)")
+
+# ========== DASHBOARD PANELS ==========
+
+# Panel 1: Revenue Summary
+show "╔══════════════════════════════════════╗"
+show "║       REVENUE SUMMARY               ║"
+show "╚══════════════════════════════════════╝"
+
+let total_rev = sqlite.query(db, "SELECT SUM(amount) as total FROM sales")
+show "  Total Revenue: $" + total_rev[0]["total"]
+
+let avg_rev = sqlite.query(db, "SELECT AVG(amount) as avg_amount FROM sales")
+show "  Average Sale:  $" + avg_rev[0]["avg_amount"]
+
+let max_sale = sqlite.query(db, "SELECT MAX(amount) as max_amount FROM sales")
+show "  Largest Sale:  $" + max_sale[0]["max_amount"]
+
+let count = sqlite.query(db, "SELECT COUNT(*) as cnt FROM sales")
+show "  Total Sales:   " + count[0]["cnt"]
+
+# Panel 2: Sales by Product
+show ""
+show "╔══════════════════════════════════════╗"
+show "║       SALES BY PRODUCT              ║"
+show "╚══════════════════════════════════════╝"
+
+let by_product = sqlite.query(db, "SELECT product, SUM(amount) as total, COUNT(*) as cnt FROM sales GROUP BY product ORDER BY total DESC")
+for each row in by_product:
+    show "  " + row["product"] + ": $" + row["total"] + " (" + row["cnt"] + " sales)"
+end
+
+# Panel 3: Sales by Region
+show ""
+show "╔══════════════════════════════════════╗"
+show "║       SALES BY REGION               ║"
+show "╚══════════════════════════════════════╝"
+
+let by_region = sqlite.query(db, "SELECT region, SUM(amount) as total, COUNT(*) as cnt FROM sales GROUP BY region ORDER BY total DESC")
+for each row in by_region:
+    # Simple bar chart
+    let bar_length = floor(row["total"] / 200)
+    let bar = ""
+    let b = 0
+    while b < bar_length:
+        bar = bar + "█"
+        b = b + 1
+    end
+    show "  " + row["region"] + ": $" + row["total"] + " " + bar
+end
+
+# Panel 4: Monthly Trends
+show ""
+show "╔══════════════════════════════════════╗"
+show "║       MONTHLY TRENDS                ║"
+show "╚══════════════════════════════════════╝"
+
+let months = ["", "January", "February", "March"]
+let by_month = sqlite.query(db, "SELECT month, SUM(amount) as total FROM sales GROUP BY month ORDER BY month")
+for each row in by_month:
+    let month_name = months[row["month"]]
+    show "  " + month_name + ": $" + row["total"]
+end
+
+# Panel 5: Team Overview
+show ""
+show "╔══════════════════════════════════════╗"
+show "║       TEAM OVERVIEW                 ║"
+show "╚══════════════════════════════════════╝"
+
+let active_users = sqlite.query(db, "SELECT COUNT(*) as cnt FROM users WHERE active = 1")
+let total_users = sqlite.query(db, "SELECT COUNT(*) as cnt FROM users")
+show "  Active: " + active_users[0]["cnt"] + "/" + total_users[0]["cnt"]
+
+let by_role = sqlite.query(db, "SELECT role, COUNT(*) as cnt FROM users WHERE active = 1 GROUP BY role")
+for each row in by_role:
+    show "  " + row["role"] + ": " + row["cnt"]
+end
+
+# Cleanup
+sqlite.close(db)
+
+show ""
+show "=== Dashboard Complete ==="
