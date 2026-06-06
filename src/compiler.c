@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#ifndef _WIN32
 #include <sys/mman.h>
+#else
+#include <windows.h>
+#endif
 
 #define MAX_LOOP_DEPTH 64
 typedef struct {

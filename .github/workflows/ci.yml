@@ -42,3 +42,32 @@ jobs:
 
       - name: Cleanup
         run: rm -f src/lex.yy.c src/glowlang.tab.c src/glowlang.tab.h
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install sqlite openssl flex bison
+          # Link keg-only dependencies so CMake can find them
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+      - name: Configure CMake
+        run: cmake -B build -S . -DOPENSSL_ROOT_DIR=$(brew --prefix openssl)
+      - name: Build GlowLang
+        run: cmake --build build --config Release
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies (Flex/Bison)
+        run: choco install winflexbison3
+      - name: Install dependencies (vcpkg)
+        run: vcpkg install openssl sqlite3:x64-windows
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      - name: Build GlowLang
+        run: cmake --build build --config Release

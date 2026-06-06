@@ -5,16 +5,27 @@
 #include <stdbool.h>
 #include <math.h>
 #include <time.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+#include <process.h>
+#define sleep(x) Sleep((x)*1000)
+#define usleep(x) Sleep((x)/1000)
+typedef int socklen_t;
+#else
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <errno.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <pthread.h>
 #include <unistd.h>
+#endif
+#include <errno.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <sqlite3.h>
@@ -1767,6 +1778,7 @@ static Value native_tensor_matmul(int argc, Value *args) {
     return value_packed(res);
 }
 
+#ifndef _WIN32
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
@@ -1803,6 +1815,11 @@ static Value native_gui_rect(int argc, Value *args) {
     XFlush(gui_display);
     return value_none();
 }
+#else
+static Value native_gui_open(int argc, Value *args) { (void)argc; (void)args; return value_bool(0); }
+static Value native_gui_clear(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
+static Value native_gui_rect(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
+#endif
 
 static Value native_gui_poll(int argc, Value *args) {
     (void)argc; (void)args;
