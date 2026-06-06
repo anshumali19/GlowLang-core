@@ -1,9 +1,0 @@
-let a = os.time()
-let i = 0
-while i < 10000:
-    i = i + 1
-end
-let b = os.time()
-show a
-show b
-show b - a

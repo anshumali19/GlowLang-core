@@ -1,5 +1,0 @@
-data = {"nothing": null}
-s = json.stringify(data)
-show "JSON with null: ", s
-parsed = json.parse(s)
-show "Parsed nothing: ", parsed.nothing

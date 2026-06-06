@@ -1,7 +1,0 @@
-func loop(n):
-    when n == 0:
-        return 0
-    end
-    return loop(n - 1)
-end
-show loop(5)
