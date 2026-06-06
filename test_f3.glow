@@ -1,4 +1,0 @@
-func f(a, b):
-  return b
-end
-print f(10, 20)

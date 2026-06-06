@@ -1,5 +1,0 @@
-show "Testing HTTP Module..."
-server = http.listen(8080)
-show "HTTP Server running on 8080: " + server
-http.close(server)
-show "HTTP Server closed"

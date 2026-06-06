@@ -1,3 +1,0 @@
-s = "Hello"
-print len(s)
-print s[0]

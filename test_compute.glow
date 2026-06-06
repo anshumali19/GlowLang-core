@@ -1,9 +1,0 @@
-func compute(x):
-    return x * 2
-end
-let gi = 0
-while gi < 20:
-    let r = compute(gi)
-    gi = gi + 1
-end
-show "compute(5):", compute(5)

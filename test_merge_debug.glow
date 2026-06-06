@@ -1,7 +1,0 @@
-func test(n):
-    show "n =", n
-    if n > 0:
-        return test(n-1)
-    end
-end
-test(10)

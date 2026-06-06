@@ -1,8 +1,0 @@
-complex = {"user": {"id": 1, "name": "Bob"}, "tags": ["cool", "glow"], "active": true, "score": 95.5}
-s = json.stringify(complex)
-show "Complex JSON: ", s
-parsed = json.parse(s)
-show "User Name: ", parsed.user.name
-show "First Tag: ", parsed.tags[0]
-show "Active: ", parsed.active
-show "Score: ", parsed.score

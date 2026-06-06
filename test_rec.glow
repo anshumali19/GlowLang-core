@@ -1,8 +1,0 @@
-func rec(n):
-    if n == 0:
-        return 0
-    end
-    return rec(n - 1)
-end
-rec(1000)
-show "Done"

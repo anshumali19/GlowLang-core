@@ -1,9 +1,0 @@
-func fib(n):
-    when n < 2:
-        return n
-    otherwise:
-        return fib(n-1) + fib(n-2)
-    end
-end
-
-show fib(10)
