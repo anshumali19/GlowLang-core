@@ -1,5 +1,9 @@
 #include "jit.h"
+#ifndef _WIN32
 #include <sys/mman.h>
+#else
+#include <windows.h>
+#endif
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
