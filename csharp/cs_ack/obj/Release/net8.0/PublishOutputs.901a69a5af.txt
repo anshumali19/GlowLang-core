@@ -1,5 +1,0 @@
-/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_ack/bin/cs_ack
-/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_ack/bin/cs_ack.dll
-/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_ack/bin/cs_ack.deps.json
-/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_ack/bin/cs_ack.runtimeconfig.json
-/home/anshumali/Desktop/GlowLang2.0 (Copy)/cs_ack/bin/cs_ack.pdb
