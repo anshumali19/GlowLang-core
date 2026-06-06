@@ -18,7 +18,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <io.h>
+#include <process.h>
+#endif
 #include <ctype.h>
 
 /* ================================================================
