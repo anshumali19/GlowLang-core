@@ -98,4 +98,4 @@ end
 2. **ARM64 Backend**: Port the JIT compiler to AArch64 for Apple Silicon support.
 3. **Incremental GC**: Transition to incremental marking to eliminate pause times in large heaps.
 
-**File saved as: SUMMARY_MAY_31_2026.md**
+
