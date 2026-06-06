@@ -1,5 +1,0 @@
-use "test_use.glow"
-func main():
-    test_func()
-end
-main()

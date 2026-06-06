@@ -1,2 +1,0 @@
-import "test_add.glow"
-let _ = log("Imported")

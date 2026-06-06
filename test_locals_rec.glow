@@ -1,9 +1,0 @@
-func test_local(n):
-    let x = n
-    when n > 0:
-        test_local(n-1)
-    end
-    show x
-end
-
-test_local(3)
