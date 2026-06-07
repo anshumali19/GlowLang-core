@@ -68,7 +68,6 @@ target_link_libraries(glowlang PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     SQLite::SQLite3
-    fl
 )
 
 if(UNIX AND NOT APPLE AND X11_FOUND)
