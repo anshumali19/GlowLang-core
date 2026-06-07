@@ -76,7 +76,7 @@ endif()
 
 # Target: gdu (from tools/gdu)
 add_executable(gdu tools/gdu/gdu.c)
-target_link_libraries(gdu PRIVATE SQLite::SQLite3)
+target_link_libraries(gdu PRIVATE SQLite::SQLite3 OpenSSL::Crypto OpenSSL::SSL)
 
 # Other tools from Makefile
 add_executable(glow_profiler tools/profiler/glow_profiler.c)
