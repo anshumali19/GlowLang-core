@@ -14,7 +14,9 @@
 #endif
 #include <sys/stat.h>
 #include <sys/types.h>
+#ifndef _WIN32
 #include <dirent.h>
+#endif
 #include <time.h>
 #include <openssl/evp.h>
 #include <errno.h>
