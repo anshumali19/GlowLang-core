@@ -6,14 +6,64 @@
 #include <math.h>
 #include <time.h>
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <io.h>
 #include <process.h>
+#include <direct.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #define sleep(x) Sleep((x)*1000)
 #define usleep(x) Sleep((x)/1000)
 typedef int socklen_t;
+typedef int ssize_t;
+
+struct dirent {
+    char d_name[1024];
+    int d_type;
+};
+#define DT_DIR 1
+#define DT_REG 2
+
+typedef struct {
+    HANDLE hFind;
+    WIN32_FIND_DATAA fd;
+    struct dirent entry;
+    int first;
+} DIR;
+
+static DIR *opendir(const char *name) {
+    DIR *dir = (DIR *)malloc(sizeof(DIR));
+    char search_path[1024];
+    snprintf(search_path, sizeof(search_path), "%s\\*", name);
+    dir->hFind = FindFirstFileA(search_path, &dir->fd);
+    if (dir->hFind == INVALID_HANDLE_VALUE) { free(dir); return NULL; }
+    dir->first = 1;
+    return dir;
+}
+
+static struct dirent *readdir(DIR *dir) {
+    if (!dir->first) { if (!FindNextFileA(dir->hFind, &dir->fd)) return NULL; }
+    dir->first = 0;
+    strncpy(dir->entry.d_name, dir->fd.cFileName, 1023);
+    dir->entry.d_name[1023] = '\0';
+    dir->entry.d_type = (dir->fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? DT_DIR : DT_REG;
+    return &dir->entry;
+}
+
+static void closedir(DIR *dir) {
+    if (dir) { FindClose(dir->hFind); free(dir); }
+}
+
+#define stat _stat
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#define mkdir(path, mode) _mkdir(path)
+#define rmdir _rmdir
+#define unlink _unlink
 #else
 #include <sys/time.h>
 #include <sys/socket.h>
@@ -1186,8 +1236,8 @@ static Value http_request_native(int argc, Value *args) {
         SSL_write(ssl, req, req_len);
         if (body_len > 0) SSL_write(ssl, body_str, body_len);
     } else {
-        ssize_t _wr = write(sockfd, req, req_len);
-        if (body_len > 0) _wr = write(sockfd, body_str, body_len);
+        ssize_t _wr = send(sockfd, req, req_len, 0);
+        if (body_len > 0) _wr = send(sockfd, body_str, body_len, 0);
         (void)_wr;
     }
 

@@ -8,7 +8,10 @@
 #include <string.h>
 #ifdef _WIN32
 #include <io.h>
+#include <direct.h>
 #define access _access
+#define mkdir(path, mode) _mkdir(path)
+#define unlink _unlink
 #else
 #include <unistd.h>
 #endif
@@ -27,6 +30,57 @@
 #define MAX_URL  512
 #define MAX_PATH 1024
 #define CACHE_DIR ".glow_pkg/.cache"
+
+#ifdef _WIN32
+#include <windows.h>
+#undef MAX_PATH
+#define MAX_PATH 1024
+
+struct dirent {
+    char d_name[1024];
+    int d_type;
+};
+#define DT_DIR 1
+#define DT_REG 2
+
+typedef struct {
+    HANDLE hFind;
+    WIN32_FIND_DATAA fd;
+    struct dirent entry;
+    int first;
+} DIR;
+
+static DIR *opendir(const char *name) {
+    DIR *dir = malloc(sizeof(DIR));
+    char search_path[1024];
+    snprintf(search_path, sizeof(search_path), "%s\\*", name);
+    dir->hFind = FindFirstFileA(search_path, &dir->fd);
+    if (dir->hFind == INVALID_HANDLE_VALUE) {
+        free(dir);
+        return NULL;
+    }
+    dir->first = 1;
+    return dir;
+}
+
+static struct dirent *readdir(DIR *dir) {
+    if (!dir->first) {
+        if (!FindNextFileA(dir->hFind, &dir->fd)) return NULL;
+    }
+    dir->first = 0;
+    strncpy(dir->entry.d_name, dir->fd.cFileName, 1023);
+    dir->entry.d_name[1023] = '\0';
+    dir->entry.d_type = (dir->fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? DT_DIR : DT_REG;
+    return &dir->entry;
+}
+
+static void closedir(DIR *dir) {
+    if (dir) {
+        FindClose(dir->hFind);
+        free(dir);
+    }
+}
+#endif
 
 /* ================================================================
  *  SEMANTIC VERSIONING
