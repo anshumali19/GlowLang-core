@@ -61,23 +61,32 @@ static int random_arg(void) {
     }
 }
 
+/* ── Random Instruction Generators ───────────────────────────────── */
+static Value dummy_float_val;
+static char dummy_string[] = "fuzz_string";
+
 static intptr_t random_ptr(void) {
-    /* Mostly NULL, occasionally a small integer cast to ptr (the VM checks
-       ptr for string constants etc., but with garbage it should just error
-       rather than crash). */
-    int r = rand() % 10;
-    if (r < 7) return (intptr_t)NULL;
-    if (r < 9) return (intptr_t)(uintptr_t)(rand() % 256);
-    return (intptr_t)"fuzz_string";
+    int r = rand() % 3;
+    if (r == 0) return (intptr_t)NULL;
+    if (r == 1) return (intptr_t)&dummy_float_val;
+    return (intptr_t)dummy_string;
 }
 
 /* ── Build a random bytecode chunk ───────────────────────────────── */
 static Bytecode* build_random_bytecode(FuncEntry *fe, int instruction_count) {
+    dummy_float_val = value_float(3.14);
     Bytecode *bc = bc_new(fe);
+    bc->local_count = 256; // Ensure all random registers (0-255) are scanned by GC
     for (int i = 0; i < instruction_count; i++) {
         OpCode op = random_opcode();
         int arg   = random_arg();
         intptr_t ptr = random_ptr();
+        if (op != OP_CONST_FLOAT && op != OP_CONST_STRING && op != OP_USE_FILE) {
+            ptr = (intptr_t)dummy_string;
+        }
+        if (op == OP_CONST_FLOAT) ptr = (intptr_t)&dummy_float_val;
+        if (op == OP_CONST_STRING || op == OP_USE_FILE) ptr = (intptr_t)dummy_string;
+        
         int idx = bc_emit(bc, op, arg, ptr);
         /* Randomize register fields */
         bc->code[idx].r0 = (unsigned short)random_reg();
@@ -111,10 +120,8 @@ int main(void) {
     printf("=== GlowLang Bytecode Fuzzer ===\n");
     printf("--- Starting Bytecode Fuzzing (500 iterations) ---\n");
 
-    /* Install signal handlers */
-    signal(SIGSEGV, fuzz_signal_handler);
-    signal(SIGFPE,  fuzz_signal_handler);
-    signal(SIGABRT, fuzz_signal_handler);
+    /* Install signal handlers for infinite loops */
+    signal(SIGALRM, fuzz_signal_handler);
 
     init_runtime();
 
@@ -128,6 +135,12 @@ int main(void) {
         glow_clear_errors();
         runtime_error_thrown = 0;
         has_exception = 0;
+        call_stack_ptr = 0;
+        call_depth = 0;
+        extern __thread int vm_stack_top;
+        extern __thread size_t stack_arena_used;
+        vm_stack_top = 0;
+        stack_arena_used = 0;
 
         /* Random instruction count: 1 – 32 */
         int instr_count = 1 + (rand() % 32);
@@ -148,15 +161,15 @@ int main(void) {
         if (sig == 0) {
             in_fuzz = 1;
             /* Attempt to run the random bytecode */
+            alarm(1);
             run_bytecode(bc, bc->code, NULL, 0);
+            alarm(0);
             in_fuzz = 0;
         } else {
             in_fuzz = 0;
             crashes++;
             /* Reinstall handlers (some systems reset to SIG_DFL after catch) */
-            signal(SIGSEGV, fuzz_signal_handler);
-            signal(SIGFPE,  fuzz_signal_handler);
-            signal(SIGABRT, fuzz_signal_handler);
+            signal(SIGALRM, fuzz_signal_handler);
         }
 
         bc_free(bc);

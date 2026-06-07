@@ -1,7 +1,8 @@
 #ifdef _MSC_VER
-#define __thread __declspec(thread)
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL __thread
 #endif
-
 #ifndef GLOWLANG_H
 #define GLOWLANG_H
 
@@ -130,7 +131,7 @@ typedef struct {
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
 /* Extract bits to type */
-#define IS_INT(v) (((v) & 0xFFFF000000000000ULL) == 0x7FFA000000000000ULL)
+#define IS_INT(v) (((v) & 0xFFFF000000000000ULL) == 0x7FF8000000000000ULL)
 static inline ValueType GET_TYPE(Value v) {
     return (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (ValueType)(((v) & MASK_TYPE) >> 48);
 }
@@ -205,8 +206,8 @@ typedef struct CallFrame {
     struct FuncEntry *fe;
     struct Instruction *pc;
 } CallFrame;
-extern __thread CallFrame call_stack[65536];
-extern __thread int call_stack_ptr;
+extern THREAD_LOCAL CallFrame call_stack[65536];
+extern THREAD_LOCAL int call_stack_ptr;
 void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
 void call_stack_pop(void);
 
@@ -612,8 +613,8 @@ extern size_t gc_allocated;
 extern size_t gc_threshold;
 extern pthread_mutex_t gc_mutex;
 extern pthread_mutex_t threads_mutex;
-extern __thread char *stack_arena;
-extern __thread size_t stack_arena_used;
+extern THREAD_LOCAL char *stack_arena;
+extern THREAD_LOCAL size_t stack_arena_used;
 Value native_verify_gc(int argc, Value *args);
 
 /* ================================================================
@@ -631,26 +632,26 @@ void call_stack_push(FuncEntry *fe, Instruction *pc);
 void call_stack_pop(void);
 int val_eq(Value a, Value b);
 int value_truthy(Value v);
-extern __thread Value *vm_stack;
-extern __thread int vm_stack_size;
-extern __thread int sp;
-extern __thread int vm_stack_top;
-extern __thread Value pending_exception;
-extern __thread int has_exception;
-extern __thread int runtime_error_thrown;
-extern __thread char *exception_stack_trace;
-extern __thread const char *error_file;
-extern __thread int error_line;
-extern __thread int profiling_active;
-extern __thread int trace_mode;
+extern THREAD_LOCAL Value *vm_stack;
+extern THREAD_LOCAL int vm_stack_size;
+extern THREAD_LOCAL int sp;
+extern THREAD_LOCAL int vm_stack_top;
+extern THREAD_LOCAL Value pending_exception;
+extern THREAD_LOCAL int has_exception;
+extern THREAD_LOCAL int runtime_error_thrown;
+extern THREAD_LOCAL char *exception_stack_trace;
+extern THREAD_LOCAL const char *error_file;
+extern THREAD_LOCAL int error_line;
+extern THREAD_LOCAL int profiling_active;
+extern THREAD_LOCAL int trace_mode;
 extern int next_free_reg;
 extern int global_lambda_count;
 typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
 extern ThreadStack active_stacks[128];
 extern int active_stack_count;
 extern pthread_mutex_t glow_gil;
-extern __thread int call_stack_ptr;
-extern __thread int call_depth;
+extern THREAD_LOCAL int call_stack_ptr;
+extern THREAD_LOCAL int call_depth;
 /* ================================================================
  *  COMPILER ROUTINES (compiler.c)
  * ================================================================ */

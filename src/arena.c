@@ -11,14 +11,14 @@ typedef struct ArenaChunk {
     char data[ARENA_CHUNK_SIZE];
 } ArenaChunk;
 
-static __thread ArenaChunk *arena_head = NULL;
+static THREAD_LOCAL ArenaChunk *arena_head = NULL;
 
 typedef struct LargeAllocation {
     struct LargeAllocation *next;
     void *ptr;
 } LargeAllocation;
 
-static __thread LargeAllocation *large_allocations = NULL;
+static THREAD_LOCAL LargeAllocation *large_allocations = NULL;
 
 void arena_init(void) {
     if (!arena_head) {
