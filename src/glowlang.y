@@ -18,6 +18,18 @@
 
 extern int yylex(void);
 extern void lexer_cleanup(void);
+
+#ifdef _WIN32
+#include <windows.h>
+static int get_self_exe_path(char *path, size_t max_len) {
+    DWORD len = GetModuleFileNameA(NULL, path, (DWORD)max_len);
+    return (len > 0) ? (int)len : -1;
+}
+#else
+static int get_self_exe_path(char *path, size_t max_len) {
+    return (int)readlink("/proc/self/exe", path, max_len);
+}
+#endif
 %}
 
 %union {
@@ -33,7 +45,7 @@ extern void lexer_cleanup(void);
 %token <int_val> INT_LIT
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
-%token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
+%token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
 %type <node_list> expr_list arg_list
@@ -60,11 +72,11 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | RETURN expr { $$ = newReturnNode($2); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
-    | FOR EACH ID IN expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
-    | FOR ID IN expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $2; $$->left = $4; $$->right = $7; }
+    | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
+    | FOR ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $2; $$->left = $4; $$->right = $7; }
     | FOR ID FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $4; $$->right = $6; $$->third = $9; }
-    | FOR ID IN FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $5; $$->right = $7; $$->third = $10; }
-    | FOR EACH ID IN FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $3; $$->left = $6; $$->right = $8; $$->third = $11; }
+    | FOR ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $5; $$->right = $7; $$->third = $10; }
+    | FOR EACH ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $3; $$->left = $6; $$->right = $8; $$->third = $11; }
     | FUNC ID '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, $8); }
     | FUNC ID '(' ')' COLON NEWLINE lines END { $$ = newFuncNode($2, 0, NULL, $7); }
     | CLASS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->left = $5; }
@@ -96,7 +108,7 @@ condition: expr;
 eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = newSeqNode($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
-expr: term | expr PLUS term { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS term { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN term { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN term { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT term { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT term { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE term { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE term { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP term { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP term { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP term { $$ = newBinOp(NODE_NOT, $2, NULL); };
+expr: term | expr PLUS term { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS term { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS term { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT term { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW term { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW term { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT term { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT term { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE term { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE term { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP term { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP term { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP term { $$ = newBinOp(NODE_NOT, $2, NULL); };
 term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
 unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); };
 power: postfix | postfix POW power { $$ = newBinOp(NODE_POW, $1, $3); };
@@ -109,25 +121,25 @@ member_name: ID { $$ = $1; }
            | WRITE { $$ = intern_string("write"); }
            | SHOW { $$ = intern_string("show"); }
            ;
-primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN expr ']' {
+primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $5;
     $$->left = $7;
     $$->comp_filter = NULL;
-} | '[' expr FOR EACH ID IN expr WHEN expr ']' {
+} | '[' expr FOR EACH ID IN_KW expr WHEN expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $5;
     $$->left = $7;
     $$->comp_filter = $9;
-} | '[' expr FOR ID IN expr ']' {
+} | '[' expr FOR ID IN_KW expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $4;
     $$->left = $6;
     $$->comp_filter = NULL;
-} | '[' expr FOR ID IN expr WHEN expr ']' {
+} | '[' expr FOR ID IN_KW expr WHEN expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $4;
@@ -163,7 +175,7 @@ int glow_main(int argc, char **argv) {
 
     // 1. Check for Embedded Package
     char self_path[1024];
-    ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path)-1);
+    int len = get_self_exe_path(self_path, sizeof(self_path)-1);
     if (len != -1) {
         self_path[len] = '\0';
         FILE *f = fopen(self_path, "rb");
@@ -253,7 +265,7 @@ int glow_main(int argc, char **argv) {
         fclose(fsrc);
 
         char self_path[1024];
-        ssize_t self_len = readlink("/proc/self/exe", self_path, sizeof(self_path)-1);
+        int self_len = get_self_exe_path(self_path, sizeof(self_path)-1);
         if (self_len == -1) { free(src_buf); return 1; }
         self_path[self_len] = '\0';
         FILE *fself = fopen(self_path, "rb");
