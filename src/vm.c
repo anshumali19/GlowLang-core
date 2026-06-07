@@ -4,7 +4,9 @@
 #include <string.h>
 #include <stdbool.h>
 #include <pthread.h>
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#endif
 #include <math.h>
 #include <sqlite3.h>
 #include "jit.h"
@@ -28,6 +30,7 @@ __thread int runtime_error_thrown = 0;
 
 __thread int profiling_active = 0;
 __thread int trace_mode = 0;
+__thread int call_depth = 0;
 int next_free_reg = 0;
 __thread char *exception_stack_trace = NULL;
 __thread const char *error_file = NULL;
@@ -47,6 +50,7 @@ void call_stack_pop(void) {
     if (call_stack_ptr > 0) call_stack_ptr--;
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
 static int string_compare_simd(const char *s1, const char *s2) {
@@ -68,6 +72,13 @@ static int string_compare_simd(const char *s1, const char *s2) {
     }
     return strcmp(s1 + i, s2 + i) == 0;
 }
+#else
+static int string_compare_simd(const char *s1, const char *s2) {
+    if (s1 == s2) return 1;
+    if (!s1 || !s2) return 0;
+    return strcmp(s1, s2) == 0;
+}
+#endif
 
 int val_eq(Value a, Value b) {
     if (a == b) return 1;
@@ -276,7 +287,9 @@ static const char *op_names[] = {
     "THROW", "TRY_START", "TRY_END", "LAMBDA", "CALL_VALUE", "CLASS_DEF", "METHOD_DEF",
     "TRAIT_DEF", "USE_TRAIT", "GET_PROPERTY", "SET_PROPERTY", "SPAWN", "MOVE", "NOP",
     "TRACE_ENTER", "PACKED_ADD", "PACKED_SUB", "PACKED_MUL", "PACKED_LOAD", "PACKED_STORE",
-    "PACKED_FUSED_MUL_ADD", "MATRIX_MUL", "SIMD_ADD", "USE_FILE", "ITER_START", "ITER_NEXT"
+    "PACKED_FUSED_MUL_ADD", "MATRIX_MUL", "SIMD_ADD", "USE_FILE", "ITER_START", "ITER_NEXT",
+    "IN", "ADD_INT", "SUB_INT", "MUL_INT", "LT_INT", "GT_INT", "LTE_INT", "GTE_INT", "EQ_INT",
+    "CALL_METHOD"
 };
 
 void print_bytecode(Bytecode *bc) {
@@ -289,8 +302,7 @@ void print_bytecode(Bytecode *bc) {
 }
 
 Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
-    static __thread int call_depth = 0;
-    if (++call_depth > 1000) {
+    if (++call_depth > 65000) {
         pending_exception = value_string_copy("Maximum recursion depth exceeded");
         has_exception = 1;
         call_depth--;
@@ -400,7 +412,10 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         &&l_OP_USE_FILE,
         &&l_OP_ITER_START,
         &&l_OP_ITER_NEXT,
-        &&l_OP_IN
+        &&l_OP_IN,
+        &&l_OP_ADD_INT, &&l_OP_SUB_INT, &&l_OP_MUL_INT,
+        &&l_OP_LT_INT, &&l_OP_GT_INT, &&l_OP_LTE_INT, &&l_OP_GTE_INT, &&l_OP_EQ_INT,
+        &&l_OP_CALL_METHOD
     };
 
 #define R(idx) vm_stack[base_reg + (idx)]
@@ -529,43 +544,26 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_OR: R(pc->r0) = value_bool(value_truthy(R(pc->r1)) || value_truthy(R(pc->r2))); pc++; DISPATCH();
     l_OP_NOT: R(pc->r0) = value_bool(!value_truthy(R(pc->r1))); pc++; DISPATCH();
     l_OP_JUMP: {
-        if (pc->arg < (pc - bc->code)) {
-            pc->exec_count++;
-            /* if (pc->exec_count > 1000 && !recording_trace && !pc->trace) {
-                recording_trace = malloc(sizeof(Trace));
-                recording_trace->instructions = malloc(sizeof(Instruction) * 128);
-                recording_trace->original_offsets = malloc(sizeof(int) * 128);
-                recording_trace->count = 0; recording_trace->capacity = 128;
-                recording_trace->start_pc = pc;
-            } */
-        }
+        if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
         pc = bc->code + pc->arg; DISPATCH();
     }
     l_OP_JUMP_IF_FALSE: {
-        if (pc->arg < (pc - bc->code) && !value_truthy(R(pc->r0))) {
-            pc->exec_count++;
-            /* if (pc->exec_count > 1000 && !recording_trace && !pc->trace) {
-                recording_trace = malloc(sizeof(Trace));
-                recording_trace->instructions = malloc(sizeof(Instruction) * 128);
-                recording_trace->original_offsets = malloc(sizeof(int) * 128);
-                recording_trace->count = 0; recording_trace->capacity = 128;
-                recording_trace->start_pc = pc;
-            } */
+        if(!value_truthy(R(pc->r0))) {
+            if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
+            pc = bc->code + pc->arg;
+        } else {
+            pc++;
         }
-        if(!value_truthy(R(pc->r0))) pc = bc->code + pc->arg; else pc++; DISPATCH();
+        DISPATCH();
     }
     l_OP_JUMP_IF_TRUE: {
-        if (pc->arg < (pc - bc->code) && value_truthy(R(pc->r0))) {
-            pc->exec_count++;
-            /* if (pc->exec_count > 1000 && !recording_trace && !pc->trace) {
-                recording_trace = malloc(sizeof(Trace));
-                recording_trace->instructions = malloc(sizeof(Instruction) * 128);
-                recording_trace->original_offsets = malloc(sizeof(int) * 128);
-                recording_trace->count = 0; recording_trace->capacity = 128;
-                recording_trace->start_pc = pc;
-            } */
+        if(value_truthy(R(pc->r0))) {
+            if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
+            pc = bc->code + pc->arg;
+        } else {
+            pc++;
         }
-        if(value_truthy(R(pc->r0))) pc = bc->code + pc->arg; else pc++; DISPATCH();
+        DISPATCH();
     }
     l_OP_FUNC_DEF: pc++; DISPATCH();
     l_OP_CALL: {
@@ -898,7 +896,22 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(o);
             if(ot==OBJ_INSTANCE) {
-                Value v = instance_get(AS_INSTANCE(o), n);
+                Instance *inst = AS_INSTANCE(o);
+                Dict *d = inst->properties;
+                intptr_t idx = pc->cache[0].val - 1;
+                Value v;
+                if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+                    v = d->values[idx];
+                } else {
+                    int new_idx = dict_get_idx(d, n);
+                    if (new_idx != -1) {
+                        pc->cache[0].val = new_idx + 1;
+                        pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
+                        v = d->values[new_idx];
+                    } else {
+                        v = class_get_method(inst->klass, n);
+                    }
+                }
                 if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
                     v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
                 }
@@ -938,7 +951,23 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_SET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r0); Value v = R(pc->r1);
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) {
-            instance_set(AS_INSTANCE(o), n, v);
+            Instance *inst = AS_INSTANCE(o);
+            Dict *d = inst->properties;
+            intptr_t idx = pc->cache[0].val - 1;
+            if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+                d->values[idx] = v;
+                gc_write_barrier((GCObject*)inst, v);
+            } else {
+                int new_idx = dict_get_idx(d, n);
+                if (new_idx != -1) {
+                    pc->cache[0].val = new_idx + 1;
+                    pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
+                    d->values[new_idx] = v;
+                    gc_write_barrier((GCObject*)inst, v);
+                } else {
+                    instance_set(inst, n, v);
+                }
+            }
         }
         else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
         pc++; DISPATCH();
@@ -1020,8 +1049,70 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 has_exception = 1;
                 goto l_OP_THROW;
             }
+        }
+        pc++; DISPATCH();
+    }
+    l_OP_CALL_METHOD: {
+        int ac = pc->arg; 
+        Value obj = R(pc->r1);
+        
+        FuncEntry *fe = NULL;
+        NativeFuncPtr native_fe = NULL;
+        
+        if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
+            ObjType ot = GET_OBJ_TYPE(obj);
+            if(ot==OBJ_INSTANCE) {
+                Instance *inst = AS_INSTANCE(obj);
+                if (pc->cache[0].key == inst->klass) {
+                    fe = (FuncEntry*)pc->cache[0].val;
+                } else {
+                    Value m = class_get_method(inst->klass, (const char*)pc->ptr);
+                    if (GET_TYPE(m) == VAL_OBJECT && GET_OBJ_TYPE(m) == OBJ_BOUND_METHOD) {
+                        fe = AS_BOUND_METHOD(m)->method;
+                        pc->cache[0].key = inst->klass;
+                        pc->cache[0].val = (intptr_t)fe;
+                    }
+                }
+            } else if(ot==OBJ_DICT) {
+                const char *n = (const char*)pc->ptr;
+                if (strcmp(n, "has") == 0) native_fe = native_dict_has;
+                else if (strcmp(n, "keys") == 0) native_fe = native_dict_keys;
+                else if (strcmp(n, "values") == 0) native_fe = native_dict_values;
+                else if (strcmp(n, "remove") == 0) native_fe = native_dict_remove;
+                else if (strcmp(n, "merge") == 0) native_fe = native_dict_merge;
+            } else if(ot==OBJ_STRING) {
+                const char *n = (const char*)pc->ptr;
+                if (strcmp(n, "contains") == 0) native_fe = native_str_contains;
+                else if (strcmp(n, "find") == 0) native_fe = native_str_find;
+                else if (strcmp(n, "slice") == 0) native_fe = native_str_slice;
+                else if (strcmp(n, "split") == 0) native_fe = native_str_split;
+            }
+        }
+        
+        if (fe && fe->body) {
+            int callee_base = base_reg + pc->r2;
+            if (callee_base + fe->body->local_count + 16 >= vm_stack_size) {
+                int old_size = vm_stack_size;
+                while (callee_base + fe->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+            }
+            vm_stack[callee_base] = obj; // SET SELF
+            
+            Value res = run_bytecode(fe->body, NULL, NULL, callee_base);
+            if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+        } else if (native_fe) {
+            Value args[257];
+            args[0] = obj;
+            int count = ac;
+            if (count > 254) count = 254;
+            int start_offset = pc->is_method ? 1 : 0;
+            for (int i = 0; i < count; i++) {
+                args[i + 1] = R(pc->r2 + start_offset + i);
+            }
+            R(pc->r0) = native_fe(count + 1, args);
         } else {
-            pending_exception = value_string_copy("Attempted to call a non-object value");
+            pending_exception = value_string_copy("Attempted to call a non-method value");
             has_exception = 1;
             goto l_OP_THROW;
         }
@@ -1112,6 +1203,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     }
     l_OP_SPAWN: {
         int ac = pc->arg; Value callee = R(pc->r0);
+        if (ac < 0 || ac > 1024) {
+            pending_exception = value_string_copy("Runtime Error: Invalid number of arguments for OP_SPAWN");
+            has_exception = 1;
+            goto l_OP_THROW;
+        }
         ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac;
         td->args = malloc(sizeof(Value)*ac); for(int i=0; i<ac; i++) td->args[i] = R(pc->r1 + i);
         pthread_t t; pthread_create(&t, NULL, thread_wrapper, td); pthread_detach(t); pc++; DISPATCH();
@@ -1547,6 +1643,15 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         R(pc->r0) = value_bool(found);
         pc++; DISPATCH();
     }
+    
+    l_OP_ADD_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) + AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_SUB_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) - AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_MUL_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) * AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_LT_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) < AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_GT_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) > AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_LTE_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) <= AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_GTE_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) >= AS_INT(R(pc->r2))); pc++; DISPATCH();
+    l_OP_EQ_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) == AS_INT(R(pc->r2))); pc++; DISPATCH();
     l_OP_NOP: pc++; DISPATCH();
 
 l_FINISH:

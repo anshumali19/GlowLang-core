@@ -100,7 +100,7 @@ markdown_table = "\n".join([header, separator] + rows)
 print("\nResults Table:")
 print(markdown_table)
 
-with open("bench_results_cross.md", "w") as f:
+with open("benchagainstgiants.md", "w") as f:
     f.write("# Comprehensive Cross-Language Benchmarks\n\n")
     f.write(markdown_table)
     f.write("\n\n*Measurements include runtime startup and execution (average of 3 runs after warmup).*")

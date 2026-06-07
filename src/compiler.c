@@ -451,45 +451,77 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_REPEAT: {
-            int limit_reg = compile_expr(n->left, -1);
-            int counter_reg = next_free_reg++;
-            int idx = bc_emit(compiling_bc, OP_CONST_INT, 0, 0);
-            compiling_bc->code[idx].r0 = counter_reg;
-
-            int loop_start = compiling_bc->count;
-
-            if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
-            LoopScope *loop = &loop_stack[loop_stack_ptr++];
-            loop->start_pc = -1; // skip jumps to loop increment
-            loop->end_patch_count = 0;
-            loop->skip_patch_count = 0;
-
-            int cond_reg = next_free_reg++;
-            bc_emit_reg(compiling_bc, OP_LT, cond_reg, counter_reg, limit_reg);
-            int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
-            compiling_bc->code[jf].r0 = cond_reg;
-
-            compile_stmt(n->right);
-
-            // Increment phase PC
-            int incr_start = compiling_bc->count;
-            for (int i = 0; i < loop->skip_patch_count; i++) {
-                compiling_bc->code[loop->skip_patches[i]].arg = incr_start;
+            int do_unroll = 0;
+            int unroll_limit = 0;
+            if (n->left && n->left->type == NODE_INT_LIT) {
+                unroll_limit = (int)AS_INT(n->left->value);
+                if (unroll_limit > 0 && unroll_limit <= 16) {
+                    do_unroll = 1;
+                }
             }
 
-            int one_reg = next_free_reg++;
-            idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
-            compiling_bc->code[idx].r0 = one_reg;
-            bc_emit_reg(compiling_bc, OP_ADD, counter_reg, counter_reg, one_reg);
+            if (do_unroll) {
+                if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
+                LoopScope *loop = &loop_stack[loop_stack_ptr++];
+                loop->start_pc = -1; // skip jumps handled per-iteration
+                loop->end_patch_count = 0;
+                loop->skip_patch_count = 0;
+                
+                for (int i=0; i<unroll_limit; i++) {
+                    compile_stmt(n->right);
+                    // Next iteration starts here; patch all skips in this iteration
+                    for (int s=0; s<loop->skip_patch_count; s++) {
+                        compiling_bc->code[loop->skip_patches[s]].arg = compiling_bc->count;
+                    }
+                    loop->skip_patch_count = 0; // reset for next iteration
+                }
+                
+                // End of loop; patch all breaks
+                for (int i = 0; i < loop->end_patch_count; i++) {
+                    compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                }
+                loop_stack_ptr--;
+            } else {
+                int limit_reg = compile_expr(n->left, -1);
+                int counter_reg = next_free_reg++;
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, 0, 0);
+                compiling_bc->code[idx].r0 = counter_reg;
 
-            bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
-            compiling_bc->code[jf].arg = compiling_bc->count;
+                int loop_start = compiling_bc->count;
 
-            // Backpatch breaks
-            for (int i = 0; i < loop->end_patch_count; i++) {
-                compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
+                LoopScope *loop = &loop_stack[loop_stack_ptr++];
+                loop->start_pc = -1; // skip jumps to loop increment
+                loop->end_patch_count = 0;
+                loop->skip_patch_count = 0;
+
+                int cond_reg = next_free_reg++;
+                bc_emit_reg(compiling_bc, OP_LT, cond_reg, counter_reg, limit_reg);
+                int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+                compiling_bc->code[jf].r0 = cond_reg;
+
+                compile_stmt(n->right);
+
+                // Increment phase PC
+                int incr_start = compiling_bc->count;
+                for (int i = 0; i < loop->skip_patch_count; i++) {
+                    compiling_bc->code[loop->skip_patches[i]].arg = incr_start;
+                }
+
+                int one_reg = next_free_reg++;
+                idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
+                compiling_bc->code[idx].r0 = one_reg;
+                bc_emit_reg(compiling_bc, OP_ADD, counter_reg, counter_reg, one_reg);
+
+                bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
+                compiling_bc->code[jf].arg = compiling_bc->count;
+
+                // Backpatch breaks
+                for (int i = 0; i < loop->end_patch_count; i++) {
+                    compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                }
+                loop_stack_ptr--;
             }
-            loop_stack_ptr--;
             break;
         }
         case NODE_FOR_RANGE: {
@@ -498,63 +530,107 @@ static void compile_stmt(Node *n) {
             }
             int var_reg = get_local_reg(n->name);
 
-            int start_val = compile_expr(n->left, -1);
-            int end_val = compile_expr(n->right, -1);
-            if (var_reg != -1) {
-                bc_emit_reg(compiling_bc, OP_MOVE, var_reg, start_val, 0);
+            int do_unroll = 0;
+            int start_lit = 0, end_lit = 0;
+            if (n->left && n->left->type == NODE_INT_LIT && n->right && n->right->type == NODE_INT_LIT) {
+                start_lit = (int)AS_INT(n->left->value);
+                end_lit = (int)AS_INT(n->right->value);
+                if (end_lit >= start_lit && (end_lit - start_lit + 1) <= 16) {
+                    do_unroll = 1;
+                }
+            }
+
+            if (do_unroll) {
+                if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
+                LoopScope *loop = &loop_stack[loop_stack_ptr++];
+                loop->start_pc = -1; 
+                loop->end_patch_count = 0;
+                loop->skip_patch_count = 0;
+
+                for (int i = start_lit; i <= end_lit; i++) {
+                    int i_val = bc_emit(compiling_bc, OP_CONST_INT, i, 0);
+                    int val_reg = next_free_reg++;
+                    compiling_bc->code[i_val].r0 = val_reg;
+
+                    if (var_reg != -1) {
+                        bc_emit_reg(compiling_bc, OP_MOVE, var_reg, val_reg, 0);
+                    } else {
+                        int slot = global_get_slot(n->name);
+                        int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                        compiling_bc->code[idx].r0 = val_reg;
+                    }
+
+                    compile_stmt(n->third);
+
+                    for (int s = 0; s < loop->skip_patch_count; s++) {
+                        compiling_bc->code[loop->skip_patches[s]].arg = compiling_bc->count;
+                    }
+                    loop->skip_patch_count = 0;
+                }
+
+                for (int i = 0; i < loop->end_patch_count; i++) {
+                    compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                }
+                loop_stack_ptr--;
             } else {
-                int slot = global_get_slot(n->name);
-                int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-                compiling_bc->code[idx].r0 = start_val;
-            }
-            int loop_start = compiling_bc->count;
+                int start_val = compile_expr(n->left, -1);
+                int end_val = compile_expr(n->right, -1);
+                if (var_reg != -1) {
+                    bc_emit_reg(compiling_bc, OP_MOVE, var_reg, start_val, 0);
+                } else {
+                    int slot = global_get_slot(n->name);
+                    int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                    compiling_bc->code[idx].r0 = start_val;
+                }
+                int loop_start = compiling_bc->count;
 
-            if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
-            LoopScope *loop = &loop_stack[loop_stack_ptr++];
-            loop->start_pc = -1; // skip jumps to loop increment
-            loop->end_patch_count = 0;
-            loop->skip_patch_count = 0;
+                if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
+                LoopScope *loop = &loop_stack[loop_stack_ptr++];
+                loop->start_pc = -1; // skip jumps to loop increment
+                loop->end_patch_count = 0;
+                loop->skip_patch_count = 0;
 
-            int i_reg = var_reg != -1 ? var_reg : next_free_reg++;
-            if (var_reg == -1) {
-                int slot = global_get_slot(n->name);
-                int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-                compiling_bc->code[idx].r0 = i_reg;
-            }
-            int cond_reg = next_free_reg++;
-            bc_emit_reg(compiling_bc, OP_LTE, cond_reg, i_reg, end_val);
-            int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
-            compiling_bc->code[jf].r0 = cond_reg;
-            compile_stmt(n->third);
+                int i_reg = var_reg != -1 ? var_reg : next_free_reg++;
+                if (var_reg == -1) {
+                    int slot = global_get_slot(n->name);
+                    int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
+                    compiling_bc->code[idx].r0 = i_reg;
+                }
+                int cond_reg = next_free_reg++;
+                bc_emit_reg(compiling_bc, OP_LTE, cond_reg, i_reg, end_val);
+                int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+                compiling_bc->code[jf].r0 = cond_reg;
+                compile_stmt(n->third);
 
-            // Increment phase PC
-            int incr_start = compiling_bc->count;
-            for (int i = 0; i < loop->skip_patch_count; i++) {
-                compiling_bc->code[loop->skip_patches[i]].arg = incr_start;
-            }
+                // Increment phase PC
+                int incr_start = compiling_bc->count;
+                for (int i = 0; i < loop->skip_patch_count; i++) {
+                    compiling_bc->code[loop->skip_patches[i]].arg = incr_start;
+                }
 
-            if (var_reg == -1) {
-                int slot = global_get_slot(n->name);
-                int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-                compiling_bc->code[idx].r0 = i_reg;
-            }
-            int one_reg = next_free_reg++;
-            int idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
-            compiling_bc->code[idx].r0 = one_reg;
-            bc_emit_reg(compiling_bc, OP_ADD, i_reg, i_reg, one_reg);
-            if (var_reg == -1) {
-                int slot = global_get_slot(n->name);
-                int idx2 = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-                compiling_bc->code[idx2].r0 = i_reg;
-            }
-            bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
-            compiling_bc->code[jf].arg = compiling_bc->count;
+                if (var_reg == -1) {
+                    int slot = global_get_slot(n->name);
+                    int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
+                    compiling_bc->code[idx].r0 = i_reg;
+                }
+                int one_reg = next_free_reg++;
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, 1, 0);
+                compiling_bc->code[idx].r0 = one_reg;
+                bc_emit_reg(compiling_bc, OP_ADD, i_reg, i_reg, one_reg);
+                if (var_reg == -1) {
+                    int slot = global_get_slot(n->name);
+                    int idx2 = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                    compiling_bc->code[idx2].r0 = i_reg;
+                }
+                bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
+                compiling_bc->code[jf].arg = compiling_bc->count;
 
-            // Backpatch breaks
-            for (int i = 0; i < loop->end_patch_count; i++) {
-                compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                // Backpatch breaks
+                for (int i = 0; i < loop->end_patch_count; i++) {
+                    compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
+                }
+                loop_stack_ptr--;
             }
-            loop_stack_ptr--;
             break;
         }
         case NODE_FOR_EACH: {

@@ -326,7 +326,16 @@ typedef enum {
     OP_USE_FILE,
     OP_ITER_START,
     OP_ITER_NEXT,
-    OP_IN
+    OP_IN,
+    OP_ADD_INT,
+    OP_SUB_INT,
+    OP_MUL_INT,
+    OP_LT_INT,
+    OP_GT_INT,
+    OP_LTE_INT,
+    OP_GTE_INT,
+    OP_EQ_INT,
+    OP_CALL_METHOD
 } OpCode;
 
 typedef struct {
@@ -630,7 +639,8 @@ typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending
 extern ThreadStack active_stacks[128];
 extern int active_stack_count;
 extern pthread_mutex_t glow_gil;
-
+extern __thread int call_stack_ptr;
+extern __thread int call_depth;
 /* ================================================================
  *  COMPILER ROUTINES (compiler.c)
  * ================================================================ */
@@ -651,6 +661,7 @@ extern Trait *last_compiling_trait;
 Dict* dict_new(int sz);
 void dict_set(Dict *d, const char *key, Value val);
 Value dict_get(Dict *d, const char *key);
+int dict_get_idx(Dict *d, const char *key);
 List* list_new(int sz);
 void list_push(List *l, Value val);
 PackedArray* packed_array_new(PackedType type, int capacity);
