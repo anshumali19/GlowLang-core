@@ -1874,7 +1874,7 @@ static Value native_tensor_matmul(int argc, Value *args) {
 }
 #endif
 
-#ifndef _WIN32
+#ifdef __linux__
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
@@ -1911,11 +1911,6 @@ static Value native_gui_rect(int argc, Value *args) {
     XFlush(gui_display);
     return value_none();
 }
-#else
-static Value native_gui_open(int argc, Value *args) { (void)argc; (void)args; return value_bool(0); }
-static Value native_gui_clear(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
-static Value native_gui_rect(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
-#endif
 
 static Value native_gui_poll(int argc, Value *args) {
     (void)argc; (void)args;
@@ -1927,6 +1922,12 @@ static Value native_gui_poll(int argc, Value *args) {
     }
     return value_none();
 }
+#else
+static Value native_gui_open(int argc, Value *args) { (void)argc; (void)args; return value_bool(0); }
+static Value native_gui_clear(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
+static Value native_gui_rect(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
+static Value native_gui_poll(int argc, Value *args) { (void)argc; (void)args; return value_none(); }
+#endif
 
 static Value native_collision_aabb(int argc, Value *args) {
     if (argc < 8) return value_bool(0);

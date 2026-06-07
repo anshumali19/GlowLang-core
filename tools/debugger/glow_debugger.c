@@ -78,7 +78,11 @@ typedef struct {
     int  depth;
 } CallFrame;
 
-static TraceEntry  trace[MAX_TRACE_LINES];
+#ifdef _WIN32
+typedef int pid_t;
+#endif
+
+static TraceEntry  *trace = NULL;
 static int         trace_count = 0;
 static Breakpoint  breakpoints[MAX_BREAKPOINTS];
 static int         bp_count = 0;
@@ -595,6 +599,11 @@ static void print_usage(const char *prog) {
 }
 
 int main(int argc, char *argv[]) {
+    trace = (TraceEntry *)malloc(MAX_TRACE_LINES * sizeof(TraceEntry));
+    if (!trace) {
+        fprintf(stderr, "Error: out of memory for trace buffer\n");
+        return 1;
+    }
     const char *trace_file = NULL;
     pid_t attach_pid = 0;
     int interactive = 0;

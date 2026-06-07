@@ -90,7 +90,7 @@ int line_num = 1;
 "for"                  { return FOR; }
 "every"                { return FOR; }
 "each"                 { return EACH; }
-"in"                   { return IN; }
+"in"                   { return IN_KW; }
 "is"                   { return IS; }
 "is not"               { return IS_NOT; }
 "from"                 { return FROM; }
