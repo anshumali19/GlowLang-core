@@ -383,7 +383,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     
     if (!start_pc && bc->count > 0 && !bc->jit_code && !bc->jit_failed) {
         if (++bc->code[0].exec_count > 10) {
-            if (0) jit_compile(bc);
+            if (1) jit_compile(bc);
         }
     }
     if (!start_pc && bc->jit_code) {
