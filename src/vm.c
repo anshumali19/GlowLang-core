@@ -21,26 +21,26 @@
 #define MAX_CALL_STACK 65536
 
 // VM Thread local Stack and frames
-__thread Value *vm_stack = NULL;
-__thread int vm_stack_size = 0;
-__thread int sp = 0;
-__thread int vm_stack_top = 0;
+THREAD_LOCAL Value *vm_stack = NULL;
+THREAD_LOCAL int vm_stack_size = 0;
+THREAD_LOCAL int sp = 0;
+THREAD_LOCAL int vm_stack_top = 0;
 
-__thread CallFrame call_stack[65536];
-__thread int call_stack_ptr = 0;
+THREAD_LOCAL CallFrame call_stack[65536];
+THREAD_LOCAL int call_stack_ptr = 0;
 
 pthread_mutex_t glow_gil = PTHREAD_MUTEX_INITIALIZER;
-__thread Value pending_exception = 0;
-__thread int has_exception = 0;
-__thread int runtime_error_thrown = 0;
+THREAD_LOCAL Value pending_exception = 0;
+THREAD_LOCAL int has_exception = 0;
+THREAD_LOCAL int runtime_error_thrown = 0;
 
-__thread int profiling_active = 0;
-__thread int trace_mode = 0;
-__thread int call_depth = 0;
+THREAD_LOCAL int profiling_active = 0;
+THREAD_LOCAL int trace_mode = 0;
+THREAD_LOCAL int call_depth = 0;
 int next_free_reg = 0;
-__thread char *exception_stack_trace = NULL;
-__thread const char *error_file = NULL;
-__thread int error_line = 0;
+THREAD_LOCAL char *exception_stack_trace = NULL;
+THREAD_LOCAL const char *error_file = NULL;
+THREAD_LOCAL int error_line = 0;
 
 
 
@@ -329,8 +329,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         vm_stack_top = base_reg + bc->local_count + 16;
     }
 
-    // static __thread long total_instructions = 0;
-    // static __thread Trace *recording_trace = NULL;
+    // static THREAD_LOCAL long total_instructions = 0;
+    // static THREAD_LOCAL Trace *recording_trace = NULL;
 
 
     typedef struct {
@@ -802,8 +802,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         for (int i = 0; i < count; i++) {
                             args[i + 1] = R(pc->r2 + start_offset + i);
                         }
-                        R(0) = bm->native_method(count + 1, args);
-                        goto l_FINISH;
+                        R(pc->r0) = bm->native_method(count + 1, args);
+                        goto l_OP_RETURN;
                     } else {
                         fe = bm->method;
                         is_bound_method = true;
@@ -816,8 +816,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                     if (pc->is_method) {
                         args++;
                     }
-                    R(0) = AS_NATIVE_FUNC(callee)->func(argc, args);
-                    goto l_FINISH;
+                    R(pc->r0) = AS_NATIVE_FUNC(callee)->func(argc, args);
+                    goto l_OP_RETURN;
                 }
                 else if (ot == OBJ_CLASS) {
                     Value inst = value_instance(instance_new(AS_CLASS(callee)));
@@ -845,8 +845,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         }
                         var_set("self", old_self);
                     }
-                    R(0) = inst;
-                    goto l_FINISH;
+                    R(pc->r0) = inst;
+                    goto l_OP_RETURN;
                 }
             }
         }
@@ -886,7 +886,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 int deopt_pc = 0;
                 Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
                 if (__builtin_expect(IS_DEOPT(res), 0)) { pc = &bc->code[deopt_pc]; goto l_DISPATCH; }
-                R(0) = res; goto l_FINISH;
+                R(pc->r0) = res; goto l_OP_RETURN;
             }
             goto l_DISPATCH;
         }
@@ -896,7 +896,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_RETURN: {
         Value ret_val = R(pc->r0);
         if (internal_depth == 0) {
-            return ret_val;
+            R(0) = ret_val;
+            goto l_FINISH;
         } else {
             call_stack_pop();
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
