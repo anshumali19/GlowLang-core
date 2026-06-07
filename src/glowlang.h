@@ -122,6 +122,7 @@ typedef struct {
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
 /* Extract bits to type */
+#define IS_INT(v) (((v) & 0xFFFF000000000000ULL) == 0x7FFA000000000000ULL)
 static inline ValueType GET_TYPE(Value v) {
     return (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (ValueType)(((v) & MASK_TYPE) >> 48);
 }
@@ -393,6 +394,7 @@ struct Bytecode {
     struct FuncEntry *owner;
     ExceptionEntry *exception_table;
     int exception_count;
+    int preserved_locals;
 };
 
 /* ================================================================

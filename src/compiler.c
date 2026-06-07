@@ -159,6 +159,7 @@ Bytecode* bc_new(FuncEntry *owner) {
     bc->owner = owner;
     bc->exception_table = NULL;
     bc->exception_count = 0;
+    bc->preserved_locals = owner ? owner->param_count : 0;
     return bc;
 }
 
@@ -945,7 +946,6 @@ static int compile_expr(Node *n, int target_reg) {
             int src = get_local_reg(n->name);
             if (src != -1) {
                 if (reg != src) bc_emit_reg(compiling_bc, OP_MOVE, reg, src, 0);
-                else reg = src;
             } else {
                 int slot = global_get_slot(n->name);
                 int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
