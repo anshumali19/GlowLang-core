@@ -68,7 +68,7 @@ void intern_table_init(void) {
 int line_num = 1;
 %}
 
-%option noinput nounput nounistd
+%option noinput nounput nounistd noyywrap
 %x COMMENT
 
 %%
@@ -232,9 +232,7 @@ f\"([^"\\]|\\.)*\" {
 
 %%
 
-int yywrap(void) {
-    return 1;
-}
+
 
 void lexer_cleanup(void) {
     #ifdef YY_CURRENT_BUFFER
