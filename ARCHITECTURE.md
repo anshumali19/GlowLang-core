@@ -150,7 +150,7 @@ Utility scripts for:
 * automation
 * compiler verification
 
-### Versioning Tools (`tools/gdu/`)
+### Versioning Tools (`tools/gdu/` - Glow Dependency Utility)
 
 Includes:
 

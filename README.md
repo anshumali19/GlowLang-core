@@ -26,7 +26,7 @@
 | **AI/ML** | Neural net blueprints, matrix ops, activation functions, training loops |
 | **JSON** | Native `json.parse` and `json.stringify` |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir` |
-| **Package Manager** | `gdu` with semantic versioning, dependency resolution, SHA-256 checksums |
+| **Package Manager** | `gdu` (Glow Dependency Utility) with semantic versioning, dependency resolution, SHA-256 checksums |
 | **LSP** | Language Server Protocol with completion, hover, go-to-definition, diagnostics |
 | **Editor Support** | VSCode, Neovim, Sublime Text, Helix, JetBrains |
 | **Tooling** | Debugger, profiler, heap inspector, bytecode viewer |
