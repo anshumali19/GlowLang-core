@@ -71,6 +71,9 @@ void optimize_bytecode(Bytecode *bc) {
                 if (reg_types[r1] == 1 && reg_types[r2] == 1) {
                     if (r0 < 1024) reg_types[r0] = 1;
                     inst->type = 1;
+                    if (inst->op == OP_ADD) inst->op = OP_ADD_INT;
+                    else if (inst->op == OP_SUB) inst->op = OP_SUB_INT;
+                    else if (inst->op == OP_MUL) inst->op = OP_MUL_INT;
                 } else if (reg_types[r1] == 2 || reg_types[r2] == 2) {
                     if (r0 < 1024) reg_types[r0] = 2;
                     inst->type = 2;
@@ -85,9 +88,9 @@ void optimize_bytecode(Bytecode *bc) {
                         int64_t i2 = AS_INT(v2);
                         int64_t res = 0;
                         int ok = 1;
-                        if (inst->op == OP_ADD) res = i1 + i2;
-                        else if (inst->op == OP_SUB) res = i1 - i2;
-                        else if (inst->op == OP_MUL) res = i1 * i2;
+                        if (inst->op == OP_ADD || inst->op == OP_ADD_INT) res = i1 + i2;
+                        else if (inst->op == OP_SUB || inst->op == OP_SUB_INT) res = i1 - i2;
+                        else if (inst->op == OP_MUL || inst->op == OP_MUL_INT) res = i1 * i2;
                         else if (inst->op == OP_DIV) { if (i2 != 0) res = i1 / i2; else ok = 0; }
                         
                         if (ok) {
@@ -101,6 +104,19 @@ void optimize_bytecode(Bytecode *bc) {
                             inst->type = 1;
                         }
                     }
+                }
+            }
+        }
+        else if (inst->op >= OP_LT && inst->op <= OP_EQ) {
+            int r1 = inst->r1;
+            int r2 = inst->r2;
+            if (r1 < 1024 && r2 < 1024) {
+                if (reg_types[r1] == 1 && reg_types[r2] == 1) {
+                    if (inst->op == OP_LT) inst->op = OP_LT_INT;
+                    else if (inst->op == OP_GT) inst->op = OP_GT_INT;
+                    else if (inst->op == OP_LTE) inst->op = OP_LTE_INT;
+                    else if (inst->op == OP_GTE) inst->op = OP_GTE_INT;
+                    else if (inst->op == OP_EQ) inst->op = OP_EQ_INT;
                 }
             }
         }
@@ -255,6 +271,26 @@ void optimize_bytecode(Bytecode *bc) {
                      bc->code[next_idx].op = OP_NOP;
                  }
              }
+        }
+        }
+    // Pass 6: Method Devirtualization
+    for (int i = 0; i < bc->count - 1; i++) {
+        Instruction *pc = &bc->code[i];
+        if (pc->op == OP_GET_PROPERTY) {
+            int next_idx = i + 1;
+            while (next_idx < bc->count && bc->code[next_idx].op == OP_NOP) next_idx++;
+            if (next_idx < bc->count && bc->code[next_idx].op == OP_CALL_VALUE) {
+                Instruction *call_pc = &bc->code[next_idx];
+                if (pc->r0 == call_pc->r1) {
+                    call_pc->op = OP_CALL_METHOD;
+                    call_pc->ptr = pc->ptr; // name of method
+                    // r1 of OP_CALL_METHOD needs the object
+                    call_pc->r1 = pc->r1;
+                    
+                    // We can eliminate OP_GET_PROPERTY
+                    pc->op = OP_NOP;
+                }
+            }
         }
     }
 
