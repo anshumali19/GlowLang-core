@@ -5,7 +5,12 @@
 %{#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#else
 #include <unistd.h>
+#endif
 #include "glowlang.h"
 #include "lsp.h"
 

@@ -19,7 +19,12 @@
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#else
 #include <unistd.h>
+#endif
 #else
 #include <io.h>
 #include <process.h>

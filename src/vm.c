@@ -3,9 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#include "win_pthread.h"
+#else
 #include <pthread.h>
+#endif
 #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#endif
 #endif
 #include <math.h>
 #include <sqlite3.h>
@@ -51,7 +57,9 @@ void call_stack_pop(void) {
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#endif
 
 static int string_compare_simd(const char *s1, const char *s2) {
     if (s1 == s2) return 1;

@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+#define __thread __declspec(thread)
+#endif
+
 #ifndef GLOWLANG_H
 #define GLOWLANG_H
 
@@ -6,7 +10,11 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#include "win_pthread.h"
+#else
 #include <pthread.h>
+#endif
 #include "arena.h"
 
 /* ================================================================
