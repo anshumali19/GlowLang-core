@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "GzFPGDVelP76XrsLnQ2+NI+IhU/aLPSvULseAxzvhVKRZbM41t7Yg4uaJfXl4Cw7STiL1Z8/kwuZ2ouGf4B2Dg==",
+  "dgSpecHash": "SxqBmZaMYPvZwjW5mfg8THi61+y+rlWqiysfRTiZ2lnPddn3Q++BBUP8Mbm4YIRe+jv5BOr7iY2FWTGPZyE1pw==",
   "success": true,
-  "projectFilePath": "/home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/CSharpBench.csproj",
+  "projectFilePath": "/home/anshumali/Desktop/GlowLang/benchmarks/CSharpBench/CSharpBench.csproj",
   "expectedPackageFiles": [],
   "logs": []
 }

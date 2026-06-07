@@ -8,6 +8,6 @@ build_property.PlatformNeutralAssembly =
 build_property.EnforceExtendedAnalyzerRules = 
 build_property._SupportedPlatformList = Linux,macOS,Windows
 build_property.RootNamespace = CSharpBench
-build_property.ProjectDir = /home/anshumali/Desktop/GlowLang 1.0/benchmarks/CSharpBench/
+build_property.ProjectDir = /home/anshumali/Desktop/GlowLang/benchmarks/CSharpBench/
 build_property.EnableComHosting = 
 build_property.EnableGeneratedComInterfaceComImportInterop = 

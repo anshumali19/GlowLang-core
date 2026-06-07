@@ -9,7 +9,9 @@
 #include <io.h>
 #define access _access
 #else
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #endif
 #include "glowlang.h"
 #include "lsp.h"

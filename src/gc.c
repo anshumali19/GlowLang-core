@@ -246,8 +246,8 @@ void* gc_alloc(size_t sz, ObjType type) {
 }
 
 #define STACK_ARENA_SIZE (1024 * 1024)
-__thread char *stack_arena = NULL;
-__thread size_t stack_arena_used = 0;
+THREAD_LOCAL char *stack_arena = NULL;
+THREAD_LOCAL size_t stack_arena_used = 0;
 
 void* gc_alloc_stack(size_t sz, ObjType type) {
     if (!stack_arena) stack_arena = malloc(STACK_ARENA_SIZE);

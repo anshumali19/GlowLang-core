@@ -18,8 +18,8 @@ typedef struct {
     int skip_patch_count;
 } LoopScope;
 
-static __thread LoopScope loop_stack[MAX_LOOP_DEPTH];
-static __thread int loop_stack_ptr = 0;
+static THREAD_LOCAL LoopScope loop_stack[MAX_LOOP_DEPTH];
+static THREAD_LOCAL int loop_stack_ptr = 0;
 
 int global_lambda_count = 0;
 static int compiling_line = 0;
@@ -725,6 +725,7 @@ static void compile_stmt(Node *n) {
             for (int i=0; i<fe->param_count; i++) {
                 func_add_local(fe, n->func_params[i]);
             }
+            fe->body->preserved_locals = fe->local_count;
             
             next_free_reg = fe->local_count;
             compile_stmt(n->left); 
@@ -1287,6 +1288,7 @@ static int compile_expr(Node *n, int target_reg) {
             for (int i = 0; i < fe->param_count; i++) {
                 func_add_local(fe, n->func_params[i]);
             }
+            fe->body->preserved_locals = fe->local_count;
             next_free_reg = fe->local_count;
             compile_stmt(n->left);
             bc_emit(compiling_bc, OP_RETURN, 0, 0);

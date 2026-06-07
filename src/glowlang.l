@@ -4,6 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _MSC_VER
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+
 #define INTERN_TABLE_SIZE 65536
 static char *intern_table[INTERN_TABLE_SIZE];
 static int intern_initialized = 0;
@@ -60,7 +68,7 @@ void intern_table_init(void) {
 int line_num = 1;
 %}
 
-%option noinput nounput
+%option noinput nounput nounistd
 %x COMMENT
 
 %%

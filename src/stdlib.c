@@ -320,10 +320,13 @@ void var_table_init(void) {
     // No longer needed
 }
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <nmmintrin.h>
+#endif
 
 static unsigned int hash_str(const char *s) {
     unsigned int h = 5381;
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     const uint64_t *p = (const uint64_t*)s;
     size_t len = strlen(s);
     size_t i = 0;
@@ -334,6 +337,11 @@ static unsigned int hash_str(const char *s) {
     for (; i < len; i++) {
         h = _mm_crc32_u8(h, *s++);
     }
+#else
+    while (*s) {
+        h = ((h << 5) + h) + (*s++);
+    }
+#endif
     return h;
 }
 
