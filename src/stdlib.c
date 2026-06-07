@@ -29,7 +29,9 @@ typedef int socklen_t;
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <sqlite3.h>
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#endif
 #include <ctype.h>
 
 Class *vm_last_class = NULL;
@@ -448,6 +450,18 @@ Value dict_get(Dict *d, const char *key) {
         idx = (idx + 1) & (d->capacity - 1);
     }
     return value_none();
+}
+
+int dict_get_idx(Dict *d, const char *key) {
+    if (!d || d->capacity == 0 || !key) return -1;
+    const char *interned = intern_string(key);
+    uint32_t h = hash_string(interned);
+    int idx = h & (d->capacity - 1);
+    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
+        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return idx;
+        idx = (idx + 1) & (d->capacity - 1);
+    }
+    return -1;
 }
 List* list_new(int sz) { List *l = gc_alloc(sizeof(List), OBJ_LIST); l->size = 0; l->capacity = sz; l->items = sz > 0 ? calloc(sz, sizeof(Value)) : NULL; return l; }
 void list_push(List *l, Value v) {
@@ -1739,6 +1753,7 @@ static Value native_tensor_transpose(int argc, Value *args) {
     return value_packed(res);
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
 static Value native_tensor_matmul(int argc, Value *args) {
@@ -1777,6 +1792,37 @@ static Value native_tensor_matmul(int argc, Value *args) {
     }
     return value_packed(res);
 }
+#else
+static Value native_tensor_matmul(int argc, Value *args) {
+    if (argc < 6) return value_none();
+    if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    if (GET_TYPE(args[3]) != VAL_OBJECT || !(args[3] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[3]) != OBJ_PACKED_ARRAY) return value_none();
+    
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    int rA = (int)val_to_double(args[1]), cA = (int)val_to_double(args[2]);
+    PackedArray *pb = AS_PACKED_ARRAY(args[3]);
+    int rB = (int)val_to_double(args[4]), cB = (int)val_to_double(args[5]);
+    
+    if (rA < 0 || cA < 0 || rB < 0 || cB < 0) return value_none();
+    if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
+    if (cA != rB) return value_none();
+    
+    PackedArray *res = packed_array_new(pa->type, rA * cB);
+    if (!res || !res->data) return value_none();
+    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+    
+    for (int i = 0; i < rA; i++) {
+        for (int j = 0; j < cB; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < cA; k++) {
+                sum += da[i * cA + k] * db[k * cB + j];
+            }
+            dr[i * cB + j] = sum;
+        }
+    }
+    return value_packed(res);
+}
+#endif
 
 #ifndef _WIN32
 #include <X11/Xlib.h>
