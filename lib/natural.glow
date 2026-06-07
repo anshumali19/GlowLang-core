@@ -4,7 +4,7 @@ func keep(f, list):
     let res = []
     for each item in list:
         if f(item):
-            res = res + [item]
+            append(res, item)
         end
     end
     return res
@@ -13,7 +13,7 @@ end
 func apply(f, list):
     let res = []
     for each item in list:
-        res = res + [f(item)]
+        append(res, f(item))
     end
     return res
 end

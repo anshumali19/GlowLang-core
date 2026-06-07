@@ -1,0 +1,39 @@
+import "natural.glow"
+
+func test_natural_features():
+    let my_list = []
+    
+    every i in from 1 to 1000:
+        when i % 2 is 0:
+            append(my_list, i)
+        end
+        
+        when i % 3 is not 0:
+            append(my_list, i * 2)
+        end
+    end
+    
+    let filtered = keep(lambda(n): n > 500, my_list)
+    let final_val = apply(lambda(n): n + 1, filtered)
+    
+    let target = 1001
+    when target is in final_val:
+        return true
+    end
+    
+    when 999999 is not in final_val:
+        return true
+    end
+    
+    return false
+end
+
+func run_bench():
+    let result = false
+    every step in from 1 to 500:
+        result = test_natural_features()
+    end
+    show "Bench complete. Last result:", result
+end
+
+run_bench()
