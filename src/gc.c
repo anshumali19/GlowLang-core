@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#include "win_pthread.h"
+#else
 #include <pthread.h>
+#endif
 #include <sqlite3.h>
 
 /* GC */
@@ -104,6 +108,8 @@ static void gc_mark_value(Value v) {
 void gc_full_collect(void) {
     pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
+    if (vm_last_class) gc_mark_value(value_class(vm_last_class));
+    if (vm_last_trait) gc_mark_value(value_trait(vm_last_trait));
     pthread_mutex_lock(&threads_mutex);
     for (int i=0; i<active_stack_count; i++) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);
@@ -148,6 +154,8 @@ void gc_full_collect(void) {
 void gc_minor_collect(void) {
     pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
+    if (vm_last_class) gc_mark_value(value_class(vm_last_class));
+    if (vm_last_trait) gc_mark_value(value_trait(vm_last_trait));
     pthread_mutex_lock(&threads_mutex);
     for (int i=0; i<active_stack_count; i++) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);

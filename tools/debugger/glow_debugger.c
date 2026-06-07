@@ -14,7 +14,12 @@
 #include <string.h>
 #include <ctype.h>
 #include <signal.h>
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#else
 #include <unistd.h>
+#endif
 
 /* ================================================================
  *  ANSI Color Codes

@@ -22,15 +22,26 @@ typedef int socklen_t;
 #include <netdb.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#ifdef _WIN32
+#include "win_pthread.h"
+#else
 #include <pthread.h>
+#endif
+#ifdef _WIN32
+#include <io.h>
+#define access _access
+#else
 #include <unistd.h>
+#endif
 #endif
 #include <errno.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <sqlite3.h>
 #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#endif
 #endif
 #include <ctype.h>
 
@@ -165,8 +176,17 @@ void glow_store_index_jit(Value coll, Value v_idx, Value v_val) {
 }
 
 void simd_add_helper(Value v_a, Value v_b, Value v_target) {
+    if (GET_TYPE(v_a) != VAL_OBJECT || !(v_a & MASK_PAYLOAD) || GET_OBJ_TYPE(v_a) != OBJ_PACKED_ARRAY ||
+        GET_TYPE(v_b) != VAL_OBJECT || !(v_b & MASK_PAYLOAD) || GET_OBJ_TYPE(v_b) != OBJ_PACKED_ARRAY ||
+        GET_TYPE(v_target) != VAL_OBJECT || !(v_target & MASK_PAYLOAD) || GET_OBJ_TYPE(v_target) != OBJ_PACKED_ARRAY) {
+        return;
+    }
     PackedArray *pa = AS_PACKED_ARRAY(v_a), *pb = AS_PACKED_ARRAY(v_b), *pt = AS_PACKED_ARRAY(v_target);
     int size = pa->size;
+    if (pb->size < size) size = pb->size;
+    if (pt->size < size) size = pt->size;
+    if (pa->type != pb->type || pa->type != pt->type) return;
+
     if (pa->type == PACKED_FLOAT64) {
         double *da = (double*)pa->data, *db = (double*)pb->data, *dt = (double*)pt->data;
         #pragma GCC ivdep
@@ -194,15 +214,18 @@ Value value_from_double(double d) {
 #define MAX_CALL_STACK 65536
 
 Value value_string_copy(const char *s) {
+    if (!s) s = "";
     size_t len = strlen(s);
     GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
     gs->size = (int)len;
     if (len >= 32) {
         size_t i = 0;
-        for (; i + 32 <= len; i += 32) {
+        #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i + 32 <= len; i += 32) {
             __m256i v = _mm256_loadu_si256((__m256i*)&s[i]);
             _mm256_storeu_si256((__m256i*)&gs->chars[i], v);
         }
+#endif
         strcpy(gs->chars + i, s + i);
     } else {
         strcpy(gs->chars, s);
@@ -284,12 +307,13 @@ int global_get_slot(const char *name) {
 
 void var_set(const char *name, Value value) {
     int slot = global_get_slot(name);
-    global_table.values[slot] = value;
+    if (slot >= 0) global_table.values[slot] = value;
 }
 
 Value var_get(const char *name) {
     int slot = global_get_slot(name);
-    return global_table.values[slot];
+    if (slot >= 0) return global_table.values[slot];
+    return value_none();
 }
 
 void var_table_init(void) {
@@ -1334,16 +1358,20 @@ static Value native_packed_add(int argc, Value *args) {
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
                 int i = 0;
-                for (; i <= sz - 4; i += 4) {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i <= sz - 4; i += 4) {
                     _mm256_storeu_pd(&dr[i], _mm256_add_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
                 }
+#endif
                 for (; i < sz; i++) dr[i] = da[i] + db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
                 int i = 0;
-                for (; i <= sz - 4; i += 4) {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i <= sz - 4; i += 4) {
                     _mm256_storeu_si256((__m256i*)&ir[i], _mm256_add_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
                 }
+#endif
                 for (; i < sz; i++) ir[i] = ia[i] + ib[i];
             }
             return value_packed(res);
@@ -1364,16 +1392,20 @@ static Value native_packed_sub(int argc, Value *args) {
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
                 int i = 0;
-                for (; i <= sz - 4; i += 4) {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i <= sz - 4; i += 4) {
                     _mm256_storeu_pd(&dr[i], _mm256_sub_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
                 }
+#endif
                 for (; i < sz; i++) dr[i] = da[i] - db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
                 int i = 0;
-                for (; i <= sz - 4; i += 4) {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i <= sz - 4; i += 4) {
                     _mm256_storeu_si256((__m256i*)&ir[i], _mm256_sub_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
                 }
+#endif
                 for (; i < sz; i++) ir[i] = ia[i] - ib[i];
             }
             return value_packed(res);
@@ -1394,9 +1426,11 @@ static Value native_packed_mul(int argc, Value *args) {
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
                 int i = 0;
-                for (; i <= sz - 4; i += 4) {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+for (; i <= sz - 4; i += 4) {
                     _mm256_storeu_pd(&dr[i], _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
                 }
+#endif
                 for (; i < sz; i++) dr[i] = da[i] * db[i];
             } else {
                 int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
@@ -1418,14 +1452,17 @@ static Value native_packed_dot(int argc, Value *args) {
             int sz = pa->size;
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data;
-                __m256d sum_vec = _mm256_setzero_pd();
-                int i = 0;
-                for (; i <= sz - 4; i += 4) {
-                    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
-                }
-                double temp[4];
-                _mm256_storeu_pd(temp, sum_vec);
-                double sum = temp[0] + temp[1] + temp[2] + temp[3];
+                double sum = 0;
+int i = 0;
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+__m256d sum_vec = _mm256_setzero_pd();
+for (; i <= sz - 4; i += 4) {
+    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+}
+double temp[4];
+_mm256_storeu_pd(temp, sum_vec);
+sum = temp[0] + temp[1] + temp[2] + temp[3];
+#endif
                 for (; i < sz; i++) sum += da[i] * db[i];
                 return value_float(sum);
             } else {
@@ -1754,7 +1791,9 @@ static Value native_tensor_transpose(int argc, Value *args) {
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
+#endif
 
 static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
@@ -1776,16 +1815,19 @@ static Value native_tensor_matmul(int argc, Value *args) {
     
     for (int i = 0; i < rA; i++) {
         for (int j = 0; j < cB; j++) {
-            __m256d sum_vec = _mm256_setzero_pd();
-            int k = 0;
-            for (; k <= cA - 4; k += 4) {
-                __m256d va = _mm256_loadu_pd(&da[i * cA + k]);
-                __m256d vb = _mm256_set_pd(db[(k+3) * cB + j], db[(k+2) * cB + j], db[(k+1) * cB + j], db[k * cB + j]);
-                sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
-            }
-            double temp[4];
-            _mm256_storeu_pd(temp, sum_vec);
-            double sum = temp[0] + temp[1] + temp[2] + temp[3];
+            double sum = 0;
+int k = 0;
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+__m256d sum_vec = _mm256_setzero_pd();
+for (; k <= cA - 4; k += 4) {
+    __m256d va = _mm256_loadu_pd(&da[i * cA + k]);
+    __m256d vb = _mm256_set_pd(db[(k+3) * cB + j], db[(k+2) * cB + j], db[(k+1) * cB + j], db[k * cB + j]);
+    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
+}
+double temp[4];
+_mm256_storeu_pd(temp, sum_vec);
+sum = temp[0] + temp[1] + temp[2] + temp[3];
+#endif
             for (; k < cA; k++) sum += da[i * cA + k] * db[k * cB + j];
             dr[i * cB + j] = sum;
         }
