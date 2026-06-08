@@ -3,6 +3,23 @@
 #include <sys/mman.h>
 #else
 #include <windows.h>
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+#define MAP_PRIVATE 0
+#define MAP_ANONYMOUS 0
+#define MAP_FAILED NULL
+static void* mmap(void *addr, size_t length, int prot, int flags, int fd, size_t offset) {
+    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
+    return VirtualAlloc(NULL, length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+static int mprotect(void *addr, size_t len, int prot) {
+    DWORD oldProtect;
+    DWORD newProtect = PAGE_READONLY;
+    if ((prot & PROT_READ) && (prot & PROT_EXEC)) newProtect = PAGE_EXECUTE_READ;
+    else if ((prot & PROT_READ) && (prot & PROT_WRITE)) newProtect = PAGE_READWRITE;
+    return VirtualProtect(addr, len, newProtect, &oldProtect) ? 0 : -1;
+}
 #endif
 #include <string.h>
 #include <stdio.h>
