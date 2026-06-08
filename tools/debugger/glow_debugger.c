@@ -569,6 +569,10 @@ static void run_repl(void) {
  * ================================================================ */
 
 static void cmd_attach(pid_t pid) {
+#ifdef _WIN32
+    printf(CLR_RED "Attach via signal is not supported on Windows.\n" CLR_RESET);
+    (void)pid;
+#else
     printf(CLR_CYAN "Sending SIGUSR1 to GlowLang process %d...\n" CLR_RESET, pid);
     if (kill(pid, SIGUSR1) != 0) {
         perror(CLR_RED "Failed to send signal" CLR_RESET);
@@ -577,6 +581,7 @@ static void cmd_attach(pid_t pid) {
     printf(CLR_GREEN "Signal sent. Check process output for debug dump.\n" CLR_RESET);
     printf(CLR_DIM "Note: The GlowLang runtime must have a SIGUSR1 handler installed.\n" CLR_RESET);
     printf(CLR_DIM "Use --trace mode for full interactive debugging.\n" CLR_RESET);
+#endif
 }
 
 /* ================================================================
