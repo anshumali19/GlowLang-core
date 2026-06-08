@@ -18,16 +18,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
 #ifdef _WIN32
 #include <io.h>
+#include <process.h>
 #define access _access
+#define read _read
+#define write _write
+#define close _close
+typedef int ssize_t;
 #else
 #include <unistd.h>
-#endif
-#else
-#include <io.h>
-#include <process.h>
 #endif
 #include <ctype.h>
 

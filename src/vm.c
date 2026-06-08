@@ -431,6 +431,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         vm_stack[base_reg + i] = value_none();
     }
 
+#ifndef _MSC_VER
     static void* dt[] = {
         &&l_OP_CONST_INT, &&l_OP_CONST_FLOAT, &&l_OP_CONST_STRING, &&l_OP_CONST_BOOL,
         &&l_OP_LOAD_VAR, &&l_OP_STORE_VAR,
@@ -484,8 +485,142 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         &&l_OP_LT_INT, &&l_OP_GT_INT, &&l_OP_LTE_INT, &&l_OP_GTE_INT, &&l_OP_EQ_INT,
         &&l_OP_CALL_METHOD
     };
+#endif
 
 #define R(idx) vm_stack[base_reg + (idx)]
+
+#ifdef _MSC_VER
+#define DISPATCH() { \
+    if (profiling_active) pc->exec_count++; \
+    if (trace_mode) { \
+        printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
+        visualize_stack(base_reg, bc->local_count); \
+    } \
+    if (has_exception) goto l_OP_THROW; \
+    switch(pc->op) { \
+        case OP_CONST_INT: goto l_OP_CONST_INT; \
+        case OP_CONST_FLOAT: goto l_OP_CONST_FLOAT; \
+        case OP_CONST_STRING: goto l_OP_CONST_STRING; \
+        case OP_CONST_BOOL: goto l_OP_CONST_BOOL; \
+        case OP_LOAD_VAR: goto l_OP_LOAD_VAR; \
+        case OP_STORE_VAR: goto l_OP_STORE_VAR; \
+        case OP_ADD: goto l_OP_ADD; \
+        case OP_SUB: goto l_OP_SUB; \
+        case OP_MUL: goto l_OP_MUL; \
+        case OP_DIV: goto l_OP_DIV; \
+        case OP_MOD: goto l_OP_MOD; \
+        case OP_POW: goto l_OP_POW; \
+        case OP_NEG: goto l_OP_NEG; \
+        case OP_LT: goto l_OP_LT; \
+        case OP_GT: goto l_OP_GT; \
+        case OP_LTE: goto l_OP_LTE; \
+        case OP_GTE: goto l_OP_GTE; \
+        case OP_EQ: goto l_OP_EQ; \
+        case OP_NEQ: goto l_OP_NEQ; \
+        case OP_AND: goto l_OP_AND; \
+        case OP_OR: goto l_OP_OR; \
+        case OP_NOT: goto l_OP_NOT; \
+        case OP_JUMP: goto l_OP_JUMP; \
+        case OP_JUMP_IF_FALSE: goto l_OP_JUMP_IF_FALSE; \
+        case OP_JUMP_IF_TRUE: goto l_OP_JUMP_IF_TRUE; \
+        case OP_LEN: goto l_OP_LEN; \
+        case OP_RANGE: goto l_OP_RANGE; \
+        case OP_TYPE: goto l_OP_TYPE; \
+        case OP_APPEND: goto l_OP_APPEND; \
+        case OP_INPUT: goto l_OP_INPUT; \
+        case OP_SHOW: goto l_OP_SHOW; \
+        case OP_WRITE: goto l_OP_WRITE; \
+        case OP_LIST_LITERAL: goto l_OP_LIST_LITERAL; \
+        case OP_DICT_LITERAL: goto l_OP_DICT_LITERAL; \
+        case OP_INDEX: goto l_OP_INDEX; \
+        case OP_SLICE: goto l_OP_SLICE; \
+        case OP_STORE_INDEX: goto l_OP_STORE_INDEX; \
+        case OP_FUNC_DEF: goto l_OP_FUNC_DEF; \
+        case OP_CALL: goto l_OP_CALL; \
+        case OP_CALL_SELF_FAST: goto l_OP_CALL_SELF_FAST; \
+        case OP_TAIL_CALL: goto l_OP_TAIL_CALL; \
+        case OP_RETURN: goto l_OP_RETURN; \
+        case OP_FOR_EACH: goto l_OP_FOR_EACH; \
+        case OP_FOR_EACH_PAIR: goto l_OP_FOR_EACH_PAIR; \
+        case OP_STOP: goto l_OP_STOP; \
+        case OP_SKIP: goto l_OP_SKIP; \
+        case OP_POP: goto l_OP_POP; \
+        case OP_PUSH_SCOPE: goto l_OP_PUSH_SCOPE; \
+        case OP_POP_SCOPE: goto l_OP_POP_SCOPE; \
+        case OP_STORE_LET: goto l_OP_STORE_LET; \
+        case OP_LOAD_LOCAL: goto l_OP_LOAD_LOCAL; \
+        case OP_STORE_LOCAL: goto l_OP_STORE_LOCAL; \
+        case OP_DICT_KEYS: goto l_OP_DICT_KEYS; \
+        case OP_DICT_VALUES: goto l_OP_DICT_VALUES; \
+        case OP_DICT_HAS: goto l_OP_DICT_HAS; \
+        case OP_DICT_REMOVE: goto l_OP_DICT_REMOVE; \
+        case OP_DICT_MERGE: goto l_OP_DICT_MERGE; \
+        case OP_MATH_ABS: goto l_OP_MATH_ABS; \
+        case OP_MATH_MIN: goto l_OP_MATH_MIN; \
+        case OP_MATH_MAX: goto l_OP_MATH_MAX; \
+        case OP_MATH_ROUND: goto l_OP_MATH_ROUND; \
+        case OP_MATH_FLOOR: goto l_OP_MATH_FLOOR; \
+        case OP_MATH_CEIL: goto l_OP_MATH_CEIL; \
+        case OP_MATH_SQRT: goto l_OP_MATH_SQRT; \
+        case OP_STR_UPPER: goto l_OP_STR_UPPER; \
+        case OP_STR_LOWER: goto l_OP_STR_LOWER; \
+        case OP_STR_TRIM: goto l_OP_STR_TRIM; \
+        case OP_STR_FIND: goto l_OP_STR_FIND; \
+        case OP_STR_REPLACE: goto l_OP_STR_REPLACE; \
+        case OP_STR_STARTSWITH: goto l_OP_STR_STARTSWITH; \
+        case OP_STR_ENDSWITH: goto l_OP_STR_ENDSWITH; \
+        case OP_STR_SPLIT: goto l_OP_STR_SPLIT; \
+        case OP_LIST_PUSH: goto l_OP_LIST_PUSH; \
+        case OP_LIST_POP: goto l_OP_LIST_POP; \
+        case OP_LIST_INSERT: goto l_OP_LIST_INSERT; \
+        case OP_LIST_REMOVE: goto l_OP_LIST_REMOVE; \
+        case OP_LIST_CONTAINS: goto l_OP_LIST_CONTAINS; \
+        case OP_LIST_SORT: goto l_OP_LIST_SORT; \
+        case OP_LIST_REVERSE: goto l_OP_LIST_REVERSE; \
+        case OP_FILE_READ: goto l_OP_FILE_READ; \
+        case OP_FILE_WRITE: goto l_OP_FILE_WRITE; \
+        case OP_FILE_APPEND: goto l_OP_FILE_APPEND; \
+        case OP_FSTRING: goto l_OP_FSTRING; \
+        case OP_LIST_COMP: goto l_OP_LIST_COMP; \
+        case OP_THROW: goto l_OP_THROW; \
+        case OP_TRY_START: goto l_OP_TRY_START; \
+        case OP_TRY_END: goto l_OP_TRY_END; \
+        case OP_LAMBDA: goto l_OP_LAMBDA; \
+        case OP_CALL_VALUE: goto l_OP_CALL_VALUE; \
+        case OP_CLASS_DEF: goto l_OP_CLASS_DEF; \
+        case OP_METHOD_DEF: goto l_OP_METHOD_DEF; \
+        case OP_TRAIT_DEF: goto l_OP_TRAIT_DEF; \
+        case OP_USE_TRAIT: goto l_OP_USE_TRAIT; \
+        case OP_GET_PROPERTY: goto l_OP_GET_PROPERTY; \
+        case OP_SET_PROPERTY: goto l_OP_SET_PROPERTY; \
+        case OP_SPAWN: goto l_OP_SPAWN; \
+        case OP_MOVE: goto l_OP_MOVE; \
+        case OP_NOP: goto l_OP_NOP; \
+        case OP_TRACE_ENTER: goto l_OP_TRACE_ENTER; \
+        case OP_PACKED_ADD: goto l_OP_PACKED_ADD; \
+        case OP_PACKED_SUB: goto l_OP_PACKED_SUB; \
+        case OP_PACKED_MUL: goto l_OP_PACKED_MUL; \
+        case OP_PACKED_LOAD: goto l_OP_PACKED_LOAD; \
+        case OP_PACKED_STORE: goto l_OP_PACKED_STORE; \
+        case OP_PACKED_FUSED_MUL_ADD: goto l_OP_PACKED_FUSED_MUL_ADD; \
+        case OP_MATRIX_MUL: goto l_OP_MATRIX_MUL; \
+        case OP_SIMD_ADD: goto l_OP_SIMD_ADD; \
+        case OP_USE_FILE: goto l_OP_USE_FILE; \
+        case OP_ITER_START: goto l_OP_ITER_START; \
+        case OP_ITER_NEXT: goto l_OP_ITER_NEXT; \
+        case OP_IN: goto l_OP_IN; \
+        case OP_ADD_INT: goto l_OP_ADD_INT; \
+        case OP_SUB_INT: goto l_OP_SUB_INT; \
+        case OP_MUL_INT: goto l_OP_MUL_INT; \
+        case OP_LT_INT: goto l_OP_LT_INT; \
+        case OP_GT_INT: goto l_OP_GT_INT; \
+        case OP_LTE_INT: goto l_OP_LTE_INT; \
+        case OP_GTE_INT: goto l_OP_GTE_INT; \
+        case OP_EQ_INT: goto l_OP_EQ_INT; \
+        case OP_CALL_METHOD: goto l_OP_CALL_METHOD; \
+    } \
+}
+#else
 #define DISPATCH() { \
     if (profiling_active) pc->exec_count++; \
     if (trace_mode) { \
@@ -495,6 +630,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     if (__builtin_expect(has_exception, 0)) goto l_OP_THROW; \
     goto *dt[pc->op]; \
 }
+#endif
     l_DISPATCH: DISPATCH();
 
     l_OP_CONST_INT: R(pc->r0) = value_int(pc->arg); pc++; goto l_DISPATCH;
