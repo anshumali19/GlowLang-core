@@ -311,7 +311,7 @@ void print_bytecode(Bytecode *bc) {
 }
 
 Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
-    if (++call_depth > 100) {
+    if (++call_depth > 64000) {
         pending_exception = value_string_copy("Maximum recursion depth exceeded");
         has_exception = 1;
         call_depth--;
@@ -348,7 +348,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) do { \
     int _eval_new_base = (new_base_reg); \
-    if (__builtin_expect(call_depth + internal_depth >= 512, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
+    if (__builtin_expect(call_depth + internal_depth >= 64000, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
     frames[internal_depth].bc = bc; \
     frames[internal_depth].pc = pc; \
     frames[internal_depth].closure = current_closure; \
@@ -631,6 +631,12 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     goto *dt[pc->op]; \
 }
 #endif
+#ifdef _MSC_VER
+#define DISPATCH_CURRENT() goto l_DISPATCH
+#else
+#define DISPATCH_CURRENT() goto *dt[pc->op]
+#endif
+
     l_DISPATCH: DISPATCH();
 
     l_OP_CONST_INT: R(pc->r0) = value_int(pc->arg); pc++; goto l_DISPATCH;
@@ -1688,13 +1694,13 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         Trace *t = (Trace*)pc->trace;
         if (!t || !t->jit_code) {
             pc->op = pc->original_op;
-            goto *dt[pc->op];
+            DISPATCH_CURRENT();
         }
         typedef Value (*TraceFunc)(Value *R, int *pc_off);
         int off = 0;
         Value res = ((TraceFunc)t->jit_code)(&vm_stack[base_reg], &off);
-        if (IS_TRACE_EXIT(res)) { pc = bc->code + off; goto *dt[pc->op]; }
-        pc->op = pc->original_op; goto *dt[pc->op];
+        if (IS_TRACE_EXIT(res)) { pc = bc->code + off; DISPATCH_CURRENT(); }
+        pc->op = pc->original_op; DISPATCH_CURRENT();
     }
     l_OP_USE_FILE: {
         const char *path = (const char*)pc->ptr;

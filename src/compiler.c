@@ -6,7 +6,11 @@
 #ifndef _WIN32
 #include <sys/mman.h>
 #else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#define munmap(addr, size) VirtualFree(addr, 0, MEM_RELEASE)
 #endif
 
 #define MAX_LOOP_DEPTH 64

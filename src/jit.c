@@ -20,6 +20,10 @@ static int mprotect(void *addr, size_t len, int prot) {
     else if ((prot & PROT_READ) && (prot & PROT_WRITE)) newProtect = PAGE_READWRITE;
     return VirtualProtect(addr, len, newProtect, &oldProtect) ? 0 : -1;
 }
+static int munmap(void *addr, size_t length) {
+    (void)length;
+    return VirtualFree(addr, 0, MEM_RELEASE) ? 0 : -1;
+}
 #endif
 #include <string.h>
 #include <stdio.h>
