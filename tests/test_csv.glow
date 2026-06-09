@@ -1,0 +1,30 @@
+use "csv.glow"
+
+# Write a CSV file
+let w = writer("test_data.csv")
+w.writerow(["Name", "Age", "City"])
+w.writerows([["Alice", "24", "New York"], ["Bob", "30", "London"], ["Charlie", "28", "Paris"]])
+w.save()
+show "CSV written to test_data.csv"
+
+# Read the CSV file as lists
+let r = reader("test_data.csv")
+let rows = r.read()
+show "Read as rows:"
+let i = 0
+while i < len(rows):
+    show "  Row " , i , ": " , rows[i]
+    i = i + 1
+end
+
+# Read the CSV file as dicts
+let dicts = r.read_dict()
+show "Read as dictionaries:"
+let j = 0
+while j < len(dicts):
+    show "  Record " , j , ": " , dicts[j]
+    j = j + 1
+end
+
+# Clean up
+fs.remove("test_data.csv")
