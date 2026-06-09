@@ -1,0 +1,21 @@
+use "web.glow"
+
+show "Testing High-Level Web Module..."
+let web = WebClient()
+
+let resp = web.fetch("http://httpbin.org/get")
+if resp != none:
+    show "Status: " + str(resp.status)
+    let data = resp.to_json()
+    show "Fetched URL: " + data["url"]
+else:
+    show "Fetch failed!"
+end
+
+let payload = dict("name", "GlowLang", "version", "1.0")
+let post_resp = web.post("http://httpbin.org/post", payload)
+if post_resp != none:
+    show "POST Status: " + str(post_resp.status)
+    let post_data = post_resp.to_json()
+    show "Posted Data received back: " + post_data["data"]
+end

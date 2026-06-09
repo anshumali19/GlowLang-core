@@ -1,0 +1,25 @@
+use "vector.glow"
+use "subprocess.glow"
+
+show "==== Testing Math/Vector Module ===="
+let v1 = Vec2()
+v1.init(0.0, 0.0)
+
+let v2 = Vec2()
+v2.init(3.0, 4.0)
+
+let dist = v1.distance(v2)
+show "Distance between vectors:"
+show dist
+
+let v3 = v2.scale(2.0)
+show "Scaled v2:"
+v3.display()
+
+show ""
+show "==== Testing Subprocess Module ===="
+# We capture output of a standard OS command
+let sys_cmd = SubprocessManager()
+sys_cmd.init()
+let result = sys_cmd.run("echo 'Hello from OS Shell!'", true)
+result.display()
