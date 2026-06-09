@@ -1,3 +1,0 @@
-let arr = []
-append(arr, "Alice")
-show arr[0]

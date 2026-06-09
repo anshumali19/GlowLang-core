@@ -1,8 +1,0 @@
-
-let s = "hello world foo"
-let parts = s.split(" ")
-show parts
-show len(parts)
-show parts[0]
-show parts[1]
-

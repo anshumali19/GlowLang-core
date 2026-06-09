@@ -1,2 +1,0 @@
-use "lib/web.glow"
-show "loaded"
