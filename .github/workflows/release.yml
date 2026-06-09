@@ -95,7 +95,7 @@ jobs:
         uses: actions/download-artifact@v3
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz
