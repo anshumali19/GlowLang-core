@@ -1,0 +1,19 @@
+use "re.glow"
+
+let pattern = "^[A-Z][a-z]+$"
+
+show "Testing regex match (^[A-Z][a-z]+$):"
+show "  'Alice' -> " , match(pattern, "Alice")
+show "  'alice' -> " , match(pattern, "alice")
+show "  'ALICE' -> " , match(pattern, "ALICE")
+
+show ""
+show "Testing regex search ([0-9]+):"
+let num_pattern = "[0-9]+"
+show "  'Age is 42 years' -> " , search(num_pattern, "Age is 42 years")
+show "  'No numbers here' -> " , search(num_pattern, "No numbers here")
+
+show ""
+show "Testing RegExp class:"
+let r = compile("hello[0-9]")
+show "  compiled match 'hello5' -> " , r.match("hello5")
