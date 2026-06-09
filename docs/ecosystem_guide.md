@@ -21,7 +21,7 @@ use "lib/tensor_utils.glow"
 | `http` | HTTP client | `http.get(url)`, `http.post(url, body)` |
 | `tensor` | Tensor ops | `tensor.create(n)`, `tensor.zeros(n)`, `tensor.ones(n)`, `tensor.dot(a, b)` |
 
-## Package Manager (gdu)
+## Package Manager (gdu (Glow Dependency Utility))
 
 ```bash
 gdu init                   # Initialize project

@@ -72,6 +72,10 @@ static void emit_mov_r11_imm64(JITBuffer *buf, uint64_t imm) {
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbb); jit_emit_u64(buf, imm); 
 }
 
+static void emit_mov_r8_imm64(JITBuffer *buf, uint64_t imm) {
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xb8); jit_emit_u64(buf, imm); 
+}
+
 static void emit_mov_rax_reg(JITBuffer *buf, int reg) {
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x84); jit_emit_byte(buf, 0x24); jit_emit_u32(buf, reg * 8);
 }
@@ -105,7 +109,7 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             case OP_GET_PROPERTY: case OP_LT: case OP_GT: case OP_LTE:
             case OP_GTE: case OP_EQ: case OP_NEQ: case OP_JUMP:
             case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
-            case OP_CALL: case OP_CALL_VALUE:
+            case OP_CALL: case OP_CALL_VALUE: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
             case OP_SIMD_ADD: case OP_TAIL_CALL:
                 break;
@@ -279,6 +283,33 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 }
                 jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
                 uint32_t done = buf.size; *(uint32_t*)(buf.code + jmp_done + 1) = (uint32_t)(done - (jmp_done + 5));
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_CALL_METHOD: {
+                // RDI: obj (from pc->r1)
+                emit_mov_rax_reg(&buf, pc->r1); 
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
+                
+                // RSI: method name (from pc->ptr)
+                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
+                
+                // RDX: argc (from pc->arg)
+                emit_mov_rdx_imm64(&buf, (uint64_t)pc->arg);
+                
+                // RCX: args (R + pc->r2 * 8)
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12 (R base)
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, r2 offset
+                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd1); // mov rcx, r10
+                
+                // R8: orig_pc
+                emit_mov_r8_imm64(&buf, (uintptr_t)orig_pc);
+                
+                // Call jit_call_method_helper
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_method_helper);
+                jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0); // call rax
+                
+                // Store result
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }

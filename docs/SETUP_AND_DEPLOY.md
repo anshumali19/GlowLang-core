@@ -47,7 +47,7 @@ make all
 
 This produces:
 - `bin/glowlang` — The GlowLang interpreter + compiler
-- `bin/gdu` — The GlowLang package manager
+- `bin/gdu (Glow Dependency Utility)` — The GlowLang package manager
 
 ### Verify the build
 ```bash
@@ -196,8 +196,8 @@ cp editors/helix/queries/glowlang/highlights.scm ~/.config/helix/runtime/queries
 ```bash
 mkdir my-project && cd my-project
 
-# Initialize with gdu (GlowLang package manager)
-/path/to/GlowLang/bin/gdu init
+# Initialize with gdu (Glow Dependency Utility) (GlowLang package manager)
+/path/to/GlowLang/bin/gdu (Glow Dependency Utility) init
 
 # This creates:
 # - Glow.deps (dependency file)
@@ -230,7 +230,7 @@ use "lib/tensor_utils.glow"
 
 ---
 
-## Package Manager (gdu)
+## Package Manager (gdu (Glow Dependency Utility))
 
 ```bash
 # Initialize project

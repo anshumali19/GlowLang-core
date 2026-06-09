@@ -1,0 +1,107 @@
+name: GlowLang Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc make
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew update
+          brew install sqlite openssl flex bison
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install winflexbison3
+          vcpkg install openssl sqlite3:x64-windows
+
+      - name: Build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: make clean && make
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cmake -B build -S . -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+          cmake --build build --config Release
+
+      - name: Prepare Artifacts (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p release_package
+          cp bin/glowlang release_package/
+          cp bin/gdu release_package/
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            tar -czvf glowlang-linux-x64.tar.gz -C release_package glowlang gdu
+          else
+            tar -czvf glowlang-macos-x64.tar.gz -C release_package glowlang gdu
+          fi
+
+      - name: Prepare Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir release_package
+          # CMake creates a Release folder for MSVC generator
+          if (Test-Path "bin\Release\glowlang.exe") {
+            Copy-Item "bin\Release\glowlang.exe" -Destination "release_package\"
+            Copy-Item "bin\Release\gdu.exe" -Destination "release_package\"
+          } else {
+            Copy-Item "bin\glowlang.exe" -Destination "release_package\"
+            Copy-Item "bin\gdu.exe" -Destination "release_package\"
+          }
+          Compress-Archive -Path release_package\* -DestinationPath glowlang-windows-x64.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: glowlang-${{ matrix.os }}
+          path: |
+            glowlang-*.tar.gz
+            glowlang-*.zip
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz
+            glowlang-macos-latest/glowlang-macos-x64.tar.gz
+            glowlang-windows-latest/glowlang-windows-x64.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

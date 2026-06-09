@@ -36,7 +36,7 @@ Start the interactive interpreter by running the binary without arguments:
 
 GlowLang ships with a rich native ecosystem designed for backend services, AI/ML pipelines, and scripting:
 
-- **`gdu` Package Manager**: Install dependencies via `gdu install <pkg>`.
+- **`gdu (Glow Dependency Utility)` Package Manager**: Install dependencies via `gdu (Glow Dependency Utility) install <pkg>`.
 - **Native Modules**: 
   - `math`: Accelerated math functions (`sin`, `cos`, `sqrt`).
   - `crypto`: High-speed OpenSSL hashing (`sha256`).
