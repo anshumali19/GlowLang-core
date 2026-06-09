@@ -83,7 +83,7 @@ start_server(8080)
 
 ---
 
-## 3. Package Management with gdu
+## 3. Package Management with gdu (Glow Dependency Utility)
 
 ### Declaring Dependencies
 Create a `Glow.deps` file:

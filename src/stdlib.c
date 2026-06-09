@@ -159,15 +159,78 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
         }
         if (ot == OBJ_CLOSURE) {
             Closure *c = AS_CLOSURE(callee);
-            if (c->body) return run_bytecode(c->body, NULL, c, (int)(args - vm_stack));
+            if (c->body) return jit_call_helper(c->body->owner, argc, args, pc);
+            return value_none();
         }
         if (ot == OBJ_NATIVE_FUNC) {
+            NativeFunc *nf = AS_NATIVE_FUNC(callee);
             if (pc && pc->is_method) {
                 args++;
             }
             return AS_NATIVE_FUNC(callee)->func(argc, args);
         }
     }
+    return value_none();
+}
+
+Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
+    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
+    FuncEntry *fe = NULL;
+    NativeFuncPtr native_fe = NULL;
+    int is_native_dict_str_method = 0;
+    Value fallback_callee = value_none();
+    
+    if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(obj);
+        if(ot==OBJ_INSTANCE) {
+            Instance *inst = AS_INSTANCE(obj);
+            if (pc && pc->cache[0].key == inst->klass) {
+                fe = (FuncEntry*)pc->cache[0].val;
+            } else {
+                Value m = class_get_method(inst->klass, n);
+                if (GET_TYPE(m) == VAL_OBJECT && GET_OBJ_TYPE(m) == OBJ_BOUND_METHOD) {
+                    fe = AS_BOUND_METHOD(m)->method;
+                    if (pc) {
+                        pc->cache[0].key = inst->klass;
+                        pc->cache[0].val = (intptr_t)fe;
+                    }
+                }
+            }
+        }
+    } else if(GET_TYPE(obj)==VAL_DICT) {
+        if (strcmp(n, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "merge") == 0) { native_fe = native_dict_merge; is_native_dict_str_method = 1; }
+        else fallback_callee = dict_get(AS_DICT(obj), n);
+    } else if(GET_TYPE(obj)==VAL_STRING) {
+        if (strcmp(n, "contains") == 0) { native_fe = native_str_contains; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "find") == 0) { native_fe = native_str_find; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "slice") == 0) { native_fe = native_str_slice; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
+    }
+    
+    if (fe && fe->body) {
+        args[0] = obj;
+        Value old_self = var_get("self");
+        var_set("self", obj);
+        Value res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+        var_set("self", old_self);
+        return res;
+    } else if (native_fe && is_native_dict_str_method) {
+        Value temp_args[257];
+        temp_args[0] = obj;
+        int count = argc;
+        if (count > 254) count = 254;
+        int start_offset = (pc && pc->is_method) ? 1 : 0;
+        for (int i=0; i<count; i++) temp_args[i+1] = args[start_offset + i];
+        return native_fe(count + 1, temp_args);
+    } else if (GET_TYPE(fallback_callee) != VAL_NONE) {
+        return jit_call_helper_val(fallback_callee, argc, args, pc);
+    }
+    
+    runtime_error_thrown = 1;
     return value_none();
 }
 

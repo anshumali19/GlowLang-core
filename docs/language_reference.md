@@ -555,12 +555,12 @@ import "lib/utils.glow"         # Import local file
 import "lib/ai.glow"            # Import AI library
 ```
 
-### Remote Imports (via gdu)
+### Remote Imports (via gdu (Glow Dependency Utility))
 ```glow
 import "https://github.com/user/math.glow"
 ```
 
-The `gdu` package manager resolves remote URLs to locally cached files.
+The `gdu (Glow Dependency Utility)` package manager resolves remote URLs to locally cached files.
 
 ### Module Pattern
 ```glow

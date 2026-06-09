@@ -62,5 +62,5 @@ This runs:
 2. ASan build: no errors
 3. TSan build: no data races
 4. Parser fuzzer: 1000 iterations clean
-5. `gdu verify`: all packages pass SHA-256
+5. `gdu (Glow Dependency Utility) verify`: all packages pass SHA-256
 6. Documentation updated

@@ -244,15 +244,15 @@ my_project/
 # Import a local file
 import "lib/helpers.glow"
 
-# Import a remote package (via gdu)
+# Import a remote package (via gdu (Glow Dependency Utility))
 import "https://github.com/user/math.glow"
 ```
 
 ---
 
-## Package Management with gdu
+## Package Management with gdu (Glow Dependency Utility)
 
-GlowLang's built-in package manager `gdu` handles dependencies:
+GlowLang's built-in package manager `gdu (Glow Dependency Utility)` handles dependencies:
 
 ```bash
 # Add a dependency

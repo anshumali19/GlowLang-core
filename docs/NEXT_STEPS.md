@@ -20,7 +20,7 @@
 - [x] **Phase 11: Traits (Modular Reuse)**.
     - Added `trait` / `end` blocks.
     - Implemented `use` keyword for class composition.
-- [x] **Phase 13: `gdu` Package Manager (Production-Ready)**.
+- [x] **Phase 13: `gdu (Glow Dependency Utility)` Package Manager (Production-Ready)**.
     - Implemented `Glow.lock` for project reproducibility.
     - Added DJB2-based file hash verification for security.
 - [x] **Phase 14: Standard Library (Initial Modules)**.
