@@ -343,12 +343,17 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         int my_frame_idx;
         int old_top;
     } VMFrame;
-    VMFrame frames[512];
+    int frames_capacity = 512;
+    VMFrame *frames = malloc(frames_capacity * sizeof(VMFrame));
     int internal_depth = 0;
 
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) do { \
     int _eval_new_base = (new_base_reg); \
     if (__builtin_expect(call_depth + internal_depth >= 64000, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
+    if (__builtin_expect(internal_depth >= frames_capacity, 0)) { \
+        frames_capacity *= 2; \
+        frames = realloc(frames, frames_capacity * sizeof(VMFrame)); \
+    } \
     frames[internal_depth].bc = bc; \
     frames[internal_depth].pc = pc; \
     frames[internal_depth].closure = current_closure; \
@@ -395,6 +400,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         } else {
             Value ret_val = res;
             if (internal_depth == 0) {
+                free(frames);
                 return ret_val;
             } else {
                 call_stack_pop();
@@ -1969,6 +1975,7 @@ l_FINISH:
     gc_free_stack_arena_range(old_arena_used, stack_arena_used);
     stack_arena_used = old_arena_used;
     call_depth--;
+    free(frames);
     return (has_exception) ? value_none() : R(0);
 }
 

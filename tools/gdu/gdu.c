@@ -545,7 +545,41 @@ int install_package(const char *name, const char *version, const char *url) {
 }
 
 /* ================================================================
- *  COMMANDS
+ *  TOOLCHAIN INSTALLER
+ * ================================================================ */
+static void install_glowlang_toolchain() {
+    printf("\033[36m[GlowLang Installer]\033[0m Starting installation of the GlowLang Toolchain...\n");
+    
+#ifdef _WIN32
+    printf("Fetching source and compiling optimized release for Windows...\n");
+    const char *cmd = "mkdir %USERPROFILE%\\.glowlang 2>nul & cd %USERPROFILE%\\.glowlang & git clone https://github.com/anshumali19/GlowLang.git . & cmake -B build -S . & cmake --build build --config Release";
+    if (system(cmd) == 0) {
+        printf("\033[32mInstallation complete!\033[0m\n");
+        printf("Configuring PATH...\n");
+        (void)system("setx PATH \"%PATH%;%USERPROFILE%\\.glowlang\\bin\\Release\"");
+        printf("\033[32mSuccessfully added to PATH!\033[0m\n");
+        printf("Please restart your terminal to start using `glowlang`.\n");
+    } else {
+        printf("\033[31mInstallation failed.\033[0m\n");
+    }
+#else
+    printf("Fetching source and compiling optimized release for POSIX...\n");
+    const char *cmd = "rm -rf ~/.glowlang && git clone https://github.com/anshumali19/GlowLang.git ~/.glowlang && cd ~/.glowlang && make clean && make";
+    if (system(cmd) == 0) {
+        printf("\033[32mInstallation complete!\033[0m\n");
+        printf("Configuring PATH...\n");
+        (void)system("echo '\n# GlowLang' >> ~/.bashrc; echo 'export PATH=\"$HOME/.glowlang/bin:$PATH\"' >> ~/.bashrc");
+        (void)system("echo '\n# GlowLang' >> ~/.zshrc; echo 'export PATH=\"$HOME/.glowlang/bin:$PATH\"' >> ~/.zshrc 2>/dev/null");
+        printf("\033[32mSuccessfully added to PATH in ~/.bashrc and ~/.zshrc!\033[0m\n");
+        printf("Please run \033[33msource ~/.bashrc\033[0m or restart your terminal to start using `glowlang`.\n");
+    } else {
+        printf("\033[31mInstallation failed.\033[0m\n");
+    }
+#endif
+}
+
+/* ================================================================
+ *  CLI COMMANDS
  * ================================================================ */
 void print_help(void) {
     printf("GlowLang Package Manager (gdu) v2.0\n");
@@ -691,6 +725,12 @@ void cmd_remove(int argc, char **argv) {
 
 void cmd_install(int argc, char **argv) {
     if (argc >= 3) {
+        /* Intercept toolchain installation */
+        if (strcmp(argv[2], "glowlang") == 0) {
+            install_glowlang_toolchain();
+            return;
+        }
+
         /* Install a specific package */
         char name[MAX_NAME] = {0};
         char version[MAX_VER] = "1.0.0";
