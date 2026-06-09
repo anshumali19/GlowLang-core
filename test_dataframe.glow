@@ -1,0 +1,24 @@
+use "dataframe.glow"
+
+show "Testing DataFrames in GlowLang..."
+
+# 1. Load the Table
+let dt = read_table("test_data.csv")
+dt.display(none)
+
+# 2. Natural Filtering
+show ""
+show "--- Filtering where City is 'London' ---"
+let londoners = dt.where("City", "is", "London")
+londoners.display(none)
+
+# 3. Natural Selection
+show ""
+show "--- Selecting only 'Name' and 'Age' ---"
+let partial = dt.select(["Name", "Age"])
+partial.display(none)
+
+# 4. Method Chaining (Pure Natural Logic)
+show ""
+show "--- Chaining: Find 'Paris' and Show Names ---"
+dt.where("City", "is", "Paris").select(["Name"]).display(none)
