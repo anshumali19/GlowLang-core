@@ -63,12 +63,15 @@ target_include_directories(glowlang PRIVATE src ${CMAKE_CURRENT_BINARY_DIR})
 
 # Libraries to link
 target_link_libraries(glowlang PRIVATE
-    m
     Threads::Threads
     OpenSSL::SSL
     OpenSSL::Crypto
     SQLite::SQLite3
 )
+
+if(NOT MSVC)
+    target_link_libraries(glowlang PRIVATE m)
+endif()
 
 if(UNIX AND NOT APPLE AND X11_FOUND)
     target_link_libraries(glowlang PRIVATE X11::X11)
