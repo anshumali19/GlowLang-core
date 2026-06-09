@@ -1,0 +1,136 @@
+# dataframe.glow
+# Natural Language Data Tables for GlowLang
+
+use "csv.glow"
+
+class Table:
+    func init(columns, rows):
+        self.columns = columns
+        self.rows = rows
+    end
+    
+    func display(limit):
+        if limit == none:
+            limit = 5
+        end
+        
+        show "==== Data Table (", len(self.rows), " rows) ===="
+        show "Columns: ", self.columns
+        
+        let i = 0
+        while i < len(self.rows):
+            if i < limit:
+                show "  [", i, "] ", self.rows[i]
+                i = i + 1
+            else:
+                i = len(self.rows)
+            end
+        end
+        if len(self.rows) > limit:
+            show "  ... (", len(self.rows) - limit, " more rows hidden)"
+        end
+        show "====================================="
+    end
+    
+    func _get_col_idx(col_name):
+        let i = 0
+        while i < len(self.columns):
+            if self.columns[i] == col_name:
+                return i
+            end
+            i = i + 1
+        end
+        return -1
+    end
+    
+    func select(column_names):
+        let indices = []
+        let i = 0
+        while i < len(column_names):
+            append(indices, self._get_col_idx(column_names[i]))
+            i = i + 1
+        end
+        
+        let new_rows = []
+        let r = 0
+        while r < len(self.rows):
+            let old_row = self.rows[r]
+            let new_row = []
+            let c = 0
+            while c < len(indices):
+                append(new_row, old_row[indices[c]])
+                c = c + 1
+            end
+            append(new_rows, new_row)
+            r = r + 1
+        end
+        
+        let t = Table()
+        t.init(column_names, new_rows)
+        return t
+    end
+    
+    func where(col_name, operator, target_value):
+        let idx = self._get_col_idx(col_name)
+        if idx == -1:
+            return self
+        end
+        
+        let target_str = target_value
+        let new_rows = []
+        
+        let r = 0
+        while r < len(self.rows):
+            let cell = self.rows[r][idx]
+            let match = false
+            
+            if operator == "is":
+                match = (cell == target_str)
+            end
+            if operator == "is_not":
+                match = (cell != target_str)
+            end
+            if operator == "contains":
+                # Using native string contains if available, else simple fallback
+                # Assuming `contains` method on strings is native in GlowLang (which we saw earlier)
+                match = cell.contains(target_str)
+            end
+            
+            if match:
+                append(new_rows, self.rows[r])
+            end
+            r = r + 1
+        end
+        
+        let t = Table()
+        t.init(self.columns, new_rows)
+        return t
+    end
+end
+
+func read_table(filepath):
+    let r = reader(filepath)
+    let all_rows = r.read()
+    
+    if len(all_rows) == 0:
+        let t = Table()
+        t.init([], [])
+        return t
+    end
+    
+    let columns = all_rows[0]
+    let data_rows = []
+    
+    let i = 1
+    while i < len(all_rows):
+        # Prevent empty rows from being added
+        if len(all_rows[i]) == len(columns):
+            append(data_rows, all_rows[i])
+        end
+        i = i + 1
+    end
+    
+    let t = Table()
+    t.init(columns, data_rows)
+    return t
+end
