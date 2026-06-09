@@ -1313,5 +1313,13 @@ void compile(Node *n) {
     compile_stmt(n);
 }
 
-void yyerror(const char *s) { fprintf(stderr, "Error: %s at line %d\n", s, line_num); }
+void yyerror(const char *s) { 
+    fprintf(stderr, "\033[31mSyntaxError:\033[0m %s\n\n", s);
+    if (compiling_file) {
+        print_error_line(compiling_file, line_num);
+        fprintf(stderr, "\n  in %s:%d\n\n", compiling_file, line_num);
+    } else {
+        fprintf(stderr, "  at line %d\n\n", line_num);
+    }
+}
 

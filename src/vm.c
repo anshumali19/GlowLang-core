@@ -246,7 +246,7 @@ void print_error_line(const char *file, int line) {
 }
 
 void print_error_trace(Value exception) {
-    fprintf(stderr, "Uncaught Exception: ");
+    fprintf(stderr, "\033[31mRuntimeError:\033[0m ");
     if (exception == 0) { fprintf(stderr, "none"); }
     else if (((exception) & MASK_NAN) != MASK_NAN) { fprintf(stderr, "%g", AS_FLOAT(exception)); }
     else {
@@ -268,8 +268,10 @@ void print_error_trace(Value exception) {
     // Print source context for the actual error location
     if (error_file && error_line > 0) {
         print_error_line(error_file, error_line);
+        fprintf(stderr, "\n  in %s:%d\n\n", error_file, error_line);
+    } else {
+        fprintf(stderr, "\n");
     }
-    fprintf(stderr, "\n");
 
     if (exception_stack_trace) {
         fprintf(stderr, "%s", exception_stack_trace);

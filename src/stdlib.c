@@ -647,25 +647,78 @@ void list_push(List *l, Value v) {
     if (l->size >= l->capacity) { l->capacity = (l->capacity == 0) ? 4 : l->capacity * 2; l->items = realloc(l->items, sizeof(Value)*l->capacity); } l->items[l->size++] = v;
 }
 
+#define TENSOR_POOL_MAX_BINS 32
+typedef struct FreeBlock {
+    struct FreeBlock *next;
+} FreeBlock;
+
+static FreeBlock *tensor_pool[TENSOR_POOL_MAX_BINS];
+static pthread_mutex_t pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int get_bin(size_t size) {
+    int bin = 0;
+    size_t s = 32;
+    while (s < size && bin < TENSOR_POOL_MAX_BINS - 1) {
+        s *= 2;
+        bin++;
+    }
+    return bin;
+}
+
+void* tensor_malloc(size_t size) {
+    if (size == 0) return NULL;
+    int bin = get_bin(size);
+    pthread_mutex_lock(&pool_mutex);
+    if (tensor_pool[bin]) {
+        void *ptr = tensor_pool[bin];
+        tensor_pool[bin] = tensor_pool[bin]->next;
+        pthread_mutex_unlock(&pool_mutex);
+        return ptr;
+    }
+    pthread_mutex_unlock(&pool_mutex);
+    size_t alloc_size = 32;
+    for (int i = 0; i < bin; i++) alloc_size *= 2;
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, 32, alloc_size) != 0) return NULL;
+    return ptr;
+}
+
+void tensor_free(void *ptr, size_t size) {
+    if (!ptr || size == 0) return;
+    int bin = get_bin(size);
+    pthread_mutex_lock(&pool_mutex);
+    FreeBlock *block = (FreeBlock*)ptr;
+    block->next = tensor_pool[bin];
+    tensor_pool[bin] = block;
+    pthread_mutex_unlock(&pool_mutex);
+}
+
 PackedArray* packed_array_new(PackedType type, int capacity) {
     PackedArray *pa = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
     pa->type = type;
     size_t elem_sz = (type == PACKED_INT64) ? sizeof(int64_t) : sizeof(double);
     if (capacity > 0) {
-        if (posix_memalign(&pa->data, 32, capacity * elem_sz) != 0) {
-            pa->data = NULL;
-            pa->size = 0;
-            pa->capacity = 0;
-        } else {
+        pa->data = tensor_malloc(capacity * elem_sz);
+        if (pa->data) {
             pa->size = capacity;
             pa->capacity = capacity;
             memset(pa->data, 0, capacity * elem_sz);
+        } else {
+            pa->size = 0;
+            pa->capacity = 0;
         }
     } else {
         pa->data = NULL;
         pa->size = 0;
         pa->capacity = 0;
     }
+    pa->ndims = 1;
+    pa->shape[0] = capacity;
+    pa->strides[0] = 1;
+    pa->offset = 0;
+    pa->is_view = false;
+    pa->base = NULL;
+    strcpy(pa->device, "cpu");
     return pa;
 }
 
@@ -1172,6 +1225,10 @@ Value native_str_split(int argc, Value *args) {
     
     List *l = list_new(8);
     
+    // Pause GC during split to protect the unrooted list 'l' and its items
+    size_t old_gc_thresh = gc_threshold;
+    gc_threshold = (size_t)-1;
+
     size_t delim_len = strlen(delim);
     if (delim_len == 0) {
         int len = strlen(s);
@@ -1179,6 +1236,7 @@ Value native_str_split(int argc, Value *args) {
             char buf[2] = { s[i], '\0' };
             list_push(l, value_string_copy(buf));
         }
+        gc_threshold = old_gc_thresh;
         return value_list(l);
     }
     
@@ -1196,6 +1254,7 @@ Value native_str_split(int argc, Value *args) {
     }
     list_push(l, value_string_copy(current));
     
+    gc_threshold = old_gc_thresh;
     return value_list(l);
 }
 
@@ -1417,6 +1476,63 @@ static Value http_request_native(int argc, Value *args) {
 
 static Value os_time(int argc, Value *args) { (void)argc; (void)args; struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
+#include <time.h>
+static Value os_format_time(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    const char *format = AS_STRING(args[0]);
+    double ts = val_to_double(args[1]);
+    time_t rawtime = (time_t)ts;
+    struct tm *timeinfo = localtime(&rawtime);
+    char buffer[256];
+    strftime(buffer, sizeof(buffer), format, timeinfo);
+    return value_string_copy(buffer);
+}
+
+#ifndef _WIN32
+#include <regex.h>
+#endif
+
+static Value native_re_match(int argc, Value *args) {
+#ifndef _WIN32
+    if (argc < 2) return value_bool(0);
+    const char *pattern = AS_STRING(args[0]);
+    const char *text = AS_STRING(args[1]);
+    regex_t regex;
+    int reti = regcomp(&regex, pattern, REG_EXTENDED);
+    if (reti) return value_bool(0);
+    reti = regexec(&regex, text, 0, NULL, 0);
+    regfree(&regex);
+    return value_bool(!reti);
+#else
+    return value_bool(0);
+#endif
+}
+
+static Value native_re_search(int argc, Value *args) {
+#ifndef _WIN32
+    if (argc < 2) return value_none();
+    const char *pattern = AS_STRING(args[0]);
+    const char *text = AS_STRING(args[1]);
+    regex_t regex;
+    regmatch_t pmatch[1];
+    if (regcomp(&regex, pattern, REG_EXTENDED)) return value_none();
+    if (regexec(&regex, text, 1, pmatch, 0) == 0) {
+        int len = pmatch[0].rm_eo - pmatch[0].rm_so;
+        char *matched = malloc(len + 1);
+        strncpy(matched, text + pmatch[0].rm_so, len);
+        matched[len] = '\0';
+        regfree(&regex);
+        Value res = value_string_copy(matched);
+        free(matched);
+        return res;
+    }
+    regfree(&regex);
+    return value_none();
+#else
+    return value_none();
+#endif
+}
+
 static SSL_CTX *ssl_ctx = NULL;
 static void ssl_init_native() { SSL_library_init(); OpenSSL_add_all_algorithms(); SSL_load_error_strings(); ssl_ctx = SSL_CTX_new(TLS_server_method()); }
 static Value ssl_listen(int argc, Value *args) {
@@ -1506,30 +1622,55 @@ static Value native_packed_add(int argc, Value *args) {
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
         GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
-        if (pa->type == pb->type && pa->size == pb->size) {
-            PackedArray *res = packed_array_new(pa->type, pa->size);
-            int sz = pa->size;
-            if (pa->type == PACKED_FLOAT64) {
-                double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                int i = 0;
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i <= sz - 4; i += 4) {
-                    _mm256_storeu_pd(&dr[i], _mm256_add_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+        if (pa->type == pb->type) {
+            if (pa->size == pb->size) {
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    int i = 0;
+                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                    for (; i <= sz - 4; i += 4) {
+                        _mm256_storeu_pd(&dr[i], _mm256_add_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                    }
+                    #endif
+                    for (; i < sz; i++) dr[i] = da[i] + db[i];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    int i = 0;
+                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                    for (; i <= sz - 4; i += 4) {
+                        _mm256_storeu_si256((__m256i*)&ir[i], _mm256_add_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
+                    }
+                    #endif
+                    for (; i < sz; i++) ir[i] = ia[i] + ib[i];
                 }
-#endif
-                for (; i < sz; i++) dr[i] = da[i] + db[i];
+                // Copy shape from pa
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
+            } else if (pa->size % pb->size == 0) { // Broadcast bias to tensor
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                int bsz = pb->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    for (int i=0; i<sz; i++) dr[i] = da[i] + db[i % bsz];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    for (int i=0; i<sz; i++) ir[i] = ia[i] + ib[i % bsz];
+                }
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
             } else {
-                int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                int i = 0;
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i <= sz - 4; i += 4) {
-                    _mm256_storeu_si256((__m256i*)&ir[i], _mm256_add_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
-                }
-#endif
-                for (; i < sz; i++) ir[i] = ia[i] + ib[i];
+                printf("tensor.add fail: pa->size = %d, pb->size = %d\n", pa->size, pb->size);
             }
-            return value_packed(res);
+        } else {
+            printf("tensor.add fail: pa->type = %d, pb->type = %d\n", pa->type, pb->type);
         }
+    } else {
+        printf("tensor.add fail: arg type mismatch. a=%d, b=%d\n", GET_TYPE(a), GET_TYPE(b));
     }
     return value_none();
 }
@@ -1540,29 +1681,47 @@ static Value native_packed_sub(int argc, Value *args) {
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
         GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
-        if (pa->type == pb->type && pa->size == pb->size) {
-            PackedArray *res = packed_array_new(pa->type, pa->size);
-            int sz = pa->size;
-            if (pa->type == PACKED_FLOAT64) {
-                double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                int i = 0;
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i <= sz - 4; i += 4) {
-                    _mm256_storeu_pd(&dr[i], _mm256_sub_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+        if (pa->type == pb->type) {
+            if (pa->size == pb->size) {
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    int i = 0;
+                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                    for (; i <= sz - 4; i += 4) {
+                        _mm256_storeu_pd(&dr[i], _mm256_sub_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                    }
+                    #endif
+                    for (; i < sz; i++) dr[i] = da[i] - db[i];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    int i = 0;
+                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                    for (; i <= sz - 4; i += 4) {
+                        _mm256_storeu_si256((__m256i*)&ir[i], _mm256_sub_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
+                    }
+                    #endif
+                    for (; i < sz; i++) ir[i] = ia[i] - ib[i];
                 }
-#endif
-                for (; i < sz; i++) dr[i] = da[i] - db[i];
-            } else {
-                int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                int i = 0;
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i <= sz - 4; i += 4) {
-                    _mm256_storeu_si256((__m256i*)&ir[i], _mm256_sub_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
+            } else if (pa->size % pb->size == 0) {
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                int bsz = pb->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    for (int i=0; i<sz; i++) dr[i] = da[i] - db[i % bsz];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    for (int i=0; i<sz; i++) ir[i] = ia[i] - ib[i % bsz];
                 }
-#endif
-                for (; i < sz; i++) ir[i] = ia[i] - ib[i];
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
             }
-            return value_packed(res);
         }
     }
     return value_none();
@@ -1574,23 +1733,43 @@ static Value native_packed_mul(int argc, Value *args) {
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
         GET_TYPE(b) == VAL_OBJECT && GET_OBJ_TYPE(b) == OBJ_PACKED_ARRAY) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
-        if (pa->type == pb->type && pa->size == pb->size) {
-            PackedArray *res = packed_array_new(pa->type, pa->size);
-            int sz = pa->size;
-            if (pa->type == PACKED_FLOAT64) {
-                double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                int i = 0;
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i <= sz - 4; i += 4) {
-                    _mm256_storeu_pd(&dr[i], _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+        if (pa->type == pb->type) {
+            if (pa->size == pb->size) {
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    int i = 0;
+                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                    for (; i <= sz - 4; i += 4) {
+                        _mm256_storeu_pd(&dr[i], _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
+                    }
+                    #endif
+                    for (; i < sz; i++) dr[i] = da[i] * db[i];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    int i = 0;
+                    // No direct 64-bit integer multiplication in AVX2, simple loop
+                    for (; i < sz; i++) ir[i] = ia[i] * ib[i];
                 }
-#endif
-                for (; i < sz; i++) dr[i] = da[i] * db[i];
-            } else {
-                int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                for (int i=0; i<sz; i++) ir[i] = ia[i] * ib[i]; // No native AVX2 64-bit multiply
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
+            } else if (pa->size % pb->size == 0) {
+                PackedArray *res = packed_array_new(pa->type, pa->size);
+                int sz = pa->size;
+                int bsz = pb->size;
+                if (pa->type == PACKED_FLOAT64) {
+                    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+                    for (int i=0; i<sz; i++) dr[i] = da[i] * db[i % bsz];
+                } else {
+                    int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
+                    for (int i=0; i<sz; i++) ir[i] = ia[i] * ib[i % bsz];
+                }
+                res->ndims = pa->ndims;
+                for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
+                return value_packed(res);
             }
-            return value_packed(res);
         }
     }
     return value_none();
@@ -1908,25 +2087,142 @@ static Value native_tensor_zeros(int argc, Value *args) {
 }
 
 static Value native_tensor_get(int argc, Value *args) {
-    if (argc < 2 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY || (GET_TYPE(args[1]) != VAL_INT && GET_TYPE(args[1]) != VAL_FLOAT)) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    int idx = 0;
+    if (GET_TYPE(args[1]) == VAL_INT || GET_TYPE(args[1]) == VAL_FLOAT) {
+        idx = (int)val_to_double(args[1]);
+    } else if (GET_TYPE(args[1]) == VAL_OBJECT && GET_OBJ_TYPE(args[1]) == OBJ_LIST) {
+        List *idx_list = (List*)(uintptr_t)(args[1] & MASK_PAYLOAD);
+        if (idx_list->size != pa->ndims) return value_none();
+        for (int i = 0; i < pa->ndims; i++) {
+            int dim_idx = (int)val_to_double(idx_list->items[i]);
+            if (dim_idx < 0 || dim_idx >= pa->shape[i]) return value_none(); // Out of bounds
+            idx += dim_idx * pa->strides[i];
+        }
+    } else {
         return value_none();
     }
-    int idx = (int)val_to_double(args[1]);
-    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    
+    idx += pa->offset;
     if (idx < 0 || idx >= pa->size) return value_none();
     return packed_array_get(pa, idx);
 }
 
 static Value native_tensor_set(int argc, Value *args) {
-    if (argc < 3 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY || (GET_TYPE(args[1]) != VAL_INT && GET_TYPE(args[1]) != VAL_FLOAT)) {
+    if (argc < 3 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    int idx = 0;
+    if (GET_TYPE(args[1]) == VAL_INT || GET_TYPE(args[1]) == VAL_FLOAT) {
+        idx = (int)val_to_double(args[1]);
+    } else if (GET_TYPE(args[1]) == VAL_OBJECT && GET_OBJ_TYPE(args[1]) == OBJ_LIST) {
+        List *idx_list = (List*)(uintptr_t)(args[1] & MASK_PAYLOAD);
+        if (idx_list->size != pa->ndims) return value_none();
+        for (int i = 0; i < pa->ndims; i++) {
+            int dim_idx = (int)val_to_double(idx_list->items[i]);
+            if (dim_idx < 0 || dim_idx >= pa->shape[i]) return value_none(); // Out of bounds
+            idx += dim_idx * pa->strides[i];
+        }
+    } else {
         return value_none();
     }
-    int idx = (int)val_to_double(args[1]);
-    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    
+    idx += pa->offset;
     if (idx >= 0 && idx < pa->size) {
         packed_array_set(pa, idx, args[2]);
     }
     return value_none();
+}
+
+static Value native_tensor_shape(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    List *l = list_new(pa->ndims);
+    for (int i = 0; i < pa->ndims; i++) {
+        list_push(l, value_int(pa->shape[i]));
+    }
+    return value_list(l);
+}
+
+static Value native_tensor_reshape(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) {
+        printf("reshape fail: invalid arg0\n");
+        return value_none();
+    }
+    PackedArray *orig = AS_PACKED_ARRAY(args[0]);
+    if (GET_TYPE(args[1]) == VAL_OBJECT && GET_OBJ_TYPE(args[1]) == OBJ_PACKED_ARRAY) {
+        PackedArray *pa = AS_PACKED_ARRAY(args[1]);
+        int new_shape[8];
+        int new_ndims = pa->size;
+        if (new_ndims > 8) return value_none();
+        int total_elements = 1;
+        for(int i=0; i<new_ndims; i++) {
+            new_shape[i] = (int)val_to_double(packed_array_get(pa, i));
+            total_elements *= new_shape[i];
+        }
+        if (total_elements != orig->size) return value_none();
+        
+        PackedArray *view = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
+        view->type = orig->type;
+        view->size = orig->size;
+        view->capacity = orig->capacity;
+        view->data = orig->data;
+        view->is_view = true;
+        view->base = orig->base ? orig->base : orig;
+        
+        view->ndims = new_ndims;
+        int current_stride = 1;
+        for (int i = new_ndims - 1; i >= 0; i--) {
+            view->shape[i] = new_shape[i];
+            view->strides[i] = current_stride;
+            current_stride *= new_shape[i];
+        }
+        view->offset = orig->offset;
+        return value_packed(view);
+    }
+    if (GET_TYPE(args[1]) != VAL_LIST) {
+        printf("reshape fail: arg1 is not a list or packed array. type = %d\n", GET_TYPE(args[1]));
+        return value_none();
+    }
+    List *shape_list = (List*)(uintptr_t)(args[1] & MASK_PAYLOAD);
+    
+    int new_shape[8];
+    int new_ndims = shape_list->size;
+    if (new_ndims > 8) {
+        printf("reshape fail: ndims > 8\n");
+        return value_none();
+    }
+    
+    int total_elements = 1;
+    for (int i = 0; i < new_ndims; i++) {
+        new_shape[i] = (int)val_to_double(shape_list->items[i]);
+        total_elements *= new_shape[i];
+    }
+    
+    if (total_elements != orig->size) {
+        printf("reshape fail: size mismatch. expected %d got %d\n", orig->size, total_elements);
+        return value_none();
+    }
+    
+    // Create view
+    PackedArray *view = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
+    view->type = orig->type;
+    view->size = orig->size;
+    view->capacity = orig->capacity;
+    view->data = orig->data;
+    view->is_view = true;
+    view->base = orig->base ? orig->base : orig;
+    
+    view->ndims = new_ndims;
+    int current_stride = 1;
+    for (int i = new_ndims - 1; i >= 0; i--) {
+        view->shape[i] = new_shape[i];
+        view->strides[i] = current_stride;
+        current_stride *= new_shape[i];
+    }
+    view->offset = orig->offset;
+    
+    return value_packed(view);
 }
 
 static Value native_tensor_transpose(int argc, Value *args) {
@@ -1941,13 +2237,54 @@ static Value native_tensor_transpose(int argc, Value *args) {
         double *s = (double*)src->data, *r = (double*)res->data;
         for (int i = 0; i < rows; i++) for (int j = 0; j < cols; j++) r[j * rows + i] = s[i * cols + j];
     }
+    
+    res->ndims = 2;
+    res->shape[0] = cols;
+    res->shape[1] = rows;
+    res->strides[0] = rows;
+    res->strides[1] = 1;
+    
     return value_packed(res);
 }
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_WIN32)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
 #endif
+
+typedef struct {
+    int start_row;
+    int end_row;
+    double *da;
+    double *db;
+    double *dr;
+    int cA;
+    int cB;
+} MatmulThreadData;
+
+static void* matmul_worker(void* arg) {
+    MatmulThreadData *data = (MatmulThreadData*)arg;
+    for (int i = data->start_row; i < data->end_row; i++) {
+        for (int j = 0; j < data->cB; j++) {
+            double sum = 0;
+            int k = 0;
+            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+            __m256d sum_vec = _mm256_setzero_pd();
+            for (; k <= data->cA - 4; k += 4) {
+                __m256d va = _mm256_loadu_pd(&data->da[i * data->cA + k]);
+                __m256d vb = _mm256_set_pd(data->db[(k+3) * data->cB + j], data->db[(k+2) * data->cB + j], data->db[(k+1) * data->cB + j], data->db[k * data->cB + j]);
+                sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
+            }
+            double temp[4];
+            _mm256_storeu_pd(temp, sum_vec);
+            sum = temp[0] + temp[1] + temp[2] + temp[3];
+            #endif
+            for (; k < data->cA; k++) sum += data->da[i * data->cA + k] * data->db[k * data->cB + j];
+            data->dr[i * data->cB + j] = sum;
+        }
+    }
+    return NULL;
+}
 
 static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
@@ -1965,30 +2302,44 @@ static Value native_tensor_matmul(int argc, Value *args) {
     
     PackedArray *res = packed_array_new(pa->type, rA * cB);
     if (!res || !res->data) return value_none();
-    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
     
-    for (int i = 0; i < rA; i++) {
-        for (int j = 0; j < cB; j++) {
-            double sum = 0;
-int k = 0;
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-__m256d sum_vec = _mm256_setzero_pd();
-for (; k <= cA - 4; k += 4) {
-    __m256d va = _mm256_loadu_pd(&da[i * cA + k]);
-    __m256d vb = _mm256_set_pd(db[(k+3) * cB + j], db[(k+2) * cB + j], db[(k+1) * cB + j], db[k * cB + j]);
-    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
-}
-double temp[4];
-_mm256_storeu_pd(temp, sum_vec);
-sum = temp[0] + temp[1] + temp[2] + temp[3];
-#endif
-            for (; k < cA; k++) sum += da[i * cA + k] * db[k * cB + j];
-            dr[i * cB + j] = sum;
+    if (pa->type == PACKED_FLOAT64) {
+        double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+        
+        int num_threads = 4;
+        if (rA < num_threads) num_threads = rA;
+        if (num_threads < 1) num_threads = 1;
+        
+        pthread_t threads[8];
+        MatmulThreadData tdata[8];
+        int rows_per_thread = rA / num_threads;
+        
+        for (int t = 0; t < num_threads; t++) {
+            tdata[t].start_row = t * rows_per_thread;
+            tdata[t].end_row = (t == num_threads - 1) ? rA : (t + 1) * rows_per_thread;
+            tdata[t].da = da;
+            tdata[t].db = db;
+            tdata[t].dr = dr;
+            tdata[t].cA = cA;
+            tdata[t].cB = cB;
+            pthread_create(&threads[t], NULL, matmul_worker, &tdata[t]);
+        }
+        
+        for (int t = 0; t < num_threads; t++) {
+            pthread_join(threads[t], NULL);
         }
     }
+    
+    res->ndims = 2;
+    res->shape[0] = rA;
+    res->shape[1] = cB;
+    res->strides[0] = cB;
+    res->strides[1] = 1;
+    
     return value_packed(res);
 }
 #else
+
 static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none();
     if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
@@ -2019,6 +2370,37 @@ static Value native_tensor_matmul(int argc, Value *args) {
     return value_packed(res);
 }
 #endif
+
+static Value native_tensor_to(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    if (GET_TYPE(args[1]) != VAL_STRING) return value_none();
+    
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    const char *target_device = AS_STRING(args[1]);
+    
+    if (strcmp(target_device, pa->device) == 0) {
+        return args[0]; // Already on target device
+    }
+    
+    if (strcmp(target_device, "cuda") == 0 || strcmp(target_device, "cpu") == 0) {
+        PackedArray *new_pa = packed_array_new(pa->type, pa->size);
+        if (pa->size > 0 && new_pa->data && pa->data) {
+            size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+            memcpy(new_pa->data, pa->data, pa->size * elem_sz);
+        }
+        new_pa->ndims = pa->ndims;
+        for (int i = 0; i < pa->ndims; i++) {
+            new_pa->shape[i] = pa->shape[i];
+            new_pa->strides[i] = pa->strides[i];
+        }
+        new_pa->offset = pa->offset;
+        strncpy(new_pa->device, target_device, 15);
+        new_pa->device[15] = '\0';
+        return value_packed(new_pa);
+    }
+    return args[0];
+}
 
 #ifdef __linux__
 #include <X11/Xlib.h>
@@ -2302,6 +2684,8 @@ void std_init(void) {
     Dict *tensor = dict_new(4);
     dict_set(tensor, "create", native_func_new("create", native_tensor_create));
     dict_set(tensor, "zeros", native_func_new("zeros", native_tensor_zeros));
+    dict_set(tensor, "shape", native_func_new("shape", native_tensor_shape));
+    dict_set(tensor, "reshape", native_func_new("reshape", native_tensor_reshape));
     dict_set(tensor, "get", native_func_new("get", native_tensor_get));
     dict_set(tensor, "set", native_func_new("set", native_tensor_set));
     dict_set(tensor, "add", native_func_new("add", native_packed_add));
@@ -2310,6 +2694,7 @@ void std_init(void) {
     dict_set(tensor, "dot", native_func_new("dot", native_packed_dot));
     dict_set(tensor, "transpose", native_func_new("transpose", native_tensor_transpose));
     dict_set(tensor, "matmul", native_func_new("matmul", native_tensor_matmul));
+    dict_set(tensor, "to_device", native_func_new("to_device", native_tensor_to));
     var_set("tensor", value_dict(tensor));
 
     Dict *sqlite = dict_new(4);
@@ -2336,6 +2721,7 @@ void std_init(void) {
     Dict *os = dict_new(4); 
     dict_set(os, "exit", native_func_new("exit", os_exit)); 
     dict_set(os, "time", native_func_new("time", os_time)); 
+    dict_set(os, "format_time", native_func_new("format_time", os_format_time));
     dict_set(os, "sleep", native_func_new("sleep", os_sleep)); 
     dict_set(os, "getenv", native_func_new("getenv", native_os_getenv));
     dict_set(os, "gc_info", native_func_new("gc_info", native_os_gc_info));
@@ -2343,6 +2729,10 @@ void std_init(void) {
     dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
 
+    Dict *re_native = dict_new(4);
+    dict_set(re_native, "match", native_func_new("match", native_re_match));
+    dict_set(re_native, "search", native_func_new("search", native_re_search));
+    var_set("re_native", value_dict(re_native));
     Dict *fs = dict_new(4);
     dict_set(fs, "readdir", native_func_new("readdir", native_fs_readdir));
     dict_set(fs, "stat", native_func_new("stat", native_fs_stat));
