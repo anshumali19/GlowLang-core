@@ -1,0 +1,12 @@
+blueprint Team:
+    action init():
+        self.members = []
+    end
+    action add_member():
+        append(self.members, "Alice")
+        show self.members[0]
+    end
+end
+let t = Team()
+t.add_member()
+show "Done"

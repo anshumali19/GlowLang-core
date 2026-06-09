@@ -18,6 +18,12 @@
 #endif
 #include "arena.h"
 
+#ifdef _MSC_VER
+#ifndef __builtin_expect
+#define __builtin_expect(x, expected_value) (x)
+#endif
+#endif
+
 /* ================================================================
  *  VALUE TYPES
  * ================================================================ */

@@ -71,6 +71,8 @@ target_link_libraries(glowlang PRIVATE
 
 if(NOT MSVC)
     target_link_libraries(glowlang PRIVATE m)
+else()
+    target_link_libraries(glowlang PRIVATE ws2_32)
 endif()
 
 if(UNIX AND NOT APPLE AND X11_FOUND)

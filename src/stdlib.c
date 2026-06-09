@@ -21,6 +21,39 @@
 #define usleep(x) Sleep((x)/1000)
 typedef int socklen_t;
 typedef int ssize_t;
+#define close(s) closesocket(s)
+#define read(s, b, n) recv(s, (char*)(b), n, 0)
+#define write(s, b, n) send(s, (const char*)(b), n, 0)
+
+static inline int posix_memalign(void **memptr, size_t alignment, size_t size) {
+    *memptr = _aligned_malloc(size, alignment);
+    return (*memptr == NULL) ? 1 : 0;
+}
+
+#ifndef _TIMEZONE_DEFINED
+#define _TIMEZONE_DEFINED
+struct timezone {
+    int  tz_minuteswest;
+    int  tz_dsttime;
+};
+#endif
+
+static inline int gettimeofday(struct timeval *tv, struct timezone *tz) {
+    if (tv) {
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        unsigned long long t = ft.dwHighDateTime;
+        t <<= 32;
+        t |= ft.dwLowDateTime;
+        t /= 10;
+        t -= 11644473600000000ULL;
+        tv->tv_sec = (long)(t / 1000000UL);
+        tv->tv_usec = (long)(t % 1000000UL);
+    }
+    return 0;
+}
+
+#pragma comment(lib, "ws2_32.lib")
 
 struct dirent {
     char d_name[1024];

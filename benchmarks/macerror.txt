@@ -1,0 +1,26 @@
+Run cmake --build build --config Release
+  cmake --build build --config Release
+  shell: /bin/bash -e {0}
+[  4%] [FLEX][GlowLexer] Building scanner with flex 2.6.4
+[  9%] [BISON][GlowParser] Building parser with bison 3.8.2
+[ 14%] Building C object CMakeFiles/glowlang.dir/glowlang.tab.c.o
+[ 19%] Building C object CMakeFiles/glowlang.dir/lex.yy.c.o
+[ 23%] Building C object CMakeFiles/glowlang.dir/src/lsp.c.o
+[ 28%] Building C object CMakeFiles/glowlang.dir/src/arena.c.o
+[ 33%] Building C object CMakeFiles/glowlang.dir/src/jit.c.o
+[ 38%] Building C object CMakeFiles/glowlang.dir/src/opt.c.o
+[ 42%] Building C object CMakeFiles/glowlang.dir/src/compiler.c.o
+[ 47%] Building C object CMakeFiles/glowlang.dir/src/vm.c.o
+[ 52%] Building C object CMakeFiles/glowlang.dir/src/gc.c.o
+[ 57%] Building C object CMakeFiles/glowlang.dir/src/stdlib.c.o
+[ 61%] Linking C executable /Users/runner/work/GlowLang/GlowLang/bin/glowlang
+[ 61%] Built target glowlang
+[ 66%] Building C object CMakeFiles/gdu.dir/tools/gdu/gdu.c.o
+/Users/runner/work/GlowLang/GlowLang/tools/gdu/gdu.c:21:10: fatal error: 'openssl/evp.h' file not found
+   21 | #include <openssl/evp.h>
+      |          ^~~~~~~~~~~~~~~
+1 error generated.
+make[2]: *** [CMakeFiles/gdu.dir/tools/gdu/gdu.c.o] Error 1
+make[1]: *** [CMakeFiles/gdu.dir/all] Error 2
+make: *** [all] Error 2
+Error: Process completed with exit code 2.
