@@ -80,12 +80,19 @@ typedef enum {
     PACKED_FLOAT64
 } PackedType;
 
-typedef struct {
+typedef struct PackedArray {
     GCObject obj;
     void *data;
     PackedType type;
-    int size;
-    int capacity;
+    int size;          // total number of elements
+    int capacity;      // allocated capacity
+    int ndims;         // number of dimensions
+    int shape[8];      // shape of each dimension (up to 8D)
+    int strides[8];    // strides for each dimension
+    int offset;        // offset from the start of data pointer
+    bool is_view;      // if true, do not free data directly without base check
+    struct PackedArray *base; // parent tensor if this is a view
+    char device[16];   // "cpu", "cuda", etc.
 } PackedArray;
 
 typedef struct {
@@ -227,6 +234,8 @@ extern Value glow_index_jit(Value coll, Value v_idx);
 extern void glow_store_index_jit(Value coll, Value v_idx, Value v_val);
 extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
 extern Value value_from_double(double d);
+extern void* tensor_malloc(size_t size);
+extern void tensor_free(void *ptr, size_t size);
 
 /* ================================================================
  *  BYTECODE

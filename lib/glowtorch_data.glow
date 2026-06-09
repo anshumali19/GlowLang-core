@@ -1,0 +1,47 @@
+# glowtorch_data.glow
+# DataLoader infrastructure for GlowTorch
+
+use "csv.glow"
+use "glowtorch.glow"
+
+class DataLoader:
+    func init(filepath, batch_size):
+        self.filepath = filepath
+        self.batch_size = batch_size
+        self.reader = CSVReader()
+        self.reader.init(filepath)
+        
+        # In a real system, we wouldn't load everything at once,
+        # but for this MVP, we load it.
+        self.dataset = self.reader.read()
+        self.total_batches = len(self.dataset) / batch_size
+        self.current_idx = 1 # Skip header
+    end
+    
+    func next_batch():
+        if self.current_idx >= len(self.dataset):
+            return none
+        end
+        
+        let batch_data = []
+        let i = 0
+        while i < self.batch_size:
+            if self.current_idx < len(self.dataset):
+                let row = self.dataset[self.current_idx]
+                if len(row) > 0:
+                    batch_data.append(row)
+                end
+            end
+            self.current_idx = self.current_idx + 1
+            i = i + 1
+        end
+        
+        # Convert batch_data strings to tensors
+        # Assuming we just extract features and targets.
+        return batch_data
+    end
+    
+    func reset():
+        self.current_idx = 1
+    end
+end

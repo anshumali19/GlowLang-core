@@ -1,0 +1,108 @@
+use "glowtorch.glow"
+
+class ReLUBackward:
+    func init(x):
+        self.x = x
+    end
+    
+    func call(grad):
+        if self.x.requires_grad:
+            if self.x.shape == none:
+                show "ERROR: self.x.shape is none in ReLUBackward"
+            end
+            let total = 1
+            let d = 0
+            while d < len(self.x.shape):
+                total = total * self.x.shape[d]
+                d = d + 1
+            end
+            
+            let mask = tensor.zeros(total)
+            let i = 0
+            while i < total:
+                if tensor.get(self.x.data, i) > 0.0:
+                    tensor.set(mask, i, tensor.get(grad, i))
+                else:
+                    tensor.set(mask, i, 0.0)
+                end
+                i = i + 1
+            end
+            mask = tensor.reshape(mask, self.x.shape)
+            self.x.backward(mask)
+        end
+    end
+end
+
+class MSELossBackward:
+    func init(pred, target):
+        self.pred = pred
+        self.target = target
+    end
+    
+    func call(grad):
+        if self.pred.requires_grad:
+            if self.pred.shape == none:
+                show "ERROR: self.pred.shape is none in MSELossBackward"
+            end
+            let diff = tensor.sub(self.pred.data, self.target.data)
+            
+            let total = 1
+            let d = 0
+            while d < len(self.pred.shape):
+                total = total * self.pred.shape[d]
+                d = d + 1
+            end
+            
+            let grad_scaled = tensor.zeros(total)
+            let i = 0
+            while i < total:
+                let v = tensor.get(diff, i)
+                let v_grad = (2.0 * v) / total
+                v_grad = v_grad * tensor.get(grad, 0)
+                tensor.set(grad_scaled, i, v_grad)
+                i = i + 1
+            end
+            
+            # Reshape grad to original shape
+            grad_scaled = tensor.reshape(grad_scaled, self.pred.shape)
+            self.pred.backward(grad_scaled)
+        end
+    end
+end
+
+class MatMulBackward:
+    func init(t1, t2):
+        self.t1 = t1
+        self.t2 = t2
+    end
+    
+    func call(grad):
+        if self.t1.requires_grad:
+            # Transpose W (t2)
+            let w_T = tensor.transpose(self.t2.data, self.t2.shape[0], self.t2.shape[1])
+            let grad1 = tensor.matmul(grad, self.t1.shape[0], self.t2.shape[1], w_T, self.t2.shape[1], self.t2.shape[0])
+            self.t1.backward(grad1)
+        end
+        if self.t2.requires_grad:
+            # Transpose X (t1)
+            let x_T = tensor.transpose(self.t1.data, self.t1.shape[0], self.t1.shape[1])
+            # dW = x_T @ grad
+            let grad2 = tensor.matmul(x_T, self.t1.shape[1], self.t1.shape[0], grad, self.t1.shape[0], self.t2.shape[1])
+            self.t2.backward(grad2)
+        end
+    end
+end
+
+func matmul(t1, t2):
+    let out_data = tensor.matmul(t1.data, t1.shape[0], t1.shape[1], t2.data, t2.shape[0], t2.shape[1])
+    let requires_grad = t1.requires_grad or t2.requires_grad
+    let out = Tensor()
+    out.init(out_data, requires_grad)
+    
+    if requires_grad:
+        let fn = MatMulBackward()
+        fn.init(t1, t2)
+        out.grad_fn = fn
+    end
+    return out
+end

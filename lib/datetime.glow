@@ -1,0 +1,34 @@
+# datetime.glow
+# Core library for GlowLang time manipulation
+
+class DateTime:
+    func init(timestamp):
+        self.timestamp = timestamp
+    end
+
+    func format(fmt):
+        return os.format_time(fmt, self.timestamp)
+    end
+
+    func to_string():
+        return self.format("%Y-%m-%d %H:%M:%S")
+    end
+
+    func get_year():
+        return self.format("%Y")
+    end
+
+    func get_month():
+        return self.format("%m")
+    end
+    
+    func get_day():
+        return self.format("%d")
+    end
+end
+
+func datetime_now():
+    let dt = DateTime()
+    dt.init(os.time())
+    return dt
+end

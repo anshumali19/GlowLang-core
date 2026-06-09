@@ -1,0 +1,137 @@
+# glowtorch.glow
+# Autograd Engine and Neural Network library for GlowLang
+
+class Tensor:
+    func init(data, requires_grad):
+        self.data = data
+        self.requires_grad = requires_grad
+        self.grad = none
+        self.grad_fn = none
+        self.shape = tensor.shape(data)
+    end
+    
+    func to_device(device):
+        let new_data = tensor.to_device(self.data, device)
+        let new_t = Tensor(new_data, self.requires_grad)
+        new_t.grad = self.grad
+        new_t.grad_fn = self.grad_fn
+        return new_t
+    end
+    
+    func backward(grad):
+        if grad == none:
+            # Create a tensor of 1s matching the shape
+            # For MVP, assume scalar 1.0 for now if no grad is passed
+            let s = 1
+            if len(self.shape) > 0:
+                s = self.shape[0]
+            end
+            grad = tensor.zeros(s)
+            let i = 0
+            while i < s:
+                tensor.set(grad, i, 1.0)
+                i = i + 1
+            end
+        end
+        
+        if self.grad == none:
+            self.grad = grad
+        else:
+            self.grad = tensor.add(self.grad, grad)
+        end
+        
+        if self.grad_fn != none:
+            self.grad_fn.call(grad)
+        end
+    end
+end
+
+class AddBackward:
+    func init(t1, t2):
+        self.t1 = t1
+        self.t2 = t2
+    end
+    
+    func call(grad):
+        if self.t1.requires_grad:
+            self.t1.backward(grad)
+        end
+        if self.t2.requires_grad:
+            # Check if t2 is a bias vector that was broadcasted
+            let is_broadcast = false
+            if grad.shape != none:
+                if self.t2.shape != none:
+                    if grad.shape[0] != self.t2.shape[0] and len(grad.shape) == 2:
+                        is_broadcast = true
+                    end
+                end
+            end
+            
+            if is_broadcast:
+                let bias_grad = tensor.zeros(self.t2.shape[0])
+                let batch_size = grad.shape[0]
+                let cols = grad.shape[1]
+                let i = 0
+                while i < batch_size:
+                    let j = 0
+                    while j < cols:
+                        let current = tensor.get(bias_grad, j)
+                        let g = tensor.get(grad, i * cols + j)
+                        tensor.set(bias_grad, j, current + g)
+                        j = j + 1
+                    end
+                    i = i + 1
+                end
+                self.t2.backward(bias_grad)
+            else:
+                self.t2.backward(grad)
+            end
+        end
+    end
+end
+
+class MulBackward:
+    func init(t1, t2):
+        self.t1 = t1
+        self.t2 = t2
+    end
+    
+    func call(grad):
+        if self.t1.requires_grad:
+            let grad1 = tensor.mul(grad, self.t2.data)
+            self.t1.backward(grad1)
+        end
+        if self.t2.requires_grad:
+            let grad2 = tensor.mul(grad, self.t1.data)
+            self.t2.backward(grad2)
+        end
+    end
+end
+
+func add(t1, t2):
+    let out_data = tensor.add(t1.data, t2.data)
+    let requires_grad = t1.requires_grad or t2.requires_grad
+    let out = Tensor()
+    out.init(out_data, requires_grad)
+    
+    if requires_grad:
+        let fn = AddBackward()
+        fn.init(t1, t2)
+        out.grad_fn = fn
+    end
+    return out
+end
+
+func mul(t1, t2):
+    let out_data = tensor.mul(t1.data, t2.data)
+    let requires_grad = t1.requires_grad or t2.requires_grad
+    let out = Tensor()
+    out.init(out_data, requires_grad)
+    
+    if requires_grad:
+        let fn = MulBackward()
+        fn.init(t1, t2)
+        out.grad_fn = fn
+    end
+    return out
+end
