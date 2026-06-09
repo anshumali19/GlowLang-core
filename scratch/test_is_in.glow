@@ -1,9 +1,0 @@
-
-let s = "hello world"
-let has = "world" is in s
-show "contains:", has
-let no = "xyz" is in s
-show "no contain:", no
-let sw = "hel" is in s
-show "starts approx:", sw
-

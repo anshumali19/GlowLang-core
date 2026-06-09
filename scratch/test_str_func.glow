@@ -1,7 +1,0 @@
-
-let s = "hello world"
-show str.starts_with(s, "hello")
-show str.ends_with(s, "world")
-show str.contains(s, "lo wo")
-show str.replace(s, "world", "glow")
-

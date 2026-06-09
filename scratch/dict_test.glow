@@ -1,5 +1,0 @@
-let d = {"key1": "val1"}
-for each k in d:
-    show "k is:", k, "type:", type(k)
-    show "d[k] is:", d[k]
-end

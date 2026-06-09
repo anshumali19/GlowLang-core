@@ -1,4 +1,0 @@
-let arr = []
-append(arr, "Alice")
-show "LEN IS:"
-show len(arr)

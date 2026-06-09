@@ -1,7 +1,0 @@
-blueprint Animal:
-    action init(name):
-        show name
-        self.name = name
-    end
-end
-Animal("Rex")

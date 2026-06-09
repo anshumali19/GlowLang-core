@@ -1,9 +1,0 @@
-blueprint Team:
-    action init(name):
-        self.name = name
-        self.members = []
-    end
-end
-show "1"
-let team = Team("Glow")
-show "2"

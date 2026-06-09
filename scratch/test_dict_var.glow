@@ -1,5 +1,0 @@
-
-let x = "hello"
-let d = {"key": x}
-show d
-

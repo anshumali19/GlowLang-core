@@ -1,3 +1,0 @@
-use "lib/tensor_utils.glow"
-let t = tensor_fill(3, 5.0)
-show tensor_to_list(t, 3)

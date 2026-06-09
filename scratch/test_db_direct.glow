@@ -1,8 +1,0 @@
-let db = sqlite.open("test_direct.db")
-sqlite.exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
-sqlite.exec(db, "INSERT INTO users (name) VALUES ('Alice')")
-let rows = sqlite.query(db, "SELECT * FROM users")
-show "Direct Rows count:", len(rows)
-for each row in rows:
-    show "Name:", row["name"]
-end
