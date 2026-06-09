@@ -1,7 +1,0 @@
-show math.sqrt(16)
-show math.abs(-5)
-show math.floor(3.7)
-show math.ceil(3.2)
-show math.random()
-show math.exp(1)
-show math.log(10)

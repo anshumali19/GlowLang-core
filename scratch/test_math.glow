@@ -1,2 +1,0 @@
-# Test math - try different approaches
-show "test1: " + abs(-5)

@@ -57,51 +57,76 @@ static GCBlock* gc_block_new(void) {
     return b;
 }
 
-static void gc_mark_object(GCObject *obj) {
+static GCObject **grey_stack = NULL;
+static int grey_capacity = 0;
+static int grey_count = 0;
+
+static void push_grey(GCObject *obj) {
     if (!obj || obj->marked) return;
     obj->marked = 1;
-    switch (obj->type) {
-        case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) gc_mark_value(l->items[i]); break; }
-        case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; gc_mark_value(it->iterable); break; }
-        case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { gc_mark_value(d->values[i]); } } break; }
-        case OBJ_SQLITE_ITER: break; 
-        case OBJ_SQLITE_HANDLE: break;
-        case OBJ_CLASS: { 
-            Class *c = (Class*)obj; 
-            gc_mark_object((GCObject*)c->methods); 
-            gc_mark_object((GCObject*)c->root_shape); 
-            if (c->stable_shape) gc_mark_object((GCObject*)c->stable_shape);
-            break; 
-        }
-        case OBJ_SHAPE: {
-            Shape *s = (Shape*)obj;
-            if (s->parent) gc_mark_object((GCObject*)s->parent);
-            gc_mark_object((GCObject*)s->transitions);
-            break;
-        }
-        case OBJ_INSTANCE: { 
-            Instance *ins = (Instance*)obj; 
-            gc_mark_object((GCObject*)ins->klass); 
-            gc_mark_object((GCObject*)ins->properties); 
-            break; 
-        }
-        case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; gc_mark_value(bm->instance); break; }
-        case OBJ_ROPE: {
-            RopeNode *rn = (RopeNode*)obj;
-            if (rn->is_leaf) gc_mark_value(rn->leaf.flat_string);
-            else {
-                gc_mark_object((GCObject*)rn->internal.left);
-                gc_mark_object((GCObject*)rn->internal.right);
-            }
-            break;
-        }
-        case OBJ_STRING_BUILDER: break; // Buffer is raw malloc'd, no nested objects to mark
-        default: break;
+    if (grey_count >= grey_capacity) {
+        grey_capacity = grey_capacity < 256 ? 256 : grey_capacity * 2;
+        grey_stack = realloc(grey_stack, grey_capacity * sizeof(GCObject*));
     }
+    grey_stack[grey_count++] = obj;
 }
+
 static void gc_mark_value(Value v) {
     if (GET_TYPE(v) == VAL_OBJECT || GET_TYPE(v) == VAL_LIST || GET_TYPE(v) == VAL_DICT || GET_TYPE(v) == VAL_STRING) {
-        if (v & MASK_PAYLOAD) gc_mark_object((GCObject*)(uintptr_t)(v & MASK_PAYLOAD));
+        if (v & MASK_PAYLOAD) push_grey((GCObject*)(uintptr_t)(v & MASK_PAYLOAD));
+    }
+}
+
+static void gc_mark_object(GCObject *obj) {
+    push_grey(obj);
+}
+
+static void process_grey_stack(void) {
+    while (grey_count > 0) {
+        GCObject *obj = grey_stack[--grey_count];
+        switch (obj->type) {
+            case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) gc_mark_value(l->items[i]); break; }
+            case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; gc_mark_value(it->iterable); break; }
+            case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { gc_mark_value(d->values[i]); } } break; }
+            case OBJ_SQLITE_ITER: break; 
+            case OBJ_SQLITE_HANDLE: break;
+            case OBJ_CLASS: { 
+                Class *c = (Class*)obj; 
+                push_grey((GCObject*)c->methods); 
+                push_grey((GCObject*)c->root_shape); 
+                if (c->stable_shape) push_grey((GCObject*)c->stable_shape);
+                break; 
+            }
+            case OBJ_SHAPE: {
+                Shape *s = (Shape*)obj;
+                if (s->parent) push_grey((GCObject*)s->parent);
+                push_grey((GCObject*)s->transitions);
+                break;
+            }
+            case OBJ_TRAIT: {
+                Trait *t = (Trait*)obj;
+                push_grey((GCObject*)t->methods);
+                break;
+            }
+            case OBJ_INSTANCE: { 
+                Instance *ins = (Instance*)obj; 
+                push_grey((GCObject*)ins->klass); 
+                push_grey((GCObject*)ins->properties); 
+                break; 
+            }
+            case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; gc_mark_value(bm->instance); break; }
+            case OBJ_ROPE: {
+                RopeNode *rn = (RopeNode*)obj;
+                if (rn->is_leaf) gc_mark_value(rn->leaf.flat_string);
+                else {
+                    push_grey((GCObject*)rn->internal.left);
+                    push_grey((GCObject*)rn->internal.right);
+                }
+                break;
+            }
+            case OBJ_STRING_BUILDER: break;
+            default: break;
+        }
     }
 }
 
@@ -121,6 +146,7 @@ void gc_full_collect(void) {
         gc_mark_value(*(active_stacks[i].pending_exc_ptr));
     }
     pthread_mutex_unlock(&threads_mutex);
+    process_grey_stack();
     GCObject **p = &gc_objects;
     while (*p) {
         if (!(*p)->marked) {
@@ -169,6 +195,7 @@ void gc_minor_collect(void) {
     pthread_mutex_unlock(&threads_mutex);
     RememberedSet *rs = gc_remembered_set;
     while (rs) { gc_mark_object(rs->obj); rs = rs->next; }
+    process_grey_stack();
 
     GCObject **p = &gc_objects;
     while (*p) {

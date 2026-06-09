@@ -1,4 +1,0 @@
-func test(input):
-    show input
-end
-test("hello")

@@ -1,5 +1,0 @@
-func test(inp):
-    let output = inp + 1
-    show output
-end
-test(5)

@@ -1,9 +1,0 @@
-blueprint Team:
-    action init():
-        self.members = []
-    end
-end
-let t = Team()
-append(t.members, "Alice")
-show "MEMBER IS: "
-show t.members[0]
