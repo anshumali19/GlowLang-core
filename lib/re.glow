@@ -1,0 +1,30 @@
+# re.glow
+# Regular Expression Core Library for GlowLang
+
+class RegExp:
+    func init(pattern):
+        self.pattern = pattern
+    end
+
+    func match(string):
+        return re_native.match(self.pattern, string)
+    end
+
+    func search(string):
+        return re_native.search(self.pattern, string)
+    end
+end
+
+func compile(pattern):
+    let r = RegExp()
+    r.init(pattern)
+    return r
+end
+
+func match(pattern, string):
+    return re_native.match(pattern, string)
+end
+
+func search(pattern, string):
+    return re_native.search(pattern, string)
+end

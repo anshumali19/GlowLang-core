@@ -1,0 +1,38 @@
+use "glowtorch.glow"
+
+show "--- Testing GlowTorch Autograd Engine ---"
+
+# We have two vectors:
+# x = [2.0, 3.0]
+# y = [4.0, 5.0]
+let x_data = tensor.zeros(2)
+tensor.set(x_data, 0, 2.0)
+tensor.set(x_data, 1, 3.0)
+
+let y_data = tensor.zeros(2)
+tensor.set(y_data, 0, 4.0)
+tensor.set(y_data, 1, 5.0)
+
+let x = Tensor()
+x.init(x_data, true)
+
+let y = Tensor()
+y.init(y_data, true)
+
+# z = x * y + x
+let xy = mul(x, y)
+let z = add(xy, x)
+
+show "Forward pass complete."
+show "Z shape: ", z.shape
+
+# Start backward pass
+z.backward(none)
+
+show "Backward pass complete."
+
+show "x.grad (expected: y + 1.0 = [5.0, 6.0]): "
+show "  [", tensor.get(x.grad, 0), ", ", tensor.get(x.grad, 1), "]"
+
+show "y.grad (expected: x = [2.0, 3.0]): "
+show "  [", tensor.get(y.grad, 0), ", ", tensor.get(y.grad, 1), "]"
