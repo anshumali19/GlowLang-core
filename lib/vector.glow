@@ -1,0 +1,38 @@
+# vector.glow
+# High-Level Vector and Math Algebra for GlowLang
+
+class Vec2:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+
+    func display():
+        show "Vec2(", self.x, ", ", self.y, ")"
+    end
+
+    func add(other):
+        let r = Vec2()
+        r.init(self.x + other.x, self.y + other.y)
+        return r
+    end
+
+    func subtract(other):
+        let r = Vec2()
+        r.init(self.x - other.x, self.y - other.y)
+        return r
+    end
+
+    func distance(other):
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        # Using the native underlying C-math engine exposed as `math`
+        return math.sqrt((dx * dx) + (dy * dy))
+    end
+    
+    func scale(scalar):
+        let r = Vec2()
+        r.init(self.x * scalar, self.y * scalar)
+        return r
+    end
+end

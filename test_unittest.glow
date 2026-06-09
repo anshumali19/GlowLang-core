@@ -1,0 +1,25 @@
+use "unittest.glow"
+
+let suite = create_suite("GlowLang Core Math Suite")
+
+func test_addition(s):
+    # This should pass
+    s.expect(10 + 5).to_be(15)
+    s.expect(10 + 5).to_not_be(20)
+end
+
+func test_subtraction(s):
+    # This should pass
+    s.expect(20 - 5).to_be(15)
+end
+
+func test_failure_case(s):
+    # This should intentionally fail to demonstrate the framework
+    s.expect(2 + 2).to_be(5)
+end
+
+suite.test("Testing Addition", test_addition)
+suite.test("Testing Subtraction", test_subtraction)
+suite.test("Intentional Failure Demo", test_failure_case)
+
+suite.run()

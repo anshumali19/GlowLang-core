@@ -1,0 +1,48 @@
+# subprocess.glow
+# Natural Language Subprocess Execution for GlowLang
+
+class ProcessResult:
+    func init(code, output):
+        self.code = code
+        self.output = output
+    end
+    
+    func display():
+        show "--- Process Result ---"
+        show "Exit Code: ", self.code
+        show "Output: "
+        show self.output
+        show "----------------------"
+    end
+end
+
+class SubprocessManager:
+    func init():
+    end
+
+    func run(command, capture_output):
+        if capture_output == true:
+            # GlowLang native os.system returns status code.
+            # We gracefully capture output using a temporary file redirect.
+            let tmp_file = ".glow_subprocess_tmp.txt"
+            let full_cmd = command + " > " + tmp_file + " 2>&1"
+            let code = os.system(full_cmd)
+            let out = fs.read(tmp_file)
+            
+            # Cleanup
+            os.system("rm -f " + tmp_file)
+            
+            let r = ProcessResult()
+            r.init(code, out)
+            return r
+        else:
+            let code = os.system(command)
+            let r = ProcessResult()
+            r.init(code, "")
+            return r
+        end
+    end
+end
+
+let sys_cmd = SubprocessManager()
+sys_cmd.init()
