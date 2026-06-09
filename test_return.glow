@@ -1,0 +1,10 @@
+blueprint Team:
+    action init():
+    end
+    action return_self():
+        return self
+    end
+end
+let t = Team()
+t.return_self()
+show "Done"
