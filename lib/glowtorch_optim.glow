@@ -1,0 +1,44 @@
+# glowtorch_optim.glow
+# Optimizer algorithms for GlowTorch
+
+use "glowtorch.glow"
+use "glowtorch_nn.glow"
+
+class SGD:
+    func init(parameters, lr):
+        # parameters should be a list of Tensors
+        self.parameters = parameters
+        self.lr = lr
+    end
+    
+    func step():
+        let i = 0
+        while i < len(self.parameters):
+            let p = self.parameters[i]
+            if p.grad != none:
+                # Update rule: p = p - lr * p.grad
+                # Multiply grad by lr
+                let grad_scaled = tensor.zeros(p.shape[0])
+                let j = 0
+                while j < p.shape[0]:
+                    let v = tensor.get(p.grad, j)
+                    tensor.set(grad_scaled, j, v * self.lr)
+                    j = j + 1
+                end
+                
+                # Subtract from p.data
+                p.data = tensor.sub(p.data, grad_scaled)
+            end
+            i = i + 1
+        end
+    end
+    
+    func zero_grad():
+        let i = 0
+        while i < len(self.parameters):
+            let p = self.parameters[i]
+            p.grad = none
+            i = i + 1
+        end
+    end
+end

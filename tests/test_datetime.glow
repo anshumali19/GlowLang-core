@@ -1,0 +1,10 @@
+use "datetime.glow"
+
+let dt = datetime_now()
+show "Current Date and Time: " , dt.to_string()
+show "Year: " , dt.get_year()
+show "Month: " , dt.get_month()
+show "Day: " , dt.get_day()
+
+# Test formatting
+show "Custom Format: " , dt.format("%A, %B %d, %Y")

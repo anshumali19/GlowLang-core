@@ -518,12 +518,14 @@ int install_package(const char *name, const char *version, const char *url) {
         return 0;
     }
 
-    /* Fallback: try registry download */
-    printf("  Fetching %s@%s from registry...\n", name, version);
+    /* Fallback: try GitHub Zero-Cost Registry */
+    printf("  Fetching %s@%s from GitHub Registry...\n", name, version);
     char cmd[2048];
+    /* Try fetching the single .glow file directly from the main branch of the repository */
     snprintf(cmd, sizeof(cmd),
-        "curl -sf --max-time 10 'https://registry.glowlang.org/pkgs/%s/%s/%s.glow' -o '%s' 2>/dev/null",
-        name, version, name, pkg_path);
+        "curl -sf --max-time 10 'https://raw.githubusercontent.com/anshumali19/%s/main/%s.glow' -o '%s' 2>/dev/null",
+        name, name, pkg_path);
+        
     if (system(cmd) == 0 && file_exists(pkg_path) && file_size(pkg_path) > 0) {
         /* Cache */
         char cp_cmd[4096];
@@ -531,6 +533,7 @@ int install_package(const char *name, const char *version, const char *url) {
         if (system(cp_cmd) < 0) { /* ignore */ }
         return 0;
     }
+
 
     /* Create stub package if nothing available */
     printf("  Registry unavailable — creating stub for %s@%s\n", name, version);

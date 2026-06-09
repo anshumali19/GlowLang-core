@@ -1,0 +1,132 @@
+use "glowtorch_backward.glow"
+
+# Parameter Initialization
+func random_tensor(size):
+    let t = tensor.zeros(size)
+    let i = 0
+    let seed = 12345
+    while i < size:
+        seed = (seed * 1103515245 + 12345)
+        let val = (seed % 1000) / 1000.0
+        tensor.set(t, i, val)
+        i = i + 1
+    end
+    return t
+end
+
+class Linear:
+    func init(in_features, out_features):
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        let w_data = random_tensor(in_features * out_features)
+        w_data = tensor.reshape(w_data, [in_features, out_features])
+        self.weight = Tensor()
+        self.weight.init(w_data, true)
+        
+        let b_data = random_tensor(out_features)
+        self.bias = Tensor()
+        self.bias.init(b_data, true)
+    end
+    
+    func to_device(device):
+        self.weight = self.weight.to_device(device)
+        self.bias = self.bias.to_device(device)
+        return self
+    end
+    
+    func forward(x):
+        # x is (batch, in_features), weight is (in_features, out_features)
+        let out_mul = matmul(x, self.weight)
+        
+        # Add bias
+        let final_data = tensor.add(out_mul.data, self.bias.data)
+        
+        let out = Tensor()
+        out.init(final_data, out_mul.requires_grad or self.bias.requires_grad)
+        
+        if out.requires_grad:
+            let fn = AddBackward()
+            fn.init(out_mul, self.bias)
+            out.grad_fn = fn
+        end
+        return out
+    end
+end
+
+class ReLU:
+    func init():
+    end
+    
+    func forward(x):
+        let total = 1
+        let d = 0
+        while d < len(x.shape):
+            total = total * x.shape[d]
+            d = d + 1
+        end
+        
+        let out_data = tensor.zeros(total)
+        let i = 0
+        while i < total:
+            # For MVP, we can treat the tensor as flat for element-wise operations if we pass a 1D index
+            let val = tensor.get(x.data, [i])
+            # wait! If it's a 2D tensor, get(data, [i]) fails because get expects ND indexing!
+            # Let's fix that. Actually, tensor.get(data, idx) without list treats it as flat index!
+            val = tensor.get(x.data, i)
+            if val > 0.0:
+                tensor.set(out_data, i, val)
+            else:
+                tensor.set(out_data, i, 0.0)
+            end
+            i = i + 1
+        end
+        out_data = tensor.reshape(out_data, x.shape)
+        
+        let out = Tensor()
+        out.init(out_data, x.requires_grad)
+        if out.requires_grad:
+            let fn = ReLUBackward()
+            fn.init(x)
+            out.grad_fn = fn
+        end
+        return out
+    end
+end
+
+class MSELoss:
+    func init():
+    end
+    
+    func forward(pred, target):
+        let diff = tensor.sub(pred.data, target.data)
+        let sq = tensor.mul(diff, diff)
+        
+        let total = 1
+        let d = 0
+        while d < len(pred.shape):
+            total = total * pred.shape[d]
+            d = d + 1
+        end
+        
+        let loss_val = 0.0
+        let i = 0
+        while i < total:
+            loss_val = loss_val + tensor.get(sq, i)
+            i = i + 1
+        end
+        loss_val = loss_val / total
+        
+        let out_data = tensor.zeros(1)
+        tensor.set(out_data, 0, loss_val)
+        let out = Tensor()
+        out.init(out_data, pred.requires_grad)
+        
+        if out.requires_grad:
+            let fn = MSELossBackward()
+            fn.init(pred, target)
+            out.grad_fn = fn
+        end
+        return out
+    end
+end

@@ -1,0 +1,86 @@
+use "glowtorch_nn.glow"
+use "glowtorch_optim.glow"
+use "glowtorch_data.glow"
+
+show "--- GlowTorch Training Pipeline Test ---"
+
+# 1. Initialize Dataset
+# We won't use the full CSV right now, let's just make dummy data for the test
+# Create Dummy X and Y
+let batch_size = 4
+let in_features = 2
+let out_features = 1
+
+let x_data = tensor.zeros(batch_size * in_features)
+let y_data = tensor.zeros(batch_size * out_features)
+
+# Target function: y = 2*x1 + 3*x2
+tensor.set(x_data, 0, 1.0)
+tensor.set(x_data, 1, 2.0)
+tensor.set(y_data, 0, 8.0)
+
+tensor.set(x_data, 2, -1.0)
+tensor.set(x_data, 3, 1.0)
+tensor.set(y_data, 1, 1.0)
+
+tensor.set(x_data, 4, 3.0)
+tensor.set(x_data, 5, -2.0)
+tensor.set(y_data, 2, 0.0)
+
+tensor.set(x_data, 6, 0.0)
+tensor.set(x_data, 7, 0.0)
+tensor.set(y_data, 3, 0.0)
+
+let x = Tensor()
+x_data = tensor.reshape(x_data, [batch_size, in_features])
+x.init(x_data, false)
+
+let y = Tensor()
+y_data = tensor.reshape(y_data, [batch_size, out_features])
+y.init(y_data, false)
+
+# 2. Build Model
+let layer = Linear()
+layer.init(in_features, out_features)
+
+let relu = ReLU()
+relu.init()
+
+# 3. Setup Loss and Optimizer
+let criterion = MSELoss()
+criterion.init()
+
+let parameters = [layer.weight, layer.bias]
+let optimizer = SGD()
+optimizer.init(parameters, 0.01)
+
+# 4. Training Loop (1 step)
+show "Model initialized. Weight shape: ", layer.weight.shape
+
+optimizer.zero_grad()
+
+# Forward
+let out = layer.forward(x)
+show "Linear out shape: ", out.shape
+
+let act = relu.forward(out)
+show "ReLU out shape: ", act.shape
+
+if act.shape != none:
+    if len(act.shape) > 0:
+        show "act.shape[0]: ", act.shape[0]
+    end
+end
+
+let loss = criterion.forward(act, y)
+
+show "Initial Loss: ", tensor.get(loss.data, 0)
+
+# Backward
+loss.backward(none)
+
+# Optimize
+optimizer.step()
+
+show "Weight Gradients: ", tensor.get(layer.weight.grad, 0), ", ", tensor.get(layer.weight.grad, 1)
+show "One training step complete."

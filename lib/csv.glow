@@ -1,0 +1,125 @@
+# csv.glow
+# Core CSV library for GlowLang
+
+class CSVReader:
+    func init(filepath):
+        self.filepath = filepath
+        self.delimiter = ","
+    end
+
+    func set_delimiter(delim):
+        self.delimiter = delim
+    end
+
+    func read():
+        let content = fs.read(self.filepath)
+        if content == none:
+            return []
+        end
+        
+        let lines = content.split("\n")
+        let result = []
+        
+        let i = 0
+        while i < len(lines):
+            let line = lines[i]
+            if line != "":
+                let columns = line.split(self.delimiter)
+                append(result, columns)
+            end
+            i = i + 1
+        end
+        return result
+    end
+
+    func read_dict():
+        let content = fs.read(self.filepath)
+        if content == none:
+            return []
+        end
+        
+        let lines = content.split("\n")
+        if len(lines) == 0:
+            return []
+        end
+
+        let header_line = lines[0]
+        if header_line == "":
+            return []
+        end
+
+        let headers = header_line.split(self.delimiter)
+        let result = []
+        
+        let i = 1
+        while i < len(lines):
+            let line = lines[i]
+            if line != "":
+                let cols = line.split(self.delimiter)
+                let row_dict = {}
+                let j = 0
+                while j < len(headers):
+                    let key = headers[j]
+                    let val = ""
+                    if j < len(cols):
+                        val = cols[j]
+                    end
+                    row_dict[key] = val
+                    j = j + 1
+                end
+                append(result, row_dict)
+            end
+            i = i + 1
+        end
+        return result
+    end
+end
+
+class CSVWriter:
+    func init(filepath):
+        self.filepath = filepath
+        self.delimiter = ","
+        self.buffer = text_builder()
+    end
+
+    func set_delimiter(delim):
+        self.delimiter = delim
+    end
+
+    func writerow(row):
+        let i = 0
+        let last_idx = len(row) - 1
+        while i < len(row):
+            append(self.buffer, row[i])
+            if i < last_idx:
+                append(self.buffer, self.delimiter)
+            end
+            i = i + 1
+        end
+        append(self.buffer, "\n")
+    end
+
+    func writerows(rows):
+        let i = 0
+        while i < len(rows):
+            self.writerow(rows[i])
+            i = i + 1
+        end
+    end
+
+    func save():
+        fs.write(self.filepath, build(self.buffer))
+    end
+end
+
+func reader(filepath):
+    let r = CSVReader()
+    r.init(filepath)
+    return r
+end
+
+func writer(filepath):
+    let w = CSVWriter()
+    w.init(filepath)
+    return w
+end
