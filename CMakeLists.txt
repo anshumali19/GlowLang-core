@@ -4,6 +4,12 @@ project(GlowLang C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED True)
 
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    # Also disable some specific type conversion warnings to clear the build output
+    add_compile_options(/wd4267 /wd4244 /wd4133 /wd4013 /wd4102)
+endif()
+
 # Set common compiler flags like in Makefile
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Enable optimization by default for release
