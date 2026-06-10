@@ -2883,6 +2883,10 @@ void std_cleanup(void) {
     // 3. Clear pending exceptions
     pending_exception = value_none();
 
+    // 3.5 Clear GC roots
+    vm_last_class = NULL;
+    vm_last_trait = NULL;
+
     // 4. Perform a full garbage collection sweep to free now-unreferenced objects
     gc_full_collect();
     
