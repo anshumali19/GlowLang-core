@@ -79,7 +79,7 @@ jobs:
           Compress-Archive -Path release_package\* -DestinationPath glowlang-windows-x64.zip
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: glowlang-${{ matrix.os }}
           path: |
@@ -92,10 +92,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v8
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz
