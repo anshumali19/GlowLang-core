@@ -1,4 +1,6 @@
 CC = gcc
+NVCC = nvcc
+
 CFLAGS = -O2 -lm -pthread -lssl -lcrypto -mavx2 -msse4.2
 CFLAGS_ASAN = -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 -fsanitize=address -fno-omit-frame-pointer
 CFLAGS_TSAN = -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 -fsanitize=thread -fno-omit-frame-pointer
@@ -15,10 +17,14 @@ GDU_BIN = $(BIN_DIR)/gdu
 
 all: $(GLOWLANG_BIN) $(GDU_BIN)
 
-$(GLOWLANG_BIN): $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
+$(SRC_DIR)/cuda/tensor_ops.o: $(SRC_DIR)/cuda/tensor_ops.cu
+	mkdir -p $(SRC_DIR)/cuda
+	$(NVCC) -c $(SRC_DIR)/cuda/tensor_ops.cu -o $(SRC_DIR)/cuda/tensor_ops.o -O2
+
+$(GLOWLANG_BIN): $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/cuda/tensor_ops.o
 	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
 	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	$(CC) $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c -o $(GLOWLANG_BIN) $(CFLAGS) -lsqlite3 -lX11
+	$(CC) $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/cuda/tensor_ops.o -o $(GLOWLANG_BIN) $(CFLAGS) -lsqlite3 -lX11 -lcudart -lcublas
 	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
 
 test-sanitized: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
@@ -89,7 +95,7 @@ verify: all
 clean:
 	rm -f $(GLOWLANG_BIN) $(GDU_BIN) bin/glowlang.js bin/glowlang.wasm
 	rm -f bin/fuzz_* bin/glow_profiler bin/glow_inspector bin/glow_debugger
-	rm -f bin/glowlang_asan bin/glowlang_tsan
+	rm -f bin/glowlang_asan bin/glowlang_tsan $(SRC_DIR)/cuda/tensor_ops.o
 
 wasm: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
 	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l

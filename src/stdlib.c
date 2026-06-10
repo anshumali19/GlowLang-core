@@ -683,8 +683,18 @@ void* tensor_malloc(size_t size) {
     return ptr;
 }
 
-void tensor_free(void *ptr, size_t size) {
+extern void* cuda_tensor_malloc(size_t size);
+extern void cuda_tensor_free(void* ptr);
+extern void cuda_tensor_to_device(void* dst, const void* src, size_t size);
+extern void cuda_tensor_to_host(void* dst, const void* src, size_t size);
+extern void cuda_tensor_matmul(const double* A, int rA, int cA, const double* B, int cB, double* C);
+
+void tensor_free(void *ptr, size_t size, const char *device) {
     if (!ptr || size == 0) return;
+    if (strcmp(device, "cuda") == 0) {
+        cuda_tensor_free(ptr);
+        return;
+    }
     int bin = get_bin(size);
     pthread_mutex_lock(&pool_mutex);
     FreeBlock *block = (FreeBlock*)ptr;
@@ -2303,7 +2313,11 @@ static Value native_tensor_matmul(int argc, Value *args) {
     PackedArray *res = packed_array_new(pa->type, rA * cB);
     if (!res || !res->data) return value_none();
     
-    if (pa->type == PACKED_FLOAT64) {
+    if (strcmp(pa->device, "cuda") == 0) {
+        cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
+        strncpy(res->device, "cuda", 15);
+        res->device[15] = '\0';
+    } else if (pa->type == PACKED_FLOAT64) {
         double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
         
         int num_threads = 4;
@@ -2358,6 +2372,13 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (!res || !res->data) return value_none();
     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
     
+    if (strcmp(pa->device, "cuda") == 0) {
+        cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
+        strncpy(res->device, "cuda", 15);
+        res->device[15] = '\0';
+        return value_packed(res);
+    }
+    
     for (int i = 0; i < rA; i++) {
         for (int j = 0; j < cB; j++) {
             double sum = 0.0;
@@ -2383,11 +2404,14 @@ static Value native_tensor_to(int argc, Value *args) {
         return args[0]; // Already on target device
     }
     
-    if (strcmp(target_device, "cuda") == 0 || strcmp(target_device, "cpu") == 0) {
-        PackedArray *new_pa = packed_array_new(pa->type, pa->size);
+    if (strcmp(target_device, "cuda") == 0) {
+        PackedArray *new_pa = packed_array_new(pa->type, 0); // No CPU mem
+        new_pa->size = pa->size;
+        new_pa->capacity = pa->size;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        new_pa->data = cuda_tensor_malloc(pa->size * elem_sz);
         if (pa->size > 0 && new_pa->data && pa->data) {
-            size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
-            memcpy(new_pa->data, pa->data, pa->size * elem_sz);
+            cuda_tensor_to_device(new_pa->data, pa->data, pa->size * elem_sz);
         }
         new_pa->ndims = pa->ndims;
         for (int i = 0; i < pa->ndims; i++) {
@@ -2395,9 +2419,26 @@ static Value native_tensor_to(int argc, Value *args) {
             new_pa->strides[i] = pa->strides[i];
         }
         new_pa->offset = pa->offset;
-        strncpy(new_pa->device, target_device, 15);
+        strncpy(new_pa->device, "cuda", 15);
         new_pa->device[15] = '\0';
         return value_packed(new_pa);
+    } else if (strcmp(target_device, "cpu") == 0) {
+        PackedArray *new_pa = packed_array_new(pa->type, pa->size); // Allocates CPU mem
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        if (pa->size > 0 && new_pa->data && pa->data) {
+            cuda_tensor_to_host(new_pa->data, pa->data, pa->size * elem_sz);
+        }
+        new_pa->ndims = pa->ndims;
+        for (int i = 0; i < pa->ndims; i++) {
+            new_pa->shape[i] = pa->shape[i];
+            new_pa->strides[i] = pa->strides[i];
+        }
+        new_pa->offset = pa->offset;
+        strncpy(new_pa->device, "cpu", 15);
+        new_pa->device[15] = '\0';
+        return value_packed(new_pa);
+    }
+    return value_none();
     }
     return args[0];
 }
