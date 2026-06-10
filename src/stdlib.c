@@ -683,10 +683,6 @@ void* tensor_malloc(size_t size) {
     return ptr;
 }
 
-<<<<<<< Updated upstream
-void tensor_free(void *ptr, size_t size) {
-    if (!ptr || size == 0) return;
-=======
 #ifdef GLOW_USE_CUDA
 extern void* cuda_tensor_malloc(size_t size);
 extern void cuda_tensor_free(void* ptr);
@@ -703,7 +699,6 @@ void tensor_free(void *ptr, size_t size, const char *device) {
         return;
     }
 #endif
->>>>>>> Stashed changes
     int bin = get_bin(size);
     pthread_mutex_lock(&pool_mutex);
     FreeBlock *block = (FreeBlock*)ptr;
