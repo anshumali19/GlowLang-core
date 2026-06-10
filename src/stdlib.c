@@ -2314,20 +2314,32 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
     
-    PackedArray *res = packed_array_new(pa->type, rA * cB);
-    if (!res || !res->data) return value_none();
-    
+    PackedArray *res;
     if (strcmp(pa->device, "cuda") == 0) {
 #ifdef GLOW_USE_CUDA
+        res = packed_array_new(pa->type, 0);
+        res->size = rA * cB;
+        res->capacity = rA * cB;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        res->data = cuda_tensor_malloc(res->size * elem_sz);
         cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
         strncpy(res->device, "cuda", 15);
         res->device[15] = '\0';
+        res->ndims = 2;
+        res->shape[0] = rA;
+        res->shape[1] = cB;
+        res->strides[0] = cB;
+        res->strides[1] = 1;
+        return value_packed(res);
 #else
         runtime_error_thrown = 1;
         return value_none();
 #endif
-    } else if (pa->type == PACKED_FLOAT64) {
-        double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+    } else {
+        res = packed_array_new(pa->type, rA * cB);
+        if (!res || !res->data) return value_none();
+        if (pa->type == PACKED_FLOAT64) {
+            double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
         
         int num_threads = 4;
         if (rA < num_threads) num_threads = rA;
@@ -2351,7 +2363,8 @@ static Value native_tensor_matmul(int argc, Value *args) {
         for (int t = 0; t < num_threads; t++) {
             pthread_join(threads[t], NULL);
         }
-    }
+        } // end of if (pa->type == PACKED_FLOAT64)
+    } // end of else
     
     res->ndims = 2;
     res->shape[0] = rA;
@@ -2377,21 +2390,32 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
     
-    PackedArray *res = packed_array_new(pa->type, rA * cB);
-    if (!res || !res->data) return value_none();
-    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-    
+    PackedArray *res;
     if (strcmp(pa->device, "cuda") == 0) {
 #ifdef GLOW_USE_CUDA
+        res = packed_array_new(pa->type, 0);
+        res->size = rA * cB;
+        res->capacity = rA * cB;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        res->data = cuda_tensor_malloc(res->size * elem_sz);
         cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
         strncpy(res->device, "cuda", 15);
         res->device[15] = '\0';
+        res->ndims = 2;
+        res->shape[0] = rA;
+        res->shape[1] = cB;
+        res->strides[0] = cB;
+        res->strides[1] = 1;
         return value_packed(res);
 #else
         runtime_error_thrown = 1;
         return value_none();
 #endif
     }
+    
+    res = packed_array_new(pa->type, rA * cB);
+    if (!res || !res->data) return value_none();
+    double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
     
     for (int i = 0; i < rA; i++) {
         for (int j = 0; j < cB; j++) {
