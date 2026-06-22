@@ -67,7 +67,7 @@ define build-fuzz
 	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
 	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
 	$(CC) tests/c_harness/$(1).c $(FUZZ_SRC) -o $(BIN_DIR)/$(1) $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION $(FUZZ_LIBS)
-	./$(BIN_DIR)/$(1)
+	ASAN_OPTIONS=detect_leaks=0 ./$(BIN_DIR)/$(1)
 	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
 endef
 

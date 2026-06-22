@@ -291,6 +291,9 @@ int main(void) {
         } else {
             in_fuzz = 0;
             crashes++;
+            pthread_mutex_unlock(&gc_mutex);
+            pthread_mutex_unlock(&threads_mutex);
+            pthread_mutex_unlock(&glow_gil);
             signal(SIGSEGV, fuzz_signal_handler);
             signal(SIGFPE,  fuzz_signal_handler);
             signal(SIGABRT, fuzz_signal_handler);
