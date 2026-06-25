@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(GlowLang C)
+project(GlowLang C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED True)
@@ -29,6 +29,12 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(SQLite3 REQUIRED)
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    find_package(CUDAToolkit)
+endif()
 
 # X11 is specific to Unix (and not macOS)
 if(UNIX AND NOT APPLE)
@@ -58,6 +64,11 @@ set(GLOW_SOURCES
     src/stdlib.c
 )
 
+if(CUDAToolkit_FOUND)
+    add_compile_definitions(GLOW_USE_CUDA)
+    list(APPEND GLOW_SOURCES src/cuda/tensor_ops.cu)
+endif()
+
 # Output binaries directly into the bin/ folder like the Makefile does
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
@@ -74,6 +85,10 @@ target_link_libraries(glowlang PRIVATE
     OpenSSL::Crypto
     SQLite::SQLite3
 )
+
+if(CUDAToolkit_FOUND)
+    target_link_libraries(glowlang PRIVATE CUDA::cudart CUDA::cublas)
+endif()
 
 if(NOT MSVC)
     target_link_libraries(glowlang PRIVATE m)

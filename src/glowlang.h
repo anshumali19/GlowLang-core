@@ -235,7 +235,7 @@ extern void glow_store_index_jit(Value coll, Value v_idx, Value v_val);
 extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
 extern Value value_from_double(double d);
 extern void* tensor_malloc(size_t size);
-extern void tensor_free(void *ptr, size_t size);
+extern void tensor_free(void *ptr, size_t size, const char *device);
 
 /* ================================================================
  *  BYTECODE
