@@ -343,12 +343,15 @@ int main(void) {
         runtime_error_thrown = 0;
         has_exception = 0;
         next_free_reg = 0;
+        call_stack_ptr = 0;
+        call_depth = 0;
 
+        volatile YY_BUFFER_STATE bp = NULL;
         int sig = sigsetjmp(fuzz_jmp, 1);
         if (sig == 0) {
             in_fuzz = 1;
 
-            YY_BUFFER_STATE bp = yy_scan_string(prog);
+            bp = yy_scan_string(prog);
             if (bp) {
                 int parse_result = yyparse();
                 if (parse_result == 0 && root != NULL) {
@@ -365,21 +368,29 @@ int main(void) {
 
                     /* Run the compiled bytecode */
                     run_bytecode(main_fe.body, main_fe.body->code, NULL, 0);
-
-                    bc_free(main_fe.body);
-                    main_fe.body = NULL;
-                    compiling_bc = NULL;
                 }
-                yy_delete_buffer(bp);
             }
 
             in_fuzz = 0;
         } else {
-            in_fuzz = 0;
             crashes++;
+            pthread_mutex_unlock(&gc_mutex);
+            pthread_mutex_unlock(&threads_mutex);
+            pthread_mutex_unlock(&glow_gil);
             signal(SIGSEGV, fuzz_signal_handler);
+            signal(SIGALRM, fuzz_signal_handler);
             signal(SIGFPE,  fuzz_signal_handler);
             signal(SIGABRT, fuzz_signal_handler);
+            in_fuzz = 0;
+        }
+        
+        if (bp) {
+            yy_delete_buffer(bp);
+        }
+        if (main_fe.body) {
+            bc_free(main_fe.body);
+            main_fe.body = NULL;
+            compiling_bc = NULL;
         }
 
         free(prog);

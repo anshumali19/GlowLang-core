@@ -19,21 +19,18 @@
 #include <string.h>
 #include <time.h>
 #include <signal.h>
-#include <setjmp.h>
 #include <unistd.h>
 #include "../../src/glowlang.h"
 
-/* ── Signal recovery ─────────────────────────────────────────────── */
-static sigjmp_buf fuzz_jmp;
+/* ── Globals for fuzzing control ─────────────────────────────────── */
 static volatile sig_atomic_t in_fuzz = 0;
+extern volatile int in_fuzz_timeout;
+
+#include <setjmp.h>
+static sigjmp_buf fuzz_jmp;
 
 static void fuzz_signal_handler(int sig) {
-    if (in_fuzz) {
-        siglongjmp(fuzz_jmp, sig);
-    }
-    /* If not in a fuzz iteration, re-raise so ASan can still report */
-    signal(sig, SIG_DFL);
-    raise(sig);
+    if (in_fuzz) siglongjmp(fuzz_jmp, 1);
 }
 
 /* ── Opcode bounds ───────────────────────────────────────────────── */
@@ -79,6 +76,8 @@ static Bytecode* build_random_bytecode(FuncEntry *fe, int instruction_count) {
     bc->local_count = 256; // Ensure all random registers (0-255) are scanned by GC
     for (int i = 0; i < instruction_count; i++) {
         OpCode op = random_opcode();
+        if (op == OP_SPAWN) op = OP_NOP; // Do not leak spawned threads!
+        
         int arg   = random_arg();
         intptr_t ptr = random_ptr();
         if (op != OP_CONST_FLOAT && op != OP_CONST_STRING && op != OP_USE_FILE) {
@@ -141,6 +140,8 @@ int main(void) {
         extern __thread size_t stack_arena_used;
         vm_stack_top = 0;
         stack_arena_used = 0;
+        extern THREAD_LOCAL Value pending_exception;
+        pending_exception = 0;
 
         /* Random instruction count: 1 – 32 */
         int instr_count = 1 + (rand() % 32);
@@ -157,20 +158,41 @@ int main(void) {
         Bytecode *bc = build_random_bytecode(&fe, instr_count);
         fe.body = bc;
 
+        in_fuzz = 1;
+        /* Attempt to run the random bytecode */
         int sig = sigsetjmp(fuzz_jmp, 1);
         if (sig == 0) {
-            in_fuzz = 1;
-            /* Attempt to run the random bytecode */
             alarm(1);
+            printf("  [debug] calling run_bytecode...\n"); fflush(stdout);
             run_bytecode(bc, bc->code, NULL, 0);
+            printf("  [debug] run_bytecode returned!\n"); fflush(stdout);
             alarm(0);
-            in_fuzz = 0;
         } else {
-            in_fuzz = 0;
+            alarm(0); /* Cancel any pending alarm if we crashed */
             crashes++;
-            /* Reinstall handlers (some systems reset to SIG_DFL after catch) */
+            pthread_mutex_unlock(&gc_mutex);
+            pthread_mutex_unlock(&threads_mutex);
+            pthread_mutex_unlock(&glow_gil);
             signal(SIGALRM, fuzz_signal_handler);
+            signal(SIGSEGV, fuzz_signal_handler);
+            signal(SIGFPE,  fuzz_signal_handler);
+            signal(SIGABRT, fuzz_signal_handler);
         }
+        in_fuzz = 0;
+
+        for (int i = 0; i < vm_stack_size; i++) {
+            vm_stack[i] = value_none();
+        }
+        vm_stack_top = 0;
+        pending_exception = value_none();
+        has_exception = 0;
+        call_stack_ptr = 0;
+        call_depth = 0;
+
+        extern void gc_full_collect(void);
+        printf("  [debug] calling gc_full_collect...\n"); fflush(stdout);
+        gc_full_collect();
+        printf("  [debug] gc_full_collect returned!\n"); fflush(stdout);
 
         bc_free(bc);
     }
