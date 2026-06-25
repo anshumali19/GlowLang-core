@@ -313,6 +313,11 @@ int glow_main(int argc, char **argv) {
         }
 
         if (filename) {
+            const char *ext = strrchr(filename, '.');
+            if (!ext || strcmp(ext, ".glow") != 0) {
+                fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension.\n");
+                return 1;
+            }
             yyin = fopen(filename, "r");
             if (yyin) {
                 compiling_file = filename;
@@ -367,6 +372,11 @@ int glow_main(int argc, char **argv) {
     } else {
         // Old style: glow file.glow
         const char *filename = subcommand;
+        const char *ext = strrchr(filename, '.');
+        if (!ext || strcmp(ext, ".glow") != 0) {
+            fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension.\n");
+            return 1;
+        }
         yyin = fopen(filename, "r");
         if (yyin) {
             compiling_file = filename;

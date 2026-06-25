@@ -26,6 +26,10 @@ THREAD_LOCAL int vm_stack_size = 0;
 THREAD_LOCAL int sp = 0;
 THREAD_LOCAL int vm_stack_top = 0;
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+volatile int in_fuzz_timeout = 0;
+#endif
+
 THREAD_LOCAL CallFrame call_stack[65536];
 THREAD_LOCAL int call_stack_ptr = 0;
 
@@ -345,17 +349,13 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         int my_frame_idx;
         int old_top;
     } VMFrame;
-    int frames_capacity = 512;
-    VMFrame *frames = malloc(frames_capacity * sizeof(VMFrame));
+    VMFrame frames[2000];
+    int frames_capacity = 2000;
     int internal_depth = 0;
 
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) do { \
     int _eval_new_base = (new_base_reg); \
     if (__builtin_expect(call_depth + internal_depth >= 2000, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
-    if (__builtin_expect(internal_depth >= frames_capacity, 0)) { \
-        frames_capacity *= 2; \
-        frames = realloc(frames, frames_capacity * sizeof(VMFrame)); \
-    } \
     frames[internal_depth].bc = bc; \
     frames[internal_depth].pc = pc; \
     frames[internal_depth].closure = current_closure; \
@@ -402,7 +402,6 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         } else {
             Value ret_val = res;
             if (internal_depth == 0) {
-                free(frames);
                 return ret_val;
             } else {
                 call_stack_pop();
@@ -497,8 +496,15 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 
 #define R(idx) vm_stack[base_reg + (idx)]
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+#define CHECK_FUZZ_TIMEOUT() if (__builtin_expect(in_fuzz_timeout, 0)) { pending_exception = value_string_copy("Fuzzer Timeout"); has_exception = 1; goto l_OP_THROW; }
+#else
+#define CHECK_FUZZ_TIMEOUT()
+#endif
+
 #ifdef _MSC_VER
 #define DISPATCH() { \
+    CHECK_FUZZ_TIMEOUT(); \
     if (profiling_active) pc->exec_count++; \
     if (trace_mode) { \
         printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
@@ -630,6 +636,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 }
 #else
 #define DISPATCH() { \
+    CHECK_FUZZ_TIMEOUT(); \
     if (profiling_active) pc->exec_count++; \
     if (trace_mode) { \
         printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
@@ -1092,15 +1099,22 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         }
 
         int current_pc_idx = (int)(pc - bc->code);
-        for (int i = 0; i < bc->exception_count; i++) {
-            if (current_pc_idx >= bc->exception_table[i].start_pc && 
-                current_pc_idx < bc->exception_table[i].end_pc) {
-                R(0) = exc;
-                has_exception = 0;
-                pending_exception = 0;
-                if (exception_stack_trace) { free(exception_stack_trace); exception_stack_trace = NULL; }
-                pc = bc->code + bc->exception_table[i].handler_pc;
-                DISPATCH();
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+        int is_fuzz_timeout = __builtin_expect(in_fuzz_timeout, 0);
+#else
+        int is_fuzz_timeout = 0;
+#endif
+        if (!is_fuzz_timeout) {
+            for (int i = 0; i < bc->exception_count; i++) {
+                if (current_pc_idx >= bc->exception_table[i].start_pc && 
+                    current_pc_idx < bc->exception_table[i].end_pc) {
+                    R(0) = exc;
+                    has_exception = 0;
+                    pending_exception = 0;
+                    if (exception_stack_trace) { free(exception_stack_trace); exception_stack_trace = NULL; }
+                    pc = bc->code + bc->exception_table[i].handler_pc;
+                    DISPATCH();
+                }
             }
         }
         
@@ -1711,6 +1725,10 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         pc->op = pc->original_op; DISPATCH_CURRENT();
     }
     l_OP_USE_FILE: {
+        if (call_depth > 50) {
+            pending_exception = value_string_copy("Maximum import depth exceeded (circular import?)");
+            has_exception = 1; goto l_OP_THROW;
+        }
         const char *path = (const char*)pc->ptr;
         if (!path) path = "";
         const char *resolved_path = path;
@@ -1758,7 +1776,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
         }
         fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-        if (sz < 0) { fclose(f); pc++; goto l_DISPATCH; }
+        if (sz < 0 || sz > 64 * 1024 * 1024) { 
+            fclose(f); 
+            char err[512]; snprintf(err, sizeof(err), "File too large or invalid: %s", path);
+            pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW; 
+        }
         char *buf = malloc(sz + 1); 
         size_t nread = fread(buf, 1, sz, f); buf[nread] = '\0'; fclose(f);
 
@@ -1778,6 +1800,9 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         if (old_bp) yy_switch_to_buffer(old_bp);
         line_num = old_line;
         if (parse_res != 0) {
+            root = old_root; compiling_file = old_file; compiling_bc = old_bc; 
+            next_free_reg = old_reg; compiling_func = old_func;
+            last_compiling_class = old_class; last_compiling_trait = old_trait;
             char err[512]; snprintf(err, sizeof(err), "Failed to load module: %s (syntax error)", path);
             pending_exception = value_string_copy(err); has_exception = 1;
             free(buf); goto l_OP_THROW;
@@ -1977,8 +2002,5 @@ l_FINISH:
     gc_free_stack_arena_range(old_arena_used, stack_arena_used);
     stack_arena_used = old_arena_used;
     call_depth--;
-    free(frames);
     return (has_exception) ? value_none() : R(0);
 }
-
-

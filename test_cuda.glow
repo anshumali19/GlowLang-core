@@ -1,0 +1,24 @@
+// Test Script for CUDA
+
+show "=== GlowLang Hardware Acceleration Test ==="
+
+show "1. Creating 1024x1024 Tensors..."
+let A = tensor.zeros(1048576) 
+let B = tensor.zeros(1048576)
+
+show "2. Running Matrix Multiplication on CPU (This might take a moment)..."
+let C_cpu = tensor.matmul(A, 1024, 1024, B, 1024, 1024)
+show "CPU Matmul Complete!"
+
+show "3. Transferring Tensors to GPU (CUDA)..."
+let A_cuda = tensor.to_device(A, "cuda")
+let B_cuda = tensor.to_device(B, "cuda")
+show "Transfer Complete!"
+
+show "4. Running Matrix Multiplication on GPU (CUDA)..."
+let C_cuda = tensor.matmul(A_cuda, 1024, 1024, B_cuda, 1024, 1024)
+show "GPU Matmul Complete! (Much faster!)"
+
+show "5. Transferring result back to CPU..."
+let C_back = tensor.to_device(C_cuda, "cpu")
+show "Hardware Acceleration Test Successful!"

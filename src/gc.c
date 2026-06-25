@@ -165,7 +165,7 @@ void gc_full_collect(void) {
             else if (unmarked->type == OBJ_INSTANCE) { /* No fields array to free, Dict is handled as OBJ_DICT */ }
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
-            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t))); }
+            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
             else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
             else if (unmarked->type == OBJ_CLOSURE) {
                 Closure *c = (Closure*)unmarked;
@@ -220,7 +220,7 @@ void gc_minor_collect(void) {
             else if (unmarked->type == OBJ_INSTANCE) { }
             else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
             else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
-            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t))); }
+            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
             else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
             else if (unmarked->type == OBJ_CLOSURE) {
                 Closure *c = (Closure*)unmarked;
