@@ -683,8 +683,22 @@ void* tensor_malloc(size_t size) {
     return ptr;
 }
 
-void tensor_free(void *ptr, size_t size) {
+#ifdef GLOW_USE_CUDA
+extern void* cuda_tensor_malloc(size_t size);
+extern void cuda_tensor_free(void* ptr);
+extern void cuda_tensor_to_device(void* dst, const void* src, size_t size);
+extern void cuda_tensor_to_host(void* dst, const void* src, size_t size);
+extern void cuda_tensor_matmul(const double* A, int rA, int cA, const double* B, int cB, double* C);
+#endif
+
+void tensor_free(void *ptr, size_t size, const char *device) {
     if (!ptr || size == 0) return;
+#ifdef GLOW_USE_CUDA
+    if (strcmp(device, "cuda") == 0) {
+        cuda_tensor_free(ptr);
+        return;
+    }
+#endif
     int bin = get_bin(size);
     pthread_mutex_lock(&pool_mutex);
     FreeBlock *block = (FreeBlock*)ptr;
@@ -1034,6 +1048,9 @@ static Value json_parse_value(const char **src) {
     } else if (strncmp(*src, "true", 4) == 0) { *src += 4; return value_bool(1); }
     else if (strncmp(*src, "false", 5) == 0) { *src += 5; return value_bool(0); }
     else if (strncmp(*src, "null", 4) == 0) { *src += 4; return value_none(); }
+    
+    // Invalid JSON, prevent infinite loops by advancing src
+    if (**src) (*src)++;
     return value_none();
 }
 
@@ -2300,11 +2317,32 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
     
-    PackedArray *res = packed_array_new(pa->type, rA * cB);
-    if (!res || !res->data) return value_none();
-    
-    if (pa->type == PACKED_FLOAT64) {
-        double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
+    PackedArray *res;
+    if (strcmp(pa->device, "cuda") == 0) {
+#ifdef GLOW_USE_CUDA
+        res = packed_array_new(pa->type, 0);
+        res->size = rA * cB;
+        res->capacity = rA * cB;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        res->data = cuda_tensor_malloc(res->size * elem_sz);
+        cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
+        strncpy(res->device, "cuda", 15);
+        res->device[15] = '\0';
+        res->ndims = 2;
+        res->shape[0] = rA;
+        res->shape[1] = cB;
+        res->strides[0] = cB;
+        res->strides[1] = 1;
+        return value_packed(res);
+#else
+        runtime_error_thrown = 1;
+        return value_none();
+#endif
+    } else {
+        res = packed_array_new(pa->type, rA * cB);
+        if (!res || !res->data) return value_none();
+        if (pa->type == PACKED_FLOAT64) {
+            double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
         
         int num_threads = 4;
         if (rA < num_threads) num_threads = rA;
@@ -2328,7 +2366,8 @@ static Value native_tensor_matmul(int argc, Value *args) {
         for (int t = 0; t < num_threads; t++) {
             pthread_join(threads[t], NULL);
         }
-    }
+        } // end of if (pa->type == PACKED_FLOAT64)
+    } // end of else
     
     res->ndims = 2;
     res->shape[0] = rA;
@@ -2354,7 +2393,30 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
     
-    PackedArray *res = packed_array_new(pa->type, rA * cB);
+    PackedArray *res;
+    if (strcmp(pa->device, "cuda") == 0) {
+#ifdef GLOW_USE_CUDA
+        res = packed_array_new(pa->type, 0);
+        res->size = rA * cB;
+        res->capacity = rA * cB;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        res->data = cuda_tensor_malloc(res->size * elem_sz);
+        cuda_tensor_matmul((const double*)pa->data, rA, cA, (const double*)pb->data, cB, (double*)res->data);
+        strncpy(res->device, "cuda", 15);
+        res->device[15] = '\0';
+        res->ndims = 2;
+        res->shape[0] = rA;
+        res->shape[1] = cB;
+        res->strides[0] = cB;
+        res->strides[1] = 1;
+        return value_packed(res);
+#else
+        runtime_error_thrown = 1;
+        return value_none();
+#endif
+    }
+    
+    res = packed_array_new(pa->type, rA * cB);
     if (!res || !res->data) return value_none();
     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
     
@@ -2383,11 +2445,15 @@ static Value native_tensor_to(int argc, Value *args) {
         return args[0]; // Already on target device
     }
     
-    if (strcmp(target_device, "cuda") == 0 || strcmp(target_device, "cpu") == 0) {
-        PackedArray *new_pa = packed_array_new(pa->type, pa->size);
+    if (strcmp(target_device, "cuda") == 0) {
+#ifdef GLOW_USE_CUDA
+        PackedArray *new_pa = packed_array_new(pa->type, 0); // No CPU mem
+        new_pa->size = pa->size;
+        new_pa->capacity = pa->size;
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+        new_pa->data = cuda_tensor_malloc(pa->size * elem_sz);
         if (pa->size > 0 && new_pa->data && pa->data) {
-            size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
-            memcpy(new_pa->data, pa->data, pa->size * elem_sz);
+            cuda_tensor_to_device(new_pa->data, pa->data, pa->size * elem_sz);
         }
         new_pa->ndims = pa->ndims;
         for (int i = 0; i < pa->ndims; i++) {
@@ -2395,11 +2461,40 @@ static Value native_tensor_to(int argc, Value *args) {
             new_pa->strides[i] = pa->strides[i];
         }
         new_pa->offset = pa->offset;
-        strncpy(new_pa->device, target_device, 15);
+        strncpy(new_pa->device, "cuda", 15);
+        new_pa->device[15] = '\0';
+        return value_packed(new_pa);
+#else
+        runtime_error_thrown = 1;
+        return value_none();
+#endif
+    } else if (strcmp(target_device, "cpu") == 0) {
+        PackedArray *new_pa = packed_array_new(pa->type, pa->size); // Allocates CPU mem
+        size_t elem_sz = (pa->type == PACKED_FLOAT64) ? sizeof(double) : sizeof(int64_t);
+#ifdef GLOW_USE_CUDA
+        if (pa->size > 0 && new_pa->data && pa->data) {
+            if (strcmp(pa->device, "cuda") == 0) {
+                cuda_tensor_to_host(new_pa->data, pa->data, pa->size * elem_sz);
+            } else {
+                memcpy(new_pa->data, pa->data, pa->size * elem_sz);
+            }
+        }
+#else
+        if (pa->size > 0 && new_pa->data && pa->data) {
+            memcpy(new_pa->data, pa->data, pa->size * elem_sz);
+        }
+#endif
+        new_pa->ndims = pa->ndims;
+        for (int i = 0; i < pa->ndims; i++) {
+            new_pa->shape[i] = pa->shape[i];
+            new_pa->strides[i] = pa->strides[i];
+        }
+        new_pa->offset = pa->offset;
+        strncpy(new_pa->device, "cpu", 15);
         new_pa->device[15] = '\0';
         return value_packed(new_pa);
     }
-    return args[0];
+    return value_none();
 }
 
 #ifdef __linux__
@@ -2576,9 +2671,17 @@ static Value native_string_builder_append(int argc, Value *args) {
         list_push(AS_LIST(args[0]), args[1]);
         return args[0];
     }
-    StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (GET_TYPE(args[0]) != VAL_OBJECT) return args[0];
+    GCObject *obj = (GCObject*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (obj->type != OBJ_STRING_BUILDER) return args[0];
+    StringBuilder *sb = (StringBuilder*)obj;
     const char *s = AS_STRING(args[1]);
     int len = strlen(s);
+    if ((long long)sb->size + len > 64 * 1024 * 1024LL) {
+        pending_exception = value_string_copy("StringBuilder size limit exceeded");
+        has_exception = 1;
+        return args[0];
+    }
     if (sb->size + len >= sb->capacity) {
         sb->capacity = (sb->size + len + 1) * 2;
         sb->buffer = realloc(sb->buffer, sb->capacity);
@@ -2591,7 +2694,10 @@ static Value native_string_builder_append(int argc, Value *args) {
 
 static Value native_string_builder_build(int argc, Value *args) {
     (void)argc; (void)args;
-    StringBuilder *sb = (StringBuilder*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (GET_TYPE(args[0]) != VAL_OBJECT) return value_none();
+    GCObject *obj = (GCObject*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    if (obj->type != OBJ_STRING_BUILDER) return value_none();
+    StringBuilder *sb = (StringBuilder*)obj;
     return value_string_copy(sb->buffer);
 }
 
@@ -2697,6 +2803,7 @@ void std_init(void) {
     dict_set(tensor, "to_device", native_func_new("to_device", native_tensor_to));
     var_set("tensor", value_dict(tensor));
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     Dict *sqlite = dict_new(4);
     dict_set(sqlite, "open", native_func_new("open", native_sqlite_open));
     dict_set(sqlite, "exec", native_func_new("exec", native_sqlite_exec));
@@ -2728,11 +2835,14 @@ void std_init(void) {
     dict_set(os, "verify_gc", native_func_new("verify_gc", native_verify_gc));
     dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
+#endif
 
     Dict *re_native = dict_new(4);
     dict_set(re_native, "match", native_func_new("match", native_re_match));
     dict_set(re_native, "search", native_func_new("search", native_re_search));
     var_set("re_native", value_dict(re_native));
+
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     Dict *fs = dict_new(4);
     dict_set(fs, "readdir", native_func_new("readdir", native_fs_readdir));
     dict_set(fs, "stat", native_func_new("stat", native_fs_stat));
@@ -2755,6 +2865,7 @@ void std_init(void) {
     dict_set(http, "request", native_func_new("request", http_request_native));
     var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
+#endif
     Dict *json = dict_new(4); 
     dict_set(json, "stringify", native_func_new("stringify", native_json_stringify)); 
     dict_set(json, "parse", native_func_new("parse", native_json_parse));
@@ -2790,6 +2901,10 @@ void std_cleanup(void) {
 
     // 3. Clear pending exceptions
     pending_exception = value_none();
+
+    // 3.5 Clear GC roots
+    vm_last_class = NULL;
+    vm_last_trait = NULL;
 
     // 4. Perform a full garbage collection sweep to free now-unreferenced objects
     gc_full_collect();

@@ -1284,6 +1284,20 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_LAMBDA: {
             FuncEntry *fe = func_table_add(n->name);
+            if (fe->body) bc_free(fe->body);
+            if (fe->specs) {
+                for (int i=0; i<fe->spec_count; i++) {
+                    if (fe->specs[i].jit_code && fe->specs[i].jit_code != (void*)1) {
+                        munmap(fe->specs[i].jit_code, fe->specs[i].jit_size);
+                    }
+                }
+                free(fe->specs);
+                fe->specs = NULL;
+                fe->spec_count = 0;
+                fe->spec_capacity = 0;
+            }
+            if (fe->local_names) free(fe->local_names);
+            fe->local_names = NULL; fe->local_count = 0; fe->local_capacity = 0;
             fe->param_count = n->func_param_count;
             fe->params = n->func_params;
             fe->body = bc_new(fe);
