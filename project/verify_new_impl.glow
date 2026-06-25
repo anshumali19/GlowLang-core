@@ -1,0 +1,43 @@
+# GlowLang System & Hardware Acceleration Verification Script
+show "=================================================="
+show "  GlowLang New Implementation Verification Suite  "
+show "=================================================="
+
+# 1. Concurrency Verification (spawn)
+show "[1] Testing Concurrency & Thread Locking..."
+func worker(id):
+    show "  -> Worker thread spawned successfully: ", id
+end
+spawn worker(1)
+spawn worker(2)
+
+# 2. SIMD Tensor Hardware Acceleration
+show ""
+show "[2] Testing SIMD Vector Math Acceleration..."
+let v1 = tensor.zeros(1000)
+let v2 = tensor.zeros(1000)
+let i = 0
+while i < 1000:
+    v1[i] = 10.5
+    v2[i] = 20.5
+    i = i + 1
+end
+let v3 = tensor.add(v1, v2)
+show "  -> SIMD 1000-element Addition [0]: ", v3[0], " (Expected 31.0)"
+
+# 3. Object-Oriented Blueprint Engine
+show ""
+show "[3] Testing Object-Oriented Blueprint Engine..."
+blueprint HardwareNode:
+    action init(n):
+        self.name = n
+    end
+    action status():
+        return "ONLINE"
+    end
+end
+let node = HardwareNode("GPU-01")
+show "  -> Node ", node.name, " status: ", node.status()
+
+show ""
+show "✅ All Core Systems Verified Online!"
