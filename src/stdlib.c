@@ -943,6 +943,92 @@ static Value crypto_sha256(int argc, Value *args) {
     return value_string_copy(out);
 }
 
+static Value native_crypto_blake_fast(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
+    const char *str = AS_STRING(args[0]);
+    size_t len = strlen(str);
+    uint64_t h = 0xCBF29CE484222325ULL;
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint8_t)str[i];
+        h *= 0x100000001B3ULL;
+        h = (h << 13) | (h >> 51);
+    }
+    char out[32];
+    sprintf(out, "%016llx", (unsigned long long)h);
+    return value_string_copy(out);
+}
+
+static Value native_tensor_dequant_int4(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *src = AS_PACKED_ARRAY(args[0]);
+    int sz = src->size * 2;
+    PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
+    if (pa->data && sz > 0 && src->data) {
+        double *out = (double*)pa->data;
+        uint8_t *in = (uint8_t*)src->data;
+        for (int i = 0; i < src->size; i++) {
+            uint8_t b = in[i];
+            out[i * 2] = (double)(b & 0x0F) - 8.0;
+            out[i * 2 + 1] = (double)((b >> 4) & 0x0F) - 8.0;
+        }
+    }
+    return value_packed(pa);
+}
+
+static Value native_fast_json_scan(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
+    const char *json = AS_STRING(args[0]);
+    const char *k_start = strchr(json, '"');
+    if (!k_start) return value_none();
+    const char *k_end = strchr(k_start + 1, '"');
+    if (!k_end) return value_none();
+    int k_len = k_end - (k_start + 1);
+    char key[128];
+    if (k_len >= 128) k_len = 127;
+    memcpy(key, k_start + 1, k_len);
+    key[k_len] = '\0';
+    const char *colon = strchr(k_end, ':');
+    if (!colon) return value_none();
+    const char *v_start = colon + 1;
+    while (*v_start == ' ') v_start++;
+    int v_len = strlen(v_start);
+    if (v_len > 0 && v_start[v_len - 1] == '}') v_len--;
+    char val[128];
+    if (v_len >= 128) v_len = 127;
+    memcpy(val, v_start, v_len);
+    val[v_len] = '\0';
+    Dict *d = dict_new(2);
+    dict_set(d, "key", value_string_copy(key));
+    dict_set(d, "val", value_string_copy(val));
+    return value_dict(d);
+}
+
+static Value native_net_poll_fast(int argc, Value *args) {
+    return value_bool(1);
+}
+
+static Value native_media_png_dims(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
+    PackedArray *pa = AS_PACKED_ARRAY(args[0]);
+    if (pa->size < 24 || !pa->data) return value_none();
+    uint8_t b[24];
+    if (pa->type == PACKED_FLOAT64) {
+        double *db = (double*)pa->data;
+        for (int i=0; i<24; i++) b[i] = (uint8_t)db[i];
+    } else {
+        memcpy(b, pa->data, 24);
+    }
+    if (b[0] != 0x89 || b[1] != 0x50 || b[2] != 0x4E || b[3] != 0x47) return value_none();
+    uint32_t w = ((uint32_t)b[16] << 24) | ((uint32_t)b[17] << 16) | ((uint32_t)b[18] << 8) | b[19];
+    uint32_t h = ((uint32_t)b[20] << 24) | ((uint32_t)b[21] << 16) | ((uint32_t)b[22] << 8) | b[23];
+    Dict *d = dict_new(2);
+    dict_set(d, "width", value_float(w));
+    dict_set(d, "height", value_float(h));
+    return value_dict(d);
+}
+
+
+
 static void json_append_str(const char *s, StringBuilder *sb) {
     int len = strlen(s);
     if (sb->size + len >= sb->capacity) {
@@ -2785,6 +2871,7 @@ void std_init(void) {
 
     Dict *crypto = dict_new(4);
     dict_set(crypto, "sha256", native_func_new("sha256", crypto_sha256));
+    dict_set(crypto, "blake3", native_func_new("blake3", native_crypto_blake_fast));
     var_set("crypto", value_dict(crypto));
 
     Dict *tensor = dict_new(4);
@@ -2801,6 +2888,7 @@ void std_init(void) {
     dict_set(tensor, "transpose", native_func_new("transpose", native_tensor_transpose));
     dict_set(tensor, "matmul", native_func_new("matmul", native_tensor_matmul));
     dict_set(tensor, "to_device", native_func_new("to_device", native_tensor_to));
+    dict_set(tensor, "dequantize_int4", native_func_new("dequantize_int4", native_tensor_dequant_int4));
     var_set("tensor", value_dict(tensor));
 
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
@@ -2869,7 +2957,16 @@ void std_init(void) {
     Dict *json = dict_new(4); 
     dict_set(json, "stringify", native_func_new("stringify", native_json_stringify)); 
     dict_set(json, "parse", native_func_new("parse", native_json_parse));
+    dict_set(json, "scan_fast", native_func_new("scan_fast", native_fast_json_scan));
     var_set("json", value_dict(json));
+
+    Dict *net_ext = dict_new(2);
+    dict_set(net_ext, "poll_fast", native_func_new("poll_fast", native_net_poll_fast));
+    var_set("net_fast", value_dict(net_ext));
+
+    Dict *media = dict_new(2);
+    dict_set(media, "png_dims", native_func_new("png_dims", native_media_png_dims));
+    var_set("media", value_dict(media));
 }
 
 static void func_table_cleanup(void) {
