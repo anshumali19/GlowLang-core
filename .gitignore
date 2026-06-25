@@ -32,3 +32,6 @@ trace.log
 # Build tools
 node_modules/
 package-lock.json
+
+# Local Agent Customizations
+.agents/
