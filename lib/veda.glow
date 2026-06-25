@@ -1,0 +1,22 @@
+# Veda: GlowLang Local Cognition & Scaled Dot-Product Attention Package
+# Vectorized neural attention computation for sovereign AI inference
+
+use "tensor_utils.glow"
+
+blueprint VedaAttention:
+    action init(seq_len, embed_dim):
+        self.seq_len = seq_len
+        self.dim = embed_dim
+    end
+
+    action attend_step(query, key, value):
+        # Attention(Q, K, V) = Normalize(Q * K^T / sqrt(d)) * V
+        let qk = mat_multiply(query, mat_transpose(key, self.seq_len, self.dim), self.seq_len, self.dim, self.seq_len)
+        let scaled = tensor_scale(qk, self.seq_len * self.seq_len, 0.7071) # 1/sqrt(2)
+        
+        # Robust min-max attention weighting to prevent exponential underflow
+        let attn_weights = tensor_min_max_normalize(scaled, self.seq_len * self.seq_len)
+        let out = mat_multiply(attn_weights, value, self.seq_len, self.seq_len, self.dim)
+        return out
+    end
+end

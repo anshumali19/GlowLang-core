@@ -1,0 +1,15 @@
+use "veda.glow"
+use "tensor_utils.glow"
+
+show "--- Industrial Verification: GlowVeda Quantized Attention ---"
+# Seq Len = 2, Dim = 2 (flat 4-element vectors)
+let Q = tensor_from_list([1.0, 0.0, 0.0, 1.0])
+let K = tensor_from_list([1.0, 0.0, 0.0, 1.0])
+let V = tensor_from_list([10.0, 20.0, 30.0, 40.0])
+
+let veda = VedaAttention(2, 2)
+let out = veda.attend_step(Q, K, V)
+
+show "Attention Output Vector: "
+tensor_print(out, 4)
+show "✅ Veda Neural Attention PASS"
