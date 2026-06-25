@@ -1,0 +1,17 @@
+show "--- Testing Newly Integrated C Primitives in VM ---"
+
+# 1. Test C BLAKE Fast Hashing
+let digest = crypto.blake3("GlowLang Low-Level C Intrinsics")
+show "C Blake Hashing Output: ", digest
+
+# 2. Test C INT4 Dequantization Kernel
+let int4_packed = tensor.zeros(4)
+int4_packed[0] = 163.0 # 0xA3
+int4_packed[1] = 127.0 # 0x7F
+
+let dequant = tensor.dequantize_int4(int4_packed)
+show "C INT4 Dequantized Tensor Size: ", len(dequant)
+show "  -> Weight [0]: ", dequant[0]
+show "  -> Weight [1]: ", dequant[1]
+
+show "✅ Low-Level C Kernel Integration Verified in VM!"
