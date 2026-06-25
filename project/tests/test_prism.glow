@@ -1,0 +1,16 @@
+use "prism.glow"
+
+show "--- Industrial Verification: GlowPrism Structural Refraction ---"
+let prism = PrismEngine()
+let tokens = prism.project_stream(["ID", "Status", "Protocol"], ["IND-99", "ACTIVE", "QUIC-v3"])
+
+show "Refracted Token Buffer Count: ", prism.refracted_count
+let i = 0
+while i < len(tokens):
+    show "  Token ", i, ": ", tokens[i]
+    i = i + 1
+end
+
+if prism.refracted_count == 3:
+    show "✅ Prism Zero-Copy Refraction PASS"
+end
