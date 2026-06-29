@@ -317,7 +317,7 @@ void print_bytecode(Bytecode *bc) {
 }
 
 Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
-    if (++call_depth > 2000) {
+    if (++call_depth > 65500) {
         pending_exception = value_string_copy("Maximum recursion depth exceeded");
         has_exception = 1;
         call_depth--;
@@ -349,13 +349,13 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         int my_frame_idx;
         int old_top;
     } VMFrame;
-    VMFrame frames[2000];
-    int frames_capacity = 2000;
+    static THREAD_LOCAL VMFrame frames[65536];
+    int frames_capacity = 65536;
     int internal_depth = 0;
 
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) do { \
     int _eval_new_base = (new_base_reg); \
-    if (__builtin_expect(call_depth + internal_depth >= 2000, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
+    if (__builtin_expect(call_depth + internal_depth >= 65500, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
     frames[internal_depth].bc = bc; \
     frames[internal_depth].pc = pc; \
     frames[internal_depth].closure = current_closure; \
