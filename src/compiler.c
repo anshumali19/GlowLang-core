@@ -128,6 +128,9 @@ void bc_free(Bytecode *bc) {
     if (bc->code) free(bc->code);
     if (bc->exception_table) free(bc->exception_table);
     if (bc->jit_code) munmap(bc->jit_code, bc->jit_size);
+    if (bc->baseline_jit_code) munmap(bc->baseline_jit_code, bc->baseline_jit_size);
+    if (bc->jit_offsets) free(bc->jit_offsets);
+    if (bc->baseline_jit_offsets) free(bc->baseline_jit_offsets);
     free(bc);
 }
 
