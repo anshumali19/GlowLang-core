@@ -383,14 +383,53 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     for (int _i = bc->preserved_locals; _i < bc->local_count; _i++) vm_stack[base_reg + _i] = value_none(); \
     goto l_DISPATCH; \
 } while(0)
-
     Instruction *pc = start_pc ? start_pc : bc->code;
 
     l_RESUME_INTERP:;
     
-    if (!start_pc && bc->count > 0 && !bc->jit_code && !bc->jit_failed) {
-        if (++bc->code[0].exec_count > 10) {
-            if (1) jit_compile(bc);
+    if (!start_pc && bc->count > 0) {
+        bc->exec_count++;
+        if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && !bc->jit_failed) {
+            if (bc->exec_count > 10) {
+                jit_compile_baseline(bc);
+            }
+        }
+        if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && !bc->jit_failed) {
+            if (bc->exec_count > 100) {
+                jit_compile(bc);
+            }
+        }
+    }
+
+    if (!start_pc && bc->baseline_jit_code && !bc->jit_code) {
+        typedef Value (*JITFunc)(Value *R, int *pc_idx);
+        int deopt_pc = 0;
+        Value res = ((JITFunc)bc->baseline_jit_code)(&vm_stack[base_reg], &deopt_pc);
+        if (__builtin_expect(IS_DEOPT(res), 0)) {
+            pc = &bc->code[deopt_pc];
+        } else {
+            Value ret_val = res;
+            if (internal_depth == 0) {
+                return ret_val;
+            } else {
+                call_stack_pop();
+                if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
+                stack_arena_used = old_arena_used;
+                vm_stack_top = old_top;
+                
+                internal_depth--;
+                bc = frames[internal_depth].bc;
+                pc = frames[internal_depth].pc;
+                current_closure = frames[internal_depth].closure;
+                base_reg = frames[internal_depth].base_reg;
+                int ret_reg = frames[internal_depth].ret_reg;
+                old_arena_used = frames[internal_depth].old_arena_used;
+                my_frame_idx = frames[internal_depth].my_frame_idx;
+                old_top = frames[internal_depth].old_top;
+                
+                if (ret_reg >= 0) vm_stack[base_reg + ret_reg] = ret_val;
+                pc++; goto l_DISPATCH;
+            }
         }
     }
     if (!start_pc && bc->jit_code) {
@@ -714,7 +753,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         }
         pc++; goto l_DISPATCH;
     }
-    l_OP_MOVE: R(pc->r0) = R(pc->r1); pc++; goto l_DISPATCH;
+    l_OP_MOVE: R(pc->r0) = R(pc->r1); pc++; DISPATCH_CURRENT();
     l_OP_ADD: {
         Value a = R(pc->r1), b = R(pc->r2), res;
         if (IS_INT(a) && IS_INT(b)) {
@@ -769,11 +808,33 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_NOT: R(pc->r0) = value_bool(!value_truthy(R(pc->r1))); pc++; goto l_DISPATCH;
     l_OP_JUMP: {
         if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
+        if (__builtin_expect(bc->jit_tier != JIT_TIER_OPTIMIZING && !bc->jit_failed, 0)) {
+            if (pc->arg <= (int)(pc - bc->code)) {
+                bc->exec_count++;
+                if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
+                    jit_compile_baseline(bc);
+                }
+                if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                    jit_compile(bc);
+                }
+            }
+        }
         pc = bc->code + pc->arg; DISPATCH();
     }
     l_OP_JUMP_IF_FALSE: {
         if(!value_truthy(R(pc->r0))) {
             if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
+            if (__builtin_expect(bc->jit_tier != JIT_TIER_OPTIMIZING && !bc->jit_failed, 0)) {
+                if (pc->arg <= (int)(pc - bc->code)) {
+                    bc->exec_count++;
+                    if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
+                        jit_compile_baseline(bc);
+                    }
+                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                        jit_compile(bc);
+                    }
+                }
+            }
             pc = bc->code + pc->arg;
         } else {
             pc++;
@@ -783,6 +844,17 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_JUMP_IF_TRUE: {
         if(value_truthy(R(pc->r0))) {
             if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("JUMP out of bounds"); has_exception = 1; goto l_OP_THROW; }
+            if (__builtin_expect(bc->jit_tier != JIT_TIER_OPTIMIZING && !bc->jit_failed, 0)) {
+                if (pc->arg <= (int)(pc - bc->code)) {
+                    bc->exec_count++;
+                    if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
+                        jit_compile_baseline(bc);
+                    }
+                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                        jit_compile(bc);
+                    }
+                }
+            }
             pc = bc->code + pc->arg;
         } else {
             pc++;
@@ -842,16 +914,35 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
             } else {
                 fe->used++;
-                if (fe->used > 10 && fe->spec_count < 8) {
-                    void *jit_check = func_get_specialization(fe, sig);
-                    if (!jit_check) {
-                        jit_compile_specialized(fe, sig);
-                        if (!func_get_specialization(fe, sig)) {
-                            func_add_specialization(fe, sig, (void*)1, 0);
+                func_maybe_tier_up(fe);
+                if (fe->body && fe->body->jit_code) {
+                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                    int deopt_pc = 0;
+                    Value res = ((JITFunc)fe->body->jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (__builtin_expect(IS_DEOPT(res), 0)) {
+                        res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                    }
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
+                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                    int deopt_pc = 0;
+                    Value res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (__builtin_expect(IS_DEOPT(res), 0)) {
+                        res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                    }
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                } else {
+                    if (fe->used > 10 && fe->spec_count < 8) {
+                        void *jit_check = func_get_specialization(fe, sig);
+                        if (!jit_check) {
+                            jit_compile_specialized(fe, sig);
+                            if (!func_get_specialization(fe, sig)) {
+                                func_add_specialization(fe, sig, (void*)1, 0);
+                            }
                         }
                     }
+                    DO_CALL(fe->body, NULL, base_reg + pc->r2, pc->r0);
                 }
-                DO_CALL(fe->body, NULL, base_reg + pc->r2, pc->r0);
             }
         } else {
             Value v = var_get(n);
@@ -1642,8 +1733,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_FOR_EACH_PAIR: pc++; goto l_DISPATCH;
     l_OP_PUSH_SCOPE: pc++; goto l_DISPATCH;
     l_OP_POP_SCOPE: pc++; goto l_DISPATCH;
-    l_OP_LOAD_LOCAL: pc++; goto l_DISPATCH;
-    l_OP_STORE_LOCAL: pc++; goto l_DISPATCH;
+    l_OP_LOAD_LOCAL: pc++; DISPATCH_CURRENT();
+    l_OP_STORE_LOCAL: pc++; DISPATCH_CURRENT();
     l_OP_DICT_KEYS: pc++; goto l_DISPATCH;
     l_OP_DICT_VALUES: pc++; goto l_DISPATCH;
     l_OP_DICT_HAS: pc++; goto l_DISPATCH;
