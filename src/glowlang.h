@@ -406,6 +406,12 @@ typedef struct {
     int handler_pc;
 } ExceptionEntry;
 
+typedef enum {
+    JIT_TIER_INTERP = 0,
+    JIT_TIER_BASELINE = 1,
+    JIT_TIER_OPTIMIZING = 2
+} JITTier;
+
 struct Bytecode {
     Instruction *code;
     int capacity;
@@ -419,6 +425,12 @@ struct Bytecode {
     ExceptionEntry *exception_table;
     int exception_count;
     int preserved_locals;
+    JITTier jit_tier;
+    uint32_t exec_count;
+    uint32_t tier_up_threshold;
+    void *baseline_jit_code;
+    size_t baseline_jit_size;
+    uint32_t *baseline_jit_offsets;
 };
 
 /* ================================================================
@@ -517,6 +529,12 @@ struct FuncEntry {
     Specialization *specs;
     int spec_count;
     int spec_capacity;
+    JITTier jit_tier;
+    uint32_t exec_count;
+    uint32_t tier_up_threshold;
+    void *baseline_jit_code;
+    size_t baseline_jit_size;
+    uint32_t *baseline_jit_offsets;
 };
 
 struct BoundMethod {
