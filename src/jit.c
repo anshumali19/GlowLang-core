@@ -112,6 +112,9 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             case OP_CALL: case OP_CALL_VALUE: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
             case OP_SIMD_ADD: case OP_TAIL_CALL:
+            case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
+            case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
+            case OP_LOAD_LOCAL: case OP_STORE_LOCAL:
                 break;
             default: bc->jit_failed = 1; return;
         }
@@ -373,6 +376,42 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 emit_mov_rax_imm64(&buf, (uintptr_t)simd_add_helper);
                 jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xd0);
                 jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++;
+                break;
+            }
+            case OP_LOAD_LOCAL: {
+                emit_mov_rax_reg(&buf, pc->arg);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_STORE_LOCAL: {
+                emit_mov_rax_reg(&buf, pc->r0);
+                emit_mov_reg_rax(&buf, pc->arg);
+                break;
+            }
+            case OP_ADD_INT: {
+                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_SUB_INT: {
+                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_MUL_INT: {
+                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc1);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            }
+            case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
+                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8);
+                uint8_t set_op;
+                switch(pc->op) { case OP_LT_INT: set_op = 0x9c; break; case OP_GT_INT: set_op = 0x9f; break; case OP_LTE_INT: set_op = 0x9e; break; case OP_GTE_INT: set_op = 0x9d; break; case OP_EQ_INT: set_op = 0x94; break; default: set_op = 0x94; break; }
+                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, set_op); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc1); emit_mov_rax_imm64(&buf, value_bool(0)); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_RETURN: { 
