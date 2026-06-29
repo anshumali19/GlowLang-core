@@ -157,6 +157,14 @@ Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
             call_stack_pop();
             return res;
         }
+        if (fe->body->baseline_jit_code && !fe->body->jit_code) {
+            typedef Value (*JITFunc)(Value *R, int *pc_idx);
+            int deopt_pc = 0;
+            call_stack_push(fe, NULL);
+            Value res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
+            call_stack_pop();
+            return res;
+        }
         return run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
     }
     return value_none();
