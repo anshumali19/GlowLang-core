@@ -214,6 +214,79 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
     return value_none();
 }
 
+Value jit_get_property_helper(Value o, const char *n, Instruction *pc) {
+    if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(o);
+        if(ot==OBJ_INSTANCE) {
+            Instance *inst = AS_INSTANCE(o);
+            Dict *d = inst->properties;
+            intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
+            Value v;
+            if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+                v = d->values[idx];
+            } else {
+                int new_idx = dict_get_idx(d, n);
+                if (new_idx != -1) {
+                    if (pc) {
+                        pc->cache[0].val = new_idx + 1;
+                        pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
+                    }
+                    v = d->values[new_idx];
+                } else {
+                    v = class_get_method(inst->klass, n);
+                }
+            }
+            if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
+                v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
+            }
+            return v;
+        } return value_none();
+    } else if(GET_TYPE(o)==VAL_DICT) {
+        Value v = dict_get(AS_DICT(o), n);
+        if (GET_TYPE(v) == VAL_NONE) {
+            if (strcmp(n, "has") == 0) v = bound_native_method_new(o, native_dict_has);
+            else if (strcmp(n, "keys") == 0) v = bound_native_method_new(o, native_dict_keys);
+            else if (strcmp(n, "values") == 0) v = bound_native_method_new(o, native_dict_values);
+            else if (strcmp(n, "remove") == 0) v = bound_native_method_new(o, native_dict_remove);
+            else if (strcmp(n, "merge") == 0) v = bound_native_method_new(o, native_dict_merge);
+        }
+        return v;
+    } else if(GET_TYPE(o)==VAL_STRING) {
+        Value v = value_none();
+        if (strcmp(n, "contains") == 0) v = bound_native_method_new(o, native_str_contains);
+        else if (strcmp(n, "find") == 0) v = bound_native_method_new(o, native_str_find);
+        else if (strcmp(n, "slice") == 0) v = bound_native_method_new(o, native_str_slice);
+        else if (strcmp(n, "split") == 0) v = bound_native_method_new(o, native_str_split);
+        return v;
+    }
+    return value_none();
+}
+
+Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) {
+    if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) {
+        Instance *inst = AS_INSTANCE(o);
+        Dict *d = inst->properties;
+        intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
+        if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+            d->values[idx] = v;
+            gc_write_barrier((GCObject*)inst, v);
+        } else {
+            int new_idx = dict_get_idx(d, n);
+            if (new_idx != -1) {
+                if (pc) {
+                    pc->cache[0].val = new_idx + 1;
+                    pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
+                }
+                d->values[new_idx] = v;
+                gc_write_barrier((GCObject*)inst, v);
+            } else {
+                instance_set(inst, n, v);
+            }
+        }
+    } else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
+    return v;
+}
+
 Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
     if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     FuncEntry *fe = NULL;
@@ -235,6 +308,8 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                         pc->cache[0].key = inst->klass;
                         pc->cache[0].val = (intptr_t)fe;
                     }
+                } else {
+                    fallback_callee = m;
                 }
             }
         }
@@ -256,7 +331,24 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         args[0] = obj;
         Value old_self = var_get("self");
         var_set("self", obj);
-        Value res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+        TypeSignature sig = compute_signature(args, fe->param_count);
+        void *jit = func_get_specialization(fe, sig);
+        Value res;
+        if (jit && jit != (void*)1) {
+            typedef Value (*JITFunc)(Value *R, int *pc_idx);
+            int deopt_pc = 0;
+            call_stack_push(fe, NULL);
+            res = ((JITFunc)jit)(args, &deopt_pc);
+            call_stack_pop();
+        } else if (fe->body->baseline_jit_code && !fe->body->jit_code) {
+            typedef Value (*JITFunc)(Value *R, int *pc_idx);
+            int deopt_pc = 0;
+            call_stack_push(fe, NULL);
+            res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
+            call_stack_pop();
+        } else {
+            res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+        }
         var_set("self", old_self);
         return res;
     } else if (native_fe && is_native_dict_str_method) {

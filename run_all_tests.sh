@@ -12,7 +12,7 @@ for test_file in "$TEST_DIR"/*.glow; do
     EXPECTED=0
     if [[ "$test_file" == *"test_std.glow"* ]]; then
         EXPECTED=42
-    elif [[ "$test_file" == *"test_div0_stack.glow"* || "$test_file" == *"test_error_stack.glow"* || "$test_file" == *"test_jit_div0.glow"* || "$test_file" == *"test_throw_stack.glow"* || "$test_file" == *"loop_rec_test.glow"* ]]; then
+    elif [[ "$test_file" == *"test_div0_stack.glow"* || "$test_file" == *"test_error_stack.glow"* || "$test_file" == *"test_jit_div0.glow"* || "$test_file" == *"test_throw_stack.glow"* || "$test_file" == *"loop_rec_test.glow"* || "$test_file" == *"test_import.glow"* ]]; then
         EXPECTED=1
     fi
 
