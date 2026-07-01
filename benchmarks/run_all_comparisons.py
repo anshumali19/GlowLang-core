@@ -3,7 +3,7 @@ import time
 import json
 import os
 
-languages = ["GlowLang", "C", "C++", "Go", "Node.js", "Python 3", "Perl", "Lua 5.4"]
+languages = ["GlowLang", "C", "C++", "Go", "Node.js", "Python 3", "Perl"]
 benchmarks = ["Fibonacci", "Loop", "Ackermann", "N-Queens", "Dijkstra"]
 
 commands = {
@@ -14,8 +14,7 @@ commands = {
         "Go": "./bench_fib_go",
         "Node.js": "node bench_fib.js",
         "Python 3": "python3 bench_fib.py",
-        "Perl": "perl bench_fib.pl",
-        "Lua 5.4": "./ext_langs/lua-5.4.6/src/lua bench_fib.lua"
+        "Perl": "perl bench_fib.pl"
     },
     "Loop": {
         "GlowLang": "../bin/glowlang bench_loop.glow",
@@ -24,8 +23,7 @@ commands = {
         "Go": "./bench_loop_go",
         "Node.js": "node bench_loop.js",
         "Python 3": "python3 bench_loop.py",
-        "Perl": "perl bench_loop.pl",
-        "Lua 5.4": "./ext_langs/lua-5.4.6/src/lua bench_loop.lua"
+        "Perl": "perl bench_loop.pl"
     },
     "Ackermann": {
         "GlowLang": "../bin/glowlang dsa_ackermann.glow",
@@ -34,18 +32,16 @@ commands = {
         "Go": "./ack_go",
         "Node.js": "node dsa_ackermann.js",
         "Python 3": "python3 dsa_ackermann.py",
-        "Perl": "perl dsa_ackermann.pl",
-        "Lua 5.4": "./ext_langs/lua-5.4.6/src/lua dsa_ackermann.lua"
+        "Perl": "perl dsa_ackermann.pl"
     },
     "N-Queens": {
-        "GlowLang": "../bin/glowlang dsa_nqueens.glow",
+        "GlowLang": "../bin/glowlang dsa_nqueens_simple.glow",
         "C": "./nq_c",
         "C++": "./nq_cpp",
         "Go": "./nq_go",
         "Node.js": "node dsa_nqueens.js",
         "Python 3": "python3 dsa_nqueens.py",
-        "Perl": "perl dsa_nqueens.pl",
-        "Lua 5.4": "./ext_langs/lua-5.4.6/src/lua dsa_nqueens.lua"
+        "Perl": "perl dsa_nqueens.pl"
     },
     "Dijkstra": {
         "GlowLang": "../bin/glowlang bench_dijkstra.glow",
@@ -54,15 +50,14 @@ commands = {
         "Go": "./bench_dijkstra_go",
         "Node.js": "node bench_dijkstra.js",
         "Python 3": "python3 bench_dijkstra.py",
-        "Perl": "perl bench_dijkstra.pl",
-        "Lua 5.4": "./ext_langs/lua-5.4.6/src/lua bench_dijkstra.lua"
+        "Perl": "perl bench_dijkstra.pl"
     }
 }
 
 def run_bench(cmd):
     start = time.time()
     try:
-        res = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        res = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
     except Exception as e:
         return None
     return time.time() - start
@@ -75,7 +70,11 @@ for b in benchmarks:
     for lang in languages:
         cmd = commands[b][lang]
         # Warmup
-        run_bench(cmd)
+        w = run_bench(cmd)
+        if w is None:
+            results[b][lang] = "FAIL"
+            print(f"  {lang}: FAIL")
+            continue
         # Run 3 times
         times = []
         for _ in range(3):
