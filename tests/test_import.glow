@@ -1,1 +1,1 @@
-import "https://fake.com/fib.glow"
+use "https://fake.com/fib.glow"

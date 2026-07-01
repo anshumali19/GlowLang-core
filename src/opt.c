@@ -1,10 +1,20 @@
 #include "opt.h"
+#include "ssa.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 void optimize_bytecode(Bytecode *bc) {
     if (!bc || bc->count == 0) return;
+
+    // SSA MIR analysis and register allocation pass
+    SSAFunc *ssa = ssa_build_from_bytecode(bc);
+    if (ssa) {
+        ssa_optimize_gvn(ssa);
+        ssa_optimize_dce(ssa);
+        ssa_linear_scan_regalloc(ssa);
+        ssa_free(ssa);
+    }
 
     // Pass 1: Identify all jump targets to define basic block boundaries
     signed char *is_jump_target = calloc(bc->count, sizeof(signed char));
@@ -21,16 +31,16 @@ void optimize_bytecode(Bytecode *bc) {
     signed char is_const[1024] = {0};
     unsigned char reg_types[1024] = {0}; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
 
-    // Pass 2: Type Inference and Constant Folding (Basic Block Local)
+    // Pass 2: Type Inference and Constant Folding (Multi-pass dataflow propagation)
+    for (int pass = 0; pass < 3; pass++) {
     for (int i=0; i < bc->count; i++) {
         Instruction *inst = &bc->code[i];
 
         // If this instruction is a jump target, it starts a new basic block.
-        // We must invalidate all constant tracking because we don't know the state
-        // coming from the jump source.
+        // We invalidate constant tracking because jump sources may differ,
+        // but preserve inferred variable types across loop boundaries.
         if (is_jump_target[i]) {
             memset(is_const, 0, sizeof(is_const));
-            memset(reg_types, 0, sizeof(reg_types));
         }
 
         if (inst->op == OP_CONST_INT) {
@@ -132,6 +142,7 @@ void optimize_bytecode(Bytecode *bc) {
                 is_const[inst->r0] = 0;
             }
         }
+    }
     }
 
     // Pass 3: Scalar Replacement
@@ -292,6 +303,40 @@ void optimize_bytecode(Bytecode *bc) {
                 }
             }
         }
+    }
+
+    // Pass 7: Peephole Copy Propagation / Temporary Elimination for Binary Ops
+    for (int iter = 0; iter < 3; iter++) {
+    for (int i = 0; i < bc->count; i++) {
+        Instruction *pc = &bc->code[i];
+        int is_bin = (pc->op >= OP_ADD && pc->op <= OP_NEQ) || 
+                     (pc->op >= OP_ADD_INT && pc->op <= OP_EQ_INT);
+        if (!is_bin) continue;
+
+        // Backward scan for r1 temporary move
+        int b1 = i - 1;
+        while (b1 >= 0 && bc->code[b1].op == OP_NOP && !is_jump_target[b1+1]) b1--;
+        if (b1 >= 0 && !is_jump_target[b1+1] && bc->code[b1].op == OP_MOVE && bc->code[b1].r0 == pc->r1) {
+            pc->r1 = bc->code[b1].r1;
+            bc->code[b1].op = OP_NOP;
+        }
+
+        // Backward scan for r2 temporary move
+        int b2 = i - 1;
+        while (b2 >= 0 && bc->code[b2].op == OP_NOP && !is_jump_target[b2+1]) b2--;
+        if (b2 >= 0 && !is_jump_target[b2+1] && bc->code[b2].op == OP_MOVE && bc->code[b2].r0 == pc->r2) {
+            pc->r2 = bc->code[b2].r1;
+            bc->code[b2].op = OP_NOP;
+        }
+
+        // Forward scan for output move
+        int f1 = i + 1;
+        while (f1 < bc->count && bc->code[f1].op == OP_NOP && !is_jump_target[f1]) f1++;
+        if (f1 < bc->count && !is_jump_target[f1] && bc->code[f1].op == OP_MOVE && bc->code[f1].r1 == pc->r0) {
+            pc->r0 = bc->code[f1].r0;
+            bc->code[f1].op = OP_NOP;
+        }
+    }
     }
 
     free(is_jump_target);

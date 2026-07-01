@@ -7,14 +7,14 @@ blueprint NQueens:
         let i = 0
         while i < row:
             let b = board[i]
-            if b is col:
+            if b == col:
                 return false
             end
             let diff = col - b
             if diff < 0:
                 diff = 0 - diff
             end
-            if diff is (row - i):
+            if diff == (row - i):
                 return false
             end
             i = i + 1
