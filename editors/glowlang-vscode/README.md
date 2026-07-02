@@ -84,4 +84,4 @@ code .
 
 ## License
 
-MIT — Part of the GlowLang project.
+Part of the GlowLang project — released under the GlowLang Sovereign License (GSL) v1.0.

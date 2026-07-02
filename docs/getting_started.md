@@ -1,6 +1,6 @@
 # Getting Started with GlowLang
 
-Welcome to **GlowLang** — a production-grade programming language with natural-language readability and native C-tier performance. This guide will have you writing and running GlowLang programs in minutes.
+Welcome to **GlowLang** — a programming language with natural-language readability, a bytecode VM with a tiered JIT, and a batteries-included standard library. This guide will have you writing and running GlowLang programs in minutes.
 
 ---
 

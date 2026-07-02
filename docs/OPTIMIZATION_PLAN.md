@@ -29,7 +29,7 @@ Transform GlowLang from a string-lookup based interpreter into a high-performanc
 ## Phase 3: Fast Value Representation (NaN Boxing) (Complete)
 **Status:** DONE (2026-05-23)
 **Description:** Shrink the 16-byte `Value` struct to an 8-byte NaN-boxed double.
-**Impact:** Achieved a **3x total iterative speedup** (0.759s -> 0.214s). Memory traffic reduced by 50% per stack operation. GlowLang is now ~3x faster than Python 3.12 in tight loops.
+**Impact:** Internal before/after on the loop benchmark improved from 0.759s to 0.214s, and per-stack-operation memory traffic dropped by roughly half from shrinking the value representation.
 
 ### Tasks:
 1. [x] Overhaul `Value` type to use a `uint64_t` representation.
