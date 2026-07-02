@@ -59,7 +59,7 @@ fuzz-parser: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_
 $(GDU_BIN): $(TOOLS_DIR)/gdu.c
 	$(CC) $(TOOLS_DIR)/gdu.c -o $(GDU_BIN) $(CFLAGS) -lsqlite3
 
-FUZZ_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
+FUZZ_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/ssa.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c
 FUZZ_LIBS = -lsqlite3 -lX11
 
 # Build a fuzz harness helper (call: $(call build-fuzz,harness_name))
