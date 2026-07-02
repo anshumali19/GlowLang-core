@@ -252,8 +252,8 @@ As of the high-performance architectural redesign, all 20 complex DSA problems h
 | Algorithm | Result | Performance Note |
 | :--- | :--- | :--- |
 | Ackermann | ✅ PASS | Massive recursion handled via 16-bit registers. |
-| N-Queens | ✅ PASS | Backtracking is ~18x faster than Python. |
-| Dijkstra | ✅ PASS | O(V^2) array access is now zero-overhead. |
+| N-Queens | ✅ PASS | Recursive backtracking solver. |
+| Dijkstra | ✅ PASS | O(V^2) array-based shortest path. |
 | Merge Sort | ✅ PASS | Memory stable with bump-pointer allocation. |
 | Bellman-Ford | ✅ PASS | Linear DP paths optimized by SSA pass. |
 

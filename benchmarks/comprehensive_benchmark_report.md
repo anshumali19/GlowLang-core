@@ -26,7 +26,7 @@ Times shown represent end-to-end execution runtime (in seconds). Lower is better
 
 ## 2. Historical Speedup Analysis: What We Achieved
 
-Comparing today's benchmark metrics against our previous baseline documentation (`benchagainstgiants.md`), we observe significant speedups across all compute-heavy workloads due to direct threading and loop tiering:
+Comparing today's benchmark metrics against a prior optimization baseline, we observe speedups across compute-heavy workloads due to direct threading and loop tiering:
 
 | Benchmark | Previous GlowLang Baseline | Optimized GlowLang (Current) | Speedup Achieved | Key Driver of Speedup |
 | :--- | :---: | :---: | :---: | :--- |

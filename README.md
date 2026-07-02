@@ -1,13 +1,12 @@
 <p align="center">
   <h1 align="center">🔥 GlowLang</h1>
-  <p align="center"><strong>A production-grade programming language with natural-language syntax, SIMD tensors, built-in HTTP, SQLite ORM, JIT compilation, and a complete developer ecosystem.</strong></p>
+  <p align="center"><strong>A programming language with natural-language syntax, SIMD tensors, built-in HTTP, SQLite bindings, a bytecode VM with JIT, and a growing standard library and tooling.</strong></p>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
-  <img src="https://img.shields.io/badge/tests-99%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/build-zero%20warnings-brightgreen" alt="Build">
-  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+  <img src="https://img.shields.io/badge/tests-103%2F104%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/license-Sovereign-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WASM-lightgrey" alt="Platform">
 </p>
 
@@ -30,7 +29,7 @@
 | **LSP** | Language Server Protocol with completion, hover, go-to-definition, diagnostics |
 | **Editor Support** | VSCode, Neovim, Sublime Text, Helix, JetBrains |
 | **Tooling** | Debugger, profiler, heap inspector, bytecode viewer |
-| **Testing** | 99 tests, 6 fuzz harnesses, ASan/TSan verification |
+| **Testing** | 104-case test suite (103 passing; `test_mergesort.glow` currently hangs), 6 fuzz harnesses, ASan/TSan builds |
 
 ## 🚀 Quick Start
 
@@ -143,7 +142,7 @@ GlowLang/
 │   ├── tensor_utils.glow   # Tensor operations
 │   ├── db.glow             # Database toolkit
 │   └── ...
-├── tests/                  # Test suite (99 tests)
+├── tests/                  # Test suite (.glow cases + C fuzz harnesses)
 ├── examples/               # Example applications
 ├── editors/                # Editor integrations
 ├── tools/                  # Dev tools (debugger, profiler)
@@ -155,7 +154,7 @@ GlowLang/
 ## 🧪 Testing
 
 ```bash
-# Run all 99 tests
+# Run the full test suite
 make verify
 
 # Run with AddressSanitizer + ThreadSanitizer
@@ -218,8 +217,7 @@ Source Code (.glow)
 
 ## 📄 License
 
-
-MIT License — see [LICENSE](LICENSE) for details.
+GlowLang is released under the **GlowLang Sovereign License (GSL) v1.0** — see [GlowLang Sovereign License](GlowLang%20Soverign%20License.md) for the full terms. All rights reserved by the GlowLang maintainers.
 
 ---
 
