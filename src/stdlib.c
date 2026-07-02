@@ -298,6 +298,17 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         ObjType ot = GET_OBJ_TYPE(obj);
         if(ot==OBJ_INSTANCE) {
             Instance *inst = AS_INSTANCE(obj);
+            if (pc && pc->cache[0].key == inst->klass && pc->cache[1].key == (void*)1) {
+                FuncEntry *cached_fe = (FuncEntry*)pc->cache[0].val;
+                typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                JITFunc cached_jit = (JITFunc)pc->cache[1].val;
+                args[0] = obj;
+                int deopt_pc = 0;
+                call_stack_push(cached_fe, NULL);
+                Value res = cached_jit(args, &deopt_pc);
+                call_stack_pop();
+                return res;
+            }
             if (pc && pc->cache[0].key == inst->klass) {
                 fe = (FuncEntry*)pc->cache[0].val;
             } else {
@@ -337,12 +348,20 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         if (jit && jit != (void*)1) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
+            if (pc) {
+                pc->cache[1].key = (void*)1;
+                pc->cache[1].val = (intptr_t)jit;
+            }
             call_stack_push(fe, NULL);
             res = ((JITFunc)jit)(args, &deopt_pc);
             call_stack_pop();
         } else if (fe->body->baseline_jit_code && !fe->body->jit_code) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
+            if (pc) {
+                pc->cache[1].key = (void*)1;
+                pc->cache[1].val = (intptr_t)fe->body->baseline_jit_code;
+            }
             call_stack_push(fe, NULL);
             res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
             call_stack_pop();
