@@ -2,214 +2,169 @@
 
 ## Overview
 
-GlowLang is an Indian-origin systems programming language project focused on performance, innovation, tooling, and long-term ecosystem development.
+GlowLang is a programming language with natural-language syntax, implemented in C. A `.glow`
+source file is lexed, parsed to an AST, compiled to register-based bytecode, optimized, and then
+executed by a virtual machine that can promote hot code to native machine code via a tiered JIT.
+Memory is managed by a generational garbage collector.
 
-The repository contains:
-
-* the Glow language compiler and parser infrastructure,
-* benchmarking systems for cross-language performance evaluation,
-* editor tooling and Language Server Protocol (LSP) integrations,
-* runtime and utility tooling,
-* and experimental research infrastructure.
-
-The project emphasizes:
-
-* systems-level performance,
-* language tooling,
-* cross-language benchmarking,
-* and enterprise-ready ecosystem architecture.
+This document describes the components that actually exist in the repository.
 
 ---
 
-# Repository Architecture
+## Execution Pipeline
 
-## 1. Parser and Compiler Infrastructure (`archive/`)
-
-The `archive/` directory contains multiple historical parser implementations and compiler experiments for GlowLang.
-
-### Components
-
-* Parser generations (`v3` → `v6`)
-* AST construction logic
-* tokenization and grammar systems
-* parser-generator outputs (Bison/Yacc style)
-* syntax evolution experiments
-
-### Core Structure
-
-The parser architecture revolves around the `GlowValue` AST node representation containing:
-
-* type metadata
-* numeric values
-* string values
-
-This layered parser evolution demonstrates iterative compiler development and grammar refinement over time.
-
-### Design Goals
-
-* incremental compiler evolution
-* experimental parser research
-* syntax validation
-* runtime integration preparation
-* future optimization support
+```
+Source (.glow)
+    ↓  Flex lexer            (src/glowlang.l)
+  Tokens
+    ↓  Bison parser          (src/glowlang.y)
+  AST
+    ↓  Compiler              (src/compiler.c)
+  Register bytecode
+    ↓  Optimizer (SSA)       (src/opt.c, src/ssa.c)
+  Optimized bytecode
+    ↓
+  Register VM  ⇄  Tiered JIT (src/vm.c ⇄ src/jit.c)
+    ↓
+  Generational GC            (src/gc.c)
+```
 
 ---
 
-## 2. Benchmarking Infrastructure (`benchmarks/`)
+## Core Components (`src/`)
 
-GlowLang includes a comprehensive multi-language benchmark suite designed for performance validation and systems-level comparison.
+| File | Role |
+|------|------|
+| `glowlang.l` | Flex lexer — tokenizes source. |
+| `glowlang.y` | Bison grammar — builds the AST. |
+| `glowlang.h` | Core type definitions, the `Value` representation, and the opcode set. |
+| `compiler.c` | Lowers the AST into register-based bytecode. |
+| `vm.c` | The virtual machine and its ~120 opcodes. |
+| `jit.c` | Multi-tier JIT compiler and deoptimization. |
+| `opt.c`, `ssa.c` | SSA-based optimization passes over the bytecode/MIR. |
+| `gc.c` | Generational garbage collector. |
+| `stdlib.c` | Native builtins (HTTP, SQLite, tensors, filesystem, JSON, OS, etc.). |
+| `lsp.c` | Language Server Protocol implementation. |
+| `arena.c` | Bump-pointer arena allocator for AST/compilation data. |
+| `ir.c`, `ast.c`, `run_bytecode_optimized.c` | Supporting IR and runtime helpers. |
+| `cuda/tensor_ops.cu` | Optional CUDA kernels (see *Hardware Acceleration*). |
 
-### Supported Languages
+### Value Representation
 
-| Language             | Implementation                                 |
-| -------------------- | ---------------------------------------------- |
-| C                    | `dijkstra_c.c`                                 |
-| C++                  | `bench_dijkstra.cpp`                           |
-| C#                   | `bench_cs.cs`, `BenchLoop.cs`, `DsaNQueens.cs` |
-| Java                 | `BenchLoop.java`, `DijkstraBench.java`         |
-| Go                   | `bench_dijkstra.go`                            |
-| JavaScript / Node.js | `bench_dijkstra.js`                            |
-| Python               | `bench_dijkstra.py`                            |
+Values are **NaN-boxed** into a single `uint64_t` (`typedef uint64_t Value`). The type tag lives in
+the high bits and is recovered via `GET_TYPE`. Value types are `INT`, `FLOAT`, `BOOL`, `STRING`,
+`LIST`, `DICT`, `OBJECT`, and `NONE`, plus internal `DEOPT` / `TRACE_EXIT` sentinels used by the JIT.
+Floats are stored directly; other types pack a tag and payload (immediate value or heap pointer).
 
-### Implemented Algorithms
+### Virtual Machine
 
-The benchmark suite currently includes:
+`vm.c` implements a **register-based** VM. On supported compilers the dispatch loop uses
+**direct-threaded / computed-goto** dispatch (`goto *dt[pc->op]`), with a `switch`-based fallback for
+portability. The VM maintains localized frame pointers for call frames and enforces instruction and
+recursion limits as safety guards.
 
-* Dijkstra shortest path
-* N-Queens solver
-* Fibonacci recursion
-* Ackermann recursion
-* Pi computation
-* loop and iteration benchmarks
+### Tiered JIT
 
-### Benchmark Philosophy
+`jit.c` promotes frequently executed code through tiers:
 
-The repository follows a strict cross-language parity approach:
+1. **Interpreter** — all code starts here.
+2. **Baseline JIT** — a function/loop is compiled after ~10 executions.
+3. **Optimizing JIT** — recompiled after ~100 executions.
 
-* identical algorithms,
-* equivalent implementations,
-* fair runtime comparisons,
-* and reproducible benchmarking.
+The JIT emits native machine code into executable memory. Guards can **deoptimize** back to the
+interpreter (via the `DEOPT` / `TRACE_EXIT` sentinels) when a speculative assumption fails. Inline
+caches accelerate property access and method dispatch.
 
-### Automation Infrastructure
+### Garbage Collector
 
-Benchmark orchestration is handled through:
-
-* `cross/compile_all.py`
-* `scratch/run_comprehensive_bench.py`
-
-This enables automated compilation and execution across multiple language runtimes.
-
----
-
-## 3. VS Code Language Server Extension (`editors/vscode/`)
-
-GlowLang includes a modern Language Server Protocol (LSP) implementation for Visual Studio Code.
-
-### Architecture
-
-The editor tooling uses:
-
-* `vscode-languageserver-protocol`
-* `vscode-languageclient`
-* `vscode-jsonrpc`
-
-### Features
-
-The extension architecture is designed to support:
-
-* syntax highlighting
-* diagnostics
-* autocomplete
-* hover information
-* semantic analysis
-* editor integration
-* future refactoring support
-
-### Supporting Dependencies
-
-Additional infrastructure includes:
-
-* semantic versioning support
-* minimatch-based file handling
-* JSON-RPC communication
-* parser integration
+`gc.c` is a generational collector managing heap-allocated objects (strings, lists, dicts, objects,
+closures). The arena allocator (`arena.c`) is used for compile-time data that has a bump/free
+lifetime rather than being GC-managed.
 
 ---
 
-## 4. Auxiliary Tooling
+## Standard Library
 
-The repository also contains supporting infrastructure and experimental tooling.
+The standard library has two layers:
 
-### Scripts (`scripts/`)
-
-Utility scripts for:
-
-* LSP testing
-* validation
-* automation
-* compiler verification
-
-### Versioning Tools (`tools/gdu/` - Glow Dependency Utility)
-
-Includes:
-
-* SemVer parsing utilities
-* version management tooling
-* release preparation infrastructure
-
-### Runtime Experiments
-
-Experimental systems-level testing includes:
-
-* GC layout validation
-* object offset testing
-* runtime memory experiments
+- **Native builtins** in `src/stdlib.c` — modules exposed to Glow programs such as `http`, `sqlite`,
+  `tensor`, `fs`, `json`, `os`, and math/string helpers. Tensor operations use SIMD (AVX2/SSE4.2).
+- **Glow-language modules** in `lib/` — libraries written in GlowLang itself, e.g. `web.glow`,
+  `orm.glow`, `ai.glow`, the `glowtorch*` autograd/NN modules, `tensor_utils.glow`, `dataframe.glow`,
+  and testing utilities.
 
 ---
 
-# Architectural Principles
+## Hardware Acceleration (Optional)
 
-## Polyglot Benchmarking
-
-GlowLang maintains identical benchmark implementations across multiple programming languages to ensure fair performance analysis and runtime comparison.
-
-## Incremental Compiler Evolution
-
-The repository preserves historical parser generations to support long-term compiler experimentation and grammar research.
-
-## Modern Tooling Ecosystem
-
-The project adopts Language Server Protocol standards for professional-grade editor integration and tooling interoperability.
-
-## Cross-Language Validation
-
-Shared benchmark implementations across ecosystems provide validation consistency and performance reproducibility.
-
-## Systems-Level Design
-
-GlowLang prioritizes:
-
-* runtime performance,
-* low-level control,
-* compiler experimentation,
-* and scalable tooling infrastructure.
+Tensor math runs on the CPU by default using SIMD. A CUDA path (`src/cuda/tensor_ops.cu`) is compiled
+**only when `nvcc` is available** — the Makefile detects it and defines `GLOW_USE_CUDA`, linking
+`-lcudart`/`-lcublas`. Without an NVIDIA toolchain the `.to_device("cuda")` abstraction falls back to
+the CPU implementation. Planned GPU work is tracked in `nextpa.md`.
 
 ---
 
-# Long-Term Vision
+## Tooling
 
-GlowLang aims to evolve into:
+| Area | Location |
+|------|----------|
+| Package manager (`gdu`) | `tools/gdu/` |
+| Debugger | `tools/debugger/` |
+| Profiler | `tools/profiler/` |
+| Heap/bytecode inspector | `tools/inspector/` |
+| AOT experiments | `tools/aot/` |
+| Stack visualizer | `tools/stack_visualizer/` |
+| Web playground | `tools/playground/`, `web/playground/` |
+| Editor integrations | `editors/` (VS Code, Neovim, Sublime, Helix, JetBrains) |
 
-* a high-performance systems language,
-* an enterprise-ready development ecosystem,
-* a research-oriented compiler platform,
-* and a globally collaborative programming language initiative.
+The VS Code extension (`editors/glowlang-vscode/`) speaks to the LSP server built from `src/lsp.c`.
 
-The architecture is intentionally modular to support:
+---
 
-* compiler expansion,
-* runtime evolution,
-* editor ecosystem growth,
-* package management,
-* and future distributed tooling infrastructure.
+## Build System
+
+The primary build is the `Makefile` (Flex + Bison + GCC). It requires `libsqlite3`, `libX11`,
+`libssl`/`libcrypto`, and an x86-64 CPU with AVX2/SSE4.2. Key targets:
+
+- `make all` — build the `glowlang` interpreter and the `gdu` package manager.
+- `make verify` — build and run the test suite (`run_all_tests.sh`).
+- `make test-sanitized` — build and run tests under AddressSanitizer and ThreadSanitizer.
+- `make fuzz-all` — run the parser/bytecode/runtime/GC/string/module fuzz harnesses.
+- `make tools` — build the standalone debugger, profiler, and inspector.
+- `make wasm` — build a WebAssembly target via Emscripten.
+
+A `CMakeLists.txt` is also provided for cross-platform CI (Linux, macOS, Windows).
+
+---
+
+## Testing
+
+- `tests/*.glow` — language-level test cases run by `run_all_tests.sh`. The runner checks each
+  program's **exit code** against an expected value (most expect `0`; a few expect specific non-zero
+  codes), so it verifies that programs run to completion, not full output correctness. As of the
+  last local run, 103 of 104 cases pass; `test_mergesort.glow` currently hangs (non-terminating)
+  and times out.
+- `tests/c_harness/` — C fuzz harnesses (parser, bytecode, runtime, GC, string, module).
+- `tests/integration/`, `tests/stability/` — larger integration and stability scenarios.
+
+---
+
+## Repository Layout
+
+```
+GlowLang/
+├── src/            # C core: lexer, parser, compiler, VM, JIT, GC, stdlib, LSP
+│   └── cuda/       # optional CUDA kernels
+├── lib/            # standard library written in GlowLang
+├── tests/          # .glow test cases + C fuzz harnesses
+├── benchmarks/     # cross-language benchmark sources + report
+├── examples/       # example programs
+├── editors/        # editor integrations (VS Code, Neovim, Sublime, Helix, JetBrains)
+├── tools/          # gdu, debugger, profiler, inspector, and more
+├── deploy/         # Docker / deployment configs
+├── docs/           # guides and language reference
+├── project/        # sample project layout
+├── web/            # web playground
+├── Makefile        # primary build
+└── CMakeLists.txt  # cross-platform build for CI
+```

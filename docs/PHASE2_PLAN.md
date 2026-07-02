@@ -174,7 +174,7 @@
 - GlowLang is **comparable to C** for simple loops and tight iteration
 - GlowLang is **~1.1x slower than C** for recursive fib
 - GlowLang is **~133x slower than C** for deep recursion (Ackermann) — but it WORKS where Python crashes
-- GlowLang is **~650x faster than Python** for loop benchmarks
+- GlowLang is modestly faster than Python on tight loop benchmarks (see `benchmarks/comprehensive_benchmark_report.md` for current figures)
 - GlowLang handles **arbitrary recursion depth** (4M+ frames) — Python caps at 1000
 
 ---
