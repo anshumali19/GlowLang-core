@@ -5,7 +5,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
-  <img src="https://img.shields.io/badge/tests-103%2F104%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-104%2F104%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Sovereign-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WASM-lightgrey" alt="Platform">
 </p>
@@ -29,7 +29,7 @@
 | **LSP** | Language Server Protocol with completion, hover, go-to-definition, diagnostics |
 | **Editor Support** | VSCode, Neovim, Sublime Text, Helix, JetBrains |
 | **Tooling** | Debugger, profiler, heap inspector, bytecode viewer |
-| **Testing** | 104-case test suite (103 passing; `test_mergesort.glow` currently hangs), 6 fuzz harnesses, ASan/TSan builds |
+| **Testing** | 104-case test suite (all passing), 6 fuzz harnesses, ASan/TSan builds |
 
 ## 🚀 Quick Start
 

@@ -962,24 +962,26 @@ static int compile_expr(Node *n, int target_reg) {
             break;
         }
         case NODE_AND: {
-            int left = compile_expr(n->left, -1);
-            if (target_reg == -1) reg = next_free_reg++;
-            bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
+            // Short-circuit: evaluate the left operand into the result register and
+            // branch on that SAME register. Keeping the branch condition and the
+            // result in one register (instead of a separate temp joined by a MOVE)
+            // stays coherent through the optimizer's copy-propagation/regalloc.
+            int left = compile_expr(n->left, reg);
+            if (left != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
             int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
-            compiling_bc->code[jf].r0 = left;
-            int right = compile_expr(n->right, -1);
-            bc_emit_reg(compiling_bc, OP_MOVE, reg, right, 0);
+            compiling_bc->code[jf].r0 = reg;               // left falsy -> keep reg (=left)
+            int right = compile_expr(n->right, reg);
+            if (right != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, right, 0);
             compiling_bc->code[jf].arg = compiling_bc->count;
             break;
         }
         case NODE_OR: {
-            int left = compile_expr(n->left, -1);
-            if (target_reg == -1) reg = next_free_reg++;
-            bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
+            int left = compile_expr(n->left, reg);
+            if (left != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
             int jt = bc_emit(compiling_bc, OP_JUMP_IF_TRUE, 0, 0);
-            compiling_bc->code[jt].r0 = left;
-            int right = compile_expr(n->right, -1);
-            bc_emit_reg(compiling_bc, OP_MOVE, reg, right, 0);
+            compiling_bc->code[jt].r0 = reg;               // left truthy -> keep reg (=left)
+            int right = compile_expr(n->right, reg);
+            if (right != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, right, 0);
             compiling_bc->code[jt].arg = compiling_bc->count;
             break;
         }
