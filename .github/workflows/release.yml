@@ -95,14 +95,13 @@ jobs:
         uses: actions/download-artifact@v8
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          repository: anshumali19/GlowLang-packages
-          files: |
-            glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz
-            glowlang-macos-latest/glowlang-macos-x64.tar.gz
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --repo anshumali19/GlowLang-packages \
+            --title "GlowLang ${{ github.ref_name }}" \
+            --notes "Optimized GlowLang compiler and package manager binaries." \
+            glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz \
+            glowlang-macos-latest/glowlang-macos-x64.tar.gz \
             glowlang-windows-latest/glowlang-windows-x64.zip
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
