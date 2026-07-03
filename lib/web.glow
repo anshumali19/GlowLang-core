@@ -434,8 +434,10 @@ blueprint Server:
         let req = Request(raw)
         let res = Response()
 
+        let mw = self.middleware
+
         # Run before middleware
-        self.middleware.run_before(req, res)
+        mw.run_before(req, res)
 
         when not res.sent:
             # Try to find route
@@ -458,7 +460,7 @@ blueprint Server:
         end
 
         # Run after middleware
-        self.middleware.run_after(req, res)
+        mw.run_after(req, res)
 
         # Send response
         http.send(client, res.build())
