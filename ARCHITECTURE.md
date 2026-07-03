@@ -141,9 +141,8 @@ A `CMakeLists.txt` is also provided for cross-platform CI (Linux, macOS, Windows
 
 - `tests/*.glow` — language-level test cases run by `run_all_tests.sh`. The runner checks each
   program's **exit code** against an expected value (most expect `0`; a few expect specific non-zero
-  codes), so it verifies that programs run to completion, not full output correctness. As of the
-  last local run, 103 of 104 cases pass; `test_mergesort.glow` currently hangs (non-terminating)
-  and times out.
+  codes), so it verifies that programs run to completion, not full output correctness. All 104
+  cases pass as of the last local run.
 - `tests/c_harness/` — C fuzz harnesses (parser, bytecode, runtime, GC, string, module).
 - `tests/integration/`, `tests/stability/` — larger integration and stability scenarios.
 
