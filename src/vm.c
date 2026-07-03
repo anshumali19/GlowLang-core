@@ -533,7 +533,28 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     };
 #endif
 
+/* Maximum register index relative to base_reg that is considered valid.
+ * The compiler/fuzzer sets local_count ≤ 256, but call opcodes can reference
+ * argument windows past that.  We pick 4096 as a generous ceiling — any index
+ * beyond that in random bytecode is surely garbage.  */
+#define VM_REG_LIMIT 4096
+
+/* Clamp loop-count + base so that base+count never exceeds vm_stack_size
+ * relative to base_reg.  Used by OP_SHOW, OP_WRITE, OP_LIST_LITERAL, etc. */
+#define CLAMP_REG_COUNT(base, count) do { \
+    if ((count) < 0) (count) = 0; \
+    int _max = vm_stack_size - base_reg - (base); \
+    if (_max < 0) _max = 0; \
+    if ((count) > _max) (count) = _max; \
+} while(0)
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+/* Bounds-checked register access via GCC statement expression (lvalue-safe).
+ * OOB indices are redirected to slot 0 which is always valid. */
+#define R(idx) vm_stack[({ int _ri = base_reg + (idx); (_ri >= 0 && _ri < vm_stack_size) ? _ri : 0; })]
+#else
 #define R(idx) vm_stack[base_reg + (idx)]
+#endif
 
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 #define CHECK_FUZZ_TIMEOUT() if (__builtin_expect(in_fuzz_timeout, 0)) { pending_exception = value_string_copy("Fuzzer Timeout"); has_exception = 1; goto l_OP_THROW; }
@@ -1168,7 +1189,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     }
 
     l_OP_POP: pc++; goto l_DISPATCH;
-    l_OP_SHOW: { int n = pc->arg; int base = pc->r0; for (int i=0; i<n; i++) { print_value(R(base+i)); if(i<n-1) printf(" "); } printf("\n"); pc++; goto l_DISPATCH; }
+    l_OP_SHOW: { int n = pc->arg; int base = pc->r0; CLAMP_REG_COUNT(base, n); for (int i=0; i<n; i++) { print_value(R(base+i)); if(i<n-1) printf(" "); } printf("\n"); pc++; goto l_DISPATCH; }
     l_OP_STORE_LET: {
         int slot = pc->arg;
         if (slot < 0 || slot >= global_table.count) { pending_exception = value_string_copy("STORE_LET slot out of bounds"); has_exception = 1; goto l_OP_THROW; }
@@ -1524,7 +1545,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         pc++; goto l_DISPATCH;
     }
     l_OP_LIST_LITERAL: {
-        int n = pc->arg; List *l = pc->is_stack_alloc ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
+        int n = pc->arg; CLAMP_REG_COUNT(pc->r1, n);
+        List *l = pc->is_stack_alloc ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
         l->size = 0; l->capacity = n; l->items = n > 0 ? calloc(n, sizeof(Value)) : NULL;
         for (int i=0; i<n; i++) list_push(l, R(pc->r1 + i));
         R(pc->r0) = value_list(l); pc++; goto l_DISPATCH;
@@ -1614,11 +1636,12 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             goto l_OP_THROW;
         }
         ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac;
+        CLAMP_REG_COUNT(pc->r1, ac);
         td->args = malloc(sizeof(Value)*ac); for(int i=0; i<ac; i++) td->args[i] = R(pc->r1 + i);
         pthread_t t; pthread_create(&t, NULL, thread_wrapper, td); pthread_detach(t); pc++; goto l_DISPATCH;
     }
     l_OP_LEN: { Value v = R(pc->r1); if(GET_TYPE(v)==VAL_STRING) R(pc->r0) = value_int(strlen(AS_STRING(v))); else if(GET_TYPE(v)==VAL_LIST) R(pc->r0) = value_int(AS_LIST(v)->size); else R(pc->r0) = value_int(0); pc++; goto l_DISPATCH; }
-    l_OP_RANGE: { int n = (int)AS_INT(R(pc->r1)); List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, value_int(i)); R(pc->r0) = value_list(l); pc++; goto l_DISPATCH; }
+    l_OP_RANGE: { int n = (int)AS_INT(R(pc->r1)); if (n < 0 || n > 10000000) n = 0; List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, value_int(i)); R(pc->r0) = value_list(l); pc++; goto l_DISPATCH; }
     l_OP_APPEND: { Value v = R(pc->r1), l = R(pc->r0); if(GET_TYPE(l)==VAL_LIST) list_push(AS_LIST(l), v); pc++; goto l_DISPATCH; }
     l_OP_TYPE: { 
         Value v = R(pc->r1); int t = GET_TYPE(v); 
@@ -1667,9 +1690,12 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         pc++; goto l_DISPATCH; 
     }
     l_OP_INPUT: pc++; goto l_DISPATCH;
-    l_OP_WRITE: { int n = pc->arg; int base = pc->r0; for (int i=0; i<n; i++) { print_value(R(base+i)); if(i<n-1) printf(" "); } pc++; goto l_DISPATCH; }
+    l_OP_WRITE: { int n = pc->arg; int base = pc->r0; CLAMP_REG_COUNT(base, n); for (int i=0; i<n; i++) { print_value(R(base+i)); if(i<n-1) printf(" "); } pc++; goto l_DISPATCH; }
     l_OP_DICT_LITERAL: {
-        int n = pc->arg; Dict *d = pc->is_stack_alloc ? gc_alloc_stack(sizeof(Dict), OBJ_DICT) : gc_alloc(sizeof(Dict), OBJ_DICT);
+        int n = pc->arg; if (n < 0) n = 0;
+        /* Each dict entry reads 2 registers: key at r1+i*2, value at r1+i*2+1 */
+        int dict_reg_span = n * 2; CLAMP_REG_COUNT(pc->r1, dict_reg_span); n = dict_reg_span / 2;
+        Dict *d = pc->is_stack_alloc ? gc_alloc_stack(sizeof(Dict), OBJ_DICT) : gc_alloc(sizeof(Dict), OBJ_DICT);
         d->capacity = 8; while(d->capacity < n*2) d->capacity *= 2;
         d->keys = calloc(d->capacity, sizeof(Value));
         d->values = calloc(d->capacity, sizeof(Value));
