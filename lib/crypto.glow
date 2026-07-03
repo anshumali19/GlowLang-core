@@ -1,0 +1,21 @@
+# Glow Crypto Library
+# Provides object-oriented wrappers for hashing, cryptography, and UUID generation.
+
+blueprint Hash:
+    action init():
+        pass
+    end
+
+    # Compute SHA-256 hash of a string
+    action sha256(data):
+        return crypto.sha256(data)
+    end
+
+    # Compute BLAKE3 fast hash of a string
+    action blake3(data):
+        return crypto.blake3(data)
+    end
+end
+
+
+let hash = Hash()
