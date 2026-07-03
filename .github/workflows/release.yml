@@ -97,6 +97,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          repository: anshumali19/GlowLang-packages
           files: |
             glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz
             glowlang-macos-latest/glowlang-macos-x64.tar.gz
@@ -104,4 +105,4 @@ jobs:
           draft: false
           prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
