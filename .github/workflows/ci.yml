@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: |
@@ -29,7 +28,7 @@ jobs:
           flex -o src/lex.yy.c src/glowlang.l
           bison -Wnone -d -o src/glowlang.tab.c src/glowlang.y
           gcc src/lex.yy.c src/glowlang.tab.c src/lsp.c src/arena.c src/jit.c \
-              src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c \
+              src/opt.c src/ssa.c src/compiler.c src/vm.c src/gc.c src/stdlib.c \
               -o bin/glowlang_asan \
               -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 \
               -fsanitize=address -fno-omit-frame-pointer \
