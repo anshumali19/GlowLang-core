@@ -554,20 +554,26 @@ static void install_glowlang_toolchain() {
     printf("\033[36m[GlowLang Installer]\033[0m Starting installation of the GlowLang Toolchain...\n");
     
 #ifdef _WIN32
-    printf("Fetching source and compiling optimized release for Windows...\n");
-    const char *cmd = "mkdir %USERPROFILE%\\.glowlang 2>nul & cd %USERPROFILE%\\.glowlang & git clone https://github.com/anshumali19/GlowLang.git . & cmake -B build -S . & cmake --build build --config Release";
+    printf("Downloading and installing pre-compiled release for Windows...\n");
+    const char *cmd = "powershell -Command \"mkdir $env:USERPROFILE\\.glowlang\\bin -Force; Invoke-WebRequest -Uri 'https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.0/glowlang-windows-x64.zip' -OutFile '$env:USERPROFILE\\.glowlang\\glowlang.zip'; Expand-Archive -Path '$env:USERPROFILE\\.glowlang\\glowlang.zip' -DestinationPath '$env:USERPROFILE\\.glowlang\\bin' -Force; Remove-Item '$env:USERPROFILE\\.glowlang\\glowlang.zip'\"";
     if (system(cmd) == 0) {
         printf("\033[32mInstallation complete!\033[0m\n");
         printf("Configuring PATH...\n");
-        (void)system("setx PATH \"%PATH%;%USERPROFILE%\\.glowlang\\bin\\Release\"");
+        (void)system("setx PATH \"%PATH%;%USERPROFILE%\\.glowlang\\bin\"");
         printf("\033[32mSuccessfully added to PATH!\033[0m\n");
         printf("Please restart your terminal to start using `glowlang`.\n");
     } else {
         printf("\033[31mInstallation failed.\033[0m\n");
     }
 #else
-    printf("Fetching source and compiling optimized release for POSIX...\n");
-    const char *cmd = "rm -rf ~/.glowlang && git clone https://github.com/anshumali19/GlowLang.git ~/.glowlang && cd ~/.glowlang && make clean && make";
+    #ifdef __APPLE__
+        printf("Downloading and installing pre-compiled release for macOS...\n");
+        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -L -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.0/glowlang-macos-x64.tar.gz && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm ~/.glowlang/glowlang.tar.gz";
+    #else
+        printf("Downloading and installing pre-compiled release for Linux...\n");
+        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -L -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.0/glowlang-linux-x64.tar.gz && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm ~/.glowlang/glowlang.tar.gz";
+    #endif
+
     if (system(cmd) == 0) {
         printf("\033[32mInstallation complete!\033[0m\n");
         printf("Configuring PATH...\n");
