@@ -444,7 +444,8 @@ blueprint Server:
             let matched = self.router.find_route(req.method, req.path)
             when matched is not none:
                 try:
-                    matched.handler(req, res)
+                    let handler_fn = matched.handler
+                    handler_fn(req, res)
                 catch err:
                     show "[GlowWeb] Error: " + err
                     res.status(500).send_json({"error": "Internal Server Error"})
