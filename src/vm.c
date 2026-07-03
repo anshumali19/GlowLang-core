@@ -1449,6 +1449,12 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         pc->cache[0].val = (intptr_t)fe;
                     }
                 }
+                if (!fe) {
+                    // No method by this name: fall back to a callable instance field
+                    // (e.g. a handler stored on the object and invoked as obj.handler(...)).
+                    Value field = dict_get(inst->properties, (const char*)pc->ptr);
+                    if (GET_TYPE(field) != VAL_NONE) fallback_callee = field;
+                }
             }
         } else if(GET_TYPE(obj)==VAL_DICT) {
             const char *n = (const char*)pc->ptr;
@@ -1504,7 +1510,9 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 } else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(fallback_callee);
                     if (c->body) {
-                        DO_CALL(c->body, c, base_reg + pc->r2, pc->r0);
+                        // A callable field/value is a plain function, so its arguments
+                        // begin after the receiver slot on a method-style call.
+                        DO_CALL(c->body, c, base_reg + pc->r2 + (pc->is_method ? 1 : 0), pc->r0);
                     } else R(pc->r0) = value_none();
                 } else if (ot == OBJ_BOUND_METHOD) {
                     BoundMethod *bm = AS_BOUND_METHOD(fallback_callee);
@@ -1517,14 +1525,18 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         for (int i = 0; i < count; i++) args[i + 1] = R(pc->r2 + start_offset + i);
                         R(pc->r0) = bm->native_method(count + 1, args);
                     } else if (bm->method && bm->method->body) {
-                        int callee_base = base_reg + pc->r2;
+                        // A real bound method reuses the receiver slot for self; a bare
+                        // function reference (no bound instance) is a plain function, so
+                        // skip that slot and start its args after self on a method call.
+                        int has_self = (GET_TYPE(bm->instance) != VAL_NONE);
+                        int callee_base = base_reg + pc->r2 + (has_self ? 0 : (pc->is_method ? 1 : 0));
                         if (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) {
                             int old_size = vm_stack_size;
                             while (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
                             vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
                             for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                         }
-                        if (GET_TYPE(bm->instance) != VAL_NONE) vm_stack[callee_base] = bm->instance;
+                        if (has_self) vm_stack[callee_base] = bm->instance;
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     } else R(pc->r0) = value_none();
                 } else {
