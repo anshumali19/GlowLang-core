@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd //wsl.localhost/Ubuntu/home/anshumali/projects/GlowLang)",
+      "Bash(grep -n 'benchagainstgiants\\\\|bench_results_cross\\\\|benchmarkmay' benchmarks/comprehensive_benchmark_report.md benchmarks/PROD_BENCHMARK_SUITE.md)",
+      "Bash(grep -nE 'static int compile_expr\\\\\\(Node \\\\*n, int target_reg\\\\\\)$|^static int compile_expr' src/compiler.c)"
+    ]
+  }
+}
