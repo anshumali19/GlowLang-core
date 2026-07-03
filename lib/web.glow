@@ -221,11 +221,6 @@ end
 
 # ─── Route Entry ───
 blueprint Route:
-    action init(method, path, handler):
-        self.method = method
-        self.path = path
-        self.handler = handler
-    end
 end
 
 # ─── Router ───
@@ -242,7 +237,10 @@ blueprint Router:
 
     action add(method, path, handler):
         let full_path = self.prefix + path
-        let r = Route(method, full_path, handler)
+        let r = Route()
+        r.method = method
+        r.path = full_path
+        r.handler = handler
         append(self.routes, r)
         return self
     end
