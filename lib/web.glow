@@ -15,7 +15,7 @@ end
 
 # ─── Request Parser ───
 blueprint Request:
-    action init(raw):
+    action setup(raw):
         self.raw = raw
         self.method = ""
         self.path = ""
@@ -26,6 +26,7 @@ blueprint Request:
         self.params = {}
         self.context = {}
         self._parse()
+        return self
     end
 
     action _parse():
@@ -133,11 +134,12 @@ end
 
 # ─── Response Builder ───
 blueprint Response:
-    action init():
+    action setup():
         self.status_code = 200
         self.headers = {}
         self.body = ""
         self.sent = false
+        return self
     end
 
     action status(code):
@@ -429,8 +431,8 @@ blueprint Server:
 
     action handle_client(client):
         let raw = http.read(client)
-        let req = Request(raw)
-        let res = Response()
+        let req = Request().setup(raw)
+        let res = Response().setup()
 
         let mw = self.middleware
 
