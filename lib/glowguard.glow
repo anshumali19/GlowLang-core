@@ -1,0 +1,146 @@
+# GlowGuard - Production-grade Schema Validation and Security Library
+# Designed specifically for GlowLang to rival Zod and Pydantic.
+
+blueprint ValidatorResult:
+    action init(valid, data, errors):
+        self.valid = valid
+        self.data = data
+        self.errors = errors
+    end
+end
+
+blueprint StringGuard:
+    action init():
+        self.guard_type = "string"
+        self._min = none
+        self._max = none
+    end
+
+    action min(length):
+        self._min = length
+        return self
+    end
+
+    action max(length):
+        self._max = length
+        return self
+    end
+
+    action validate(value, path):
+        let l = len(value)
+        when self._min is not none and l < self._min:
+            return {"valid": false, "data": value, "errors": [path + " must be at least " + self._min + " characters."]}
+        end
+        when self._max is not none and l > self._max:
+            return {"valid": false, "data": value, "errors": [path + " must be at most " + self._max + " characters."]}
+        end
+        return {"valid": true, "data": value, "errors": []}
+    end
+end
+
+blueprint NumberGuard:
+    action init():
+        self.guard_type = "number"
+        self._min = none
+        self._max = none
+    end
+
+    action min(val):
+        self._min = val
+        return self
+    end
+
+    action max(val):
+        self._max = val
+        return self
+    end
+
+    action validate(value, path):
+        when self._min is not none and value < self._min:
+            return {"valid": false, "data": value, "errors": [path + " must be at least " + self._min + "."]}
+        end
+        when self._max is not none and value > self._max:
+            return {"valid": false, "data": value, "errors": [path + " must be at most " + self._max + "."]}
+        end
+        return {"valid": true, "data": value, "errors": []}
+    end
+end
+
+blueprint BooleanGuard:
+    action init():
+        self.guard_type = "boolean"
+    end
+
+    action validate(value, path):
+        return {"valid": true, "data": value, "errors": []}
+    end
+end
+
+blueprint ObjectGuard:
+    action init():
+        self.guard_type = "object"
+        self.schema = {}
+    end
+
+    action validate(value, path):
+        let errors = []
+        let validated_data = {}
+        let is_valid = true
+
+        # Check all rules in the schema against the provided dictionary
+        for each key in self.schema:
+            let rule = self.schema[key]
+            let field_path = key
+            when path != "":
+                field_path = path + "." + key
+            end
+
+            let field_value = value[key]
+            when field_value is none:
+                errors = errors + [field_path + " is required."]
+                is_valid = false
+            otherwise:
+                let result = rule.validate(field_value, field_path)
+                when not result["valid"]:
+                    is_valid = false
+                    for each err in result["errors"]:
+                        errors = errors + [err]
+                    end
+                otherwise:
+                    validated_data[key] = result["data"]
+                end
+            end
+        end
+        return {"valid": is_valid, "data": validated_data, "errors": errors}
+    end
+end
+
+blueprint GlowGuard:
+    action init():
+        pass
+    end
+
+    action _result(valid, data, errors):
+        return {"valid": valid, "data": data, "errors": errors}
+    end
+
+    action str():
+        return StringGuard()
+    end
+
+    action num():
+        return NumberGuard()
+    end
+
+    action bool():
+        return BooleanGuard()
+    end
+
+    action object(schema):
+        let obj = ObjectGuard()
+        obj.schema = schema
+        return obj
+    end
+end
+
+let guard = GlowGuard()

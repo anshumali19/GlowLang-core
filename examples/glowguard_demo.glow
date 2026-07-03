@@ -1,0 +1,50 @@
+use "lib/glowguard.glow"
+use "lib/json_utils.glow"
+
+show "🛡️ Welcome to GlowGuard Demo"
+show "Validating a simulated User Registration Payload..."
+show "------------------------------------------------"
+
+let guard = GlowGuard()
+
+# 1. Define our strict API Schema using GlowGuard
+let str_guard = guard.str()
+str_guard.min(3)
+str_guard.max(20)
+let age_guard = guard.num()
+age_guard.min(18)
+let bool_guard = guard.bool()
+
+let user_schema = guard.object({"username": str_guard, "age": age_guard, "is_active": bool_guard})
+
+# 2. Simulate an incoming bad request (e.g., from a Web API)
+let bad_payload = {"username": "ab", "age": 16, "is_active": "yes"}
+
+show "\nTesting BAD Payload:"
+let bad_result = user_schema.validate(bad_payload, "")
+
+when not bad_result["valid"]:
+    show "Validation FAILED as expected! Errors found:"
+    for each err in bad_result["errors"]:
+        show " ❌ " + err
+    end
+otherwise:
+    show "Wait, this shouldn't have passed!"
+end
+
+# 3. Simulate a perfectly valid request
+let good_payload = {"username": "anshumali19", "age": 21, "is_active": true}
+
+show "\nTesting GOOD Payload:"
+let good_result = user_schema.validate(good_payload, "")
+
+when good_result["valid"]:
+    show "✅ Validation PASSED! Clean data is ready for the Database."
+    show "Clean Data: "
+    show good_result["data"]
+otherwise:
+    show "Wait, this should have passed!"
+end
+
+show "------------------------------------------------"
+show "GlowGuard provides production-grade security for GlowLang APIs!"

@@ -36,16 +36,25 @@ blueprint Request:
             return none
         end
 
-        # Split by double newline to get headers and body
+        # Split by double newline to get headers and body (support both \r\n and \n)
         let body_pos = self.raw.find("\r\n\r\n")
+        let split_len = 4
+        let line_split = "\r\n"
+        
+        when body_pos < 0:
+            body_pos = self.raw.find("\n\n")
+            split_len = 2
+            line_split = "\n"
+        end
+
         let header_section = self.raw
         when body_pos >= 0:
             header_section = self.raw.slice(0, body_pos)
-            self.body = self.raw.slice(body_pos + 4, len(self.raw))
+            self.body = self.raw.slice(body_pos + split_len, len(self.raw))
         end
 
         # Parse header lines
-        let lines = header_section.split("\r\n")
+        let lines = header_section.split(line_split)
         when len(lines) == 0:
             return none
         end
