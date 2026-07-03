@@ -221,6 +221,11 @@ end
 
 # ─── Route Entry ───
 blueprint Route:
+    action init(method, path, handler):
+        self.method = method
+        self.path = path
+        self.handler = handler
+    end
 end
 
 # ─── Router ───
@@ -237,10 +242,7 @@ blueprint Router:
 
     action add(method, path, handler):
         let full_path = self.prefix + path
-        let r = Route()
-        r.method = method
-        r.path = full_path
-        r.handler = handler
+        let r = Route(method, full_path, handler)
         append(self.routes, r)
         return self
     end
@@ -432,18 +434,15 @@ blueprint Server:
         let req = Request(raw)
         let res = Response()
 
-        let mw = self.middleware
-
         # Run before middleware
-        mw.run_before(req, res)
+        self.middleware.run_before(req, res)
 
         when not res.sent:
             # Try to find route
             let matched = self.router.find_route(req.method, req.path)
             when matched is not none:
                 try:
-                    let handler_fn = matched.handler
-                    handler_fn(req, res)
+                    matched.handler(req, res)
                 catch err:
                     show "[GlowWeb] Error: " + err
                     res.status(500).send_json({"error": "Internal Server Error"})
@@ -459,7 +458,7 @@ blueprint Server:
         end
 
         # Run after middleware
-        mw.run_after(req, res)
+        self.middleware.run_after(req, res)
 
         # Send response
         http.send(client, res.build())
