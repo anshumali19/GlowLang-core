@@ -262,9 +262,25 @@ void optimize_bytecode(Bytecode *bc) {
             while (next_idx < bc->count && bc->code[next_idx].op == OP_NOP) next_idx++;
             
             if (next_idx < bc->count && bc->code[next_idx].op == OP_RETURN && pc->r0 == bc->code[next_idx].r0) {
-                pc->op = OP_TAIL_CALL;
-                bc->code[next_idx].op = OP_NOP;
-                continue;
+                // Only tail-call when the target is a plain function. A class
+                // constructor compiles to OP_CALL_VALUE loading the class, and
+                // its result is the freshly-built instance, not the callee's
+                // return value. The tail path forwards the callee's return, so
+                // TCO'ing a constructor drops the instance (`return Foo(x)` then
+                // yields a corrupt value). Named funcs and self-calls are safe;
+                // a dynamic OP_CALL_VALUE callee (class/lambda/method) is not.
+                int tco_safe = 0;
+                if (pc->op == OP_CALL_SELF_FAST) {
+                    tco_safe = 1;
+                } else if (pc->op == OP_CALL && pc->ptr) {
+                    FuncEntry *fe = func_get((const char*)pc->ptr);
+                    if (fe && fe->body) tco_safe = 1;
+                }
+                if (tco_safe) {
+                    pc->op = OP_TAIL_CALL;
+                    bc->code[next_idx].op = OP_NOP;
+                    continue;
+                }
             }
         }
 
