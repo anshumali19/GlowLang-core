@@ -1011,11 +1011,26 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         }
                         R(pc->r0) = bm->native_method(count + 1, args);
                     } else if (bm->method && bm->method->body) {
-                        Value old_self = var_get("self");
-                        var_set("self", bm->instance);
-                        Value res = run_bytecode(bm->method->body, NULL, NULL, base_reg + pc->r2);
-                        var_set("self", old_self);
-                        if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                        // Calling a bound method held as a value: the method body
+                        // expects self at R0 and args at R1.., so lay out the callee
+                        // frame the same way the direct obj.method() path does rather
+                        // than starting args at R0 (which dropped the first argument).
+                        int has_self = (GET_TYPE(bm->instance) != VAL_NONE);
+                        int count = ac; if (count > 254) count = 254;
+                        int start_offset = pc->is_method ? 1 : 0;
+                        Value temp[256];
+                        for (int i = 0; i < count; i++) temp[i] = R(pc->r2 + start_offset + i);
+                        int callee_base = base_reg + pc->r2;
+                        if (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) {
+                            int old_size = vm_stack_size;
+                            while (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                            for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
+                        }
+                        int slot = callee_base;
+                        if (has_self) { vm_stack[slot] = bm->instance; slot++; }
+                        for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
+                        DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     }
                 }
                 else if (ot == OBJ_CLOSURE) {
@@ -1394,6 +1409,16 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                     }
                     R(pc->r0) = bm->native_method(count + 1, args);
                 } else if(bm->method && bm->method->body) {
+                    // Copy incoming args before we overwrite the stack: when the
+                    // bound method carries a self, it goes in R0 and the args must
+                    // shift up one slot (R1, R2, ...). Skipping this shift makes
+                    // `let f = obj.method; f(a, b)` drop the first arg.
+                    int has_self = (GET_TYPE(bm->instance) != VAL_NONE);
+                    int count = ac; if (count > 254) count = 254;
+                    int start_offset = pc->is_method ? 1 : 0;
+                    Value temp[256];
+                    for (int i = 0; i < count; i++) temp[i] = R(pc->r2 + start_offset + i);
+
                     int callee_base = base_reg + pc->r2;
                     if (callee_base + bm->method->body->local_count + 16 >= vm_stack_size) {
                         int old_size = vm_stack_size;
@@ -1401,9 +1426,9 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                         vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
                         for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                     }
-                    if (GET_TYPE(bm->instance) != VAL_NONE) {
-                        vm_stack[callee_base] = bm->instance; // self at R0
-                    }
+                    int slot = callee_base;
+                    if (has_self) { vm_stack[slot] = bm->instance; slot++; } // self at R0
+                    for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
                     DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                 } else R(pc->r0) = value_none();
             } else if(ot==OBJ_CLOSURE) {
