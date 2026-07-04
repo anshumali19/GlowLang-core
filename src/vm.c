@@ -1448,6 +1448,14 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 has_exception = 1;
                 goto l_OP_THROW;
             }
+        } else {
+            // The callee is not a callable value at all (e.g. none from an
+            // undefined name, or a number/string). This previously fell through
+            // silently, so `undefined_func()` was a no-op; throw to match the
+            // OP_CALL "not found" and object-not-callable paths.
+            pending_exception = value_string_copy("Attempted to call a non-callable value");
+            has_exception = 1;
+            goto l_OP_THROW;
         }
         pc++; goto l_DISPATCH;
     }
