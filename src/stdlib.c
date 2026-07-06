@@ -510,12 +510,18 @@ Value rope_new(Value left, Value right) {
 static void rope_flatten_recursive(RopeNode *rn, char *dest, size_t *offset) {
     if (rn->obj.type == OBJ_STRING) {
         GCString *gs = (GCString*)rn;
-        strcpy(dest + *offset, gs->chars);
-        *offset += strlen(gs->chars);
+        /* Use the stored size (O(1)) instead of strlen (O(n)); memcpy the exact
+           span rather than strcpy scanning for the NUL. The final terminator is
+           written once by rope_flatten. */
+        memcpy(dest + *offset, gs->chars, (size_t)gs->size);
+        *offset += (size_t)gs->size;
     } else if (rn->obj.type == OBJ_ROPE) {
         if (rn->is_leaf) {
             GCString *gs = (GCString*)(uintptr_t)(rn->leaf.flat_string & MASK_PAYLOAD);
-            strcpy(dest + *offset, gs->chars + rn->leaf.offset);
+            /* Copy exactly rn->length bytes of the view. strcpy would run to the
+               source NUL, which for a substring view can exceed rn->length and
+               overflow the destination buffer. */
+            memcpy(dest + *offset, gs->chars + rn->leaf.offset, rn->length);
             *offset += rn->length;
         } else {
             rope_flatten_recursive(rn->internal.left, dest, offset);

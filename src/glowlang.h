@@ -153,7 +153,7 @@ static inline ValueType GET_TYPE(Value v) {
 static inline size_t rope_length(Value v) {
     if (GET_TYPE(v) == VAL_STRING) {
         GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
-        if (obj->type == OBJ_STRING) return strlen(((GCString*)obj)->chars);
+        if (obj->type == OBJ_STRING) return (size_t)((GCString*)obj)->size;
         if (obj->type == OBJ_ROPE) return ((RopeNode*)obj)->length;
     }
     return 0;
