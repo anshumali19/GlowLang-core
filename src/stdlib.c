@@ -832,7 +832,11 @@ void tensor_free(void *ptr, size_t size, const char *device) {
     pthread_mutex_unlock(&pool_mutex);
 }
 
-PackedArray* packed_array_new(PackedType type, int capacity) {
+/* Internal constructor. When zero_init is 0 the element buffer is left
+   UNINITIALIZED (it comes from the tensor pool and may hold stale bytes), so
+   callers MUST fully overwrite every element before any read. Use the uninit
+   path only for result buffers proven to write all `capacity` elements. */
+static PackedArray* packed_array_new_ex(PackedType type, int capacity, int zero_init) {
     PackedArray *pa = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
     pa->type = type;
     size_t elem_sz = (type == PACKED_INT64) ? sizeof(int64_t) : sizeof(double);
@@ -841,7 +845,7 @@ PackedArray* packed_array_new(PackedType type, int capacity) {
         if (pa->data) {
             pa->size = capacity;
             pa->capacity = capacity;
-            memset(pa->data, 0, capacity * elem_sz);
+            if (zero_init) memset(pa->data, 0, capacity * elem_sz);
         } else {
             pa->size = 0;
             pa->capacity = 0;
@@ -859,6 +863,16 @@ PackedArray* packed_array_new(PackedType type, int capacity) {
     pa->base = NULL;
     strcpy(pa->device, "cpu");
     return pa;
+}
+
+PackedArray* packed_array_new(PackedType type, int capacity) {
+    return packed_array_new_ex(type, capacity, 1);
+}
+
+/* Result buffer that will be fully overwritten by the caller — skips the
+   O(n) zeroing pass. Only for sites proven to write every element. */
+static PackedArray* packed_array_new_uninit(PackedType type, int capacity) {
+    return packed_array_new_ex(type, capacity, 0);
 }
 
 #if 0
@@ -1852,7 +1866,7 @@ static Value native_packed_add(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1878,7 +1892,7 @@ static Value native_packed_add(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) { // Broadcast bias to tensor
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
@@ -1911,7 +1925,7 @@ static Value native_packed_sub(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1936,7 +1950,7 @@ static Value native_packed_sub(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
@@ -1963,7 +1977,7 @@ static Value native_packed_mul(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1984,7 +1998,7 @@ static Value native_packed_mul(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
