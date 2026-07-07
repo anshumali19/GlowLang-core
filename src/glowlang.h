@@ -210,6 +210,8 @@ typedef struct GlobalTable {
     Value *values;
     int count;
     int capacity;
+    int *index;      // open-addressed hash: name-hash bucket -> slot, -1 = empty
+    int index_cap;   // power-of-two size of index (0 = not yet built)
 } GlobalTable;
 
 extern GlobalTable global_table;

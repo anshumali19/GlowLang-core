@@ -130,7 +130,7 @@ static void closedir(DIR *dir) {
 
 Class *vm_last_class = NULL;
 Trait *vm_last_trait = NULL;
-GlobalTable global_table = {NULL, NULL, 0, 0};
+GlobalTable global_table = {NULL, NULL, 0, 0, NULL, 0};
 
 FuncEntry *func_table = NULL;
 int func_table_size = 1024;
@@ -562,11 +562,48 @@ const char* rope_flatten(Value v) {
     return "";
 }
 
+static uint32_t hash_string(const char *s);
+
+/* Insert an existing slot into the open-addressed name->slot index.
+   index_cap must be a power of two with a free bucket available. */
+static void global_index_insert_slot(int slot) {
+    uint32_t mask = (uint32_t)(global_table.index_cap - 1);
+    uint32_t h = hash_string(global_table.names[slot]) & mask;
+    while (global_table.index[h] != -1) h = (h + 1) & mask;
+    global_table.index[h] = slot;
+}
+
+/* (Re)allocate the index to new_cap buckets and reinsert every live slot. */
+static void global_index_rebuild(int new_cap) {
+    global_table.index = realloc(global_table.index, sizeof(int) * new_cap);
+    global_table.index_cap = new_cap;
+    for (int i = 0; i < new_cap; i++) global_table.index[i] = -1;
+    for (int s = 0; s < global_table.count; s++) {
+        if (global_table.names[s]) global_index_insert_slot(s);
+    }
+}
+
 int global_get_slot(const char *name) {
     if (!name) return -1;
-    for (int i = 0; i < global_table.count; i++) {
-        if (global_table.names[i] && strcmp(global_table.names[i], name) == 0) return i;
+
+    // Keep the index at <0.75 load factor. Slot indices are stable, so growing
+    // the parallel names/values arrays never requires a rehash; only growth in
+    // the number of entries does.
+    if (global_table.index_cap == 0 ||
+        (global_table.count + 1) * 4 >= global_table.index_cap * 3) {
+        global_index_rebuild(global_table.index_cap ? global_table.index_cap * 2 : 2048);
     }
+
+    uint32_t mask = (uint32_t)(global_table.index_cap - 1);
+    uint32_t h = hash_string(name) & mask;
+    while (global_table.index[h] != -1) {
+        int s = global_table.index[h];
+        // strcmp-confirm preserves the original content-equality semantics.
+        if (global_table.names[s] && strcmp(global_table.names[s], name) == 0) return s;
+        h = (h + 1) & mask;
+    }
+    // Not found — `h` is the empty bucket where the new slot belongs.
+
     if (global_table.count >= global_table.capacity) {
         int old_cap = global_table.capacity;
         global_table.capacity = global_table.capacity == 0 ? 1024 : global_table.capacity * 2;
@@ -579,12 +616,13 @@ int global_get_slot(const char *name) {
     }
     int slot = global_table.count++;
     global_table.names[slot] = name;
-    
+    global_table.index[h] = slot;
+
     // Check if this is a builtin or already defined function
     FuncEntry *fe = func_get(name);
     if (fe) global_table.values[slot] = bound_method_new(value_none(), fe);
     else global_table.values[slot] = value_none();
-    
+
     return slot;
 }
 
@@ -3157,8 +3195,13 @@ void std_cleanup(void) {
         free(global_table.values);
         global_table.values = NULL;
     }
+    if (global_table.index) {
+        free(global_table.index);
+        global_table.index = NULL;
+    }
     global_table.count = 0;
     global_table.capacity = 0;
+    global_table.index_cap = 0;
 
     // 4. Clean up main thread VM stack
     vm_stack_cleanup();
