@@ -498,6 +498,18 @@ for (; i + 32 <= len; i += 32) {
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
+/* Build a GCString directly from a length-delimited span (which need not be
+   NUL-terminated), allocating the string once. Lets callers that already know
+   the length (slice, split, JSON keys) avoid a temp malloc + second copy. */
+static Value value_string_copy_len(const char *s, size_t len) {
+    if (!s) { s = ""; len = 0; }
+    GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
+    gs->size = (int)len;
+    memcpy(gs->chars, s, len);
+    gs->chars[len] = '\0';
+    return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+}
+
 Value rope_new(Value left, Value right) {
     RopeNode *rn = gc_alloc(sizeof(RopeNode), OBJ_ROPE);
     rn->length = rope_length(left) + rope_length(right);
@@ -1447,12 +1459,7 @@ Value native_str_slice(int argc, Value *args) {
     }
     
     int slice_len = end - start;
-    char *buf = malloc(slice_len + 1);
-    memcpy(buf, s + start, slice_len);
-    buf[slice_len] = '\0';
-    Value res = value_string_copy(buf);
-    free(buf);
-    return res;
+    return value_string_copy_len(s + start, (size_t)slice_len);
 }
 
 Value native_str_split(int argc, Value *args) {
@@ -1486,11 +1493,7 @@ Value native_str_split(int argc, Value *args) {
     const char *next = strstr(current, delim);
     while (next != NULL) {
         size_t part_len = next - current;
-        char *buf = malloc(part_len + 1);
-        memcpy(buf, current, part_len);
-        buf[part_len] = '\0';
-        list_push(l, value_string_copy(buf));
-        free(buf);
+        list_push(l, value_string_copy_len(current, part_len));
         current = next + delim_len;
         next = strstr(current, delim);
     }
