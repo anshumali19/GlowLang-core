@@ -130,7 +130,7 @@ static void closedir(DIR *dir) {
 
 Class *vm_last_class = NULL;
 Trait *vm_last_trait = NULL;
-GlobalTable global_table = {NULL, NULL, 0, 0};
+GlobalTable global_table = {NULL, NULL, 0, 0, NULL, 0};
 
 FuncEntry *func_table = NULL;
 int func_table_size = 1024;
@@ -498,6 +498,18 @@ for (; i + 32 <= len; i += 32) {
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
+/* Build a GCString directly from a length-delimited span (which need not be
+   NUL-terminated), allocating the string once. Lets callers that already know
+   the length (slice, split, JSON keys) avoid a temp malloc + second copy. */
+static Value value_string_copy_len(const char *s, size_t len) {
+    if (!s) { s = ""; len = 0; }
+    GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
+    gs->size = (int)len;
+    memcpy(gs->chars, s, len);
+    gs->chars[len] = '\0';
+    return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+}
+
 Value rope_new(Value left, Value right) {
     RopeNode *rn = gc_alloc(sizeof(RopeNode), OBJ_ROPE);
     rn->length = rope_length(left) + rope_length(right);
@@ -510,12 +522,18 @@ Value rope_new(Value left, Value right) {
 static void rope_flatten_recursive(RopeNode *rn, char *dest, size_t *offset) {
     if (rn->obj.type == OBJ_STRING) {
         GCString *gs = (GCString*)rn;
-        strcpy(dest + *offset, gs->chars);
-        *offset += strlen(gs->chars);
+        /* Use the stored size (O(1)) instead of strlen (O(n)); memcpy the exact
+           span rather than strcpy scanning for the NUL. The final terminator is
+           written once by rope_flatten. */
+        memcpy(dest + *offset, gs->chars, (size_t)gs->size);
+        *offset += (size_t)gs->size;
     } else if (rn->obj.type == OBJ_ROPE) {
         if (rn->is_leaf) {
             GCString *gs = (GCString*)(uintptr_t)(rn->leaf.flat_string & MASK_PAYLOAD);
-            strcpy(dest + *offset, gs->chars + rn->leaf.offset);
+            /* Copy exactly rn->length bytes of the view. strcpy would run to the
+               source NUL, which for a substring view can exceed rn->length and
+               overflow the destination buffer. */
+            memcpy(dest + *offset, gs->chars + rn->leaf.offset, rn->length);
             *offset += rn->length;
         } else {
             rope_flatten_recursive(rn->internal.left, dest, offset);
@@ -544,11 +562,48 @@ const char* rope_flatten(Value v) {
     return "";
 }
 
+static uint32_t hash_string(const char *s);
+
+/* Insert an existing slot into the open-addressed name->slot index.
+   index_cap must be a power of two with a free bucket available. */
+static void global_index_insert_slot(int slot) {
+    uint32_t mask = (uint32_t)(global_table.index_cap - 1);
+    uint32_t h = hash_string(global_table.names[slot]) & mask;
+    while (global_table.index[h] != -1) h = (h + 1) & mask;
+    global_table.index[h] = slot;
+}
+
+/* (Re)allocate the index to new_cap buckets and reinsert every live slot. */
+static void global_index_rebuild(int new_cap) {
+    global_table.index = realloc(global_table.index, sizeof(int) * new_cap);
+    global_table.index_cap = new_cap;
+    for (int i = 0; i < new_cap; i++) global_table.index[i] = -1;
+    for (int s = 0; s < global_table.count; s++) {
+        if (global_table.names[s]) global_index_insert_slot(s);
+    }
+}
+
 int global_get_slot(const char *name) {
     if (!name) return -1;
-    for (int i = 0; i < global_table.count; i++) {
-        if (global_table.names[i] && strcmp(global_table.names[i], name) == 0) return i;
+
+    // Keep the index at <0.75 load factor. Slot indices are stable, so growing
+    // the parallel names/values arrays never requires a rehash; only growth in
+    // the number of entries does.
+    if (global_table.index_cap == 0 ||
+        (global_table.count + 1) * 4 >= global_table.index_cap * 3) {
+        global_index_rebuild(global_table.index_cap ? global_table.index_cap * 2 : 2048);
     }
+
+    uint32_t mask = (uint32_t)(global_table.index_cap - 1);
+    uint32_t h = hash_string(name) & mask;
+    while (global_table.index[h] != -1) {
+        int s = global_table.index[h];
+        // strcmp-confirm preserves the original content-equality semantics.
+        if (global_table.names[s] && strcmp(global_table.names[s], name) == 0) return s;
+        h = (h + 1) & mask;
+    }
+    // Not found — `h` is the empty bucket where the new slot belongs.
+
     if (global_table.count >= global_table.capacity) {
         int old_cap = global_table.capacity;
         global_table.capacity = global_table.capacity == 0 ? 1024 : global_table.capacity * 2;
@@ -561,12 +616,13 @@ int global_get_slot(const char *name) {
     }
     int slot = global_table.count++;
     global_table.names[slot] = name;
-    
+    global_table.index[h] = slot;
+
     // Check if this is a builtin or already defined function
     FuncEntry *fe = func_get(name);
     if (fe) global_table.values[slot] = bound_method_new(value_none(), fe);
     else global_table.values[slot] = value_none();
-    
+
     return slot;
 }
 
@@ -625,11 +681,10 @@ FuncEntry* func_table_add(const char *name) {
                 func_table[idx].used = 1;
             }
             func_table[idx].name = name;
-            for (int i = 0; i < global_table.count; i++) {
-                if (global_table.names[i] && strcmp(global_table.names[i], name) == 0) {
-                    global_table.values[i] = bound_method_new(value_none(), &func_table[idx]);
-                    break;
-                }
+            /* Use the O(1) hashed global index instead of linear scan. */
+            int gslot = global_get_slot(name);
+            if (gslot >= 0) {
+                global_table.values[gslot] = bound_method_new(value_none(), &func_table[idx]);
             }
             return &func_table[idx];
         }
@@ -701,9 +756,9 @@ Dict* dict_new(int sz) {
 
 void dict_set(Dict *d, const char *key, Value val) {
     if (!key) return;
-    const char *interned = intern_string(key);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     gc_write_barrier((GCObject*)d, val);
-    uint32_t h = hash_string(interned);
     int idx = h & (d->capacity - 1);
     
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
@@ -722,13 +777,27 @@ void dict_set(Dict *d, const char *key, Value val) {
         d->values = calloc(d->capacity, sizeof(Value));
         for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
         d->size = 0;
+        /* Re-insert with known-interned keys: hash once, skip intern_string. */
         for (int i=0; i<old_cap; i++) {
             if (GET_TYPE(old_keys[i]) != VAL_NONE) {
-                dict_set(d, (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD), old_values[i]);
+                const char *k = (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD);
+                uint32_t kh = hash_string(k);
+                int ki = kh & (d->capacity - 1);
+                while (GET_TYPE(d->keys[ki]) != VAL_NONE)
+                    ki = (ki + 1) & (d->capacity - 1);
+                d->keys[ki] = make_value(VAL_STRING, (uintptr_t)k);
+                d->values[ki] = old_values[i];
+                d->size++;
             }
         }
         free(old_keys); free(old_values);
-        dict_set(d, interned, val);
+        /* Re-insert the new key (already interned, hash known). */
+        idx = h & (d->capacity - 1);
+        while (GET_TYPE(d->keys[idx]) != VAL_NONE)
+            idx = (idx + 1) & (d->capacity - 1);
+        d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
+        d->values[idx] = val;
+        d->size++;
         return;
     }
     
@@ -739,8 +808,8 @@ void dict_set(Dict *d, const char *key, Value val) {
 
 Value dict_get(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return value_none();
-    const char *interned = intern_string(key);
-    uint32_t h = hash_string(interned);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return d->values[idx];
@@ -751,8 +820,8 @@ Value dict_get(Dict *d, const char *key) {
 
 int dict_get_idx(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return -1;
-    const char *interned = intern_string(key);
-    uint32_t h = hash_string(interned);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return idx;
@@ -826,7 +895,11 @@ void tensor_free(void *ptr, size_t size, const char *device) {
     pthread_mutex_unlock(&pool_mutex);
 }
 
-PackedArray* packed_array_new(PackedType type, int capacity) {
+/* Internal constructor. When zero_init is 0 the element buffer is left
+   UNINITIALIZED (it comes from the tensor pool and may hold stale bytes), so
+   callers MUST fully overwrite every element before any read. Use the uninit
+   path only for result buffers proven to write all `capacity` elements. */
+static PackedArray* packed_array_new_ex(PackedType type, int capacity, int zero_init) {
     PackedArray *pa = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
     pa->type = type;
     size_t elem_sz = (type == PACKED_INT64) ? sizeof(int64_t) : sizeof(double);
@@ -835,7 +908,7 @@ PackedArray* packed_array_new(PackedType type, int capacity) {
         if (pa->data) {
             pa->size = capacity;
             pa->capacity = capacity;
-            memset(pa->data, 0, capacity * elem_sz);
+            if (zero_init) memset(pa->data, 0, capacity * elem_sz);
         } else {
             pa->size = 0;
             pa->capacity = 0;
@@ -853,6 +926,16 @@ PackedArray* packed_array_new(PackedType type, int capacity) {
     pa->base = NULL;
     strcpy(pa->device, "cpu");
     return pa;
+}
+
+PackedArray* packed_array_new(PackedType type, int capacity) {
+    return packed_array_new_ex(type, capacity, 1);
+}
+
+/* Result buffer that will be fully overwritten by the caller — skips the
+   O(n) zeroing pass. Only for sites proven to write every element. */
+static PackedArray* packed_array_new_uninit(PackedType type, int capacity) {
+    return packed_array_new_ex(type, capacity, 0);
 }
 
 #if 0
@@ -1056,9 +1139,13 @@ static Value crypto_sha256(int argc, Value *args) {
     const char *str = AS_STRING(args[0]);
     unsigned char hash[SHA256_DIGEST_LENGTH];
     SHA256((const unsigned char*)str, strlen(str), hash);
+    static const char hex_chars[] = "0123456789abcdef";
     char out[SHA256_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(out + (i * 2), "%02x", hash[i]);
-    out[SHA256_DIGEST_LENGTH * 2] = 0;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2]     = hex_chars[hash[i] >> 4];
+        out[i * 2 + 1] = hex_chars[hash[i] & 0x0F];
+    }
+    out[SHA256_DIGEST_LENGTH * 2] = '\0';
     return value_string_copy(out);
 }
 
@@ -1427,12 +1514,7 @@ Value native_str_slice(int argc, Value *args) {
     }
     
     int slice_len = end - start;
-    char *buf = malloc(slice_len + 1);
-    memcpy(buf, s + start, slice_len);
-    buf[slice_len] = '\0';
-    Value res = value_string_copy(buf);
-    free(buf);
-    return res;
+    return value_string_copy_len(s + start, (size_t)slice_len);
 }
 
 Value native_str_split(int argc, Value *args) {
@@ -1466,11 +1548,7 @@ Value native_str_split(int argc, Value *args) {
     const char *next = strstr(current, delim);
     while (next != NULL) {
         size_t part_len = next - current;
-        char *buf = malloc(part_len + 1);
-        memcpy(buf, current, part_len);
-        buf[part_len] = '\0';
-        list_push(l, value_string_copy(buf));
-        free(buf);
+        list_push(l, value_string_copy_len(current, part_len));
         current = next + delim_len;
         next = strstr(current, delim);
     }
@@ -1535,7 +1613,7 @@ static Value http_request_native(int argc, Value *args) {
         Value v_headers = dict_get(opts, "headers");
         if (GET_TYPE(v_headers) == VAL_DICT) {
             Dict *hdrs = AS_DICT(v_headers);
-            for (int i = 0; i < hdrs->size; i++) {
+            for (int i = 0; i < hdrs->capacity; i++) {
                 if (GET_TYPE(hdrs->keys[i]) == VAL_STRING && GET_TYPE(hdrs->values[i]) == VAL_STRING) {
                     req_len += snprintf(req + req_len, sizeof(req) - req_len, "%s: %s\r\n", AS_STRING(hdrs->keys[i]), AS_STRING(hdrs->values[i]));
                 }
@@ -1846,7 +1924,7 @@ static Value native_packed_add(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1872,7 +1950,7 @@ static Value native_packed_add(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) { // Broadcast bias to tensor
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
@@ -1905,7 +1983,7 @@ static Value native_packed_sub(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1930,7 +2008,7 @@ static Value native_packed_sub(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
@@ -1957,7 +2035,7 @@ static Value native_packed_mul(int argc, Value *args) {
         PackedArray *pa = AS_PACKED_ARRAY(a), *pb = AS_PACKED_ARRAY(b);
         if (pa->type == pb->type) {
             if (pa->size == pb->size) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
@@ -1978,7 +2056,7 @@ static Value native_packed_mul(int argc, Value *args) {
                 for (int d=0; d<pa->ndims; d++) { res->shape[d] = pa->shape[d]; res->strides[d] = pa->strides[d]; }
                 return value_packed(res);
             } else if (pa->size % pb->size == 0) {
-                PackedArray *res = packed_array_new(pa->type, pa->size);
+                PackedArray *res = packed_array_new_uninit(pa->type, pa->size);
                 int sz = pa->size;
                 int bsz = pb->size;
                 if (pa->type == PACKED_FLOAT64) {
@@ -3134,8 +3212,13 @@ void std_cleanup(void) {
         free(global_table.values);
         global_table.values = NULL;
     }
+    if (global_table.index) {
+        free(global_table.index);
+        global_table.index = NULL;
+    }
     global_table.count = 0;
     global_table.capacity = 0;
+    global_table.index_cap = 0;
 
     // 4. Clean up main thread VM stack
     vm_stack_cleanup();
