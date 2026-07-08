@@ -745,6 +745,7 @@ Value bound_method_new(Value inst, FuncEntry *fe);
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 const char *intern_string(const char *s);
+const char *intern_string_hash(const char *s, uint32_t *out_hash);
 void intern_table_init(void);
 void intern_cleanup(void);
 void lexer_cleanup(void);

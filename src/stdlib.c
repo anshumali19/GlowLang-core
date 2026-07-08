@@ -681,11 +681,10 @@ FuncEntry* func_table_add(const char *name) {
                 func_table[idx].used = 1;
             }
             func_table[idx].name = name;
-            for (int i = 0; i < global_table.count; i++) {
-                if (global_table.names[i] && strcmp(global_table.names[i], name) == 0) {
-                    global_table.values[i] = bound_method_new(value_none(), &func_table[idx]);
-                    break;
-                }
+            /* Use the O(1) hashed global index instead of linear scan. */
+            int gslot = global_get_slot(name);
+            if (gslot >= 0) {
+                global_table.values[gslot] = bound_method_new(value_none(), &func_table[idx]);
             }
             return &func_table[idx];
         }
@@ -757,9 +756,9 @@ Dict* dict_new(int sz) {
 
 void dict_set(Dict *d, const char *key, Value val) {
     if (!key) return;
-    const char *interned = intern_string(key);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     gc_write_barrier((GCObject*)d, val);
-    uint32_t h = hash_string(interned);
     int idx = h & (d->capacity - 1);
     
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
@@ -778,13 +777,27 @@ void dict_set(Dict *d, const char *key, Value val) {
         d->values = calloc(d->capacity, sizeof(Value));
         for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
         d->size = 0;
+        /* Re-insert with known-interned keys: hash once, skip intern_string. */
         for (int i=0; i<old_cap; i++) {
             if (GET_TYPE(old_keys[i]) != VAL_NONE) {
-                dict_set(d, (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD), old_values[i]);
+                const char *k = (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD);
+                uint32_t kh = hash_string(k);
+                int ki = kh & (d->capacity - 1);
+                while (GET_TYPE(d->keys[ki]) != VAL_NONE)
+                    ki = (ki + 1) & (d->capacity - 1);
+                d->keys[ki] = make_value(VAL_STRING, (uintptr_t)k);
+                d->values[ki] = old_values[i];
+                d->size++;
             }
         }
         free(old_keys); free(old_values);
-        dict_set(d, interned, val);
+        /* Re-insert the new key (already interned, hash known). */
+        idx = h & (d->capacity - 1);
+        while (GET_TYPE(d->keys[idx]) != VAL_NONE)
+            idx = (idx + 1) & (d->capacity - 1);
+        d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
+        d->values[idx] = val;
+        d->size++;
         return;
     }
     
@@ -795,8 +808,8 @@ void dict_set(Dict *d, const char *key, Value val) {
 
 Value dict_get(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return value_none();
-    const char *interned = intern_string(key);
-    uint32_t h = hash_string(interned);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return d->values[idx];
@@ -807,8 +820,8 @@ Value dict_get(Dict *d, const char *key) {
 
 int dict_get_idx(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return -1;
-    const char *interned = intern_string(key);
-    uint32_t h = hash_string(interned);
+    uint32_t h;
+    const char *interned = intern_string_hash(key, &h);
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return idx;
@@ -1126,9 +1139,13 @@ static Value crypto_sha256(int argc, Value *args) {
     const char *str = AS_STRING(args[0]);
     unsigned char hash[SHA256_DIGEST_LENGTH];
     SHA256((const unsigned char*)str, strlen(str), hash);
+    static const char hex_chars[] = "0123456789abcdef";
     char out[SHA256_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) sprintf(out + (i * 2), "%02x", hash[i]);
-    out[SHA256_DIGEST_LENGTH * 2] = 0;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2]     = hex_chars[hash[i] >> 4];
+        out[i * 2 + 1] = hex_chars[hash[i] & 0x0F];
+    }
+    out[SHA256_DIGEST_LENGTH * 2] = '\0';
     return value_string_copy(out);
 }
 
@@ -1596,7 +1613,7 @@ static Value http_request_native(int argc, Value *args) {
         Value v_headers = dict_get(opts, "headers");
         if (GET_TYPE(v_headers) == VAL_DICT) {
             Dict *hdrs = AS_DICT(v_headers);
-            for (int i = 0; i < hdrs->size; i++) {
+            for (int i = 0; i < hdrs->capacity; i++) {
                 if (GET_TYPE(hdrs->keys[i]) == VAL_STRING && GET_TYPE(hdrs->values[i]) == VAL_STRING) {
                     req_len += snprintf(req + req_len, sizeof(req) - req_len, "%s: %s\r\n", AS_STRING(hdrs->keys[i]), AS_STRING(hdrs->values[i]));
                 }
