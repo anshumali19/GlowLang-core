@@ -54,6 +54,34 @@ const char *intern_string(const char *s) {
     return arena_strdup(s);
 }
 
+/* Intern a string AND return the FNV-1a hash it already computed.
+   This is the same hash that hash_string() in stdlib.c produces,
+   so dict callers can reuse it instead of hashing twice. */
+const char *intern_string_hash(const char *s, uint32_t *out_hash) {
+    ensure_intern_init();
+    unsigned int h = 2166136261u;
+    for (int i = 0; s[i]; i++) {
+        h ^= (unsigned char)s[i];
+        h *= 16777619;
+    }
+    *out_hash = (uint32_t)h;
+    unsigned int start = h % INTERN_TABLE_SIZE;
+    unsigned int idx = start;
+    
+    do {
+        if (!intern_table[idx]) {
+            char *dup = arena_strdup(s);
+            intern_table[idx] = dup;
+            return (const char *)dup;
+        }
+        if (strcmp(intern_table[idx], s) == 0)
+            return intern_table[idx];
+        idx = (idx + 1) % INTERN_TABLE_SIZE;
+    } while (idx != start);
+
+    return arena_strdup(s);
+}
+
 void intern_cleanup(void) {
     /* Handled by arena_free_all() now */
     memset(intern_table, 0, sizeof(intern_table));
