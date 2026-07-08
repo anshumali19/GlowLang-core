@@ -153,7 +153,7 @@ static inline ValueType GET_TYPE(Value v) {
 static inline size_t rope_length(Value v) {
     if (GET_TYPE(v) == VAL_STRING) {
         GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
-        if (obj->type == OBJ_STRING) return strlen(((GCString*)obj)->chars);
+        if (obj->type == OBJ_STRING) return (size_t)((GCString*)obj)->size;
         if (obj->type == OBJ_ROPE) return ((RopeNode*)obj)->length;
     }
     return 0;
@@ -210,6 +210,8 @@ typedef struct GlobalTable {
     Value *values;
     int count;
     int capacity;
+    int *index;      // open-addressed hash: name-hash bucket -> slot, -1 = empty
+    int index_cap;   // power-of-two size of index (0 = not yet built)
 } GlobalTable;
 
 extern GlobalTable global_table;
@@ -743,6 +745,7 @@ Value bound_method_new(Value inst, FuncEntry *fe);
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 const char *intern_string(const char *s);
+const char *intern_string_hash(const char *s, uint32_t *out_hash);
 void intern_table_init(void);
 void intern_cleanup(void);
 void lexer_cleanup(void);
