@@ -58,6 +58,34 @@ static GCBlock* gc_block_new(void) {
     return b;
 }
 
+/* Find an existing block with at least `sz` bytes of free tail space. */
+static GCBlock* gc_block_find_fit(size_t sz) {
+    for (GCBlock *b = gc_block_list; b; b = b->next) {
+        if (b->size - b->used >= sz) return b;
+    }
+    return NULL;
+}
+
+/* Free every block whose live_count has dropped to zero. Called at the end of
+   a collection, after the object sweep has unlinked every dead object from
+   gc_objects, so no live object can still reference a freed block. This bounds
+   the block arena to the set of blocks that actually hold live objects instead
+   of growing monotonically. */
+static void gc_reclaim_empty_blocks(void) {
+    GCBlock **pp = &gc_block_list;
+    while (*pp) {
+        GCBlock *b = *pp;
+        if (b->live_count == 0) {
+            if (b == gc_current_block) gc_current_block = NULL;
+            *pp = b->next;
+            free(b);
+        } else {
+            pp = &b->next;
+        }
+    }
+    if (!gc_current_block && gc_block_list) gc_current_block = gc_block_list;
+}
+
 static GCObject **grey_stack = NULL;
 static int grey_capacity = 0;
 static int grey_count = 0;
@@ -182,6 +210,7 @@ void gc_full_collect(void) {
         }
     }
     while (gc_remembered_set) { RememberedSet *next = gc_remembered_set->next; gc_remembered_set->obj->in_remembered_set = 0; free(gc_remembered_set); gc_remembered_set = next; }
+    gc_reclaim_empty_blocks();
     gc_allocated_at_last_gc = gc_allocated;
     pthread_mutex_unlock(&gc_mutex);
 }
@@ -289,6 +318,7 @@ void gc_minor_collect(void) {
         gc_remembered_set = next;
     }
 
+    gc_reclaim_empty_blocks();
     gc_allocated_at_last_gc = gc_allocated;
     pthread_mutex_unlock(&gc_mutex);
 }
@@ -316,7 +346,10 @@ void* gc_alloc(size_t sz, ObjType type) {
     GCObject *obj = NULL;
     if (sz < gc_block_size / 4) {
         if (!gc_current_block || gc_current_block->used + sz > gc_current_block->size) {
-            gc_current_block = gc_block_new();
+            /* Reuse a block that still has free tail space before allocating a
+               new one, so the arena does not grow unbounded. */
+            GCBlock *fit = gc_block_find_fit(sz);
+            gc_current_block = fit ? fit : gc_block_new();
         }
         obj = (GCObject*)(gc_current_block->data + gc_current_block->used);
         gc_current_block->used += sz;
