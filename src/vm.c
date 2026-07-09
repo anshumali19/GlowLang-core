@@ -65,15 +65,11 @@ void call_stack_pop(void) {
 #include <immintrin.h>
 #endif
 
-static int string_compare_simd(const char *s1, const char *s2) {
+static int string_equal_simd(const char *s1, size_t l1, const char *s2, size_t l2) {
     if (s1 == s2) return 1;
     if (!s1 || !s2) return 0;
-    
-    // For simplicity, we compare in 32-byte chunks if they are long enough
-    size_t l1 = strlen(s1);
-    size_t l2 = strlen(s2);
     if (l1 != l2) return 0;
-    
+
     size_t i = 0;
     for (; i + 32 <= l1; i += 32) {
         __m256i v1 = _mm256_loadu_si256((__m256i*)&s1[i]);
@@ -85,9 +81,10 @@ static int string_compare_simd(const char *s1, const char *s2) {
     return strcmp(s1 + i, s2 + i) == 0;
 }
 #else
-static int string_compare_simd(const char *s1, const char *s2) {
+static int string_equal_simd(const char *s1, size_t l1, const char *s2, size_t l2) {
     if (s1 == s2) return 1;
     if (!s1 || !s2) return 0;
+    if (l1 != l2) return 0;
     return strcmp(s1, s2) == 0;
 }
 #endif
@@ -99,7 +96,11 @@ int val_eq(Value a, Value b) {
     uint64_t tb = ((b) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
     if (ta == VAL_INT && tb == VAL_FLOAT) return (double)AS_INT(a) == AS_FLOAT(b);
     if (ta == VAL_FLOAT && tb == VAL_INT) return AS_FLOAT(a) == (double)AS_INT(b);
-    if (ta == VAL_STRING && tb == VAL_STRING) return string_compare_simd(AS_STRING(a), AS_STRING(b));
+    if (ta == VAL_STRING && tb == VAL_STRING) {
+        size_t l1 = rope_length(a);
+        size_t l2 = rope_length(b);
+        return string_equal_simd(AS_STRING(a), l1, AS_STRING(b), l2);
+    }
     return 0;
 }
 
