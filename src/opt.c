@@ -23,9 +23,23 @@ void optimize_bytecode(Bytecode *bc) {
         }
     }
 
-    Value const_vals[1024] = {0};
-    signed char is_const[1024] = {0};
-    unsigned char reg_types[1024] = {0}; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
+    // Determine the number of registers actually used so the per-register
+    // tracking tables are sized dynamically instead of being hard-capped at
+    // 1024 (which silently disabled optimization for programs using more
+    // registers than that).
+    int max_reg = -1;
+    for (int i = 0; i < bc->count; i++) {
+        Instruction *inst = &bc->code[i];
+        if (inst->r0 >= 0 && inst->r0 > max_reg) max_reg = inst->r0;
+        if (inst->r1 >= 0 && inst->r1 > max_reg) max_reg = inst->r1;
+        if (inst->r2 >= 0 && inst->r2 > max_reg) max_reg = inst->r2;
+    }
+    int nregs = max_reg + 1;
+    if (nregs < 0) nregs = 0;
+
+    Value *const_vals = nregs ? calloc(nregs, sizeof(Value)) : NULL;
+    signed char *is_const = nregs ? calloc(nregs, sizeof(signed char)) : NULL;
+    unsigned char *reg_types = nregs ? calloc(nregs, sizeof(unsigned char)) : NULL; // 0=Unknown, 1=Int, 2=Float, 3=String, 4=Bool
 
     // Pass 2: Type Inference and Constant Folding (Multi-pass dataflow propagation)
     for (int pass = 0; pass < 3; pass++) {
@@ -36,11 +50,11 @@ void optimize_bytecode(Bytecode *bc) {
         // We invalidate constant tracking because jump sources may differ,
         // but preserve inferred variable types across loop boundaries.
         if (is_jump_target[i]) {
-            memset(is_const, 0, sizeof(is_const));
+            memset(is_const, 0, nregs * sizeof(*is_const));
         }
 
         if (inst->op == OP_CONST_INT) {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 is_const[inst->r0] = 1;
                 const_vals[inst->r0] = value_int(inst->arg);
                 reg_types[inst->r0] = 1;
@@ -48,19 +62,19 @@ void optimize_bytecode(Bytecode *bc) {
             inst->type = 1;
         }
         else if (inst->op == OP_CONST_FLOAT) {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 reg_types[inst->r0] = 2;
             }
             inst->type = 2;
         }
         else if (inst->op == OP_CONST_STRING) {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 reg_types[inst->r0] = 3;
             }
             inst->type = 3;
         }
         else if (inst->op == OP_CONST_BOOL) {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 is_const[inst->r0] = 1;
                 const_vals[inst->r0] = value_bool(inst->arg);
                 reg_types[inst->r0] = 4;
@@ -72,16 +86,16 @@ void optimize_bytecode(Bytecode *bc) {
             int r1 = inst->r1;
             int r2 = inst->r2;
             
-            if (r1 < 1024 && r2 < 1024) {
+            if (r1 < nregs && r2 < nregs) {
                 // Type Inference
                 if (reg_types[r1] == 1 && reg_types[r2] == 1) {
-                    if (r0 < 1024) reg_types[r0] = 1;
+                    if (r0 < nregs) reg_types[r0] = 1;
                     inst->type = 1;
                     if (inst->op == OP_ADD) inst->op = OP_ADD_INT;
                     else if (inst->op == OP_SUB) inst->op = OP_SUB_INT;
                     else if (inst->op == OP_MUL) inst->op = OP_MUL_INT;
                 } else if (reg_types[r1] == 2 || reg_types[r2] == 2) {
-                    if (r0 < 1024) reg_types[r0] = 2;
+                    if (r0 < nregs) reg_types[r0] = 2;
                     inst->type = 2;
                 }
                 
@@ -102,7 +116,7 @@ void optimize_bytecode(Bytecode *bc) {
                         if (ok) {
                             inst->op = OP_CONST_INT;
                             inst->arg = (int)res;
-                            if (r0 < 1024) {
+                            if (r0 < nregs) {
                                 is_const[r0] = 1;
                                 const_vals[r0] = value_int(res);
                                 reg_types[r0] = 1;
@@ -116,7 +130,7 @@ void optimize_bytecode(Bytecode *bc) {
         else if (inst->op >= OP_LT && inst->op <= OP_EQ) {
             int r1 = inst->r1;
             int r2 = inst->r2;
-            if (r1 < 1024 && r2 < 1024) {
+            if (r1 < nregs && r2 < nregs) {
                 if (reg_types[r1] == 1 && reg_types[r2] == 1) {
                     if (inst->op == OP_LT) inst->op = OP_LT_INT;
                     else if (inst->op == OP_GT) inst->op = OP_GT_INT;
@@ -127,14 +141,14 @@ void optimize_bytecode(Bytecode *bc) {
             }
         }
         else if (inst->op == OP_MOVE) {
-            if (inst->r1 < 1024 && inst->r0 < 1024) {
+            if (inst->r1 < nregs && inst->r0 < nregs) {
                 is_const[inst->r0] = is_const[inst->r1];
                 const_vals[inst->r0] = const_vals[inst->r1];
                 reg_types[inst->r0] = reg_types[inst->r1];
                 inst->type = reg_types[inst->r1];
             }
         } else {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 is_const[inst->r0] = 0;
             }
         }
@@ -142,19 +156,19 @@ void optimize_bytecode(Bytecode *bc) {
     }
 
     // Pass 3: Scalar Replacement
-    int virtual_bases[1024];
-    int virtual_sizes[1024];
-    for (int j=0; j<1024; j++) { virtual_bases[j] = -1; virtual_sizes[j] = 0; }
+    int *virtual_bases = nregs ? calloc(nregs, sizeof(int)) : NULL;
+    int *virtual_sizes = nregs ? calloc(nregs, sizeof(int)) : NULL;
+    for (int j=0; j<nregs; j++) { virtual_bases[j] = -1; virtual_sizes[j] = 0; }
 
     for (int i=0; i < bc->count; i++) {
         Instruction *inst = &bc->code[i];
 
         if (is_jump_target[i]) {
-            for (int j=0; j<1024; j++) { virtual_bases[j] = -1; virtual_sizes[j] = 0; }
+            for (int j=0; j<nregs; j++) { virtual_bases[j] = -1; virtual_sizes[j] = 0; }
         }
 
         if (inst->op == OP_LIST_LITERAL && inst->is_stack_alloc && inst->arg <= 4) {
-            if (inst->r0 < 1024) {
+            if (inst->r0 < nregs) {
                 virtual_bases[inst->r0] = inst->r1;
                 virtual_sizes[inst->r0] = inst->arg;
                 inst->op = OP_NOP;
@@ -163,8 +177,8 @@ void optimize_bytecode(Bytecode *bc) {
         else if (inst->op == OP_INDEX) {
             int coll_reg = inst->r1;
             int idx_reg = inst->r2;
-            if (coll_reg < 1024 && virtual_bases[coll_reg] != -1) {
-                if (idx_reg < 1024 && is_const[idx_reg]) {
+            if (coll_reg < nregs && virtual_bases[coll_reg] != -1) {
+                if (idx_reg < nregs && is_const[idx_reg]) {
                     int k = (int)AS_INT(const_vals[idx_reg]);
                     if (k >= 0 && k < virtual_sizes[coll_reg]) {
                         inst->op = OP_MOVE;
@@ -175,7 +189,7 @@ void optimize_bytecode(Bytecode *bc) {
         }
         else if (inst->op == OP_LEN) {
              int coll_reg = inst->r1;
-             if (coll_reg < 1024 && virtual_bases[coll_reg] != -1) {
+             if (coll_reg < nregs && virtual_bases[coll_reg] != -1) {
                  inst->op = OP_CONST_INT;
                  inst->arg = virtual_sizes[coll_reg];
              }
@@ -184,8 +198,8 @@ void optimize_bytecode(Bytecode *bc) {
             int coll_reg = inst->r0;
             int idx_reg = inst->r1;
             int src_reg = inst->r2;
-            if (coll_reg < 1024 && virtual_bases[coll_reg] != -1) {
-                if (idx_reg < 1024 && is_const[idx_reg]) {
+            if (coll_reg < nregs && virtual_bases[coll_reg] != -1) {
+                if (idx_reg < nregs && is_const[idx_reg]) {
                     int k = (int)AS_INT(const_vals[idx_reg]);
                     if (k >= 0 && k < virtual_sizes[coll_reg]) {
                         inst->op = OP_MOVE;
@@ -351,5 +365,10 @@ void optimize_bytecode(Bytecode *bc) {
     }
     }
 
+    free(virtual_bases);
+    free(virtual_sizes);
+    free(const_vals);
+    free(is_const);
+    free(reg_types);
     free(is_jump_target);
 }
