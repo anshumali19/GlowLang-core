@@ -36,6 +36,25 @@ typedef struct RememberedSet {
 } RememberedSet;
 static RememberedSet *gc_remembered_set = NULL;
 
+/* Frozen string literals produced by OP_CONST_STRING are allocated once and
+   shared (see vm_get_const_string in vm.c). They are kept alive for the life
+   of the process by being registered here as permanent GC roots, so the
+   collector never frees a literal that later loads still reference. */
+static Value *gc_const_roots = NULL;
+static int gc_const_roots_cap = 0;
+static int gc_const_roots_len = 0;
+
+void gc_register_constant_root(Value v) {
+    pthread_mutex_lock(&gc_mutex);
+    if (gc_const_roots_len == gc_const_roots_cap) {
+        int ncap = gc_const_roots_cap ? gc_const_roots_cap * 2 : 64;
+        gc_const_roots = realloc(gc_const_roots, ncap * sizeof(Value));
+        gc_const_roots_cap = ncap;
+    }
+    gc_const_roots[gc_const_roots_len++] = v;
+    pthread_mutex_unlock(&gc_mutex);
+}
+
 void gc_write_barrier(GCObject *src, Value target) {
     if (!src || src->generation == 0) return;
     if (GET_TYPE(target) != VAL_OBJECT && GET_TYPE(target) != VAL_LIST && GET_TYPE(target) != VAL_DICT && GET_TYPE(target) != VAL_STRING) return;
@@ -171,6 +190,7 @@ void gc_full_collect(void) {
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     if (vm_last_class) gc_mark_value(value_class(vm_last_class));
     if (vm_last_trait) gc_mark_value(value_trait(vm_last_trait));
+    for (int i = 0; i < gc_const_roots_len; i++) gc_mark_value(gc_const_roots[i]);
     pthread_mutex_lock(&threads_mutex);
     for (int i=0; i<active_stack_count; i++) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);
@@ -268,6 +288,14 @@ void gc_minor_collect(void) {
     if (vm_last_trait) {
         GCObject *o = (GCObject*)(uintptr_t)(value_trait(vm_last_trait) & MASK_PAYLOAD);
         if (o && o->generation == 0) push_grey(o);
+    }
+    /* Frozen string literals are roots too (only young ones matter here). */
+    for (int i = 0; i < gc_const_roots_len; i++) {
+        Value v = gc_const_roots[i];
+        if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) {
+            GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+            if (o->generation == 0) push_grey(o);
+        }
     }
 
     /* Scan remembered set: old objects that reference young objects */
