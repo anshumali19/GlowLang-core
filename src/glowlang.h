@@ -645,6 +645,7 @@ void gc_free_stack_arena_range(size_t old_used, size_t new_used);
 void gc_write_barrier(GCObject *src, Value target);
 void gc_full_collect(void);
 void gc_minor_collect(void);
+void gc_register_constant_root(Value v);
 extern GCObject *gc_objects;
 extern size_t gc_allocated;
 extern size_t gc_threshold;

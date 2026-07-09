@@ -89,6 +89,33 @@ static int string_equal_simd(const char *s1, size_t l1, const char *s2, size_t l
 }
 #endif
 
+/* Frozen, GC-rooted canonical strings for OP_CONST_STRING. The same literal
+   string is shared instead of re-allocating a fresh GCString on every load.
+   Keyed by the interned char* in pc->ptr (stable for the process lifetime),
+   so pc->ptr keeps its original meaning and the JIT is unaffected. */
+static Value *g_const_cache_vals = NULL;
+static const char **g_const_cache_keys = NULL;
+static int g_const_cache_cap = 0;
+static int g_const_cache_len = 0;
+
+static Value vm_get_const_string(const char *s) {
+    for (int i = 0; i < g_const_cache_len; i++) {
+        if (g_const_cache_keys[i] == s) return g_const_cache_vals[i];
+    }
+    Value v = value_string_copy(s);
+    if (g_const_cache_len == g_const_cache_cap) {
+        int ncap = g_const_cache_cap ? g_const_cache_cap * 2 : 16;
+        g_const_cache_vals = realloc(g_const_cache_vals, ncap * sizeof(Value));
+        g_const_cache_keys = realloc(g_const_cache_keys, ncap * sizeof(const char*));
+        g_const_cache_cap = ncap;
+    }
+    g_const_cache_keys[g_const_cache_len] = s;
+    g_const_cache_vals[g_const_cache_len] = v;
+    g_const_cache_len++;
+    gc_register_constant_root(v);
+    return v;
+}
+
 int val_eq(Value a, Value b) {
     if (a == b) return 1;
     if (((a) & MASK_NAN) != MASK_NAN && ((b) & MASK_NAN) != MASK_NAN) return AS_FLOAT(a) == AS_FLOAT(b);
@@ -717,7 +744,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 
     l_OP_CONST_INT: R(pc->r0) = value_int(pc->arg); pc++; goto l_DISPATCH;
     l_OP_CONST_FLOAT: R(pc->r0) = *(Value*)pc->ptr; pc++; goto l_DISPATCH;
-    l_OP_CONST_STRING: R(pc->r0) = value_string_copy((const char*)pc->ptr); pc++; goto l_DISPATCH;
+    l_OP_CONST_STRING: R(pc->r0) = vm_get_const_string((const char*)pc->ptr); pc++; goto l_DISPATCH;
     l_OP_CONST_BOOL: R(pc->r0) = value_bool(pc->arg); pc++; goto l_DISPATCH;
     l_OP_LOAD_VAR: {
         int slot = pc->arg;
