@@ -398,12 +398,6 @@ typedef struct Trace {
     Instruction *start_pc;
 } Trace;
 
-typedef struct TraceMap {
-    Instruction *pc;
-    Trace *trace;
-    struct TraceMap *next;
-} TraceMap;
-
 typedef struct {
     int start_pc;
     int end_pc;
