@@ -1,5 +1,4 @@
 #include "opt.h"
-#include "ssa.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
