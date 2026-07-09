@@ -22,7 +22,11 @@ typedef struct GCBlock {
     struct GCBlock *next;
     size_t size;
     size_t used;
-    int live_count;
+    /* Must be a pointer-width type so that `data` (the flexible array member)
+       begins at a 16-byte-aligned offset. With an `int` here the struct is 28
+       bytes and `data` starts 4-byte aligned, which misaligned every
+       block-allocated GCObject and tripped UBSan's alignment checks. */
+    size_t live_count;
     char data[];
 } GCBlock;
 
