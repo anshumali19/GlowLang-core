@@ -463,13 +463,14 @@ void simd_add_helper(Value v_a, Value v_b, Value v_target) {
     }
 }
 
-double val_to_double(Value v) {
-    if (((v) & MASK_NAN) != MASK_NAN) return AS_FLOAT(v);
-    uint64_t type = ((v) & MASK_TYPE) >> 48;
-    if (type == VAL_INT) return (double)AS_INT(v);
-    if (type == VAL_BOOL) return (double)AS_BOOL(v);
-    return 0.0;
-}
+ double val_to_double(Value v) {
+     if (((v) & MASK_NAN) != MASK_NAN) return AS_FLOAT(v);
+     uint64_t type = ((v) & MASK_TYPE) >> 48;
+     if (type == VAL_INT) return (double)AS_INT(v);
+     if (type == VAL_BOOL) return (double)AS_BOOL(v);
+     if (is_bigint(v)) return bigint_to_double(AS_BIGINT(v));
+     return 0.0;
+ }
 
 Value value_from_double(double d) {
     if (d == (int64_t)d) return value_int((int64_t)d);
@@ -1097,6 +1098,7 @@ void print_value(Value v) {
             }
             printf("]");
         }
+        else if (ot == OBJ_BIGINT) { char _bb[2048]; bigint_to_string(AS_BIGINT(v), _bb, sizeof(_bb)); printf("%s", _bb); }
         else printf("<object>");
     } else printf("none");
 }
@@ -1261,6 +1263,7 @@ static void json_stringify_helper(Value v, StringBuilder *sb) {
     if ((v & MASK_NAN) != MASK_NAN) { 
         char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return; 
     }
+    if (is_bigint(v)) { char tmp[2048]; bigint_to_string(AS_BIGINT(v), tmp, sizeof(tmp)); json_append_str(tmp, sb); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {
         char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, sb);

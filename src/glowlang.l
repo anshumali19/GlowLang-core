@@ -188,7 +188,9 @@ int line_num = 1;
 }
 
 [0-9]+ {
-    yylval.int_val = atoi(yytext);
+    char *out = malloc(yyleng + 1);
+    memcpy(out, yytext, yyleng + 1);
+    yylval.str_val = out;
     return INT_LIT;
 }
 

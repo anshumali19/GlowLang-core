@@ -116,9 +116,22 @@ static Value vm_get_const_string(const char *s) {
     return v;
 }
 
+/* Forward declarations for the numeric-tower helpers defined below (used by
+   val_eq / comparisons which appear earlier in this file). */
+static inline int value_exact_int64(Value v, int64_t *out);
+static inline int is_fractional_double(Value v);
+static inline BigInt* value_to_bigint(Value v);
+static inline int value_cmp(Value a, Value b);
+
 int val_eq(Value a, Value b) {
     if (a == b) return 1;
     if (((a) & MASK_NAN) != MASK_NAN && ((b) & MASK_NAN) != MASK_NAN) return AS_FLOAT(a) == AS_FLOAT(b);
+    if (is_bigint(a) || is_bigint(b)) {
+        int64_t ia, ib;
+        if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) return ia == ib;
+        if (is_bigint(a) && is_bigint(b)) return bigint_cmp(AS_BIGINT(a), AS_BIGINT(b)) == 0;
+        return 0;
+    }
     uint64_t ta = ((a) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((a) & MASK_TYPE) >> 48;
     uint64_t tb = ((b) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
     if (ta == VAL_INT && tb == VAL_FLOAT) return (double)AS_INT(a) == AS_FLOAT(b);
@@ -155,31 +168,90 @@ static inline Value num_from_double(double r) {
 static inline int64_t num_payload_int(Value v) {
     return (int64_t)((v & MASK_PAYLOAD) << 16) >> 16;
 }
-// Fast path for the common int+int case: a native 64-bit op, promoted to an
-// (exact) double only when the result leaves the signed 48-bit inline range.
-static inline Value num_add(Value a, Value b) {
-    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
-        int64_t r = num_payload_int(a) + num_payload_int(b);
-        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
-        return value_float((double)r);
+/* 2^53: the largest integer a double represents exactly. Beyond this we keep
+   the value exact with a heap big-int instead of an (inexact) double. */
+#define INT53_MAX ((int64_t)9007199254740992LL)
+
+/* Is v an exact integer that fits in int64 (inline int, small bigint, or
+   integer-valued double)? */
+static inline int value_exact_int64(Value v, int64_t *out) {
+    if (GET_TYPE(v) == VAL_INT) { *out = num_payload_int(v); return 1; }
+    if (is_bigint(v)) return bigint_fits_int64(AS_BIGINT(v), out);
+    if (GET_TYPE(v) == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        if (isfinite(d) && d == floor(d) && fabs(d) < 9.2233720368547758e18)
+            { *out = (int64_t)d; return 1; }
     }
-    return num_from_double(val_to_double(a) + val_to_double(b));
+    return 0;
+}
+static inline int is_fractional_double(Value v) {
+    if (GET_TYPE(v) == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        return !(isfinite(d) && d == floor(d));
+    }
+    return 0;
+}
+static inline BigInt* value_to_bigint(Value v) {
+    if (is_bigint(v)) return AS_BIGINT(v);
+    int64_t i;
+    if (value_exact_int64(v, &i)) return bigint_from_int64(i);
+    return bigint_from_int64((int64_t)val_to_double(v));
+}
+/* Exact three-way comparison of two values (int/bigint vs double). */
+static inline int value_cmp(Value a, Value b) {
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib))
+        return (ia > ib) ? 1 : (ia < ib) ? -1 : 0;
+    if (is_fractional_double(a) || is_fractional_double(b)) {
+        double da = val_to_double(a), db = val_to_double(b);
+        return (da > db) ? 1 : (da < db) ? -1 : 0;
+    }
+    return bigint_cmp(value_to_bigint(a), value_to_bigint(b));
+}
+
+// Numeric tower: inline int (48-bit) -> double (exact to 2^53) -> heap big-int
+// (exact beyond 2^53).
+static inline Value num_add(Value a, Value b) {
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) {
+        int64_t r;
+        if (__builtin_add_overflow(ia, ib, &r))
+            return value_bigint(bigint_add(bigint_from_int64(ia), bigint_from_int64(ib)));
+        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+        if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
+        return value_bigint(bigint_from_int64(r));
+    }
+    if (is_fractional_double(a) || is_fractional_double(b))
+        return num_from_double(val_to_double(a) + val_to_double(b));
+    return value_bigint(bigint_add(value_to_bigint(a), value_to_bigint(b)));
 }
 static inline Value num_sub(Value a, Value b) {
-    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
-        int64_t r = num_payload_int(a) - num_payload_int(b);
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) {
+        int64_t r;
+        if (__builtin_sub_overflow(ia, ib, &r))
+            return value_bigint(bigint_sub(bigint_from_int64(ia), bigint_from_int64(ib)));
         if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
-        return value_float((double)r);
+        if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
+        return value_bigint(bigint_from_int64(r));
     }
-    return num_from_double(val_to_double(a) - val_to_double(b));
+    if (is_fractional_double(a) || is_fractional_double(b))
+        return num_from_double(val_to_double(a) - val_to_double(b));
+    return value_bigint(bigint_sub(value_to_bigint(a), value_to_bigint(b)));
 }
 static inline Value num_mul(Value a, Value b) {
-    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
-        __int128 p = (__int128)num_payload_int(a) * (__int128)num_payload_int(b);
-        if (p >= (__int128)INT48_MIN && p <= (__int128)INT48_MAX) return value_int((int64_t)p);
-        return value_float((double)p);
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) {
+        int64_t r;
+        if (__builtin_mul_overflow(ia, ib, &r))
+            return value_bigint(bigint_mul(bigint_from_int64(ia), bigint_from_int64(ib)));
+        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+        if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
+        return value_bigint(bigint_from_int64(r));
     }
-    return num_from_double(val_to_double(a) * val_to_double(b));
+    if (is_fractional_double(a) || is_fractional_double(b))
+        return num_from_double(val_to_double(a) * val_to_double(b));
+    return value_bigint(bigint_mul(value_to_bigint(a), value_to_bigint(b)));
 }
 static inline Value num_div(Value a, Value b) { return num_from_double(val_to_double(a) / val_to_double(b)); }
 
@@ -187,10 +259,10 @@ static inline Value num_div(Value a, Value b) { return num_from_double(val_to_do
 Value jit_int_add(Value a, Value b) { return num_add(a, b); }
 Value jit_int_sub(Value a, Value b) { return num_sub(a, b); }
 Value jit_int_mul(Value a, Value b) { return num_mul(a, b); }
-Value jit_int_lt(Value a, Value b)  { return value_bool(val_to_double(a) <  val_to_double(b)); }
-Value jit_int_gt(Value a, Value b)  { return value_bool(val_to_double(a) >  val_to_double(b)); }
-Value jit_int_lte(Value a, Value b) { return value_bool(val_to_double(a) <= val_to_double(b)); }
-Value jit_int_gte(Value a, Value b) { return value_bool(val_to_double(a) >= val_to_double(b)); }
+Value jit_int_lt(Value a, Value b)  { return value_bool(value_cmp(a, b) <  0); }
+Value jit_int_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
+Value jit_int_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
+Value jit_int_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
 
@@ -861,9 +933,9 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
             Value sa, sb;
             if (GET_TYPE(a) == VAL_STRING) sa = a;
-            else { char buf[64]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,64,AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+            else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(is_bigint(a)) bigint_to_string(AS_BIGINT(a), buf, sizeof(buf)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
             if (GET_TYPE(b) == VAL_STRING) sb = b;
-            else { char buf[64]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,64,AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+            else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(is_bigint(b)) bigint_to_string(AS_BIGINT(b), buf, sizeof(buf)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
             res = rope_new(sa, sb);
         } else if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
             pc->type = 5;
@@ -891,10 +963,10 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         R(pc->r0) = num_div(a, b);
         pc++; goto l_DISPATCH; 
     }
-    l_OP_LT: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_bool(AS_INT(a) < AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_bool(val_to_double(a) < val_to_double(b)); } pc++; goto l_DISPATCH; }
-    l_OP_GT: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_bool(AS_INT(a) > AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_bool(val_to_double(a) > val_to_double(b)); } pc++; goto l_DISPATCH; }
-    l_OP_LTE: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_bool(AS_INT(a) <= AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_bool(val_to_double(a) <= val_to_double(b)); } pc++; goto l_DISPATCH; }
-    l_OP_GTE: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_bool(AS_INT(a) >= AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_bool(val_to_double(a) >= val_to_double(b)); } pc++; goto l_DISPATCH; }
+    l_OP_LT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) < 0); pc++; goto l_DISPATCH; }
+    l_OP_GT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) > 0); pc++; goto l_DISPATCH; }
+    l_OP_LTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) <= 0); pc++; goto l_DISPATCH; }
+    l_OP_GTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) >= 0); pc++; goto l_DISPATCH; }
     l_OP_EQ: { pc->type=1; R(pc->r0) = value_bool(val_eq(R(pc->r1), R(pc->r2))); pc++; goto l_DISPATCH; }
     l_OP_NEQ: R(pc->r0) = value_bool(!val_eq(R(pc->r1), R(pc->r2))); pc++; goto l_DISPATCH;
     l_OP_AND: R(pc->r0) = value_bool(value_truthy(R(pc->r1)) && value_truthy(R(pc->r2))); pc++; goto l_DISPATCH;
