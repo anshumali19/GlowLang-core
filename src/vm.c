@@ -152,9 +152,35 @@ static inline Value num_from_double(double r) {
     }
     return value_float(r);
 }
-static inline Value num_add(Value a, Value b) { return num_from_double(val_to_double(a) + val_to_double(b)); }
-static inline Value num_sub(Value a, Value b) { return num_from_double(val_to_double(a) - val_to_double(b)); }
-static inline Value num_mul(Value a, Value b) { return num_from_double(val_to_double(a) * val_to_double(b)); }
+static inline int64_t num_payload_int(Value v) {
+    return (int64_t)((v & MASK_PAYLOAD) << 16) >> 16;
+}
+// Fast path for the common int+int case: a native 64-bit op, promoted to an
+// (exact) double only when the result leaves the signed 48-bit inline range.
+static inline Value num_add(Value a, Value b) {
+    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
+        int64_t r = num_payload_int(a) + num_payload_int(b);
+        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+        return value_float((double)r);
+    }
+    return num_from_double(val_to_double(a) + val_to_double(b));
+}
+static inline Value num_sub(Value a, Value b) {
+    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
+        int64_t r = num_payload_int(a) - num_payload_int(b);
+        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+        return value_float((double)r);
+    }
+    return num_from_double(val_to_double(a) - val_to_double(b));
+}
+static inline Value num_mul(Value a, Value b) {
+    if (GET_TYPE(a) == VAL_INT && GET_TYPE(b) == VAL_INT) {
+        __int128 p = (__int128)num_payload_int(a) * (__int128)num_payload_int(b);
+        if (p >= (__int128)INT48_MIN && p <= (__int128)INT48_MAX) return value_int((int64_t)p);
+        return value_float((double)p);
+    }
+    return num_from_double(val_to_double(a) * val_to_double(b));
+}
 static inline Value num_div(Value a, Value b) { return num_from_double(val_to_double(a) / val_to_double(b)); }
 
 /* JIT helpers (defined here, called from jit.c). */
