@@ -42,7 +42,7 @@ static int get_self_exe_path(char *path, size_t max_len) {
     struct { char **names; int count; } str_list;
 }
 
-%token <int_val> INT_LIT
+%token <str_val> INT_LIT
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
@@ -121,7 +121,7 @@ member_name: ID { $$ = $1; }
            | WRITE { $$ = intern_string("write"); }
            | SHOW { $$ = intern_string("show"); }
            ;
-primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNode($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
+primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); free((void*)$1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $5;

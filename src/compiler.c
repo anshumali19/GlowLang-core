@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <stdbool.h>
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -35,7 +36,26 @@ static const char *compiling_class_name = NULL;
 static const char *compiling_trait_name = NULL;
 
 Node* node_new(NodeType t) { Node *n = arena_alloc(sizeof(Node)); memset(n, 0, sizeof(Node)); n->type = t; n->line = line_num; return n; }
-Node* newIntNode(int64_t v) { Node *n = node_new(NODE_INT_LIT); n->value = value_int(v); return n; }
+/* Build an integer literal Value via the numeric tower: inline 48-bit int ->
+   double (exact to 2^53) -> heap big-int (exact beyond 2^53). */
+static inline Value int_literal_value(int64_t v) {
+    if (fits_int48(v)) return value_int(v);
+    if (v >= -INT53_MAX && v <= INT53_MAX) return value_float((double)v);
+    return value_bigint(bigint_from_int64(v));
+}
+Node* newIntNode(int64_t v) { Node *n = node_new(NODE_INT_LIT); n->value = int_literal_value(v); return n; }
+Node* newIntNodeStr(const char *s) {
+    errno = 0;
+    char *end;
+    long long v = strtoll(s, &end, 10);
+    /* Exact when the literal fits an int64 and is parsed without overflow. */
+    if (errno == 0 && *end == '\0') return newIntNode((int64_t)v);
+    /* Otherwise (literal beyond 2^63) keep it exact as a heap big-int. */
+    BigInt *b = bigint_from_string(s);
+    Node *n = node_new(NODE_INT_LIT);
+    n->value = value_bigint(b);
+    return n;
+}
 Node* newFloatNode(double v) { Node *n = node_new(NODE_FLOAT_LIT); n->value = value_float(v); return n; }
 Node* newBoolNode(int v) { Node *n = node_new(NODE_BOOL_LIT); n->value = value_bool(v); return n; }
 Node* newStringNode(const char *s) { Node *n = node_new(NODE_STRING_LIT); n->name = s; return n; }
@@ -930,8 +950,20 @@ static int compile_expr(Node *n, int target_reg) {
 
     switch (n->type) {
         case NODE_INT_LIT: {
-            int idx = bc_emit(compiling_bc, OP_CONST_INT, AS_INT(n->value), 0);
-            compiling_bc->code[idx].r0 = reg;
+            Value lit = n->value;
+            if (GET_TYPE(lit) == VAL_INT) {
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, AS_INT(lit), 0);
+                compiling_bc->code[idx].r0 = reg;
+            } else {
+                /* Literal is a double or heap big-int: carry it as a generic
+                   Value constant (like FLOAT_LIT) and root big-ints so the GC
+                   never frees a literal still referenced by the bytecode. */
+                Value *vp = arena_alloc(sizeof(Value));
+                *vp = lit;
+                int idx = bc_emit(compiling_bc, OP_CONST_FLOAT, 0, (intptr_t)vp);
+                compiling_bc->code[idx].r0 = reg;
+                if (is_bigint(lit)) gc_register_constant_root(lit);
+            }
             break;
         }
         case NODE_FLOAT_LIT: {

@@ -55,7 +55,7 @@ typedef struct { Value callee; int argc; Value *args; } ThreadData;
  *  GC & OBJECTS
  * ================================================================ */
 typedef enum {
-    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE
+    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_BIGINT, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE
 } ObjType;
 
 typedef struct GCObject {
@@ -100,6 +100,17 @@ typedef struct {
     int size;
     char chars[];
 } GCString;
+
+/* Arbitrary-precision signed integer (numeric tower stage 2). Stored as a heap
+   GC object carried in a VAL_OBJECT Value, so it reuses the existing object
+   machinery (the 8-slot ValueType tag space is already full). Little-endian
+   base-2^32 limbs. */
+typedef struct BigInt {
+    GCObject obj;
+    int neg;      /* 1 if negative, 0 if >= 0 */
+    int nlimbs;   /* number of used limbs (>= 1) */
+    uint32_t limbs[]; /* flexible array member */
+} BigInt;
 
 typedef struct RopeNode {
     GCObject obj;
@@ -146,6 +157,9 @@ typedef struct {
 #define INT48_MIN  ((int64_t)0xFFFF800000000000LL)  /* -2^47 */
 #define INT48_MAX  ((int64_t)0x00007FFFFFFFFFFFLL)  /*  2^47 - 1 */
 static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MAX; }
+/* 2^53: largest integer a double represents exactly. Beyond this, integer
+   literals are kept exact as heap big-ints (stage 2 of the numeric tower). */
+#define INT53_MAX ((int64_t)9007199254740992LL)
 
 #define IS_DEOPT(v)      ((v) == (MASK_NAN | ((uint64_t)VAL_DEOPT << 48)))
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
@@ -188,6 +202,8 @@ static inline BoundMethod* AS_BOUND_METHOD(Value v) { return (BoundMethod*)(uint
 static inline Trait* AS_TRAIT(Value v) { return (Trait*)(uintptr_t)(v & MASK_PAYLOAD); }
 static inline NativeFunc* AS_NATIVE_FUNC(Value v) { return (NativeFunc*)(uintptr_t)(v & MASK_PAYLOAD); }
 static inline PackedArray* AS_PACKED_ARRAY(Value v) { return (PackedArray*)(uintptr_t)(v & MASK_PAYLOAD); }
+static inline BigInt* AS_BIGINT(Value v) { return (BigInt*)(uintptr_t)(v & MASK_PAYLOAD); }
+static inline int is_bigint(Value v) { return GET_TYPE(v) == VAL_OBJECT && ((GCObject*)(uintptr_t)(v & MASK_PAYLOAD))->type == OBJ_BIGINT; }
 
 /* Value Constructors */
 static inline Value make_value(uint64_t type, uint64_t payload) {
@@ -209,6 +225,18 @@ static inline Value value_obj(void *ptr) { return make_value(VAL_OBJECT, (uint64
 static inline Value value_bound_method(BoundMethod *bm) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)bm); }
 static inline Value value_native_func(NativeFunc *nf) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)nf); }
 static inline Value value_none(void) { return make_value(VAL_NONE, 0); }
+static inline Value value_bigint(BigInt *b) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)b); }
+
+/* Big integer operations (numeric tower stage 2). */
+BigInt* bigint_from_int64(int64_t v);
+BigInt* bigint_from_string(const char *s);
+void bigint_to_string(BigInt *b, char *out, size_t n);
+int bigint_cmp(BigInt *a, BigInt *b);          /* -1, 0, 1 */
+BigInt* bigint_add(BigInt *a, BigInt *b);
+BigInt* bigint_sub(BigInt *a, BigInt *b);
+BigInt* bigint_mul(BigInt *a, BigInt *b);
+double bigint_to_double(BigInt *b);
+int bigint_fits_int64(BigInt *b, int64_t *out);
 
 typedef uint64_t TypeSignature;
 
@@ -628,6 +656,7 @@ void yyerror(const char *s);
  * ================================================================ */
 Node *node_new(NodeType type);
 Node* newIntNode(int64_t v);
+Node* newIntNodeStr(const char *s);
 Node* newFloatNode(double v);
 Node* newBoolNode(int v);
 Node* newStringNode(const char *s);
