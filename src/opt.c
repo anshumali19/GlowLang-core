@@ -113,7 +113,7 @@ void optimize_bytecode(Bytecode *bc) {
                         else if (inst->op == OP_MUL || inst->op == OP_MUL_INT) res = i1 * i2;
                         else if (inst->op == OP_DIV) { if (i2 != 0) res = i1 / i2; else ok = 0; }
                         
-                        if (ok) {
+                        if (ok && res >= INT32_MIN && res <= INT32_MAX && fits_int48(res)) {
                             inst->op = OP_CONST_INT;
                             inst->arg = (int)res;
                             if (r0 < nregs) {
