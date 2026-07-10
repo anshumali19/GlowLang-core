@@ -241,6 +241,97 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc) {
     *(uint32_t*)&buf->code[jmp_done + 1] = done_pos - (jmp_done + 5);
 }
 
+// ---- Inline fast path for integer arithmetic / comparison ----
+// Load r1,r2 into rax,rcx and verify both are inline ints. Records the two
+// "not an int" jump patch positions (caller fills them to its slow path).
+// On success rax/rcx hold the sign-extended 64-bit integers.
+static void emit_jit_int_load_and_check(JITBuffer *buf, int r1, int r2,
+                                        uint32_t *jne_a, uint32_t *jne_b) {
+    emit_mov_rax_reg(buf, r1);
+    emit_mov_rcx_reg(buf, r2);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8 (INLINE_INT tag)
+    *jne_a = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0); // jne slow
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8
+    *jne_b = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0); // jne slow
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x10); // sar rax, 16 (sign-extend 48->64)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf9); jit_emit_byte(buf, 0x10); // sar rcx, 16
+}
+
+// Inline integer add/sub; promotes to a double (exact for the whole 48-bit
+// range) when the result leaves the signed 48-bit range. Mixed types fall
+// back to slow_fn (a jit_int_* helper).
+static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r2, uintptr_t slow_fn) {
+    uint32_t jne_a, jne_b;
+    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    if (is_sub) {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x29); jit_emit_byte(buf, 0xc8); // sub rax, rcx
+    } else {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x01); jit_emit_byte(buf, 0xc8); // add rax, rcx
+    }
+    emit_mov_rdx_imm64(buf, INT48_MAX);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
+    uint32_t jg_over = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8f); jit_emit_u32(buf, 0); // jg promote
+    emit_mov_rdx_imm64(buf, INT48_MIN);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
+    uint32_t jl_under = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0); // jl promote
+    emit_mov_rdx_imm64(buf, MASK_NAN); // rebox as inline int
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
+    uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t promote_pos = buf->size;
+    jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, 0xc0); // cvtsi2sd xmm0, rax
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x7e); jit_emit_byte(buf, 0xc0); // movq rax, xmm0
+    uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t slow_pos = buf->size;
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
+    emit_mov_rax_imm64(buf, slow_fn);
+    emit_call_rax(buf);
+    uint32_t done_pos = buf->size;
+    emit_mov_reg_rax(buf, r0);
+    *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
+    *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
+    *(uint32_t*)(buf->code + jg_over + 2) = (uint32_t)(promote_pos - (jg_over + 6));
+    *(uint32_t*)(buf->code + jl_under + 2) = (uint32_t)(promote_pos - (jl_under + 6));
+    *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
+    *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(done_pos - (jmp_done2 + 5));
+}
+
+// Inline integer ordered comparisons; produces a bool value. Mixed types fall
+// back to slow_fn (a jit_int_* helper).
+static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn) {
+    uint32_t jne_a, jne_b;
+    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xc8); // cmp rax, rcx
+    switch (op) {
+        case OP_LT_INT:  jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9c); break; // setl cl
+        case OP_GT_INT:  jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9f); break; // setg cl
+        case OP_LTE_INT: jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9e); break; // setle cl
+        case OP_GTE_INT: jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9d); break; // setge cl
+        default:         jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x94); break; // sete cl
+    }
+    jit_emit_byte(buf, 0xc1); // modrm: cl
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc1); // movzx eax, cl
+    emit_mov_rdx_imm64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // bool tag 0x7FFA...
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
+    uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t slow_pos = buf->size;
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
+    emit_mov_rax_imm64(buf, slow_fn);
+    emit_call_rax(buf);
+    uint32_t done_pos = buf->size;
+    emit_mov_reg_rax(buf, r0);
+    *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
+    *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
+    *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
+}
+
 void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
     (void)current_sig;
     if (bc->jit_code || bc->jit_failed) return;
@@ -528,32 +619,26 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 break;
             }
             case OP_ADD_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_add);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add);
                 break;
             }
             case OP_SUB_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_sub);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub);
                 break;
             }
             case OP_MUL_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_mul);
                 emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
                 uintptr_t cmp_fn =
                     pc->op == OP_LT_INT ? (uintptr_t)jit_int_lt :
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_mov_rax_imm64(&buf, cmp_fn);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn);
                 break;
             }
             case OP_RETURN: { 
@@ -581,14 +666,14 @@ void jit_compile(Bytecode *bc) { jit_compile_ext(bc, NULL, 0); }
 void func_maybe_tier_up(FuncEntry *fe) {
     if (!fe || !fe->body) return;
     fe->exec_count++;
-    
+
     // Tier 1: Baseline JIT after 10 executions
     if (fe->jit_tier == JIT_TIER_INTERP && !fe->body->baseline_jit_code && !fe->body->jit_failed) {
         if (fe->exec_count > 10) {
             jit_compile_baseline(fe->body);
         }
     }
-    
+
     // Tier 2: Optimizing JIT after 100 executions
     if (fe->jit_tier == JIT_TIER_BASELINE && !fe->body->jit_code && !fe->body->jit_failed) {
         if (fe->exec_count > 100) {
@@ -888,15 +973,11 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
                 break;
             }
             case OP_ADD_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_add);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add);
                 break;
             }
             case OP_SUB_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_sub);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub);
                 break;
             }
             case OP_MUL_INT: {
@@ -906,14 +987,12 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
                 uintptr_t cmp_fn =
                     pc->op == OP_LT_INT ? (uintptr_t)jit_int_lt :
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_mov_rax_imm64(&buf, cmp_fn);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn);
                 break;
             }
             case OP_RETURN: { 
