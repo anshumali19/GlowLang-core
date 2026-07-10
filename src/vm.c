@@ -143,6 +143,30 @@ int value_truthy(Value v) {
     return 0;
 }
 
+/* ---- Numeric tower (stage 1): keep exact integers inline when they fit the
+   48-bit payload, otherwise promote to a double. Never truncates. ---- */
+static inline Value num_from_double(double r) {
+    if (isfinite(r) && r == floor(r) && fabs(r) < 9.0e18) {
+        int64_t i = (int64_t)r;
+        if (fits_int48(i)) return value_int(i);
+    }
+    return value_float(r);
+}
+static inline Value num_add(Value a, Value b) { return num_from_double(val_to_double(a) + val_to_double(b)); }
+static inline Value num_sub(Value a, Value b) { return num_from_double(val_to_double(a) - val_to_double(b)); }
+static inline Value num_mul(Value a, Value b) { return num_from_double(val_to_double(a) * val_to_double(b)); }
+static inline Value num_div(Value a, Value b) { return num_from_double(val_to_double(a) / val_to_double(b)); }
+
+/* JIT helpers (defined here, called from jit.c). */
+Value jit_int_add(Value a, Value b) { return num_add(a, b); }
+Value jit_int_sub(Value a, Value b) { return num_sub(a, b); }
+Value jit_int_mul(Value a, Value b) { return num_mul(a, b); }
+Value jit_int_lt(Value a, Value b)  { return value_bool(val_to_double(a) <  val_to_double(b)); }
+Value jit_int_gt(Value a, Value b)  { return value_bool(val_to_double(a) >  val_to_double(b)); }
+Value jit_int_lte(Value a, Value b) { return value_bool(val_to_double(a) <= val_to_double(b)); }
+Value jit_int_gte(Value a, Value b) { return value_bool(val_to_double(a) >= val_to_double(b)); }
+Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
+
 
 pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t threads_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -280,7 +304,7 @@ void print_error_line(const char *file, int line) {
 void print_error_trace(Value exception) {
     fprintf(stderr, "\033[31mRuntimeError:\033[0m ");
     if (exception == 0) { fprintf(stderr, "none"); }
-    else if (((exception) & MASK_NAN) != MASK_NAN) { fprintf(stderr, "%g", AS_FLOAT(exception)); }
+    else if (((exception) & MASK_NAN) != MASK_NAN) { char _b[64]; format_double(_b, sizeof(_b), AS_FLOAT(exception)); fprintf(stderr, "%s", _b); }
     else {
         uint64_t type = ((exception) & MASK_TYPE) >> 48;
         if (type == VAL_INT) fprintf(stderr, "%ld", (long)AS_INT(exception));
@@ -807,13 +831,13 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         Value a = R(pc->r1), b = R(pc->r2), res;
         if (IS_INT(a) && IS_INT(b)) {
             pc->type = 1;
-            res = value_int(AS_INT(a) + AS_INT(b));
+            res = num_add(a, b);
         } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
             Value sa, sb;
             if (GET_TYPE(a) == VAL_STRING) sa = a;
-            else { char buf[64]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) snprintf(buf,64,"%g",AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+            else { char buf[64]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,64,AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
             if (GET_TYPE(b) == VAL_STRING) sb = b;
-            else { char buf[64]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) snprintf(buf,64,"%g",AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+            else { char buf[64]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,64,"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,64,AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
             res = rope_new(sa, sb);
         } else if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
             pc->type = 5;
@@ -824,12 +848,12 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             res = value_list(rl);
         } else {
             if (GET_TYPE(a) == VAL_FLOAT || GET_TYPE(b) == VAL_FLOAT) pc->type = 2;
-            res = value_from_double(val_to_double(a) + val_to_double(b));
+            res = num_add(a, b);
         }
         R(pc->r0) = res; pc++; goto l_DISPATCH;
     }
-    l_OP_SUB: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_int(AS_INT(a) - AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_from_double(val_to_double(a) - val_to_double(b)); } pc++; goto l_DISPATCH; }
-    l_OP_MUL: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_int(AS_INT(a) * AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_from_double(val_to_double(a) * val_to_double(b)); } pc++; goto l_DISPATCH; }
+    l_OP_SUB: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = num_sub(a, b); } else { pc->type=2; R(pc->r0) = num_sub(a, b); } pc++; goto l_DISPATCH; }
+    l_OP_MUL: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = num_mul(a, b); } else { pc->type=2; R(pc->r0) = num_mul(a, b); } pc++; goto l_DISPATCH; }
     l_OP_DIV: { 
         Value a = R(pc->r1), b = R(pc->r2);
         if (val_to_double(b) == 0.0) {
@@ -837,13 +861,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             has_exception = 1;
             goto l_OP_THROW;
         }
-        if (IS_INT(a) && IS_INT(b)) {
-            pc->type = 1;
-            R(pc->r0) = value_int(AS_INT(a) / AS_INT(b));
-        } else {
-            pc->type = 2;
-            R(pc->r0) = value_from_double(val_to_double(a) / val_to_double(b));
-        }
+        if (GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) pc->type = 1; else pc->type = 2;
+        R(pc->r0) = num_div(a, b);
         pc++; goto l_DISPATCH; 
     }
     l_OP_LT: { Value a = R(pc->r1), b = R(pc->r2); if(GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) { pc->type=1; R(pc->r0) = value_bool(AS_INT(a) < AS_INT(b)); } else { pc->type=2; R(pc->r0) = value_bool(val_to_double(a) < val_to_double(b)); } pc++; goto l_DISPATCH; }
@@ -1729,8 +1748,8 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         pc++; goto l_DISPATCH; 
     }
     l_OP_MOD: R(pc->r0) = value_from_double(fmod(val_to_double(R(pc->r1)), val_to_double(R(pc->r2)))); pc++; goto l_DISPATCH;
-    l_OP_POW: R(pc->r0) = value_from_double(pow(val_to_double(R(pc->r1)), val_to_double(R(pc->r2)))); pc++; goto l_DISPATCH;
-    l_OP_NEG: R(pc->r0) = value_from_double(-val_to_double(R(pc->r1))); pc++; goto l_DISPATCH;
+    l_OP_POW: R(pc->r0) = num_from_double(pow(val_to_double(R(pc->r1)), val_to_double(R(pc->r2)))); pc++; goto l_DISPATCH;
+    l_OP_NEG: { Value v = R(pc->r1); if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); if (x == INT48_MIN) R(pc->r0) = value_float(-(double)x); else R(pc->r0) = value_int(-x); } else R(pc->r0) = num_from_double(-val_to_double(v)); pc++; goto l_DISPATCH; }
     l_OP_STOP: {
         if (pc->arg > 0) {
             if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("STOP out of bounds"); has_exception = 1; goto l_OP_THROW; }
@@ -2171,9 +2190,9 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         pc++; goto l_DISPATCH;
     }
     
-    l_OP_ADD_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) + AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;
-    l_OP_SUB_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) - AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;
-    l_OP_MUL_INT: R(pc->r0) = value_int(AS_INT(R(pc->r1)) * AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;
+    l_OP_ADD_INT: R(pc->r0) = num_add(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
+    l_OP_SUB_INT: R(pc->r0) = num_sub(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
+    l_OP_MUL_INT: R(pc->r0) = num_mul(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
     l_OP_LT_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) < AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;
     l_OP_GT_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) > AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;
     l_OP_LTE_INT: R(pc->r0) = value_bool(AS_INT(R(pc->r1)) <= AS_INT(R(pc->r2))); pc++; goto l_DISPATCH;

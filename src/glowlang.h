@@ -140,6 +140,13 @@ typedef struct {
 #define MASK_TYPE     ((uint64_t)0x0007000000000000)
 #define MASK_PAYLOAD  ((uint64_t)0x0000FFFFFFFFFFFF)
 
+/* Inline integer range: GlowLang packs integers into the 48-bit VALUE payload.
+   Results that exceed this signed range are promoted to a double (stage 1 of the
+   numeric tower). Doubles are exact integers up to 2^53. */
+#define INT48_MIN  ((int64_t)0xFFFF800000000000LL)  /* -2^47 */
+#define INT48_MAX  ((int64_t)0x00007FFFFFFFFFFFLL)  /*  2^47 - 1 */
+static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MAX; }
+
 #define IS_DEOPT(v)      ((v) == (MASK_NAN | ((uint64_t)VAL_DEOPT << 48)))
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
@@ -236,6 +243,16 @@ extern Value packed_array_get_jit(Value v_pa, Value v_idx);
 extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
 extern Value glow_index_jit(Value coll, Value v_idx);
 extern void glow_store_index_jit(Value coll, Value v_idx, Value v_val);
+/* Wide-integer helpers used by the JIT so integer arithmetic matches the
+   interpreter (promote to double on overflow / cross-type compare). */
+extern Value jit_int_add(Value a, Value b);
+extern Value jit_int_sub(Value a, Value b);
+extern Value jit_int_mul(Value a, Value b);
+extern Value jit_int_lt(Value a, Value b);
+extern Value jit_int_gt(Value a, Value b);
+extern Value jit_int_lte(Value a, Value b);
+extern Value jit_int_gte(Value a, Value b);
+extern Value jit_int_eq(Value a, Value b);
 extern void simd_add_helper(Value v_a, Value v_b, Value v_target);
 extern Value value_from_double(double d);
 extern void* tensor_malloc(size_t size);
@@ -754,6 +771,7 @@ FuncEntry* func_get(const char *name);
 void std_init(void);
 void std_cleanup(void);
 void print_value(Value v);
+void format_double(char *buf, size_t n, double d);
 double val_to_double(Value v);
 extern Class *vm_last_class;
 extern Trait *vm_last_trait;

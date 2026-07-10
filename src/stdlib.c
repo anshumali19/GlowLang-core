@@ -1050,9 +1050,18 @@ Value bound_native_method_new(Value inst, NativeFuncPtr native_m) { BoundMethod 
 Value native_func_new(const char *name, NativeFuncPtr ptr) { NativeFunc *nf = gc_alloc(sizeof(NativeFunc), OBJ_NATIVE_FUNC); nf->name = name; nf->func = ptr; return value_native_func(nf); }
 
 
+/* Render an integer-valued double without exponent/decimal so integers that
+   were promoted out of the 48-bit inline range still print like integers. */
+void format_double(char *buf, size_t n, double d) {
+    if (isfinite(d) && d == floor(d) && fabs(d) < 1e16)
+        snprintf(buf, n, "%.0f", d);
+    else
+        snprintf(buf, n, "%g", d);
+}
+
 void print_value(Value v) {
     if (v == 0) { printf("none"); return; }
-    if ((v & MASK_NAN) != MASK_NAN) { printf("%g", AS_FLOAT(v)); return; }
+    if ((v & MASK_NAN) != MASK_NAN) { char _b[64]; format_double(_b, sizeof(_b), AS_FLOAT(v)); printf("%s", _b); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) printf("%ld", (long)AS_INT(v));
     else if (type == VAL_BOOL) printf(AS_BOOL(v) ? "true" : "false");
@@ -1250,7 +1259,7 @@ static void json_stringify_helper(Value v, StringBuilder *sb) {
     // For now, keep it simple but use the efficient append
     if (v == 0) { json_append_str("null", sb); return; }
     if ((v & MASK_NAN) != MASK_NAN) { 
-        char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v)); json_append_str(tmp, sb); return; 
+        char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return; 
     }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {

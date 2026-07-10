@@ -528,29 +528,32 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 break;
             }
             case OP_ADD_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_add);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_SUB_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_sub);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_MUL_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc1);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_mul);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8);
-                uint8_t set_op;
-                switch(pc->op) { case OP_LT_INT: set_op = 0x9c; break; case OP_GT_INT: set_op = 0x9f; break; case OP_LTE_INT: set_op = 0x9e; break; case OP_GTE_INT: set_op = 0x9d; break; case OP_EQ_INT: set_op = 0x94; break; default: set_op = 0x94; break; }
-                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, set_op); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc1); emit_mov_rax_imm64(&buf, value_bool(0)); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                uintptr_t cmp_fn =
+                    pc->op == OP_LT_INT ? (uintptr_t)jit_int_lt :
+                    pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
+                    pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
+                    pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
+                emit_mov_rax_imm64(&buf, cmp_fn);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_RETURN: { 
@@ -885,29 +888,32 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
                 break;
             }
             case OP_ADD_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_add);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_SUB_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_sub);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_MUL_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc1);
-                emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_mul);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8);
-                uint8_t set_op;
-                switch(pc->op) { case OP_LT_INT: set_op = 0x9c; break; case OP_GT_INT: set_op = 0x9f; break; case OP_LTE_INT: set_op = 0x9e; break; case OP_GTE_INT: set_op = 0x9d; break; case OP_EQ_INT: set_op = 0x94; break; default: set_op = 0x94; break; }
-                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, set_op); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc1); emit_mov_rax_imm64(&buf, value_bool(0)); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_mov_reg_rax(&buf, pc->r0);
+                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2);
+                uintptr_t cmp_fn =
+                    pc->op == OP_LT_INT ? (uintptr_t)jit_int_lt :
+                    pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
+                    pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
+                    pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
+                emit_mov_rax_imm64(&buf, cmp_fn);
+                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_RETURN: { 
