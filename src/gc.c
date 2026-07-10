@@ -142,6 +142,7 @@ static void process_grey_stack(void) {
             case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { gc_mark_value(d->values[i]); } } break; }
             case OBJ_SQLITE_ITER: break; 
             case OBJ_SQLITE_HANDLE: break;
+            case OBJ_BIGINT: break;
             case OBJ_CLASS: { 
                 Class *c = (Class*)obj; 
                 push_grey((GCObject*)c->methods); 
