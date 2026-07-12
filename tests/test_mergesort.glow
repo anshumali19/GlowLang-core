@@ -5,7 +5,7 @@ func mergeSort(arr, left, right):
         return arr
     end
 
-    mid = (left + right) / 2
+    mid = floor((left + right) / 2)
     arr = mergeSort(arr, left, mid)
     arr = mergeSort(arr, mid + 1, right)
     arr = merge(arr, left, mid, right)

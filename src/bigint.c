@@ -160,32 +160,44 @@ int bigint_fits_int64(BigInt *b, int64_t *out) {
 double bigint_to_double(BigInt *b) {
     int64_t i;
     if (bigint_fits_int64(b, &i)) return (double)i;
-    char buf[600];
-    bigint_to_string(b, buf, sizeof buf);
-    return strtod(buf, NULL);
+    char *s = bigint_to_new_string(b);
+    double d = strtod(s, NULL);
+    free(s);
+    return d;
 }
 
-void bigint_to_string(BigInt *b, char *out, size_t n) {
-    if (b->nlimbs == 1 && b->limbs[0] == 0) { snprintf(out, n, "0"); return; }
-    int cap = b->nlimbs;
-    uint32_t *w = (uint32_t*)malloc(sizeof(uint32_t) * (size_t)(cap + 1));
+char* bigint_to_new_string(BigInt *b) {
+    if (b->nlimbs == 1 && b->limbs[0] == 0) {
+        char *s = (char*)malloc(2);
+        s[0] = '0'; s[1] = '\0';
+        return s;
+    }
+    /* Worst-case decimal length is nlimbs*10 (2^32 < 10^10). */
+    size_t cap = (size_t)b->nlimbs * 10 + 2;
+    char *buf = (char*)malloc(cap + 1);
+    uint32_t *w = (uint32_t*)malloc(sizeof(uint32_t) * (size_t)b->nlimbs);
     int wl = b->nlimbs;
     for (int i = 0; i < wl; i++) w[i] = b->limbs[i];
-    char tmp[4096];
     int tlen = 0;
-    while (!(wl == 1 && w[0] == 0) && tlen < (int)sizeof(tmp) - 1) {
+    while (!(wl == 1 && w[0] == 0)) {
         uint64_t rem = 0;
         for (int i = wl - 1; i >= 0; i--) {
             uint64_t cur = (rem << 32) | w[i];
             w[i] = (uint32_t)(cur / 10u);
             rem = cur % 10u;
         }
-        tmp[tlen++] = (char)('0' + (int)rem);
+        buf[tlen++] = (char)('0' + (int)rem);
         while (wl > 1 && w[wl - 1] == 0) wl--;
     }
-    size_t pos = 0;
-    if (b->neg && tlen > 0 && pos < n) out[pos++] = '-';
-    for (int i = tlen - 1; i >= 0 && pos < n; i--) out[pos++] = tmp[i];
-    if (pos < n) out[pos] = '\0';
     free(w);
+    for (int i = 0, j = tlen - 1; i < j; i++, j--) {
+        char c = buf[i]; buf[i] = buf[j]; buf[j] = c;
+    }
+    if (b->neg) {
+        memmove(buf + 1, buf, (size_t)tlen);
+        buf[0] = '-';
+        tlen++;
+    }
+    buf[tlen] = '\0';
+    return buf;
 }
