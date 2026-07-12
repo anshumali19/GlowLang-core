@@ -951,12 +951,14 @@ static int compile_expr(Node *n, int target_reg) {
     switch (n->type) {
         case NODE_INT_LIT: {
             Value lit = n->value;
-            if (GET_TYPE(lit) == VAL_INT) {
-                int idx = bc_emit(compiling_bc, OP_CONST_INT, AS_INT(lit), 0);
+            if (GET_TYPE(lit) == VAL_INT && AS_INT(lit) >= INT32_MIN && AS_INT(lit) <= INT32_MAX) {
+                /* Fits the 32-bit OP_CONST_INT immediate. */
+                int idx = bc_emit(compiling_bc, OP_CONST_INT, (int)AS_INT(lit), 0);
                 compiling_bc->code[idx].r0 = reg;
             } else {
-                /* Literal is a double or heap big-int: carry it as a generic
-                   Value constant (like FLOAT_LIT) and root big-ints so the GC
+                /* Wider-than-32-bit int, double, or heap big-int: carry it as a
+                   generic Value constant (like FLOAT_LIT) so the value is not
+                   truncated by the 32-bit immediate, and root big-ints so the GC
                    never frees a literal still referenced by the bytecode. */
                 Value *vp = arena_alloc(sizeof(Value));
                 *vp = lit;
