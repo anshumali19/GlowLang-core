@@ -18,6 +18,33 @@
 #include "jit.h"
 #include "opt.h"
 
+/* Portable signed-64-bit overflow builtins for compilers that lack the
+   __builtin_*_overflow intrinsics (e.g. MSVC). GCC/Clang use the natives. */
+#if !defined(__GNUC__) && !defined(__clang__)
+static inline int glow_add_overflow_i64(int64_t a, int64_t b, int64_t *res) {
+    uint64_t ur = (uint64_t)a + (uint64_t)b;
+    int64_t r = (int64_t)ur;
+    *res = r;
+    return (((a ^ r) & (b ^ r)) < 0);
+}
+static inline int glow_sub_overflow_i64(int64_t a, int64_t b, int64_t *res) {
+    uint64_t ur = (uint64_t)a - (uint64_t)b;
+    int64_t r = (int64_t)ur;
+    *res = r;
+    return (((a ^ b) & (a ^ r)) < 0);
+}
+static inline int glow_mul_overflow_i64(int64_t a, int64_t b, int64_t *res) {
+    if (a == 0 || b == 0) { *res = 0; return 0; }
+    if ((a == INT64_MIN && b == -1) || (b == INT64_MIN && a == -1)) { *res = INT64_MIN; return 1; }
+    int64_t r = (int64_t)((uint64_t)a * (uint64_t)b);
+    *res = r;
+    return (r / a) != b;
+}
+#define __builtin_add_overflow glow_add_overflow_i64
+#define __builtin_sub_overflow glow_sub_overflow_i64
+#define __builtin_mul_overflow glow_mul_overflow_i64
+#endif
+
 #define MAX_CALL_STACK 65536
 
 // VM Thread local Stack and frames
