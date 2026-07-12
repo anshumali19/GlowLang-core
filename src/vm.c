@@ -933,9 +933,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
             Value sa, sb;
             if (GET_TYPE(a) == VAL_STRING) sa = a;
-            else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(is_bigint(a)) bigint_to_string(AS_BIGINT(a), buf, sizeof(buf)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+            else if (is_bigint(a)) { char *_bs = bigint_to_new_string(AS_BIGINT(a)); sa = value_string_copy(_bs); free(_bs); }
+            else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
             if (GET_TYPE(b) == VAL_STRING) sb = b;
-            else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(is_bigint(b)) bigint_to_string(AS_BIGINT(b), buf, sizeof(buf)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+            else if (is_bigint(b)) { char *_bs = bigint_to_new_string(AS_BIGINT(b)); sb = value_string_copy(_bs); free(_bs); }
+            else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
             res = rope_new(sa, sb);
         } else if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
             pc->type = 5;
@@ -1205,7 +1207,53 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     l_OP_CALL_SELF_FAST: {
         FuncEntry *fe = bc->owner;
         if (fe && fe->body) {
-            DO_CALL(fe->body, NULL, base_reg + pc->r2, pc->r0);
+            call_stack[my_frame_idx].pc = pc;
+            TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
+
+            void *jit = func_get_specialization(fe, sig);
+            if (jit && jit != (void*)1) {
+                pc->cache[0].key = (void*)sig;
+                pc->cache[0].val = (intptr_t)jit;
+                typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                JITFunc f = (JITFunc)jit;
+                int deopt_pc = 0;
+                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                if (__builtin_expect(IS_DEOPT(res), 0)) {
+                    res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                }
+                if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+            } else {
+                fe->used++;
+                func_maybe_tier_up(fe);
+                if (fe->body && fe->body->jit_code) {
+                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                    int deopt_pc = 0;
+                    Value res = ((JITFunc)fe->body->jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (__builtin_expect(IS_DEOPT(res), 0)) {
+                        res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                    }
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
+                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                    int deopt_pc = 0;
+                    Value res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (__builtin_expect(IS_DEOPT(res), 0)) {
+                        res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
+                    }
+                    if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
+                } else {
+                    if (fe->used > 10 && fe->spec_count < 8) {
+                        void *jit_check = func_get_specialization(fe, sig);
+                        if (!jit_check) {
+                            jit_compile_specialized(fe, sig);
+                            if (!func_get_specialization(fe, sig)) {
+                                func_add_specialization(fe, sig, (void*)1, 0);
+                            }
+                        }
+                    }
+                    DO_CALL(fe->body, NULL, base_reg + pc->r2, pc->r0);
+                }
+            }
         }
         pc++; goto l_DISPATCH;
     }
