@@ -332,8 +332,9 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
 }
 
-void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
+ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
     (void)current_sig;
+    if (!fe) fe = bc->owner;
     if (bc->jit_code || bc->jit_failed) return;
 
     for (int i = 0; i < bc->count; i++) {
@@ -346,7 +347,7 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_LT: case OP_GT: case OP_LTE:
             case OP_GTE: case OP_EQ: case OP_NEQ: case OP_JUMP:
             case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
-            case OP_CALL: case OP_CALL_VALUE: case OP_CALL_METHOD:
+            case OP_CALL: case OP_CALL_VALUE: case OP_CALL_SELF_FAST: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
             case OP_SIMD_ADD: case OP_TAIL_CALL:
             case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
@@ -355,6 +356,21 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
                 break;
             default: bc->jit_failed = 1; return;
         }
+    }
+
+    // Reject self-recursive functions with complex bodies (array mutation or
+    // calls to other functions). The fast self-call JIT path is only proven
+    // correct for pure scalar recursion (e.g. fib); complex bodies (e.g. a
+    // mergesort that mutates arrays and calls a helper) must run through the
+    // interpreter/specialization path to avoid miscompilation.
+    {
+        int has_self = 0, has_complex = 0;
+        for (int i = 0; i < bc->count; i++) {
+            OpCode op = bc->code[i].op;
+            if (op == OP_CALL_SELF_FAST) has_self = 1;
+            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
+        }
+        if (has_self && has_complex) { bc->jit_failed = 1; return; }
     }
 
     size_t size = 65536; 
@@ -486,9 +502,27 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
             case OP_JUMP: { jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_FALSE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_TRUE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
-            case OP_CALL:
-            case OP_CALL_VALUE: {
-                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
+             case OP_CALL_SELF_FAST: {
+                 if (fe) {
+                     jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
+                     jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
+                     jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd6);
+                     emit_mov_rdi_imm64(&buf, (uintptr_t)fe);
+                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_self_call);
+                     emit_call_rax(&buf);
+                     emit_mov_reg_rax(&buf, pc->r0);
+                 } else {
+                     emit_mov_rax_reg(&buf, pc->r1);
+                     jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val);
+                     emit_call_rax(&buf);
+                     emit_mov_reg_rax(&buf, pc->r0);
+                 }
+                 break;
+             }
+             case OP_CALL:
+             case OP_CALL_VALUE: {
+                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : (pc->op == OP_CALL_SELF_FAST ? fe : NULL);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
                 jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
@@ -668,14 +702,14 @@ void func_maybe_tier_up(FuncEntry *fe) {
     fe->exec_count++;
 
     // Tier 1: Baseline JIT after 10 executions
-    if (fe->jit_tier == JIT_TIER_INTERP && !fe->body->baseline_jit_code && !fe->body->jit_failed) {
+    if (fe->body->jit_tier == JIT_TIER_INTERP && !fe->body->baseline_jit_code && !fe->body->jit_failed) {
         if (fe->exec_count > 10) {
             jit_compile_baseline(fe->body);
         }
     }
 
     // Tier 2: Optimizing JIT after 100 executions
-    if (fe->jit_tier == JIT_TIER_BASELINE && !fe->body->jit_code && !fe->body->jit_failed) {
+    if (fe->body->jit_tier == JIT_TIER_BASELINE && !fe->body->jit_code && !fe->body->jit_failed) {
         if (fe->exec_count > 100) {
             jit_compile(fe->body);
         }
@@ -710,9 +744,11 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
     emit_epilogue(buf);
 }
 
-void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
+ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
     (void)current_sig;
+    if (!fe) fe = bc->owner;
     if (bc->baseline_jit_code || bc->jit_failed) return;
+
 
     for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
@@ -724,7 +760,7 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
             case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_LT: case OP_GT: case OP_LTE:
             case OP_GTE: case OP_EQ: case OP_NEQ: case OP_JUMP:
             case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
-            case OP_CALL: case OP_CALL_VALUE: case OP_CALL_METHOD:
+            case OP_CALL: case OP_CALL_VALUE: case OP_CALL_SELF_FAST: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
             case OP_SIMD_ADD: case OP_TAIL_CALL:
             case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
@@ -733,6 +769,17 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
                 break;
             default: bc->jit_failed = 1; return;
         }
+    }
+
+    // See jit_compile_ext: reject complex self-recursive bodies from the fast path.
+    {
+        int has_self = 0, has_complex = 0;
+        for (int i = 0; i < bc->count; i++) {
+            OpCode op = bc->code[i].op;
+            if (op == OP_CALL_SELF_FAST) has_self = 1;
+            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
+        }
+        if (has_self && has_complex) { bc->jit_failed = 1; return; }
     }
 
     size_t size = 65536;
@@ -863,9 +910,27 @@ void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current
             case OP_JUMP: { jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_FALSE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_TRUE: { emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
-            case OP_CALL:
-            case OP_CALL_VALUE: {
-                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
+             case OP_CALL_SELF_FAST: {
+                 if (fe) {
+                     jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
+                     jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
+                     jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd6);
+                     emit_mov_rdi_imm64(&buf, (uintptr_t)fe);
+                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_self_call);
+                     emit_call_rax(&buf);
+                     emit_mov_reg_rax(&buf, pc->r0);
+                 } else {
+                     emit_mov_rax_reg(&buf, pc->r1);
+                     jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val);
+                     emit_call_rax(&buf);
+                     emit_mov_reg_rax(&buf, pc->r0);
+                 }
+                 break;
+             }
+             case OP_CALL:
+             case OP_CALL_VALUE: {
+                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : (pc->op == OP_CALL_SELF_FAST ? fe : NULL);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
                 jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
@@ -1036,6 +1101,9 @@ static void propagate_types(Instruction *code, int count, int param_count, TypeS
                 else reg_types[pc->r0] = 0;
                 break;
             }
+            case OP_CALL_SELF_FAST:
+                reg_types[pc->r0] = (sig == 1) ? 1 : 0;
+                break;
             default: break;
         }
     }

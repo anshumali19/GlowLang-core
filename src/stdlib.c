@@ -170,13 +170,40 @@ Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
     return value_none();
 }
 
-Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
+/* Monomorphic self-recursion fast path: the callee is always `fe` itself, so
+   once its JIT code exists we call it directly (no signature/hash lookup).
+   Falls back to the interpreter only before warm-up has compiled `fe`. */
+Value jit_self_call(FuncEntry *fe, Value *args) {
+    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    int deopt_pc = 0;
+    if (fe && fe->body) {
+        if (fe->body->jit_code) {
+            call_stack_push(fe, NULL);
+            Value res = ((JITFunc)fe->body->jit_code)(args, &deopt_pc);
+            call_stack_pop();
+            if (IS_DEOPT(res)) return run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
+            return res;
+        }
+        void *jit = func_get_specialization(fe, compute_signature(args, fe->param_count));
+        if (jit && jit != (void*)1) {
+            call_stack_push(fe, NULL);
+            Value res = ((JITFunc)jit)(args, &deopt_pc);
+            call_stack_pop();
+            if (IS_DEOPT(res)) return run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
+            return res;
+        }
+        return run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+    }
+    return value_none();
+}
+
+ Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
     if (pc) call_stack[call_stack_ptr - 1].pc = pc;
     FuncEntry *fe = func_get(name);
     if (fe) return jit_call_helper(fe, argc, args, pc);
     Value v = var_get(name);
     return jit_call_helper_val(v, argc, args, pc);
-}
+ }
 
 Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
     if (pc) call_stack[call_stack_ptr - 1].pc = pc;
@@ -1098,7 +1125,7 @@ void print_value(Value v) {
             }
             printf("]");
         }
-        else if (ot == OBJ_BIGINT) { char _bb[2048]; bigint_to_string(AS_BIGINT(v), _bb, sizeof(_bb)); printf("%s", _bb); }
+        else if (ot == OBJ_BIGINT) { char *_bb = bigint_to_new_string(AS_BIGINT(v)); printf("%s", _bb); free(_bb); }
         else printf("<object>");
     } else printf("none");
 }
@@ -1144,6 +1171,15 @@ static Value math_sin(int argc, Value *args) { return argc > 0 ? value_from_doub
 static Value math_cos(int argc, Value *args) { return argc > 0 ? value_from_double(cos(val_to_double(args[0]))) : value_none(); }
 static Value math_sqrt(int argc, Value *args) { return argc > 0 ? value_from_double(sqrt(val_to_double(args[0]))) : value_none(); }
 static Value math_pow(int argc, Value *args) { return argc > 1 ? value_from_double(pow(val_to_double(args[0]), val_to_double(args[1]))) : value_none(); }
+static Value math_floor(int argc, Value *args) { return argc > 0 ? value_int((int64_t)floor(val_to_double(args[0]))) : value_none(); }
+static Value math_ceil(int argc, Value *args)  { return argc > 0 ? value_int((int64_t)ceil(val_to_double(args[0])))  : value_none(); }
+static Value math_round(int argc, Value *args) { return argc > 0 ? value_int((int64_t)llround(val_to_double(args[0]))) : value_none(); }
+static Value native_int(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    Value v = args[0];
+    if (GET_TYPE(v) == VAL_INT) return v;
+    return value_int((int64_t)val_to_double(v));
+}
 
 static Value crypto_sha256(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
@@ -1263,7 +1299,7 @@ static void json_stringify_helper(Value v, StringBuilder *sb) {
     if ((v & MASK_NAN) != MASK_NAN) { 
         char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return; 
     }
-    if (is_bigint(v)) { char tmp[2048]; bigint_to_string(AS_BIGINT(v), tmp, sizeof(tmp)); json_append_str(tmp, sb); return; }
+    if (is_bigint(v)) { char *_s = bigint_to_new_string(AS_BIGINT(v)); json_append_str(_s, sb); free(_s); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {
         char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, sb);
@@ -3048,6 +3084,10 @@ void std_init(void) {
     var_set("len", native_func_new("len", native_len));
     var_set("type", native_func_new("type", native_type));
     var_set("range", native_func_new("range", native_range));
+    var_set("floor", native_func_new("floor", math_floor));
+    var_set("ceil", native_func_new("ceil", math_ceil));
+    var_set("round", native_func_new("round", math_round));
+    var_set("int", native_func_new("int", native_int));
     
     Dict *debug = dict_new(4);
     dict_set(debug, "dump_stack", native_func_new("dump_stack", native_dump_stack));
@@ -3070,6 +3110,9 @@ void std_init(void) {
     dict_set(math, "cos", native_func_new("cos", math_cos));
     dict_set(math, "sqrt", native_func_new("sqrt", math_sqrt));
     dict_set(math, "pow", native_func_new("pow", math_pow));
+    dict_set(math, "floor", native_func_new("floor", math_floor));
+    dict_set(math, "ceil", native_func_new("ceil", math_ceil));
+    dict_set(math, "round", native_func_new("round", math_round));
     dict_set(math, "vec2_add", native_func_new("vec2_add", math_vec2_add));
     dict_set(math, "vec2_dist", native_func_new("vec2_dist", math_vec2_dist));
     var_set("math", value_dict(math));
