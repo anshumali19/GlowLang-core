@@ -121,7 +121,7 @@ member_name: ID { $$ = $1; }
            | WRITE { $$ = intern_string("write"); }
            | SHOW { $$ = intern_string("show"); }
            ;
-primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); free((void*)$1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
+primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
     $$ = node_new(NODE_LIST_COMP);
     $$->comp_expr = $2;
     $$->comp_var = $5;
