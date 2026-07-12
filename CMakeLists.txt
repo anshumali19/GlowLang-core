@@ -58,11 +58,11 @@ set(GLOW_SOURCES
     src/arena.c
     src/jit.c
     src/opt.c
-    src/ssa.c
     src/compiler.c
     src/vm.c
     src/gc.c
     src/stdlib.c
+    src/bigint.c
 )
 
 if(CUDAToolkit_FOUND)
