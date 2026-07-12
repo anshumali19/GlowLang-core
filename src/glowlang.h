@@ -230,7 +230,7 @@ static inline Value value_bigint(BigInt *b) { return make_value(VAL_OBJECT, (uin
 /* Big integer operations (numeric tower stage 2). */
 BigInt* bigint_from_int64(int64_t v);
 BigInt* bigint_from_string(const char *s);
-void bigint_to_string(BigInt *b, char *out, size_t n);
+char* bigint_to_new_string(BigInt *b);
 int bigint_cmp(BigInt *a, BigInt *b);          /* -1, 0, 1 */
 BigInt* bigint_add(BigInt *a, BigInt *b);
 BigInt* bigint_sub(BigInt *a, BigInt *b);
@@ -264,6 +264,7 @@ void call_stack_pop(void);
 extern TypeSignature compute_signature(Value *regs, int count);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
+extern Value jit_self_call(struct FuncEntry *fe, Value *args);
 extern Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, struct Instruction *pc);
 extern Value jit_get_property_helper(Value o, const char *n, struct Instruction *pc);
 extern Value jit_set_property_helper(Value o, const char *n, Value v, struct Instruction *pc);
