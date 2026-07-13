@@ -1,7 +1,7 @@
 {
     "name": "glowlang-vscode",
     "displayName": "GlowLang",
-    "description": "Full-featured VS Code support for GlowLang — syntax highlighting, snippets, LSP integration, run/debug, and package management.",
+    "description": "Full-featured VS Code support for GlowLang \u2014 syntax highlighting, snippets, LSP integration, run/debug, and package management.",
     "version": "2.0.0",
     "publisher": "glowlang",
     "license": "SEE LICENSE IN ../../GlowLang Soverign License.md",
@@ -27,10 +27,6 @@
         "natural language syntax"
     ],
     "main": "./extension.js",
-    "activationEvents": [
-        "onLanguage:glow",
-        "workspaceContains:**/*.glow"
-    ],
     "dependencies": {
         "vscode-languageclient": "^8.0.2"
     },
@@ -55,7 +51,11 @@
                 },
                 "glowlang.trace.server": {
                     "type": "string",
-                    "enum": ["off", "messages", "verbose"],
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
                     "default": "off",
                     "description": "Trace LSP server communication"
                 }
@@ -64,8 +64,14 @@
         "languages": [
             {
                 "id": "glow",
-                "aliases": ["GlowLang", "Glow", "glow"],
-                "extensions": [".glow"],
+                "aliases": [
+                    "GlowLang",
+                    "Glow",
+                    "glow"
+                ],
+                "extensions": [
+                    ".glow"
+                ],
                 "configuration": "./language-configuration.json",
                 "icon": {
                     "light": "./images/glow-icon.png",
@@ -174,7 +180,9 @@
         "taskDefinitions": [
             {
                 "type": "glowlang",
-                "required": ["file"],
+                "required": [
+                    "file"
+                ],
                 "properties": {
                     "file": {
                         "type": "string",
