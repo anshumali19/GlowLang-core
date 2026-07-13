@@ -43,7 +43,20 @@ static void jit_emit_u64(JITBuffer *buf, uint64_t v) {
     if (buf->size + 8 <= buf->capacity) { memcpy(buf->code + buf->size, &v, 8); buf->size += 8; } 
 }
 
-#if defined(__x86_64__) || defined(_M_X64)
+/*
+ * NOTE: The machine-code emitter below targets the System V AMD64 ABI
+ * (integer args in RDI, RSI, RDX, RCX, R8, R9; RSI/RDI caller-saved).
+ * Windows x64 uses a different calling convention (Microsoft x64 ABI:
+ * integer args in RCX, RDX, R8, R9; 32-byte shadow space; RSI/RDI and
+ * XMM6-15 callee-saved). Running this SysV-targeted code under the
+ * Microsoft x64 ABI corrupts argument passing / callee-saved registers,
+ * causing access violations in JIT-compiled function calls. Until a
+ * dedicated Windows x64 ABI backend is implemented, exclude Windows so it
+ * uses the proven interpreter fallback (same path as macOS arm64). This
+ * mirrors the existing idiom in stdlib.c. Linux/macOS x86-64 are
+ * unaffected and keep the full JIT.
+ */
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_WIN32)
 static void emit_mov_rax_imm64(JITBuffer *buf, uint64_t imm) { 
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xb8); jit_emit_u64(buf, imm); 
 }
