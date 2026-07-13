@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.15)
 project(GlowLang C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -8,6 +8,12 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     # Also disable some specific type conversion warnings to clear the build output
     add_compile_options(/wd4267 /wd4244 /wd4133 /wd4013 /wd4102)
+    # Statically link the MSVC C runtime so the shipped .exe has no VCRUNTIME140
+    # dependency. Combined with the x64-windows-static vcpkg triplet (OpenSSL +
+    # SQLite as static libs) this produces a single self-contained binary that
+    # runs on a clean Windows machine with no external DLLs. Requires CMP0091
+    # (NEW as of CMake 3.15) for CMAKE_MSVC_RUNTIME_LIBRARY to take effect.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # Set common compiler flags like in Makefile
@@ -94,7 +100,8 @@ endif()
 if(NOT MSVC)
     target_link_libraries(glowlang PRIVATE m)
 else()
-    target_link_libraries(glowlang PRIVATE ws2_32)
+    # Static OpenSSL on Windows requires crypt32 (and ws2_32 for our sockets).
+    target_link_libraries(glowlang PRIVATE ws2_32 crypt32)
 endif()
 
 if(UNIX AND NOT APPLE AND X11_FOUND)
@@ -104,6 +111,10 @@ endif()
 # Target: gdu (from tools/gdu)
 add_executable(gdu tools/gdu/gdu.c)
 target_link_libraries(gdu PRIVATE SQLite::SQLite3 OpenSSL::Crypto OpenSSL::SSL)
+if(MSVC)
+    # Static OpenSSL/SQLite on Windows require these system libs.
+    target_link_libraries(gdu PRIVATE ws2_32 crypt32)
+endif()
 
 # Other tools from Makefile
 add_executable(glow_profiler tools/profiler/glow_profiler.c)
