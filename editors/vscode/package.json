@@ -11,9 +11,6 @@
         "Programming Languages"
     ],
     "main": "./extension.js",
-    "activationEvents": [
-        "onLanguage:glow"
-    ],
     "dependencies": {
         "vscode-languageclient": "^8.0.2"
     },
