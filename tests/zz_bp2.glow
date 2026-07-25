@@ -1,0 +1,10 @@
+blueprint Foo:
+ can a():
+  self.b()
+ end
+ can b():
+  show "b"
+ end
+end
+let f = Foo()
+f.a()

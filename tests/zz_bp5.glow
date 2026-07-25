@@ -1,0 +1,40 @@
+blueprint NQ:
+ can init(n):
+  self.n = n
+  self.count = 0
+ end
+ can solve():
+  let board = range(self.n)
+  self.backtrack(board, 0)
+  return self.count
+ end
+ can backtrack(board, row):
+  when row >= self.n:
+   self.count = self.count + 1
+   return 0
+  end
+  let col = 0
+  while col < self.n:
+   if self.is_safe(board, row, col):
+    board[row] = col
+    self.backtrack(board, row + 1)
+    board[row] = 0 - 1
+   end
+   col = col + 1
+  end
+ end
+ can is_safe(board, row, col):
+  let i = 0
+  while i < row:
+   let b = board[i]
+   if b == col:
+    return false
+   end
+   i = i + 1
+  end
+  return true
+ end
+end
+let q = NQ()
+q.init(10)
+show q.solve()

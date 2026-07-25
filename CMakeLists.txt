@@ -8,6 +8,11 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     # Also disable some specific type conversion warnings to clear the build output
     add_compile_options(/wd4267 /wd4244 /wd4133 /wd4013 /wd4102)
+    # The JIT recurses via a C shim (jit_self_call) plus the generated prologue,
+    # i.e. ~2 machine-stack frames per logical recursion level, so deep recursion
+    # needs a much larger stack than the 1MB default to reach the interpreter's
+    # recursion-depth guard. Reserve 512 MB (committed 4 MB) to match behaviour.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:536870912,4194304")
     # Statically link the MSVC C runtime so the shipped .exe has no VCRUNTIME140
     # dependency. Combined with the x64-windows-static vcpkg triplet (OpenSSL +
     # SQLite as static libs) this produces a single self-contained binary that
