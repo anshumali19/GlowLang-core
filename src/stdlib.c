@@ -17,10 +17,16 @@
 #include <direct.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <stddef.h>
+#ifndef _WIN32
+#include <sanitizer/asan_interface.h>
+#endif
 #define sleep(x) Sleep((x)*1000)
 #define usleep(x) Sleep((x)/1000)
 typedef int socklen_t;
+#if defined(_WIN32) && !defined(_SSIZE_T_DEFINED) && !defined(__MINGW32__) && !defined(__MINGW64__)
 typedef int ssize_t;
+#endif
 #define close(s) closesocket(s)
 #define read(s, b, n) recv(s, (char*)(b), n, 0)
 #define write(s, b, n) send(s, (const char*)(b), n, 0)
@@ -139,66 +145,200 @@ FuncEntry main_fe;
 
 const char *compiling_file = NULL;
 
-Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
-    (void)argc;
-    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
+  Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
+      (void)argc;
+      if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+      if (fe && fe->body) {
+          /* Allocate a fresh register frame for the callee instead of reusing the
+           * caller's window via an offset (R + r2*8). The offset model lets nested
+           * JIT calls accumulate past the allocated frame and clobber neighbouring
+           * vm_stack slots / heap on mutual or deep recursion (heap corruption
+           * surfacing as a later calloc crash). This mirrors the interpreter's
+           * DO_CALL frame chaining, so each level's register window resets. */
+ int new_base = vm_stack_top;
+           int needed = new_base + fe->body->local_count + 16;
+           Value temp_args[16];
+          int copy_count = fe->param_count < argc ? fe->param_count : argc;
+          if (copy_count > 16) copy_count = 16;
+          for (int _i = 0; _i < copy_count; _i++)
+              temp_args[_i] = args[_i];
+          for (int _i = 0; _i < copy_count; _i++)
+              vm_stack[new_base + _i] = temp_args[_i];
+          for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+              vm_stack[new_base + _i] = value_none();
+         int saved_top = vm_stack_top;
+         vm_stack_top = needed;
+
+         TypeSignature sig = compute_signature(&vm_stack[new_base], fe->param_count);
+         void *jit = func_get_specialization(fe, sig);
+         typedef Value (*JITFunc)(Value *R, int *pc_idx);
+         Value res;
+         if (jit && jit != (void*)1) {
+             if (pc) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)jit; }
+             int deopt_pc = 0;
+              call_stack_push(fe, NULL);
+              res = ((JITFunc)jit)(&vm_stack[new_base], &deopt_pc);
+              call_stack_pop();
+              if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
+         } else if (fe->body->jit_code) {
+             if (pc) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->jit_code; }
+             int deopt_pc = 0;
+             call_stack_push(fe, NULL);
+             res = ((JITFunc)fe->body->jit_code)(&vm_stack[new_base], &deopt_pc);
+             call_stack_pop();
+             if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
+         } else if (fe->body->baseline_jit_code) {
+             if (pc) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->baseline_jit_code; }
+             int deopt_pc = 0;
+             call_stack_push(fe, NULL);
+             res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[new_base], &deopt_pc);
+             call_stack_pop();
+             if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
+          } else {
+              res = run_bytecode(fe->body, NULL, NULL, new_base);
+          }
+           vm_stack_top = saved_top;
+           return res;
+      }
+return value_none();
+}
+
+/* Fast self-recursion helper for JIT direct calls: checks depth and either
+ * calls JIT entry directly (single C frame) or returns a deopt sentinel.
+ * The JIT code checks for the sentinel and jumps to a fallback that calls
+ * the full C shim jit_self_call_with_depth. This ensures proper C stack
+ * unwinding on deopt. */
+Value jit_self_call_direct(FuncEntry *fe, Value *args) {
+    if (getenv("GLOW_JIT_DEBUG")) {
+        fprintf(stderr, "[DBG] jit_self_call_direct: fe=%p, &call_depth=%p, call_depth=%d, fe->body->baseline_jit_code=%p\n", (void*)fe, (void*)&call_depth, call_depth, (void*)(fe ? fe->body->baseline_jit_code : NULL));
+        fflush(stderr);
+    }
+    if (!fe || !fe->body || (!fe->body->baseline_jit_code && !fe->body->jit_code)) {
+        return MASK_NAN | ((uint64_t)VAL_DEOPT << 48); // deopt
+    }
+    if (call_depth >= 100) {
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+            fflush(stderr);
+        }
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 10, deopt\n", call_depth);
+            fflush(stderr);
+        }
+        return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
+    }
+
+    int new_base = vm_stack_top;
+    int needed = new_base + fe->body->local_count + 16;
+    Value temp_args[16];
+    int copy_count = fe->param_count < 16 ? fe->param_count : 16;
+    for (int _i = 0; _i < copy_count; _i++)
+        temp_args[_i] = args[_i];
+    if (needed >= vm_stack_size) {
+        int old_size = vm_stack_size;
+        while (needed >= vm_stack_size) vm_stack_size *= 2;
+        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+        for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+    }
+    if (needed > vm_stack_top) vm_stack_top = needed;
+    for (int _i = 0; _i < copy_count; _i++)
+        vm_stack[new_base + _i] = temp_args[_i];
+    for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+        vm_stack[new_base + _i] = value_none();
+
+    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    int deopt_pc = 0;
+    call_depth++;
+    /* Use optimized JIT code if available, otherwise baseline JIT code. */
+    void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
+    if (getenv("GLOW_JIT_DEBUG")) {
+        fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d, calling JIT at %p\n", call_depth, jit_code);
+        fflush(stderr);
+    }
+    Value res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
+    call_depth--;
+    vm_stack_top = new_base; // restore frame
+    return res;
+}
+
+/* Proper self-recursion helper: manages call stack, checks depth, handles deopt.
+ * Mirrors jit_call_helper but skips specialization lookup since callee is always `fe`.
+ * Returns DEOPT sentinel for deep recursion so caller (JIT or C) can fall back. */
+Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     if (fe && fe->body) {
-        TypeSignature sig = compute_signature(args, fe->param_count);
-        void *jit = func_get_specialization(fe, sig);
-        if (jit && jit != (void*)1) {
-            if (pc) {
-                pc->cache[0].key = (void*)sig;
-                pc->cache[0].val = (intptr_t)jit;
+        /* Deep recursion: return DEOPT sentinel so caller (JIT or C) falls back to interpreter. */
+        if (call_depth >= 100) {
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+            fflush(stderr);
+        }
+            if (getenv("GLOW_JIT_DEBUG")) {
+                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 100, deopt\n", call_depth);
+                fflush(stderr);
             }
-            typedef Value (*JITFunc)(Value *R, int *pc_idx);
-            int deopt_pc = 0;
-            call_stack_push(fe, NULL);
-            Value res = ((JITFunc)jit)(args, &deopt_pc);
-            call_stack_pop();
-            return res;
+            return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
         }
-        if (fe->body->baseline_jit_code && !fe->body->jit_code) {
-            typedef Value (*JITFunc)(Value *R, int *pc_idx);
-            int deopt_pc = 0;
-            call_stack_push(fe, NULL);
-            Value res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
-            call_stack_pop();
-            return res;
+
+        int new_base = vm_stack_top;
+        int needed = new_base + fe->body->local_count + 3;
+        Value temp_args[16];
+        int copy_count = fe->param_count < 16 ? fe->param_count : 16;
+        for (int _i = 0; _i < copy_count; _i++)
+            temp_args[_i] = args[_i];
+        if (needed >= vm_stack_size) {
+            int old_size = vm_stack_size;
+            while (needed >= vm_stack_size) vm_stack_size *= 2;
+            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+            for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
         }
-        return run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+        if (needed > vm_stack_top) vm_stack_top = needed;
+        for (int _i = 0; _i < copy_count; _i++)
+            vm_stack[new_base + _i] = temp_args[_i];
+        for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+            vm_stack[new_base + _i] = value_none();
+
+        typedef Value (*JITFunc)(Value *R, int *pc_idx);
+        int deopt_pc = 0;
+        Value res;
+        call_stack_push(fe, NULL);
+        call_depth++;
+        /* Use optimized JIT code if available, otherwise baseline JIT code. */
+        void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d, calling JIT at %p with R=%p, new_base=%d, local_count=%d, copy_count=%d, fe->body->jit_code=%p, fe->body->baseline_jit_code=%p\n", 
+                    call_depth, jit_code, (void*)&vm_stack[new_base], new_base, fe->body->local_count, copy_count, (void*)fe->body->jit_code, (void*)fe->body->baseline_jit_code);
+            fflush(stderr);
+        }
+        res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned, deopt_pc=%d, res=%llx\n", deopt_pc, (unsigned long long)res);
+            fflush(stderr);
+        }
+        call_depth--;
+        call_stack_pop();
+        if (IS_DEOPT(res)) {
+            if (getenv("GLOW_JIT_DEBUG")) {
+                fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned DEOPT pc=%d\n", deopt_pc);
+                fflush(stderr);
+            }
+            res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
+        }
+        vm_stack_top = new_base; /* restore frame */
+        return res;
     }
     return value_none();
 }
-
-/* Monomorphic self-recursion fast path: the callee is always `fe` itself, so
-   once its JIT code exists we call it directly (no signature/hash lookup).
-   Falls back to the interpreter only before warm-up has compiled `fe`. */
-Value jit_self_call(FuncEntry *fe, Value *args) {
-    typedef Value (*JITFunc)(Value *R, int *pc_idx);
-    int deopt_pc = 0;
-    if (fe && fe->body) {
-        if (fe->body->jit_code) {
-            call_stack_push(fe, NULL);
-            Value res = ((JITFunc)fe->body->jit_code)(args, &deopt_pc);
-            call_stack_pop();
-            if (IS_DEOPT(res)) return run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
-            return res;
-        }
-        void *jit = func_get_specialization(fe, compute_signature(args, fe->param_count));
-        if (jit && jit != (void*)1) {
-            call_stack_push(fe, NULL);
-            Value res = ((JITFunc)jit)(args, &deopt_pc);
-            call_stack_pop();
-            if (IS_DEOPT(res)) return run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
-            return res;
-        }
-        return run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
-    }
-    return value_none();
+/* Monomorphic self-recursion fast path with call depth tracking: the callee is always `fe` itself,
+ * so once its JIT code exists we call it directly (no signature/hash lookup).
+ * Checks recursion depth before entering JIT to avoid stack overflow (STATUS_BAD_STACK).
+ * Falls back to interpreter if depth limit exceeded, matching vm_self_call_jit_or_recurse. */
+Value jit_self_call_with_depth(FuncEntry *fe, Value *args) {
+    return jit_self_call_proper(fe, args, NULL);
 }
 
  Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
-    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     FuncEntry *fe = func_get(name);
     if (fe) return jit_call_helper(fe, argc, args, pc);
     Value v = var_get(name);
@@ -206,12 +346,15 @@ Value jit_self_call(FuncEntry *fe, Value *args) {
  }
 
 Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
-    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(callee);
         if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(callee)));
         if (ot == OBJ_BOUND_METHOD) {
-            BoundMethod *bm = AS_BOUND_METHOD(callee);
+             BoundMethod *bm = AS_BOUND_METHOD(callee);
+             if (getenv("GLOW_CALLDBG")) { fprintf(stderr, "[CALLVAL] bm=%p bm->method=%p bm->native=%p argc=%d args=%p callee=%lx ot=%d\n", (void*)bm, (void*)bm->method, (void*)bm->native_method, argc, (void*)args, (unsigned long)callee, (int)ot); fflush(stderr); }
+             if (((uintptr_t)bm & 7) || (uintptr_t)bm < 0x1000 || (uintptr_t)bm > 0x7fffffffffffUL) { fprintf(stderr, "[CALLVAL-BAD] callee=%lx bm=%p\n", (unsigned long)callee, (void*)bm); fflush(stderr); }
+             if (bm->method == NULL || ((uintptr_t)bm->method & 7)) { fprintf(stderr, "[CALLVAL-BADMETHOD] callee=%lx bm=%p bm->method=%p\n", (unsigned long)callee, (void*)bm, (void*)bm->method); fflush(stderr); }
             if (bm->native_method) {
                 Value temp_args[256];
                 temp_args[0] = bm->instance;
@@ -315,7 +458,14 @@ Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) 
 }
 
 Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
-    if (pc) call_stack[call_stack_ptr - 1].pc = pc;
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+    extern THREAD_LOCAL Bytecode *g_dbg_bc;
+    extern THREAD_LOCAL Instruction *g_dbg_pc;
+    extern THREAD_LOCAL int vm_stack_top;
+    g_dbg_pc = pc;
+    int old_top = vm_stack_top;
+    int curr_offset = (int)(args - vm_stack);
+    if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
     FuncEntry *fe = NULL;
     NativeFuncPtr native_fe = NULL;
     int is_native_dict_str_method = 0;
@@ -329,11 +479,16 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 FuncEntry *cached_fe = (FuncEntry*)pc->cache[0].val;
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc cached_jit = (JITFunc)pc->cache[1].val;
-                args[0] = obj;
                 int deopt_pc = 0;
                 call_stack_push(cached_fe, NULL);
+                static int self_slot = -1;
+                if (self_slot < 0) self_slot = global_get_slot("self");
+                Value old_self = (self_slot >= 0 && self_slot < global_table.count) ? global_table.values[self_slot] : value_none();
+                if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = obj;
                 Value res = cached_jit(args, &deopt_pc);
+                if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = old_self;
                 call_stack_pop();
+                vm_stack_top = old_top;
                 return res;
             }
             if (pc && pc->cache[0].key == inst->klass) {
@@ -365,13 +520,15 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         else if (strcmp(n, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
     }
     
+    Value final_res = value_none();
     if (fe && fe->body) {
-        args[0] = obj;
-        Value old_self = var_get("self");
-        var_set("self", obj);
+        g_dbg_bc = fe->body;
+        static int self_slot = -1;
+        if (self_slot < 0) self_slot = global_get_slot("self");
+        Value old_self = (self_slot >= 0 && self_slot < global_table.count) ? global_table.values[self_slot] : value_none();
+        if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = obj;
         TypeSignature sig = compute_signature(args, fe->param_count);
         void *jit = func_get_specialization(fe, sig);
-        Value res;
         if (jit && jit != (void*)1) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
@@ -380,7 +537,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 pc->cache[1].val = (intptr_t)jit;
             }
             call_stack_push(fe, NULL);
-            res = ((JITFunc)jit)(args, &deopt_pc);
+            final_res = ((JITFunc)jit)(args, &deopt_pc);
             call_stack_pop();
         } else if (fe->body->baseline_jit_code && !fe->body->jit_code) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
@@ -390,13 +547,12 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 pc->cache[1].val = (intptr_t)fe->body->baseline_jit_code;
             }
             call_stack_push(fe, NULL);
-            res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
+            final_res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
             call_stack_pop();
         } else {
-            res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
+            final_res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
         }
-        var_set("self", old_self);
-        return res;
+        if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = old_self;
     } else if (native_fe && is_native_dict_str_method) {
         Value temp_args[257];
         temp_args[0] = obj;
@@ -404,13 +560,15 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         if (count > 254) count = 254;
         int start_offset = (pc && pc->is_method) ? 1 : 0;
         for (int i=0; i<count; i++) temp_args[i+1] = args[start_offset + i];
-        return native_fe(count + 1, temp_args);
+        final_res = native_fe(count + 1, temp_args);
     } else if (GET_TYPE(fallback_callee) != VAL_NONE) {
-        return jit_call_helper_val(fallback_callee, argc, args, pc);
+        final_res = jit_call_helper_val(fallback_callee, argc, args, pc);
+    } else {
+        runtime_error_thrown = 1;
     }
     
-    runtime_error_thrown = 1;
-    return value_none();
+    vm_stack_top = old_top;
+    return final_res;
 }
 
 Value packed_array_get_jit(Value v_pa, Value v_idx) {
@@ -694,12 +852,13 @@ static unsigned int hash_str(const char *s) {
     return h;
 }
 
-void func_table_init(void) { 
-    func_table = calloc(func_table_size, sizeof(FuncEntry)); 
-    main_fe.name = "<main>";
-    main_fe.param_count = 0;
-    main_fe.body = NULL;
-}
+ void func_table_init(void) { 
+     func_table = calloc(func_table_size, sizeof(FuncEntry)); 
+     func_table_capacity = func_table_size;
+     main_fe.name = "<main>";
+     main_fe.param_count = 0;
+     main_fe.body = NULL;
+ }
 FuncEntry* func_table_add(const char *name) {
     unsigned int h = hash_str(name) % func_table_size;
     unsigned int idx = h;
@@ -1891,7 +2050,7 @@ static Value ssl_listen(int argc, Value *args) {
     if (SSL_CTX_use_PrivateKey_file(ssl_ctx, key, SSL_FILETYPE_PEM) <= 0) return value_int(-3);
     int sockfd = socket(AF_INET, SOCK_STREAM, 0); struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET; addr.sin_addr.s_addr = INADDR_ANY; addr.sin_port = htons(port);
-    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) return value_int(-4);
     listen(sockfd, 10); return value_int(sockfd);
 }
@@ -1914,7 +2073,7 @@ static Value net_listen(int argc, Value *args) {
     int port = AS_INT(args[0]), sockfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET; addr.sin_addr.s_addr = INADDR_ANY; addr.sin_port = htons(port);
-    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) return value_int(-1);
     listen(sockfd, 10); return value_int(sockfd);
 }
@@ -1924,7 +2083,7 @@ static Value http_listen(int argc, Value *args) {
     int port = AS_INT(args[0]), sockfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr; memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET; addr.sin_addr.s_addr = INADDR_ANY; addr.sin_port = htons(port);
-    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) return value_int(-1);
     listen(sockfd, 1024); return value_int(sockfd);
 }

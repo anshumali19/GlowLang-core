@@ -1,0 +1,10 @@
+blueprint Foo:
+ can count(n):
+  when n <= 0:
+    return 0
+  end
+  return 1 + self.count(n - 1)
+ end
+end
+let f = Foo()
+show f.count(5)

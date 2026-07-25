@@ -18,13 +18,32 @@ static int mprotect(void *addr, size_t len, int prot) {
     DWORD newProtect = PAGE_READONLY;
     if ((prot & PROT_READ) && (prot & PROT_EXEC)) newProtect = PAGE_EXECUTE_READ;
     else if ((prot & PROT_READ) && (prot & PROT_WRITE)) newProtect = PAGE_READWRITE;
-    return VirtualProtect(addr, len, newProtect, &oldProtect) ? 0 : -1;
+    BOOL res = VirtualProtect(addr, len, newProtect, &oldProtect);
+    if (res && (prot & PROT_EXEC)) {
+        FlushInstructionCache(GetCurrentProcess(), addr, len);
+    }
+    return res ? 0 : -1;
 }
 static int munmap(void *addr, size_t length) {
     (void)length;
     return VirtualFree(addr, 0, MEM_RELEASE) ? 0 : -1;
 }
 #endif
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+#define GLOW_JIT_WIN64 1
+#else
+#define GLOW_JIT_SYSV 1
+#endif
+
+/* JIT helper function declarations */
+extern Value jit_val_lt(Value a, Value b);
+extern Value jit_val_gt(Value a, Value b);
+extern Value jit_val_lte(Value a, Value b);
+extern Value jit_val_gte(Value a, Value b);
+extern Value jit_val_eq(Value a, Value b);
+extern Value jit_val_neq(Value a, Value b);
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +75,7 @@ static void jit_emit_u64(JITBuffer *buf, uint64_t v) {
  * mirrors the existing idiom in stdlib.c. Linux/macOS x86-64 are
  * unaffected and keep the full JIT.
  */
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_WIN32)
+#if defined(__x86_64__) || defined(_M_X64)
 static void emit_mov_rax_imm64(JITBuffer *buf, uint64_t imm) { 
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xb8); jit_emit_u64(buf, imm); 
 }
@@ -89,40 +108,76 @@ static void emit_mov_r8_imm64(JITBuffer *buf, uint64_t imm) {
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xb8); jit_emit_u64(buf, imm); 
 }
 
-static void emit_load_cpu_regs(JITBuffer *buf) {
-    // mov r14, [r12 + 0]
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x34); jit_emit_byte(buf, 0x24);
-    // mov r15, [r12 + 8]
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x7c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x08);
-    // mov rbx, [r12 + 16]
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x5c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x10);
-}
-static void emit_save_cpu_regs(JITBuffer *buf) {
-    // mov [r12 + 0], r14
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x34); jit_emit_byte(buf, 0x24);
-    // mov [r12 + 8], r15
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x7c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x08);
-    // mov [r12 + 16], rbx
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x5c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x10);
+static void emit_mov_r9_imm64(JITBuffer *buf, uint64_t imm) {
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xb9); jit_emit_u64(buf, imm); 
 }
 
+static void emit_load_cpu_regs(JITBuffer *buf) { (void)buf; }
+static void emit_save_cpu_regs(JITBuffer *buf) { (void)buf; }
+
 static void emit_prologue(JITBuffer *buf) {
-    jit_emit_byte(buf, 0x55); 
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe5);
+    jit_emit_byte(buf, 0x55); // push rbp
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe5); // mov rbp, rsp
     jit_emit_byte(buf, 0x53); // push rbx
-    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x54); jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x55);
-    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x56); jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x57);
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xfc); // r12 = R
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf5); // r13 = pc_idx
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x56); // push rsi
+    jit_emit_byte(buf, 0x57); // push rdi
+#endif
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x54); // push r12
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x55); // push r13
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x56); // push r14
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x57); // push r15
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xec); jit_emit_byte(buf, 0x28); // sub rsp, 40 (8 align + 32 shadow space, reserved once)
+#else
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xec); jit_emit_byte(buf, 0x08); // sub rsp, 8 (keep 16-byte aligned)
+#endif
+#ifdef GLOW_JIT_WIN64
+    // R12 = regs (from RCX)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xcc); // mov r12, rcx
+    // R13 = pc_idx (from RDX)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd5); // mov r13, rdx
+#else
+    // R12 = regs (from RDI)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xfc); // mov r12, rdi
+    // R13 = pc_idx (from RSI)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf5); // mov r13, rsi
+#endif
     emit_load_cpu_regs(buf);
 }
 
+static void emit_mov_reg_rax(JITBuffer *buf, int reg);
+static void emit_zero_locals(JITBuffer *buf, Bytecode *bc, FuncEntry *fe) {
+    if (!bc) return;
+    int start = (fe && fe->param_count > 0) ? fe->param_count : 0;
+    if (fe && fe->name && strchr(fe->name, ':')) start++;
+    int end = bc->local_count;
+    if (end > 64) end = 64;
+    if (start < end) {
+        emit_mov_rax_imm64(buf, value_none());
+        for (int i = start; i < end; i++) {
+            emit_mov_reg_rax(buf, i);
+        }
+    }
+}
+
 static void emit_pop_frame(JITBuffer *buf) {
-    emit_save_cpu_regs(buf);
-    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5f); jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5e);
-    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5d); jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5c);
+    emit_load_cpu_regs(buf);
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x28); // add rsp, 40
+#else
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x08); // add rsp, 8
+#endif
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5f); // pop r15
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5e); // pop r14
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5d); // pop r13
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5c); // pop r12
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x5f); // pop rdi
+    jit_emit_byte(buf, 0x5e); // pop rsi
+#endif
     jit_emit_byte(buf, 0x5b); // pop rbx
-    jit_emit_byte(buf, 0x5d);
+    jit_emit_byte(buf, 0x5d); // pop rbp
 }
 
 static void emit_epilogue(JITBuffer *buf) {
@@ -132,71 +187,9 @@ static void emit_epilogue(JITBuffer *buf) {
 
 static void emit_call_rax(JITBuffer *buf) {
     emit_save_cpu_regs(buf);
-    jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xd0);
+    // Shadow space is pre-reserved in prologue on Win64, so just call directly
+    jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xd0); // call rax
     emit_load_cpu_regs(buf);
-}
-
-static void emit_mov_reg_rax(JITBuffer *buf, int reg);
-
-/* Inline self-recursion fast path (lever 1): instead of bouncing every
-   recursive call through the C shim jit_self_call (which does a C function
-   call + stack-frame push/pop per recursion), emit a direct call into this
-   function's own JIT entry (buf.code). The calling convention is identical to
-   what jit_self_call uses (args = rsp + r2*8, deopt detected via IS_DEOPT),
-   so semantics are unchanged; we only remove the C-call overhead. On deopt we
-   fall back to the real jit_self_call (same function as before) to preserve
-   all capabilities. Multi-arg self-recursion keeps the C-shim path. */
-static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc) {
-    if (!fe || fe->param_count != 1) {
-        jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2);
-        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xc2); jit_emit_u32(buf, pc->r2 * 8);
-        jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd6);
-        emit_mov_rdi_imm64(buf, (uintptr_t)fe);
-        emit_mov_rax_imm64(buf, (uintptr_t)jit_self_call);
-        emit_call_rax(buf);
-        emit_mov_reg_rax(buf, pc->r0);
-        return;
-    }
-    /* Save JIT registers so the recursive call (which clobbers them) cannot
-       corrupt the caller's live values. Mirrors emit_save_cpu_regs. */
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x34); jit_emit_byte(buf, 0x24);
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x7c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x08);
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x5c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x10);
-    /* args = rsp + r2*8 */
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2);
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xc2); jit_emit_u32(buf, pc->r2 * 8);
-    /* deopt_pc slot on the C stack */
-    jit_emit_byte(buf, 0x6a); jit_emit_byte(buf, 0x00);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe6);
-    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd7);
-    /* direct recursive call to this function's JIT entry (buf.code base) */
-    uint32_t call_off = buf->size;
-    jit_emit_byte(buf, 0xe8);
-    jit_emit_u32(buf, (uint32_t)(0 - (int32_t)(call_off + 5)));
-    /* result in rax; check deopt sentinel */
-    emit_mov_rdx_imm64(buf, (uint64_t)(MASK_NAN | ((uint64_t)VAL_DEOPT << 48)));
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd0);
-    uint32_t je_deopt = buf->size;
-    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);
-    /* normal path */
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x08);
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x34); jit_emit_byte(buf, 0x24);
-    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x7c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x08);
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x5c); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x10);
-    emit_mov_reg_rax(buf, pc->r0);
-    uint32_t jmp_done = buf->size;
-    jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
-    /* DEOPT fallback: real C shim (handles deopt + edges) */
-    uint32_t deopt_pos = buf->size;
-    *(uint32_t*)(buf->code + je_deopt + 2) = deopt_pos - (je_deopt + 6);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x08);
-    emit_mov_rdi_imm64(buf, (uintptr_t)fe);
-    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd7);
-    emit_mov_rax_imm64(buf, (uintptr_t)jit_self_call);
-    emit_call_rax(buf);
-    emit_mov_reg_rax(buf, pc->r0);
-    uint32_t done_pos = buf->size;
-    *(uint32_t*)(buf->code + jmp_done + 1) = done_pos - (jmp_done + 5);
 }
 
 static void emit_mov_rax_reg(JITBuffer *buf, int reg) {
@@ -235,6 +228,190 @@ static void emit_mov_rsi_reg(JITBuffer *buf, int reg) {
     else if (reg == 2) { jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xde); }
     else { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0xb4); jit_emit_byte(buf, 0x24); jit_emit_u32(buf, reg * 8); }
 }
+static void emit_mov_r8_reg(JITBuffer *buf, int reg) {
+    if (reg == 0) { jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf0); }
+    else if (reg == 1) { jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf8); }
+    else if (reg == 2) { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd8); }
+    else { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x84); jit_emit_byte(buf, 0x24); jit_emit_u32(buf, reg * 8); }
+}
+static void emit_mov_r9_reg(JITBuffer *buf, int reg) {
+    if (reg == 0) { jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf1); }
+    else if (reg == 1) { jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf9); }
+    else if (reg == 2) { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd9); }
+    else { jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x8c); jit_emit_byte(buf, 0x24); jit_emit_u32(buf, reg * 8); }
+}
+
+/* ABI Abstraction Helpers for C Function Calls */
+static void emit_mov_arg1_imm64(JITBuffer *buf, uint64_t imm) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rcx_imm64(buf, imm);
+#else
+    emit_mov_rdi_imm64(buf, imm);
+#endif
+}
+static void emit_mov_arg1_reg(JITBuffer *buf, int reg) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rcx_reg(buf, reg);
+#else
+    emit_mov_rdi_reg(buf, reg);
+#endif
+}
+static void emit_mov_arg1_from_rax(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
+#else
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
+#endif
+}
+static void emit_mov_arg1_r10(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd1); // mov rcx, r10
+#else
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd7); // mov rdi, r10
+#endif
+}
+
+static void emit_mov_arg2_imm64(JITBuffer *buf, uint64_t imm) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rdx_imm64(buf, imm);
+#else
+    emit_mov_rsi_imm64(buf, imm);
+#endif
+}
+static void emit_mov_arg2_reg(JITBuffer *buf, int reg) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rdx_reg(buf, reg);
+#else
+    emit_mov_rsi_reg(buf, reg);
+#endif
+}
+static void emit_mov_arg2_from_rcx(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
+#else
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
+#endif
+}
+static void emit_mov_arg2_r10(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd2); // mov rdx, r10
+#else
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd6); // mov rsi, r10
+#endif
+}
+
+static void emit_mov_arg3_imm64(JITBuffer *buf, uint64_t imm) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_r8_imm64(buf, imm);
+#else
+    emit_mov_rdx_imm64(buf, imm);
+#endif
+}
+static void emit_mov_arg3_reg(JITBuffer *buf, int reg) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_r8_reg(buf, reg);
+#else
+    emit_mov_rdx_reg(buf, reg);
+#endif
+}
+static void emit_mov_arg3_r10(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd0); // mov r8, r10
+#else
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd2); // mov rdx, r10
+#endif
+}
+
+static void emit_mov_arg4_imm64(JITBuffer *buf, uint64_t imm) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_r9_imm64(buf, imm);
+#else
+    emit_mov_rcx_imm64(buf, imm);
+#endif
+}
+static void emit_mov_arg4_reg(JITBuffer *buf, int reg) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_r9_reg(buf, reg);
+#else
+    emit_mov_rcx_reg(buf, reg);
+#endif
+}
+static void emit_mov_arg4_r10(JITBuffer *buf) {
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd1); // mov r9, r10
+#else
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd1); // mov rcx, r10
+#endif
+}
+
+static void emit_mov_arg5_imm64(JITBuffer *buf, uint64_t imm) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rax_imm64(buf, imm);
+    // Shadow space is pre-reserved in prologue; arg5 goes to [rsp + 32]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x44); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x20); // mov [rsp + 32], rax
+#else
+    emit_mov_r8_imm64(buf, imm);
+#endif
+}
+static void emit_mov_arg5_reg(JITBuffer *buf, int reg) {
+#ifdef GLOW_JIT_WIN64
+    emit_mov_rax_reg(buf, reg);
+    // Shadow space is pre-reserved in prologue; arg5 goes to [rsp + 32]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x44); jit_emit_byte(buf, 0x24); jit_emit_byte(buf, 0x20); // mov [rsp + 32], rax
+#else
+    emit_mov_r8_reg(buf, reg);
+#endif
+}
+
+/* Inline self-recursion fast path */
+static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc) {
+    if (!fe || fe->param_count != 1) {
+        jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2);
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xc2); jit_emit_u32(buf, pc->r2 * 8);
+        emit_mov_arg2_r10(buf);
+        emit_mov_arg1_imm64(buf, (uintptr_t)fe);
+        emit_mov_rax_imm64(buf, (uintptr_t)jit_self_call_direct);
+        emit_call_rax(buf);
+        emit_mov_reg_rax(buf, pc->r0);
+        return;
+    }
+    /* args = r12 + r2*8 */
+    jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2);
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xc2); jit_emit_u32(buf, pc->r2 * 8);
+    /* deopt_pc slot on the C stack */
+    jit_emit_byte(buf, 0x6a); jit_emit_byte(buf, 0x00);
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2); // mov rdx, rsp
+#else
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe6); // mov rsi, rsp
+#endif
+    emit_mov_arg1_r10(buf);
+    /* direct recursive call to this function's JIT entry (buf.code base) */
+    uint32_t call_off = buf->size;
+    jit_emit_byte(buf, 0xe8);
+    jit_emit_u32(buf, (uint32_t)(0 - (int32_t)(call_off + 5)));
+    /* result in rax; check deopt sentinel */
+    emit_mov_rdx_imm64(buf, (uint64_t)(MASK_NAN | ((uint64_t)VAL_DEOPT << 48)));
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd0);
+    uint32_t je_deopt = buf->size;
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);
+    /* normal path */
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x08);
+    emit_mov_reg_rax(buf, pc->r0);
+    uint32_t jmp_done = buf->size;
+    jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    /* DEOPT fallback: real C shim (handles deopt + edges) */
+    uint32_t deopt_pos = buf->size;
+    *(uint32_t*)(buf->code + je_deopt + 2) = deopt_pos - (je_deopt + 6);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xc4); jit_emit_byte(buf, 0x08);
+    emit_mov_arg1_imm64(buf, (uintptr_t)fe);
+    emit_mov_arg2_r10(buf);
+    emit_mov_rax_imm64(buf, (uintptr_t)jit_self_call_direct);
+    emit_call_rax(buf);
+    emit_mov_reg_rax(buf, pc->r0);
+    uint32_t done_pos = buf->size;
+    *(uint32_t*)(buf->code + jmp_done + 1) = done_pos - (jmp_done + 5);
+}
 
 static void emit_fast_index(JITBuffer *buf, Instruction *pc) {
     emit_mov_rax_reg(buf, pc->r1); // RAX = coll
@@ -268,7 +445,7 @@ static void emit_fast_index(JITBuffer *buf, Instruction *pc) {
     *(uint32_t*)&buf->code[jne_int + 2] = fb_pos - (jne_int + 6);
     *(uint32_t*)&buf->code[jae_bounds + 2] = fb_pos - (jae_bounds + 6);
 
-    emit_mov_rdi_reg(buf, pc->r1); emit_mov_rsi_reg(buf, pc->r2);
+    emit_mov_arg1_reg(buf, pc->r1); emit_mov_arg2_reg(buf, pc->r2);
     emit_mov_rax_imm64(buf, (uintptr_t)glow_index_jit);
     emit_call_rax(buf);
     emit_mov_reg_rax(buf, pc->r0);
@@ -309,7 +486,7 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc) {
     *(uint32_t*)&buf->code[jne_int + 2] = fb_pos - (jne_int + 6);
     *(uint32_t*)&buf->code[jae_bounds + 2] = fb_pos - (jae_bounds + 6);
 
-    emit_mov_rdi_reg(buf, pc->r0); emit_mov_rsi_reg(buf, pc->r1); emit_mov_rdx_reg(buf, pc->r2);
+    emit_mov_arg1_reg(buf, pc->r0); emit_mov_arg2_reg(buf, pc->r1); emit_mov_arg3_reg(buf, pc->r2);
     emit_mov_rax_imm64(buf, (uintptr_t)glow_store_index_jit);
     emit_call_rax(buf);
 
@@ -364,8 +541,13 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x7e); jit_emit_byte(buf, 0xc0); // movq rax, xmm0
     uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
+#else
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
+#endif
     emit_mov_rax_imm64(buf, slow_fn);
     emit_call_rax(buf);
     uint32_t done_pos = buf->size;
@@ -397,8 +579,13 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
+#ifdef GLOW_JIT_WIN64
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
+#else
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
+#endif
     emit_mov_rax_imm64(buf, slow_fn);
     emit_call_rax(buf);
     uint32_t done_pos = buf->size;
@@ -420,8 +607,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
             case OP_LOAD_VAR: case OP_STORE_VAR: case OP_STORE_LET:
             case OP_MOVE: case OP_NOP:
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-            case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_LT: case OP_GT: case OP_LTE:
-            case OP_GTE: case OP_EQ: case OP_NEQ: case OP_JUMP:
+            case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_JUMP:
             case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
             case OP_CALL: case OP_CALL_VALUE: case OP_CALL_SELF_FAST: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
@@ -456,6 +642,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
 
     // Prologue
     emit_prologue(&buf);
+    emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
 
@@ -530,11 +717,11 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                     else { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return; }
                     jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x7e); jit_emit_byte(&buf, 0xc0);
                     emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->op == OP_ADD || pc->op == OP_SUB) {
+                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
                 } else {
                     emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                    if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8); emit_mov_rcx_imm64(&buf, 0x7FF8000000000000ULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8); }
-                    else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8); emit_mov_rcx_imm64(&buf, 0x7FF8000000000000ULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); }
-                    else if (pc->op == OP_MUL) {
+                    if (pc->op == OP_MUL) {
                         emit_mov_rdx_imm64(&buf, 0x0000FFFFFFFFFFFFULL);
                         jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd0);
                         jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd1);
@@ -547,32 +734,48 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_GET_PROPERTY: {
-                emit_mov_rax_reg(&buf, pc->r1);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_rdx_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
                 emit_call_rax(&buf);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_SET_PROPERTY: {
-                emit_mov_rax_reg(&buf, pc->r0);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_rax_reg(&buf, pc->r1);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc2); // mov rdx, rax
-                emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg1_reg(&buf, pc->r0);
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_reg(&buf, pc->r1);
+                emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_set_property_helper);
                 emit_call_rax(&buf);
                 break;
             }
             case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8);
-                uint8_t set_op;
-                switch(pc->op) { case OP_LT: set_op = 0x9c; break; case OP_GT: set_op = 0x9f; break; case OP_LTE: set_op = 0x9e; break; case OP_GTE: set_op = 0x9d; break; case OP_EQ: set_op = 0x94; break; case OP_NEQ: set_op = 0x95; break; default: set_op = 0x94; break; }
-                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, set_op); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc1); emit_mov_rax_imm64(&buf, value_bool(0)); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_mov_reg_rax(&buf, pc->r0);
+                uintptr_t cmp_fn =
+                    pc->op == OP_LT   ? (uintptr_t)jit_val_lt  :
+                    pc->op == OP_GT   ? (uintptr_t)jit_val_gt  :
+                    pc->op == OP_LTE  ? (uintptr_t)jit_val_lte :
+                    pc->op == OP_GTE  ? (uintptr_t)jit_val_gte :
+                    pc->op == OP_EQ   ? (uintptr_t)jit_val_eq  : (uintptr_t)jit_val_neq;
+                int int_op = -1;
+                switch (pc->op) {
+                    case OP_LT:  int_op = OP_LT_INT; break;
+                    case OP_GT:  int_op = OP_GT_INT; break;
+                    case OP_LTE: int_op = OP_LTE_INT; break;
+                    case OP_GTE: int_op = OP_GTE_INT; break;
+                    case OP_EQ:  int_op = OP_EQ_INT; break;
+                    default:     int_op = -1; break;
+                }
+                if (int_op >= 0) {
+                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                } else {
+                    emit_mov_arg1_reg(&buf, pc->r1);
+                    emit_mov_arg2_reg(&buf, pc->r2);
+                    emit_mov_rax_imm64(&buf, cmp_fn);
+                    emit_call_rax(&buf);
+                    emit_mov_reg_rax(&buf, pc->r0);
+                }
                 break;
             }
             case OP_JUMP: { jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
@@ -582,8 +785,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                  if (fe) {
                      emit_self_call_direct(&buf, fe, pc);
                  } else {
-                     emit_mov_rax_reg(&buf, pc->r1);
-                     jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                     emit_mov_arg1_reg(&buf, pc->r1);
                      emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val);
                      emit_call_rax(&buf);
                      emit_mov_reg_rax(&buf, pc->r0);
@@ -595,8 +797,8 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : (pc->op == OP_CALL_SELF_FAST ? fe : NULL);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
-                emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                 emit_mov_rax_imm64(&buf, (uintptr_t)compute_signature);
                 emit_call_rax(&buf);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
@@ -607,22 +809,21 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0x79); jit_emit_byte(&buf, 0x08); jit_emit_byte(&buf, 0x00);
                 uint32_t je_null = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jit_emit_u32(&buf, 0);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x08);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xee);
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_r10(&buf);
                 emit_call_rax(&buf);
                 uint32_t jmp_done = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
                 uint32_t slow_path = buf.size; 
                 *(uint32_t*)(buf.code + jne_cache + 2) = (uint32_t)(slow_path - (jne_cache + 6));
                 *(uint32_t*)(buf.code + je_null + 2) = (uint32_t)(slow_path - (je_null + 6));
-                emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd2);
-                emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg3_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                 if (target_fe) { 
-                    emit_mov_rdi_imm64(&buf, (uintptr_t)target_fe); 
+                    emit_mov_arg1_imm64(&buf, (uintptr_t)target_fe); 
                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper); 
                 } else { 
-                    emit_mov_rax_reg(&buf, pc->r1); 
-                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                    emit_mov_arg1_reg(&buf, pc->r1); 
                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val); 
                 }
                 emit_call_rax(&buf);
@@ -631,29 +832,15 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_CALL_METHOD: {
-                // RDI: obj (from pc->r1)
-                emit_mov_rax_reg(&buf, pc->r1); 
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
-                
-                // RSI: method name (from pc->ptr)
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                
-                // RDX: argc (from pc->arg)
-                emit_mov_rdx_imm64(&buf, (uint64_t)pc->arg);
-                
-                // RCX: args (R + pc->r2 * 8)
+                emit_mov_arg1_reg(&buf, pc->r1); 
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_imm64(&buf, (uint64_t)pc->arg);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12 (R base)
-                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, r2 offset
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd1); // mov rcx, r10
-                
-                // R8: orig_pc
-                emit_mov_r8_imm64(&buf, (uintptr_t)orig_pc);
-                
-                // Call jit_call_method_helper
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, pc->r2 * 8
+                emit_mov_arg4_r10(&buf);
+                emit_mov_arg5_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_method_helper);
                 emit_call_rax(&buf);
-                
-                // Store result
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
@@ -670,29 +857,19 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                     jit_emit_u32(&buf, 0);
                     jump_count++;
                 } else {
-                    // Dynamic or cross-function tail call
-                    // 1. Prepare args
                     jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // r10 = R
                     jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // r10 points to args
-                    
-                    // 2. Setup call info
-                    emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
-                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd2); // rdx = r10 (args)
-                    emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg); // rsi = argc
-
+                    emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
+                    emit_mov_arg3_r10(&buf);
+                    emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                     if (target_fe) { 
-                        emit_mov_rdi_imm64(&buf, (uintptr_t)target_fe); 
+                        emit_mov_arg1_imm64(&buf, (uintptr_t)target_fe); 
                         emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper); 
                     } else { 
-                        emit_mov_rax_reg(&buf, pc->r1); // Load callee
-                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // rdi = callee
+                        emit_mov_arg1_reg(&buf, pc->r1);
                         emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val); 
                     }
-                    
-                    // 3. Epilogue (Pop frame) before jumping
                     emit_pop_frame(&buf);
-                    
-                    // 4. Jump (true tail call since we popped our frame)
                     jit_emit_byte(&buf, 0xff); jit_emit_byte(&buf, 0xe0); // jmp rax
                 }
                 break;
@@ -706,10 +883,9 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_SIMD_ADD: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2); emit_mov_rdx_reg(&buf, pc->r0);
+                emit_mov_arg1_reg(&buf, pc->r1); emit_mov_arg2_reg(&buf, pc->r2); emit_mov_arg3_reg(&buf, pc->r0);
                 emit_mov_rax_imm64(&buf, (uintptr_t)simd_add_helper);
                 emit_call_rax(&buf);
-                jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++;
                 break;
             }
             case OP_LOAD_LOCAL: {
@@ -731,9 +907,27 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_MUL_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                uint32_t jne_a, jne_b;
+                emit_jit_int_load_and_check(&buf, pc->r1, pc->r2, &jne_a, &jne_b);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc1); /* imul rax, rcx */
+                emit_mov_rdx_imm64(&buf, MASK_NAN);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd0); /* or rax, rdx */
+                uint32_t jmp_done = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                uint32_t slow_pos = buf.size;
+#ifdef GLOW_JIT_WIN64
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xca);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc1);
+#else
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xce);
+#endif
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_mul);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_call_rax(&buf);
+                uint32_t done_pos = buf.size;
+                emit_mov_reg_rax(&buf, pc->r0);
+                *(uint32_t*)(buf.code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
+                *(uint32_t*)(buf.code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
+                *(uint32_t*)(buf.code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
@@ -780,7 +974,7 @@ void func_maybe_tier_up(FuncEntry *fe) {
 
     // Tier 2: Optimizing JIT after 100 executions
     if (fe->body->jit_tier == JIT_TIER_BASELINE && !fe->body->jit_code && !fe->body->jit_failed) {
-        if (fe->exec_count > 100) {
+        if (fe->exec_count > 50) {
             jit_compile(fe->body);
         }
     }
@@ -796,7 +990,7 @@ void jit_maybe_tier_up(Bytecode *bc) {
             jit_compile_baseline(bc);
         }
     } else if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code) {
-        if (bc->exec_count > 100) {
+        if (bc->exec_count > 50) {
             jit_compile(bc);
         }
     }
@@ -827,8 +1021,7 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
             case OP_LOAD_VAR: case OP_STORE_VAR: case OP_STORE_LET:
             case OP_MOVE: case OP_NOP:
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-            case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_LT: case OP_GT: case OP_LTE:
-            case OP_GTE: case OP_EQ: case OP_NEQ: case OP_JUMP:
+            case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_JUMP:
             case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
             case OP_CALL: case OP_CALL_VALUE: case OP_CALL_SELF_FAST: case OP_CALL_METHOD:
             case OP_INDEX: case OP_STORE_INDEX:
@@ -858,6 +1051,7 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
     JITBuffer buf = {code, 0, size};
 
     jit_baseline_emit_prologue(&buf);
+    emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
 
@@ -932,11 +1126,11 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                     else { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return; }
                     jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x7e); jit_emit_byte(&buf, 0xc0);
                     emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->op == OP_ADD || pc->op == OP_SUB) {
+                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
                 } else {
                     emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                    if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8); emit_mov_rcx_imm64(&buf, 0x7FF8000000000000ULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8); }
-                    else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8); emit_mov_rcx_imm64(&buf, 0x7FF8000000000000ULL); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); }
-                    else if (pc->op == OP_MUL) {
+                    if (pc->op == OP_MUL) {
                         emit_mov_rdx_imm64(&buf, 0x0000FFFFFFFFFFFFULL);
                         jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd0);
                         jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd1);
@@ -949,32 +1143,48 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 break;
             }
             case OP_GET_PROPERTY: {
-                emit_mov_rax_reg(&buf, pc->r1);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_rdx_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
                 emit_call_rax(&buf);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
             case OP_SET_PROPERTY: {
-                emit_mov_rax_reg(&buf, pc->r0);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7); // mov rdi, rax
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_rax_reg(&buf, pc->r1);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc2); // mov rdx, rax
-                emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg1_reg(&buf, pc->r0);
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_reg(&buf, pc->r1);
+                emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_set_property_helper);
                 emit_call_rax(&buf);
                 break;
             }
             case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ: {
-                emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8);
-                uint8_t set_op;
-                switch(pc->op) { case OP_LT: set_op = 0x9c; break; case OP_GT: set_op = 0x9f; break; case OP_LTE: set_op = 0x9e; break; case OP_GTE: set_op = 0x9d; break; case OP_EQ: set_op = 0x94; break; case OP_NEQ: set_op = 0x95; break; default: set_op = 0x94; break; }
-                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, set_op); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xb6); jit_emit_byte(&buf, 0xc1); emit_mov_rax_imm64(&buf, value_bool(0)); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xc8); emit_mov_reg_rax(&buf, pc->r0);
+                uintptr_t cmp_fn =
+                    pc->op == OP_LT   ? (uintptr_t)jit_val_lt  :
+                    pc->op == OP_GT   ? (uintptr_t)jit_val_gt  :
+                    pc->op == OP_LTE  ? (uintptr_t)jit_val_lte :
+                    pc->op == OP_GTE  ? (uintptr_t)jit_val_gte :
+                    pc->op == OP_EQ   ? (uintptr_t)jit_val_eq  : (uintptr_t)jit_val_neq;
+                int int_op = -1;
+                switch (pc->op) {
+                    case OP_LT:  int_op = OP_LT_INT; break;
+                    case OP_GT:  int_op = OP_GT_INT; break;
+                    case OP_LTE: int_op = OP_LTE_INT; break;
+                    case OP_GTE: int_op = OP_GTE_INT; break;
+                    case OP_EQ:  int_op = OP_EQ_INT; break;
+                    default:     int_op = -1; break;
+                }
+                if (int_op >= 0) {
+                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                } else {
+                    emit_mov_arg1_reg(&buf, pc->r1);
+                    emit_mov_arg2_reg(&buf, pc->r2);
+                    emit_mov_rax_imm64(&buf, cmp_fn);
+                    emit_call_rax(&buf);
+                    emit_mov_reg_rax(&buf, pc->r0);
+                }
                 break;
             }
             case OP_JUMP: { jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
@@ -984,8 +1194,7 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                  if (fe) {
                      emit_self_call_direct(&buf, fe, pc);
                  } else {
-                     emit_mov_rax_reg(&buf, pc->r1);
-                     jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                     emit_mov_arg1_reg(&buf, pc->r1);
                      emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val);
                      emit_call_rax(&buf);
                      emit_mov_reg_rax(&buf, pc->r0);
@@ -997,8 +1206,8 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : (pc->op == OP_CALL_SELF_FAST ? fe : NULL);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
-                emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                 emit_mov_rax_imm64(&buf, (uintptr_t)compute_signature);
                 emit_call_rax(&buf);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
@@ -1009,22 +1218,21 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0x79); jit_emit_byte(&buf, 0x08); jit_emit_byte(&buf, 0x00);
                 uint32_t je_null = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jit_emit_u32(&buf, 0);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x08);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd7);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xee);
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_r10(&buf);
                 emit_call_rax(&buf);
                 uint32_t jmp_done = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
                 uint32_t slow_path = buf.size; 
                 *(uint32_t*)(buf.code + jne_cache + 2) = (uint32_t)(slow_path - (jne_cache + 6));
                 *(uint32_t*)(buf.code + je_null + 2) = (uint32_t)(slow_path - (je_null + 6));
-                emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd2);
-                emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg3_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                 if (target_fe) { 
-                    emit_mov_rdi_imm64(&buf, (uintptr_t)target_fe); 
+                    emit_mov_arg1_imm64(&buf, (uintptr_t)target_fe); 
                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper); 
                 } else { 
-                    emit_mov_rax_reg(&buf, pc->r1); 
-                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                    emit_mov_arg1_reg(&buf, pc->r1); 
                     emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val); 
                 }
                 emit_call_rax(&buf);
@@ -1033,14 +1241,13 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 break;
             }
             case OP_CALL_METHOD: {
-                emit_mov_rax_reg(&buf, pc->r1); 
-                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
-                emit_mov_rsi_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_rdx_imm64(&buf, (uint64_t)pc->arg);
+                emit_mov_arg1_reg(&buf, pc->r1); 
+                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_arg3_imm64(&buf, (uint64_t)pc->arg);
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
-                jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd1);
-                emit_mov_r8_imm64(&buf, (uintptr_t)orig_pc);
+                emit_mov_arg4_r10(&buf);
+                emit_mov_arg5_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_method_helper);
                 emit_call_rax(&buf);
                 emit_mov_reg_rax(&buf, pc->r0);
@@ -1061,15 +1268,14 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 } else {
                     jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2);
                     jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8);
-                    emit_mov_rcx_imm64(&buf, (uintptr_t)orig_pc);
-                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xd2);
-                    emit_mov_rsi_imm64(&buf, (uint64_t)pc->arg);
+                    emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
+                    emit_mov_arg3_r10(&buf);
+                    emit_mov_arg2_imm64(&buf, (uint64_t)pc->arg);
                     if (target_fe) { 
-                        emit_mov_rdi_imm64(&buf, (uintptr_t)target_fe); 
+                        emit_mov_arg1_imm64(&buf, (uintptr_t)target_fe); 
                         emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper); 
                     } else { 
-                        emit_mov_rax_reg(&buf, pc->r1);
-                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                        emit_mov_arg1_reg(&buf, pc->r1);
                         emit_mov_rax_imm64(&buf, (uintptr_t)jit_call_helper_val); 
                     }
                     emit_pop_frame(&buf);
@@ -1086,7 +1292,7 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 break;
             }
             case OP_SIMD_ADD: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rsi_reg(&buf, pc->r2); emit_mov_rdx_reg(&buf, pc->r0);
+                emit_mov_arg1_reg(&buf, pc->r1); emit_mov_arg2_reg(&buf, pc->r2); emit_mov_arg3_reg(&buf, pc->r0);
                 emit_mov_rax_imm64(&buf, (uintptr_t)simd_add_helper);
                 emit_call_rax(&buf);
                 break;
@@ -1110,9 +1316,27 @@ static void jit_baseline_emit_epilogue(JITBuffer *buf) {
                 break;
             }
             case OP_MUL_INT: {
-                emit_mov_rdi_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                uint32_t jne_a, jne_b;
+                emit_jit_int_load_and_check(&buf, pc->r1, pc->r2, &jne_a, &jne_b);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0xaf); jit_emit_byte(&buf, 0xc1); /* imul rax, rcx */
+                emit_mov_rdx_imm64(&buf, MASK_NAN);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd0); /* or rax, rdx */
+                uint32_t jmp_done = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                uint32_t slow_pos = buf.size;
+#ifdef GLOW_JIT_WIN64
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xca);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc1);
+#else
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc7);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xce);
+#endif
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_int_mul);
-                emit_call_rax(&buf); emit_mov_reg_rax(&buf, pc->r0);
+                emit_call_rax(&buf);
+                uint32_t done_pos = buf.size;
+                emit_mov_reg_rax(&buf, pc->r0);
+                *(uint32_t*)(buf.code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
+                *(uint32_t*)(buf.code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
+                *(uint32_t*)(buf.code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
@@ -1148,7 +1372,8 @@ void jit_compile_baseline(Bytecode *bc) { jit_compile_baseline_ext(bc, NULL, 0);
 
 static void propagate_types(Instruction *code, int count, int param_count, TypeSignature sig, FuncEntry *fe) {
     unsigned char reg_types[256]; memset(reg_types, 0, 256);
-    for (int i = 0; i < param_count && i < 16; i++) reg_types[i] = (sig >> (i * 4)) & 0xF;
+    int start_reg = (fe && fe->name && strchr(fe->name, ':')) ? 1 : 0;
+    for (int i = 0; i < param_count && (start_reg + i) < 16; i++) reg_types[start_reg + i] = (sig >> (i * 4)) & 0xF;
     for (int i = 0; i < count; i++) {
         Instruction *pc = &code[i];
         switch (pc->op) {
