@@ -1,0 +1,25 @@
+blueprint NQ:
+ can init(n):
+  self.n = n
+  self.count = 0
+ end
+ can solve():
+  let board = range(self.n)
+  self.backtrack(board, 0)
+  return self.count
+ end
+ can backtrack(board, row):
+  when row >= self.n:
+   self.count = self.count + 1
+   return 0
+  end
+  let col = 0
+  while col < self.n:
+   board[col] = col
+   col = col + 1
+  end
+ end
+end
+let q = NQ()
+q.init(4)
+show q.solve()
