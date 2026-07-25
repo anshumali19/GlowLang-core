@@ -727,6 +727,8 @@ extern THREAD_LOCAL const char *error_file;
 extern THREAD_LOCAL int error_line;
 extern THREAD_LOCAL int profiling_active;
 extern THREAD_LOCAL int trace_mode;
+extern THREAD_LOCAL Bytecode *g_dbg_bc;
+extern THREAD_LOCAL Instruction *g_dbg_pc;
 extern int next_free_reg;
 extern int global_lambda_count;
 typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
