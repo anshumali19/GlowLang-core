@@ -18,6 +18,53 @@
 #include "jit.h"
 #include "opt.h"
 
+#ifdef _WIN32
+#include <windows.h>
+extern const char *op_names[];
+THREAD_LOCAL Bytecode *g_dbg_bc = NULL;
+THREAD_LOCAL Instruction *g_dbg_pc = NULL;
+static int g_veh_registered = 0;
+static LONG CALLBACK glow_veh(EXCEPTION_POINTERS *ep) {
+    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        void *addr = (void*)ep->ExceptionRecord->ExceptionInformation[1];
+        fprintf(stderr, "\n[AV] faulting addr=%p\n", addr);
+        if (g_dbg_bc) {
+            const char *fname = (g_dbg_bc->owner && g_dbg_bc->owner->name) ? g_dbg_bc->owner->name : "(null)";
+            long idx = g_dbg_pc ? (long)(g_dbg_pc - g_dbg_bc->code) : -1;
+            const char *op = (g_dbg_pc && g_dbg_pc->op >= 0 && g_dbg_pc->op < 256) ? op_names[g_dbg_pc->op] : "?";
+            fprintf(stderr, "[AV] func=%s op_index=%ld op=%s\n", fname, idx, op);
+            fprintf(stderr, "--- bytecode of %s (count=%d) ---\n", fname, g_dbg_bc->count);
+            int n = g_dbg_bc->count < 0 ? 0 : (g_dbg_bc->count > 45 ? 45 : g_dbg_bc->count);
+            for (int _i = 0; _i < n; _i++) {
+                Instruction *_pc = &g_dbg_bc->code[_i];
+                const char *_nm = (_pc->op >= 0 && _pc->op < 256) ? op_names[_pc->op] : "UNKNOWN";
+                fprintf(stderr, "%04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", _i, _nm, _pc->r0, _pc->r1, _pc->r2, _pc->arg);
+            }
+        }
+        fprintf(stderr, "Call stack (depth=%d):\n", call_stack_ptr);
+        for (int _c = 0; _c < call_stack_ptr && _c < 32; _c++) {
+            const char *fn = (call_stack[_c].fe && call_stack[_c].fe->name) ? call_stack[_c].fe->name : "<unknown>";
+            fprintf(stderr, "  frame [%d]: %s\n", _c, fn);
+        }
+        FuncEntry *top_fe = (call_stack_ptr > 0) ? call_stack[call_stack_ptr - 1].fe : NULL;
+        if (top_fe && top_fe->body) {
+            fprintf(stderr, "--- Bytecode of top frame %s (count=%d) ---\n", top_fe->name, top_fe->body->count);
+            for (int _i = 0; _i < top_fe->body->count; _i++) {
+                Instruction *_pc = &top_fe->body->code[_i];
+                const char *_nm = (_pc->op >= 0 && _pc->op < 256) ? op_names[_pc->op] : "UNKNOWN";
+                fprintf(stderr, "%04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", _i, _nm, _pc->r0, _pc->r1, _pc->r2, _pc->arg);
+            }
+        }
+        fflush(stderr);
+        abort();
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+static void glow_ensure_veh(void) {
+    if (!g_veh_registered) { AddVectoredExceptionHandler(1, glow_veh); g_veh_registered = 1; }
+}
+#endif
+
 /* Portable signed-64-bit overflow builtins for compilers that lack the
    __builtin_*_overflow intrinsics (e.g. MSVC). GCC/Clang use the natives. */
 #if !defined(__GNUC__) && !defined(__clang__)
@@ -68,6 +115,7 @@ THREAD_LOCAL int runtime_error_thrown = 0;
 THREAD_LOCAL int profiling_active = 0;
 THREAD_LOCAL int trace_mode = 0;
 THREAD_LOCAL int call_depth = 0;
+THREAD_LOCAL int force_interpreter_self_call = 0;
 int next_free_reg = 0;
 THREAD_LOCAL char *exception_stack_trace = NULL;
 THREAD_LOCAL const char *error_file = NULL;
@@ -229,11 +277,10 @@ static inline int value_cmp(Value a, Value b) {
     int64_t ia, ib;
     if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib))
         return (ia > ib) ? 1 : (ia < ib) ? -1 : 0;
-    if (is_fractional_double(a) || is_fractional_double(b)) {
-        double da = val_to_double(a), db = val_to_double(b);
-        return (da > db) ? 1 : (da < db) ? -1 : 0;
-    }
-    return bigint_cmp(value_to_bigint(a), value_to_bigint(b));
+    if (is_bigint(a) || is_bigint(b))
+        return bigint_cmp(value_to_bigint(a), value_to_bigint(b));
+    double da = val_to_double(a), db = val_to_double(b);
+    return (da > db) ? 1 : (da < db) ? -1 : 0;
 }
 
 // Numeric tower: inline int (48-bit) -> double (exact to 2^53) -> heap big-int
@@ -292,6 +339,14 @@ Value jit_int_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
 Value jit_int_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
+/* Generic value comparison helpers for JIT (non-specialized paths). */
+Value jit_val_lt(Value a, Value b)  { if (getenv("GLOW_JIT_DEBUG")) { fprintf(stderr, "[DBG] jit_val_lt: a=%llx b=%llx cmp=%d\n", (unsigned long long)a, (unsigned long long)b, value_cmp(a, b)); fflush(stderr); } return value_bool(value_cmp(a, b) <  0); }
+Value jit_val_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
+Value jit_val_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
+Value jit_val_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
+Value jit_val_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
+Value jit_val_neq(Value a, Value b) { return value_bool(!val_eq(a, b)); }
+
 
 pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t threads_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -300,7 +355,9 @@ int active_stack_count = 0;
 
 void print_error_trace(Value exception);
 void vm_stack_init(void) {
-    vm_stack_size = 2 * 1024 * 1024; // 16MB if Value is 8 bytes
+    gc_threshold = 128 * 1024 * 1024;
+    const char *vs = getenv("GLOW_VM_STACK");
+    vm_stack_size = vs ? atoi(vs) : (1024 * 1024); // 1M slots = 8MB (grows via realloc as needed)
     vm_stack = calloc(vm_stack_size, sizeof(Value));
     sp = 0;
     vm_stack_top = 0;
@@ -463,7 +520,7 @@ void print_error_trace(Value exception) {
     }
 }
 
-static const char *op_names[] = {
+const char *op_names[] = {
     "CONST_INT", "CONST_FLOAT", "CONST_STRING", "CONST_BOOL", "LOAD_VAR", "STORE_VAR",
     "ADD", "SUB", "MUL", "DIV", "MOD", "POW", "NEG", "LT", "GT", "LTE", "GTE", "EQ", "NEQ",
     "AND", "OR", "NOT", "JUMP", "JUMP_IF_FALSE", "JUMP_IF_TRUE", "LEN", "RANGE", "TYPE",
@@ -493,8 +550,88 @@ void print_bytecode(Bytecode *bc) {
     }
 }
 
-Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
-    if (++call_depth > 65500) {
+/* Direct-call a callee's JIT (specialized / opt / baseline) from the
+ * interpreter. The callee frame starts at vm_stack[base_reg + pc->r2] (the
+ * caller's argument area, exactly the DO_CALL contract), but the callee's
+ * JIT prologue reads its params from slots 0/1/2 and then writes spill /
+ * local slots up to its own local_count. The callee's frame must live in its
+ * OWN region, not overlaid on the caller's frame (which still has live locals
+ * at/above the arg slot). Allocate a fresh frame above vm_stack_top, copy the
+ * caller's arg window into it, run the callee there, then restore vm_stack_top.
+ * The previous version only grew vm_stack_top but still passed the caller's arg
+ * slot as R, so the callee's local stores landed inside the caller's live frame
+ * (e.g. is_even's regs) -> logical frame overlap and heap corruption that only
+ * surfaced as a late calloc SEGV (mutual recursion is_even/is_odd). */
+/* Self-recursion from the VM interpreter. Because the JIT path costs ~2
+ * machine frames per logical level (this bridge + the generated prologue),
+ * deep self-recursion must NOT re-enter the JIT, or the OS stack guard trips
+ * with STATUS_BAD_STACK long before run_bytecode's depth guard. Below the
+ * threshold we use the fast JIT path; at/above it we dispatch the body
+ * directly through run_bytecode (single frame) so the clean depth guard fires. */
+static Value vm_self_call_jit_or_recurse(Value (*f)(Value *, int *), Bytecode *body,
+                                           int callee_base, int callee_local, int *deopt_pc) {
+       if (call_depth < 400 && !force_interpreter_self_call) {
+          return vm_call_jit_direct(f, callee_base, callee_local, body->owner->param_count, deopt_pc);
+      }
+      return run_bytecode(body, NULL, NULL, callee_base);
+  }
+
+Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
+                                       int callee_local, int param_count, int *deopt_pc) {
+        if (getenv("GLOW_NOJITEXEC")) return MASK_NAN | ((uint64_t)15 << 48);
+        /* Deep recursion: avoid JIT to prevent C stack overflow. call_depth is
+         * NOT reset here so it accumulates across JIT self-/mutual-recursion;
+         * once it passes the threshold we deopt to the interpreter, which then
+         * drives recursion with its own clean depth guard (no 2-frames/level
+         * machine-stack blowup). */
+        if (call_depth > 10 || force_interpreter_self_call) return MASK_NAN | ((uint64_t)15 << 48);
+        int new_base = vm_stack_top;
+        int need = new_base + callee_local + 3;
+        int saved_top = vm_stack_top;
+        /* Copy caller's arg window to a local buffer BEFORE potential realloc, */
+        Value temp_args[16];
+        int copy_count = param_count < 16 ? param_count : 16;
+        for (int _i = 0; _i < copy_count; _i++)
+            temp_args[_i] = vm_stack[callee_base + _i];
+        if (need >= vm_stack_size) {
+            int old_size = vm_stack_size;
+            while (need >= vm_stack_size) vm_stack_size *= 2;
+            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+            for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+        }
+        if (need > vm_stack_top) vm_stack_top = need;
+        /* Copy the caller's arg window (slots callee_base .. callee_base+local) */
+        for (int _i = 0; _i < copy_count; _i++)
+            vm_stack[new_base + _i] = temp_args[_i];
+        
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: &call_depth=%p, call_depth=%d, callee_base=%d, new_base=%d, callee_local=%d, f=%p\n", (void*)&call_depth, call_depth, callee_base, new_base, callee_local, (void*)f);
+            fflush(stderr);
+        }
+        
+        Value res = f(&vm_stack[new_base], deopt_pc);
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: JIT returned, res=%llx\n", (unsigned long long)res);
+            fflush(stderr);
+        }
+        vm_stack_top = saved_top;
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: after restore\n");
+            fflush(stderr);
+        }
+        if (getenv("GLOW_JIT_DEBUG")) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: returning res=%llx\n", (unsigned long long)res);
+            fflush(stderr);
+        }
+        return res;
+    }
+
+ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
+     #ifdef _WIN32
+     glow_ensure_veh();
+     #endif
+     if (getenv("GLOW_ENTRYDBG")) { fprintf(stderr, "[ENTER] owner=%s start_pc=%p count=%d jf=%d local_count=%d base_reg=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", (void*)start_pc, bc->count, bc->jit_failed, bc->local_count, base_reg); fflush(stderr); }
+     if (++call_depth > 65500) {
         pending_exception = value_string_copy("Maximum recursion depth exceeded");
         has_exception = 1;
         call_depth--;
@@ -503,6 +640,23 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 
     call_stack_push(bc->owner, start_pc ? start_pc : bc->code);
     int my_frame_idx = call_stack_ptr - 1;
+    int entry_count = bc->count;
+    if (entry_count <= 0 || entry_count > 100000) {
+        fprintf(stderr, "[ENTRY-CORRUPT] bc->count=%d owner=%s call_depth=%d\n", entry_count,
+                (bc->owner && bc->owner->name) ? bc->owner->name : "?", call_depth);
+        for (int _s = call_stack_ptr - 1; _s >= 0; _s--)
+            fprintf(stderr, "  frame[%d] fe=%s\n", _s,
+                    (call_stack[_s].fe && call_stack[_s].fe->name) ? call_stack[_s].fe->name : "?");
+        abort();
+    }
+
+    if (getenv("GLOW_TOPPROBE")) {
+        if (vm_stack_top < 0 || vm_stack_top > vm_stack_size) {
+            fprintf(stderr, "[TOPCORRUPT] vm_stack_top=%d size=%d owner=%s base_reg=%d lc=%d\n",
+                    vm_stack_top, vm_stack_size, (bc->owner&&bc->owner->name)?bc->owner->name:"?", base_reg, bc->local_count);
+            abort();
+        }
+    }
 
     size_t old_arena_used = stack_arena_used;
     int old_top = vm_stack_top;
@@ -529,10 +683,16 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     static THREAD_LOCAL VMFrame frames[65536];
     int frames_capacity = 65536;
     int internal_depth = 0;
+    /* Tail-call reuse keeps internal_depth flat, so count tail recursions
+     * separately to still enforce the recursion-depth guard on infinite
+     * tail recursion (e.g. `func r(): r() end; r()`). Reset on every
+     * real frame push/pop. */
+    int tail_depth = 0;
 
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) do { \
     int _eval_new_base = (new_base_reg); \
     if (__builtin_expect(call_depth + internal_depth >= 65500, 0)) { pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW; } \
+    tail_depth = 0; \
     frames[internal_depth].bc = bc; \
     frames[internal_depth].pc = pc; \
     frames[internal_depth].closure = current_closure; \
@@ -550,16 +710,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     my_frame_idx = call_stack_ptr - 1; \
     old_arena_used = stack_arena_used; \
     old_top = vm_stack_top; \
-    if (__builtin_expect(base_reg + bc->local_count >= vm_stack_size, 0)) { \
-        int old_size = vm_stack_size; \
-        while (base_reg + bc->local_count >= vm_stack_size) vm_stack_size *= 2; \
-        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size); \
-        for (int _i=old_size; _i<vm_stack_size; _i++) vm_stack[_i] = 0; \
-    } \
     if (__builtin_expect(base_reg + bc->local_count > vm_stack_top, 0)) vm_stack_top = base_reg + bc->local_count; \
     for (int _i = bc->preserved_locals; _i < bc->local_count; _i++) vm_stack[base_reg + _i] = value_none(); \
     goto l_DISPATCH; \
 } while(0)
+
     Instruction *pc = start_pc ? start_pc : bc->code;
 
     l_RESUME_INTERP:;
@@ -567,18 +722,30 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
     if (!start_pc && bc->count > 0) {
         bc->exec_count++;
         if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && !bc->jit_failed) {
-            if (bc->exec_count > 10) {
-                jit_compile_baseline(bc);
+            if (getenv("GLOW_NO_BASELINE")) bc->jit_failed = 1;
+            const char *only = getenv("GLOW_BASE_ONLY");
+            if (only) { fprintf(stderr, "[GATE] owner=%s only=%s jit_failed_before=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", only, bc->jit_failed); fflush(stderr); }
+            if (only && bc->owner && bc->owner->name && strcmp(only, bc->owner->name) != 0) bc->jit_failed = 1;
+            if (bc->exec_count > 5) {
+                if (bc->count <= 0 || bc->count > 100000) {
+                    fprintf(stderr, "[CORRUPT] bc->count=%d (entry=%d) owner=%s exec_count=%d\n",
+                            bc->count, entry_count, (bc->owner && bc->owner->name) ? bc->owner->name : "?", bc->exec_count);
+                    for (int _s = call_stack_ptr - 1; _s >= 0; _s--)
+                        fprintf(stderr, "  frame[%d] fe=%s\n", _s,
+                                (call_stack[_s].fe && call_stack[_s].fe->name) ? call_stack[_s].fe->name : "?");
+                    abort();
+                }
+                if (getenv("GLOW_OPTGATE")) jit_compile(bc); else jit_compile_baseline(bc);
             }
         }
         if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && !bc->jit_failed) {
-            if (bc->exec_count > 100) {
+            if (bc->exec_count > 50) {
                 jit_compile(bc);
             }
         }
     }
 
-    if (!start_pc && bc->baseline_jit_code && !bc->jit_code) {
+    if (!start_pc && bc->baseline_jit_code && !bc->jit_code && !getenv("GLOW_NOBASEEXEC") && !getenv("GLOW_NOJITEXEC")) {
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         Value res = ((JITFunc)bc->baseline_jit_code)(&vm_stack[base_reg], &deopt_pc);
@@ -595,6 +762,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 vm_stack_top = old_top;
                 
                 internal_depth--;
+            tail_depth = 0;
                 bc = frames[internal_depth].bc;
                 pc = frames[internal_depth].pc;
                 current_closure = frames[internal_depth].closure;
@@ -609,7 +777,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             }
         }
     }
-    if (!start_pc && bc->jit_code) {
+    if (!start_pc && bc->jit_code && !getenv("GLOW_NOJITEXEC")) {
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
@@ -626,6 +794,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 vm_stack_top = old_top;
                 
                 internal_depth--;
+            tail_depth = 0;
                 bc = frames[internal_depth].bc;
                 pc = frames[internal_depth].pc;
                 current_closure = frames[internal_depth].closure;
@@ -639,13 +808,6 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 pc++; goto l_DISPATCH;
             }
         }
-    }
-    if (__builtin_expect(base_reg + bc->local_count >= vm_stack_size, 0)) {
-        int old_size = vm_stack_size;
-        vm_stack_size = (vm_stack_size == 0) ? 4096 : vm_stack_size * 2;
-        while (base_reg + bc->local_count >= vm_stack_size) vm_stack_size *= 2;
-        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
-        for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
     }
     if (__builtin_expect(base_reg + bc->local_count > vm_stack_top, 0)) vm_stack_top = base_reg + bc->local_count;
 
@@ -741,6 +903,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 
 #ifdef _MSC_VER
 #define DISPATCH() { \
+    g_dbg_bc = bc; g_dbg_pc = pc; \
     CHECK_FUZZ_TIMEOUT(); \
     if (profiling_active) pc->exec_count++; \
     if (trace_mode) { \
@@ -873,13 +1036,16 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
 }
 #else
 #define DISPATCH() { \
-    CHECK_FUZZ_TIMEOUT(); \
+    if (__builtin_expect(has_exception | profiling_active | trace_mode, 0)) { \
+        g_dbg_bc = bc; g_dbg_pc = pc; \
+        CHECK_FUZZ_TIMEOUT(); \
     if (profiling_active) pc->exec_count++; \
     if (trace_mode) { \
         printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
         visualize_stack(base_reg, bc->local_count); \
     } \
-    if (__builtin_expect(has_exception, 0)) goto l_OP_THROW; \
+        if (has_exception) goto l_OP_THROW; \
+    } \
     goto *dt[pc->op]; \
 }
 #endif
@@ -992,10 +1158,10 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         R(pc->r0) = num_div(a, b);
         pc++; goto l_DISPATCH; 
     }
-    l_OP_LT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) < 0); pc++; goto l_DISPATCH; }
-    l_OP_GT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) > 0); pc++; goto l_DISPATCH; }
-    l_OP_LTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) <= 0); pc++; goto l_DISPATCH; }
-    l_OP_GTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; R(pc->r0) = value_bool(value_cmp(a, b) >= 0); pc++; goto l_DISPATCH; }
+    l_OP_LT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; if (IS_INT(a) && IS_INT(b)) { R(pc->r0) = value_bool(AS_INT(a) < AS_INT(b)); } else { R(pc->r0) = value_bool(value_cmp(a, b) < 0); } pc++; goto l_DISPATCH; }
+    l_OP_GT: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; if (IS_INT(a) && IS_INT(b)) { R(pc->r0) = value_bool(AS_INT(a) > AS_INT(b)); } else { R(pc->r0) = value_bool(value_cmp(a, b) > 0); } pc++; goto l_DISPATCH; }
+    l_OP_LTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; if (IS_INT(a) && IS_INT(b)) { R(pc->r0) = value_bool(AS_INT(a) <= AS_INT(b)); } else { R(pc->r0) = value_bool(value_cmp(a, b) <= 0); } pc++; goto l_DISPATCH; }
+    l_OP_GTE: { Value a = R(pc->r1), b = R(pc->r2); pc->type=2; if (IS_INT(a) && IS_INT(b)) { R(pc->r0) = value_bool(AS_INT(a) >= AS_INT(b)); } else { R(pc->r0) = value_bool(value_cmp(a, b) >= 0); } pc++; goto l_DISPATCH; }
     l_OP_EQ: { pc->type=1; R(pc->r0) = value_bool(val_eq(R(pc->r1), R(pc->r2))); pc++; goto l_DISPATCH; }
     l_OP_NEQ: R(pc->r0) = value_bool(!val_eq(R(pc->r1), R(pc->r2))); pc++; goto l_DISPATCH;
     l_OP_AND: R(pc->r0) = value_bool(value_truthy(R(pc->r1)) && value_truthy(R(pc->r2))); pc++; goto l_DISPATCH;
@@ -1009,7 +1175,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
                     jit_compile_baseline(bc);
                 }
-                if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 50) {
                     jit_compile(bc);
                 }
             }
@@ -1025,7 +1191,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                     if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
                         jit_compile_baseline(bc);
                     }
-                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 50) {
                         jit_compile(bc);
                     }
                 }
@@ -1045,7 +1211,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                     if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && bc->exec_count > 10) {
                         jit_compile_baseline(bc);
                     }
-                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 100) {
+                    if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && bc->exec_count > 50) {
                         jit_compile(bc);
                     }
                 }
@@ -1068,6 +1234,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
         if (fe && fe->body) {
             TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
             
+            void *jit = func_get_specialization(fe, sig);
             // 1. PIC Lookup
             if (pc->cache[0].key == (void*)sig && pc->cache[0].val) {
                 bool cache_valid = false;
@@ -1081,10 +1248,11 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                     pc->cache[0].key = NULL;
                     pc->cache[0].val = 0;
                 } else {
-                    typedef Value (*JITFunc)(Value *R, int *pc_idx);
-                    JITFunc f = (JITFunc)pc->cache[0].val;
-                    int deopt_pc = 0;
-                    Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                 JITFunc f = (JITFunc)jit;
+                 int deopt_pc = 0;
+                 if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s SPEC base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                     }
@@ -1093,7 +1261,6 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 }
             }
 
-            void *jit = func_get_specialization(fe, sig);
             if (jit && jit != (void*)1) {
                 // Update Cache
                 pc->cache[0].key = (void*)sig;
@@ -1102,7 +1269,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc f = (JITFunc)jit;
                 int deopt_pc = 0;
-                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                 if (__builtin_expect(IS_DEOPT(res), 0)) {
                     res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                 }
@@ -1113,7 +1280,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 if (fe->body && fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    Value res = ((JITFunc)fe->body->jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    Value res = vm_call_jit_direct((JITFunc)fe->body->jit_code, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                     }
@@ -1121,13 +1288,14 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    Value res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+                    Value res = vm_call_jit_direct((JITFunc)fe->body->baseline_jit_code, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                     }
                     if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                 } else {
-                    if (fe->used > 10 && fe->spec_count < 8) {
+                    if (fe->used > 10 && fe->spec_count < 8 && !fe->body->jit_failed) {
                         void *jit_check = func_get_specialization(fe, sig);
                         if (!jit_check) {
                             jit_compile_specialized(fe, sig);
@@ -1244,7 +1412,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc f = (JITFunc)jit;
                 int deopt_pc = 0;
-                Value res = f(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                Value res = vm_self_call_jit_or_recurse((Value (*)(Value *, int *))f, fe->body, base_reg + pc->r2, fe->body->local_count, &deopt_pc);
                 if (__builtin_expect(IS_DEOPT(res), 0)) {
                     res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                 }
@@ -1255,7 +1423,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 if (fe->body && fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    Value res = ((JITFunc)fe->body->jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    Value res = vm_self_call_jit_or_recurse((JITFunc)fe->body->jit_code, fe->body, base_reg + pc->r2, fe->body->local_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                     }
@@ -1263,13 +1431,14 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    Value res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[base_reg + pc->r2], &deopt_pc);
+                    if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+                    Value res = vm_self_call_jit_or_recurse((JITFunc)fe->body->baseline_jit_code, fe->body, base_reg + pc->r2, fe->body->local_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
                     }
                     if(has_exception) { R(pc->r0) = pending_exception; goto l_OP_THROW; } R(pc->r0) = res;
                 } else {
-                    if (fe->used > 10 && fe->spec_count < 8) {
+                    if (fe->used > 10 && fe->spec_count < 8 && !fe->body->jit_failed) {
                         void *jit_check = func_get_specialization(fe, sig);
                         if (!jit_check) {
                             jit_compile_specialized(fe, sig);
@@ -1383,6 +1552,13 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
                 for (int i=ac; i<fe->param_count; i++) vm_stack[base_reg + i] = value_none();
             }
             bc = fe->body; pc = bc->code;
+            /* Tail-call reuse keeps internal_depth flat; count it so infinite
+             * tail recursion still trips the depth guard and exits cleanly. */
+            if (__builtin_expect(call_depth + internal_depth + (++tail_depth) >= 65500, 0)) {
+                pending_exception = value_string_copy("Maximum recursion depth exceeded");
+                has_exception = 1;
+                goto l_OP_THROW;
+            }
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
             stack_arena_used = old_arena_used;
             if (bc->jit_code) {
@@ -1409,6 +1585,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             vm_stack_top = old_top;
             
             internal_depth--;
+            tail_depth = 0;
             bc = frames[internal_depth].bc;
             pc = frames[internal_depth].pc;
             current_closure = frames[internal_depth].closure;
@@ -1473,6 +1650,7 @@ Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure
             vm_stack_top = old_top;
             
             internal_depth--;
+            tail_depth = 0;
             bc = frames[internal_depth].bc;
             pc = frames[internal_depth].pc;
             current_closure = frames[internal_depth].closure;

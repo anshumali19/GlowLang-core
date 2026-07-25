@@ -25,7 +25,9 @@
 #define read _read
 #define write _write
 #define close _close
+#if defined(_WIN32) && !defined(_SSIZE_T_DEFINED) && !defined(__MINGW32__) && !defined(__MINGW64__)
 typedef int ssize_t;
+#endif
 #else
 #include <unistd.h>
 #endif

@@ -343,25 +343,37 @@ void optimize_bytecode(Bytecode *bc) {
         int b1 = i - 1;
         while (b1 >= 0 && bc->code[b1].op == OP_NOP && !is_jump_target[b1+1]) b1--;
         if (b1 >= 0 && !is_jump_target[b1+1] && bc->code[b1].op == OP_MOVE && bc->code[b1].r0 == pc->r1) {
+            int target_reg = bc->code[b1].r0;
             pc->r1 = bc->code[b1].r1;
-            bc->code[b1].op = OP_NOP;
+            // Only NOP the move if target_reg is not read anywhere else
+            int is_read_elsewhere = 0;
+            for (int k = 0; k < bc->count; k++) {
+                if (k == b1 || k == i) continue;
+                Instruction *inst = &bc->code[k];
+                if (inst->op == OP_NOP) continue;
+                if (inst->r1 == target_reg || inst->r2 == target_reg) { is_read_elsewhere = 1; break; }
+            }
+            if (!is_read_elsewhere) bc->code[b1].op = OP_NOP;
         }
 
         // Backward scan for r2 temporary move
         int b2 = i - 1;
         while (b2 >= 0 && bc->code[b2].op == OP_NOP && !is_jump_target[b2+1]) b2--;
         if (b2 >= 0 && !is_jump_target[b2+1] && bc->code[b2].op == OP_MOVE && bc->code[b2].r0 == pc->r2) {
+            int target_reg = bc->code[b2].r0;
             pc->r2 = bc->code[b2].r1;
-            bc->code[b2].op = OP_NOP;
+            // Only NOP the move if target_reg is not read anywhere else
+            int is_read_elsewhere = 0;
+            for (int k = 0; k < bc->count; k++) {
+                if (k == b2 || k == i) continue;
+                Instruction *inst = &bc->code[k];
+                if (inst->op == OP_NOP) continue;
+                if (inst->r1 == target_reg || inst->r2 == target_reg) { is_read_elsewhere = 1; break; }
+            }
+            if (!is_read_elsewhere) bc->code[b2].op = OP_NOP;
         }
 
-        // Forward scan for output move
-        int f1 = i + 1;
-        while (f1 < bc->count && bc->code[f1].op == OP_NOP && !is_jump_target[f1]) f1++;
-        if (f1 < bc->count && !is_jump_target[f1] && bc->code[f1].op == OP_MOVE && bc->code[f1].r1 == pc->r0) {
-            pc->r0 = bc->code[f1].r0;
-            bc->code[f1].op = OP_NOP;
-        }
+        /* Forward scan output move disabled */
     }
     }
 

@@ -265,6 +265,10 @@ extern TypeSignature compute_signature(Value *regs, int count);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
 extern Value jit_self_call(struct FuncEntry *fe, Value *args);
+extern Value jit_self_call_with_depth(struct FuncEntry *fe, Value *args);
+extern Value jit_self_call_proper(struct FuncEntry *fe, Value *args, struct Instruction *pc);
+extern Value jit_self_call_direct(struct FuncEntry *fe, Value *args);
+extern Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base, int callee_local, int callee_param, int *deopt_pc);
 extern Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, struct Instruction *pc);
 extern Value jit_get_property_helper(Value o, const char *n, struct Instruction *pc);
 extern Value jit_set_property_helper(Value o, const char *n, Value v, struct Instruction *pc);
@@ -731,6 +735,7 @@ extern int active_stack_count;
 extern pthread_mutex_t glow_gil;
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;
+extern THREAD_LOCAL int force_interpreter_self_call;
 /* ================================================================
  *  COMPILER ROUTINES (compiler.c)
  * ================================================================ */
