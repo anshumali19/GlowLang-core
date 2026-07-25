@@ -18,11 +18,12 @@
 #include "jit.h"
 #include "opt.h"
 
+THREAD_LOCAL Bytecode *g_dbg_bc = NULL;
+THREAD_LOCAL Instruction *g_dbg_pc = NULL;
+
 #ifdef _WIN32
 #include <windows.h>
 extern const char *op_names[];
-THREAD_LOCAL Bytecode *g_dbg_bc = NULL;
-THREAD_LOCAL Instruction *g_dbg_pc = NULL;
 static int g_veh_registered = 0;
 static LONG CALLBACK glow_veh(EXCEPTION_POINTERS *ep) {
     if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
