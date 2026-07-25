@@ -1,0 +1,7 @@
+blueprint Foo:
+ can hello():
+  show "hi"
+ end
+end
+let f = Foo()
+f.hello()
