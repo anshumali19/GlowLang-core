@@ -191,7 +191,8 @@ static void process_grey_stack(void) {
 }
 
 void gc_full_collect(void) {
-    pthread_mutex_lock(&gc_mutex);
+    int single_threaded = (active_stack_count <= 1);
+    if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     if (vm_last_class) gc_mark_value(value_class(vm_last_class));
     if (vm_last_trait) gc_mark_value(value_trait(vm_last_trait));
@@ -201,13 +202,15 @@ void gc_full_collect(void) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);
         int stk_sp = *(active_stacks[i].top_ptr);
         if (stk) {
-            int lim = (stk_sp > 1000000) ? 1000000 : stk_sp;
+            int lim = stk_sp + 65536;
+            if (lim > vm_stack_size) lim = vm_stack_size;
             for (int j=0; j<lim; j++) gc_mark_value(stk[j]);
         }
         gc_mark_value(*(active_stacks[i].pending_exc_ptr));
     }
     pthread_mutex_unlock(&threads_mutex);
     process_grey_stack();
+    for (GCBlock *b = gc_block_list; b; b = b->next) b->live_count = 0;
     GCObject **p = &gc_objects;
     while (*p) {
         if (!(*p)->marked) {
@@ -226,134 +229,25 @@ void gc_full_collect(void) {
                 if (c->captured_names) free(c->captured_names);
                 if (c->captured_values) free(c->captured_values);
             }
-            gc_allocated -= unmarked->sz;
-            if (unmarked->is_block_allocated) { ((GCBlock*)unmarked->block_ptr)->live_count--; } else { free(unmarked); }
+            if (gc_allocated >= unmarked->sz) gc_allocated -= unmarked->sz; else gc_allocated = 0;
+            if (!unmarked->is_block_allocated) { free(unmarked); }
         } else {
             (*p)->marked = 0;
             if ((*p)->generation == 0) (*p)->generation = 1; // Promote
+            if ((*p)->is_block_allocated && (*p)->block_ptr) {
+                ((GCBlock*)(*p)->block_ptr)->live_count++;
+            }
             p = &((*p)->next);
         }
     }
     while (gc_remembered_set) { RememberedSet *next = gc_remembered_set->next; gc_remembered_set->obj->in_remembered_set = 0; free(gc_remembered_set); gc_remembered_set = next; }
     gc_reclaim_empty_blocks();
     gc_allocated_at_last_gc = gc_allocated;
-    pthread_mutex_unlock(&gc_mutex);
+    if (!single_threaded) pthread_mutex_unlock(&gc_mutex);
 }
 
 void gc_minor_collect(void) {
-    pthread_mutex_lock(&gc_mutex);
-    
-    /* Scan young roots: only stack slots pointing to generation 0 objects */
-    pthread_mutex_lock(&threads_mutex);
-    for (int i = 0; i < active_stack_count; i++) {
-        Value *stk = *(active_stacks[i].vm_stack_ptr);
-        int stk_sp = *(active_stacks[i].top_ptr);
-        if (stk) {
-            int lim = (stk_sp > 1000000) ? 1000000 : stk_sp;
-            for (int j = 0; j < lim; j++) {
-                Value v = stk[j];
-                if (GET_TYPE(v) == VAL_OBJECT || GET_TYPE(v) == VAL_LIST || GET_TYPE(v) == VAL_DICT || GET_TYPE(v) == VAL_STRING) {
-                    if (v & MASK_PAYLOAD) {
-                        GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
-                        if (obj->generation == 0) push_grey(obj);
-                    }
-                }
-            }
-        }
-        /* pending_exc may point to young objects */
-        Value exc = *(active_stacks[i].pending_exc_ptr);
-        if (GET_TYPE(exc) == VAL_OBJECT || GET_TYPE(exc) == VAL_LIST || GET_TYPE(exc) == VAL_DICT || GET_TYPE(exc) == VAL_STRING) {
-            if (exc & MASK_PAYLOAD) {
-                GCObject *obj = (GCObject*)(uintptr_t)(exc & MASK_PAYLOAD);
-                if (obj->generation == 0) push_grey(obj);
-            }
-        }
-    }
-    pthread_mutex_unlock(&threads_mutex);
-
-    /* Globals (and the last-compiled class/trait) are roots that may hold
-       young (gen 0) objects. The stack scan above only catches gen-0 objects
-       still live in a register; once an assignment overwrites that register
-       the global is the only reference. Skipping these here regressed
-       correctness vs. the full collector (which scans them) and could free a
-       live young object. Only mark gen-0 objects to stay generational. */
-    for (int i = 0; i < global_table.count; i++) {
-        Value v = global_table.values[i];
-        if (GET_TYPE(v) == VAL_OBJECT || GET_TYPE(v) == VAL_LIST || GET_TYPE(v) == VAL_DICT || GET_TYPE(v) == VAL_STRING) {
-            if (v & MASK_PAYLOAD) {
-                GCObject *obj = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
-                if (obj->generation == 0) push_grey(obj);
-            }
-        }
-    }
-    if (vm_last_class) {
-        GCObject *o = (GCObject*)(uintptr_t)(value_class(vm_last_class) & MASK_PAYLOAD);
-        if (o && o->generation == 0) push_grey(o);
-    }
-    if (vm_last_trait) {
-        GCObject *o = (GCObject*)(uintptr_t)(value_trait(vm_last_trait) & MASK_PAYLOAD);
-        if (o && o->generation == 0) push_grey(o);
-    }
-    /* Frozen string literals are roots too (only young ones matter here). */
-    for (int i = 0; i < gc_const_roots_len; i++) {
-        Value v = gc_const_roots[i];
-        if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) {
-            GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
-            if (o->generation == 0) push_grey(o);
-        }
-    }
-
-    /* Scan remembered set: old objects that reference young objects */
-    RememberedSet *rs = gc_remembered_set;
-    while (rs) { gc_mark_object(rs->obj); rs = rs->next; }
-
-    process_grey_stack();
-
-    /* Sweep only generation 0 (nursery) objects */
-    GCObject **p = &gc_objects;
-    while (*p) {
-        if ((*p)->generation == 1) {
-            (*p)->marked = 0;
-            p = &((*p)->next);
-            continue;
-        }
-        if (!(*p)->marked) {
-            GCObject *unmarked = *p; *p = unmarked->next;
-            if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
-            else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
-            else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
-            else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close(((SQLiteHandle*)unmarked)->db); }
-            else if (unmarked->type == OBJ_INSTANCE) { }
-            else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
-            else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
-            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
-            else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
-            else if (unmarked->type == OBJ_CLOSURE) {
-                Closure *c = (Closure*)unmarked;
-                if (c->captured_names) free(c->captured_names);
-                if (c->captured_values) free(c->captured_values);
-            }
-            gc_allocated -= unmarked->sz;
-            if (unmarked->is_block_allocated) { ((GCBlock*)unmarked->block_ptr)->live_count--; } else { free(unmarked); }
-        } else {
-            /* Survived minor collection: promote to generation 1 */
-            (*p)->generation = 1;
-            (*p)->marked = 0;
-            p = &((*p)->next);
-        }
-    }
-
-    /* Clear remembered set after minor collection (old->young refs are now old->old) */
-    while (gc_remembered_set) {
-        RememberedSet *next = gc_remembered_set->next;
-        gc_remembered_set->obj->in_remembered_set = 0;
-        free(gc_remembered_set);
-        gc_remembered_set = next;
-    }
-
-    gc_reclaim_empty_blocks();
-    gc_allocated_at_last_gc = gc_allocated;
-    pthread_mutex_unlock(&gc_mutex);
+    gc_full_collect();
 }
 
 #if 0
@@ -369,11 +263,20 @@ void* gc_alloc(size_t sz, ObjType type) {
             gc_threshold = 128 * 1024;
         }
     }
-    size_t allocated_since_gc = gc_allocated - gc_allocated_at_last_gc;
-    if (gc_allocated > gc_threshold) gc_full_collect();
-    else if (allocated_since_gc > gc_threshold / 4) gc_minor_collect();
+    size_t allocated_since_gc = (gc_allocated >= gc_allocated_at_last_gc) ? (gc_allocated - gc_allocated_at_last_gc) : 0;
+    static int gc_nogc = -1, gc_forcefull = -1;
+    if (gc_nogc < 0) {
+        gc_nogc = (getenv("GLOW_NOGC") != NULL) ? 1 : 0;
+        gc_forcefull = (getenv("GLOW_FORCEFULL") != NULL) ? 1 : 0;
+    }
+    if (!gc_nogc) {
+        if (gc_forcefull) gc_full_collect();
+        else if (gc_allocated > gc_threshold) gc_full_collect();
+        else if (allocated_since_gc > gc_threshold / 2) gc_full_collect();
+    }
     
-    pthread_mutex_lock(&gc_mutex);
+    int single_threaded = (active_stack_count <= 1);
+    if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     
     sz = (sz + 7) & ~7;
     GCObject *obj = NULL;
@@ -398,7 +301,7 @@ void* gc_alloc(size_t sz, ObjType type) {
     obj->generation = 0;
     obj->is_stack_allocated = 0;
     obj->type = type; obj->sz = sz; obj->next = gc_objects; gc_objects = obj; gc_allocated += sz;
-    pthread_mutex_unlock(&gc_mutex);
+    if (!single_threaded) pthread_mutex_unlock(&gc_mutex);
     return obj;
 }
 
@@ -421,6 +324,7 @@ void* gc_alloc_stack(size_t sz, ObjType type) {
 }
 
 void gc_free_stack_arena_range(size_t old_used, size_t new_used) {
+    if (getenv("GLOW_NOARENAFREE")) return; /* debug: disable stack-arena free */
     if (!stack_arena) return;
     char *ptr = stack_arena + old_used;
     char *end = stack_arena + new_used;
