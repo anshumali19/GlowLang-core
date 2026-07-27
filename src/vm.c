@@ -602,7 +602,7 @@ void print_bytecode(Bytecode *bc) {
  * directly through run_bytecode (single frame) so the clean depth guard fires. */
 static Value vm_self_call_jit_or_recurse(Value (*f)(Value *, int *), Bytecode *body,
                                            int callee_base, int callee_local, int *deopt_pc) {
-       if (call_depth < 400 && !force_interpreter_self_call) {
+       if (call_depth < 2000 && !force_interpreter_self_call) {
           return vm_call_jit_direct(f, callee_base, callee_local, body->owner->param_count, deopt_pc);
       }
       return run_bytecode(body, NULL, NULL, callee_base);
@@ -616,7 +616,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
          * once it passes the threshold we deopt to the interpreter, which then
          * drives recursion with its own clean depth guard (no 2-frames/level
          * machine-stack blowup). */
-        if (call_depth > 10 || force_interpreter_self_call) return MASK_NAN | ((uint64_t)15 << 48);
+        if (call_depth > 2000 || force_interpreter_self_call) return MASK_NAN | ((uint64_t)15 << 48);
         int new_base = vm_stack_top;
         int need = new_base + callee_local + 3;
         int saved_top = vm_stack_top;

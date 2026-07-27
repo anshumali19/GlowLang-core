@@ -216,13 +216,13 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     if (!fe || !fe->body || (!fe->body->baseline_jit_code && !fe->body->jit_code)) {
         return MASK_NAN | ((uint64_t)VAL_DEOPT << 48); // deopt
     }
-    if (call_depth >= 100) {
+    if (call_depth >= 2000) {
         if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
         if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 10, deopt\n", call_depth);
+            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
         return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
@@ -268,13 +268,13 @@ Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     if (fe && fe->body) {
         /* Deep recursion: return DEOPT sentinel so caller (JIT or C) falls back to interpreter. */
-        if (call_depth >= 100) {
+        if (call_depth >= 2000) {
         if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
             if (glow_jit_debug) {
-                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 100, deopt\n", call_depth);
+                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 2000, deopt\n", call_depth);
                 fflush(stderr);
             }
             return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
