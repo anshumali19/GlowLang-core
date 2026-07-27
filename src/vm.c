@@ -21,6 +21,36 @@
 THREAD_LOCAL Bytecode *g_dbg_bc = NULL;
 THREAD_LOCAL Instruction *g_dbg_pc = NULL;
 
+/* Cached debug environment flags – checked once at startup */
+static int glow_dbg_flags_init = 0;
+int glow_jit_debug = 0;
+int glow_nojitexec = 0;
+int glow_nobaseexec = 0;
+static int glow_entrydbg = 0;
+static int glow_topprobe = 0;
+int glow_jitdbg = 0;
+static int glow_no_baseline = 0;
+static int glow_optgate = 0;
+int glow_calldbg = 0;
+int glow_noarenafree = 0;
+static const char *glow_base_only = NULL;
+
+static void glow_init_debug_flags(void) {
+    if (glow_dbg_flags_init) return;
+    glow_dbg_flags_init = 1;
+    glow_jit_debug = (getenv("GLOW_JIT_DEBUG") != NULL);
+    glow_nojitexec = (getenv("GLOW_NOJITEXEC") != NULL);
+    glow_nobaseexec = (getenv("GLOW_NOBASEEXEC") != NULL);
+    glow_entrydbg = (getenv("GLOW_ENTRYDBG") != NULL);
+    glow_topprobe = (getenv("GLOW_TOPPROBE") != NULL);
+    glow_jitdbg = (getenv("GLOW_JITDBG") != NULL);
+    glow_no_baseline = (getenv("GLOW_NO_BASELINE") != NULL);
+    glow_optgate = (getenv("GLOW_OPTGATE") != NULL);
+    glow_calldbg = (getenv("GLOW_CALLDBG") != NULL);
+    glow_noarenafree = (getenv("GLOW_NOARENAFREE") != NULL);
+    glow_base_only = getenv("GLOW_BASE_ONLY");
+}
+
 #ifdef _WIN32
 #include <windows.h>
 extern const char *op_names[];
@@ -341,7 +371,7 @@ Value jit_int_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
 /* Generic value comparison helpers for JIT (non-specialized paths). */
-Value jit_val_lt(Value a, Value b)  { if (getenv("GLOW_JIT_DEBUG")) { fprintf(stderr, "[DBG] jit_val_lt: a=%llx b=%llx cmp=%d\n", (unsigned long long)a, (unsigned long long)b, value_cmp(a, b)); fflush(stderr); } return value_bool(value_cmp(a, b) <  0); }
+Value jit_val_lt(Value a, Value b)  { if (glow_jit_debug) { fprintf(stderr, "[DBG] jit_val_lt: a=%llx b=%llx cmp=%d\n", (unsigned long long)a, (unsigned long long)b, value_cmp(a, b)); fflush(stderr); } return value_bool(value_cmp(a, b) <  0); }
 Value jit_val_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
 Value jit_val_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
 Value jit_val_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
@@ -356,6 +386,7 @@ int active_stack_count = 0;
 
 void print_error_trace(Value exception);
 void vm_stack_init(void) {
+    glow_init_debug_flags();
     gc_threshold = 128 * 1024 * 1024;
     const char *vs = getenv("GLOW_VM_STACK");
     vm_stack_size = vs ? atoi(vs) : (1024 * 1024); // 1M slots = 8MB (grows via realloc as needed)
@@ -579,7 +610,7 @@ static Value vm_self_call_jit_or_recurse(Value (*f)(Value *, int *), Bytecode *b
 
 Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
                                        int callee_local, int param_count, int *deopt_pc) {
-        if (getenv("GLOW_NOJITEXEC")) return MASK_NAN | ((uint64_t)15 << 48);
+        if (glow_nojitexec) return MASK_NAN | ((uint64_t)15 << 48);
         /* Deep recursion: avoid JIT to prevent C stack overflow. call_depth is
          * NOT reset here so it accumulates across JIT self-/mutual-recursion;
          * once it passes the threshold we deopt to the interpreter, which then
@@ -605,22 +636,22 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
         for (int _i = 0; _i < copy_count; _i++)
             vm_stack[new_base + _i] = temp_args[_i];
         
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] vm_call_jit_direct: &call_depth=%p, call_depth=%d, callee_base=%d, new_base=%d, callee_local=%d, f=%p\n", (void*)&call_depth, call_depth, callee_base, new_base, callee_local, (void*)f);
             fflush(stderr);
         }
         
         Value res = f(&vm_stack[new_base], deopt_pc);
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] vm_call_jit_direct: JIT returned, res=%llx\n", (unsigned long long)res);
             fflush(stderr);
         }
         vm_stack_top = saved_top;
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] vm_call_jit_direct: after restore\n");
             fflush(stderr);
         }
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] vm_call_jit_direct: returning res=%llx\n", (unsigned long long)res);
             fflush(stderr);
         }
@@ -631,7 +662,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
      #ifdef _WIN32
      glow_ensure_veh();
      #endif
-     if (getenv("GLOW_ENTRYDBG")) { fprintf(stderr, "[ENTER] owner=%s start_pc=%p count=%d jf=%d local_count=%d base_reg=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", (void*)start_pc, bc->count, bc->jit_failed, bc->local_count, base_reg); fflush(stderr); }
+     if (glow_entrydbg) { fprintf(stderr, "[ENTER] owner=%s start_pc=%p count=%d jf=%d local_count=%d base_reg=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", (void*)start_pc, bc->count, bc->jit_failed, bc->local_count, base_reg); fflush(stderr); }
      if (++call_depth > 65500) {
         pending_exception = value_string_copy("Maximum recursion depth exceeded");
         has_exception = 1;
@@ -651,7 +682,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
         abort();
     }
 
-    if (getenv("GLOW_TOPPROBE")) {
+    if (glow_topprobe) {
         if (vm_stack_top < 0 || vm_stack_top > vm_stack_size) {
             fprintf(stderr, "[TOPCORRUPT] vm_stack_top=%d size=%d owner=%s base_reg=%d lc=%d\n",
                     vm_stack_top, vm_stack_size, (bc->owner&&bc->owner->name)?bc->owner->name:"?", base_reg, bc->local_count);
@@ -723,8 +754,8 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
     if (!start_pc && bc->count > 0) {
         bc->exec_count++;
         if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code && !bc->jit_failed) {
-            if (getenv("GLOW_NO_BASELINE")) bc->jit_failed = 1;
-            const char *only = getenv("GLOW_BASE_ONLY");
+            if (glow_no_baseline) bc->jit_failed = 1;
+            const char *only = glow_base_only;
             if (only) { fprintf(stderr, "[GATE] owner=%s only=%s jit_failed_before=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", only, bc->jit_failed); fflush(stderr); }
             if (only && bc->owner && bc->owner->name && strcmp(only, bc->owner->name) != 0) bc->jit_failed = 1;
             if (bc->exec_count > 5) {
@@ -736,7 +767,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
                                 (call_stack[_s].fe && call_stack[_s].fe->name) ? call_stack[_s].fe->name : "?");
                     abort();
                 }
-                if (getenv("GLOW_OPTGATE")) jit_compile(bc); else jit_compile_baseline(bc);
+                if (glow_optgate) jit_compile(bc); else jit_compile_baseline(bc);
             }
         }
         if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code && !bc->jit_failed) {
@@ -746,7 +777,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
         }
     }
 
-    if (!start_pc && bc->baseline_jit_code && !bc->jit_code && !getenv("GLOW_NOBASEEXEC") && !getenv("GLOW_NOJITEXEC")) {
+    if (!start_pc && bc->baseline_jit_code && !bc->jit_code && !glow_nobaseexec && !glow_nojitexec) {
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         Value res = ((JITFunc)bc->baseline_jit_code)(&vm_stack[base_reg], &deopt_pc);
@@ -778,7 +809,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
             }
         }
     }
-    if (!start_pc && bc->jit_code && !getenv("GLOW_NOJITEXEC")) {
+    if (!start_pc && bc->jit_code && !glow_nojitexec) {
         typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
@@ -1252,7 +1283,7 @@ Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
                  typedef Value (*JITFunc)(Value *R, int *pc_idx);
                  JITFunc f = (JITFunc)jit;
                  int deopt_pc = 0;
-                 if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s SPEC base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+                 if (glow_jitdbg) { fprintf(stderr, "[JITRUN] owner=%s SPEC base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
 Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
@@ -1289,7 +1320,7 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                 } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+                    if (glow_jitdbg) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
                     Value res = vm_call_jit_direct((JITFunc)fe->body->baseline_jit_code, base_reg + pc->r2, fe->body->local_count, fe->param_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
@@ -1432,7 +1463,7 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                 } else if (fe->body && fe->body->baseline_jit_code && !fe->body->jit_code) {
                     typedef Value (*JITFunc)(Value *R, int *pc_idx);
                     int deopt_pc = 0;
-                    if (getenv("GLOW_JITDBG")) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
+                    if (glow_jitdbg) { fprintf(stderr, "[JITRUN] owner=%s BASELINE base=%d\n", (fe&&fe->name)?fe->name:"?", base_reg + pc->r2); fflush(stderr); }
                     Value res = vm_self_call_jit_or_recurse((JITFunc)fe->body->baseline_jit_code, fe->body, base_reg + pc->r2, fe->body->local_count, &deopt_pc);
                     if (__builtin_expect(IS_DEOPT(res), 0)) {
                         res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, base_reg + pc->r2);
