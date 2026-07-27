@@ -738,6 +738,13 @@ extern pthread_mutex_t glow_gil;
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;
 extern THREAD_LOCAL int force_interpreter_self_call;
+/* Cached debug environment flags (defined in vm.c, checked once at startup) */
+extern int glow_jit_debug;
+extern int glow_nojitexec;
+extern int glow_nobaseexec;
+extern int glow_jitdbg;
+extern int glow_calldbg;
+extern int glow_noarenafree;
 /* ================================================================
  *  COMPILER ROUTINES (compiler.c)
  * ================================================================ */
