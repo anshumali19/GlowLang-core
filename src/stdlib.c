@@ -209,20 +209,20 @@ return value_none();
  * the full C shim jit_self_call_with_depth. This ensures proper C stack
  * unwinding on deopt. */
 Value jit_self_call_direct(FuncEntry *fe, Value *args) {
-    if (getenv("GLOW_JIT_DEBUG")) {
+    if (glow_jit_debug) {
         fprintf(stderr, "[DBG] jit_self_call_direct: fe=%p, &call_depth=%p, call_depth=%d, fe->body->baseline_jit_code=%p\n", (void*)fe, (void*)&call_depth, call_depth, (void*)(fe ? fe->body->baseline_jit_code : NULL));
         fflush(stderr);
     }
     if (!fe || !fe->body || (!fe->body->baseline_jit_code && !fe->body->jit_code)) {
         return MASK_NAN | ((uint64_t)VAL_DEOPT << 48); // deopt
     }
-    if (call_depth >= 100) {
-        if (getenv("GLOW_JIT_DEBUG")) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+    if (call_depth >= 2000) {
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
-        if (getenv("GLOW_JIT_DEBUG")) {
-            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 10, deopt\n", call_depth);
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
         return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
@@ -251,7 +251,7 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     call_depth++;
     /* Use optimized JIT code if available, otherwise baseline JIT code. */
     void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
-    if (getenv("GLOW_JIT_DEBUG")) {
+    if (glow_jit_debug) {
         fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d, calling JIT at %p\n", call_depth, jit_code);
         fflush(stderr);
     }
@@ -268,13 +268,13 @@ Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     if (fe && fe->body) {
         /* Deep recursion: return DEOPT sentinel so caller (JIT or C) falls back to interpreter. */
-        if (call_depth >= 100) {
-        if (getenv("GLOW_JIT_DEBUG")) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 100, deopt\n", call_depth);
+        if (call_depth >= 2000) {
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
-            if (getenv("GLOW_JIT_DEBUG")) {
-                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 100, deopt\n", call_depth);
+            if (glow_jit_debug) {
+                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 2000, deopt\n", call_depth);
                 fflush(stderr);
             }
             return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
@@ -305,20 +305,20 @@ Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
         call_depth++;
         /* Use optimized JIT code if available, otherwise baseline JIT code. */
         void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d, calling JIT at %p with R=%p, new_base=%d, local_count=%d, copy_count=%d, fe->body->jit_code=%p, fe->body->baseline_jit_code=%p\n", 
                     call_depth, jit_code, (void*)&vm_stack[new_base], new_base, fe->body->local_count, copy_count, (void*)fe->body->jit_code, (void*)fe->body->baseline_jit_code);
             fflush(stderr);
         }
         res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
-        if (getenv("GLOW_JIT_DEBUG")) {
+        if (glow_jit_debug) {
             fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned, deopt_pc=%d, res=%llx\n", deopt_pc, (unsigned long long)res);
             fflush(stderr);
         }
         call_depth--;
         call_stack_pop();
         if (IS_DEOPT(res)) {
-            if (getenv("GLOW_JIT_DEBUG")) {
+            if (glow_jit_debug) {
                 fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned DEOPT pc=%d\n", deopt_pc);
                 fflush(stderr);
             }
@@ -352,7 +352,7 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
         if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(callee)));
         if (ot == OBJ_BOUND_METHOD) {
              BoundMethod *bm = AS_BOUND_METHOD(callee);
-             if (getenv("GLOW_CALLDBG")) { fprintf(stderr, "[CALLVAL] bm=%p bm->method=%p bm->native=%p argc=%d args=%p callee=%lx ot=%d\n", (void*)bm, (void*)bm->method, (void*)bm->native_method, argc, (void*)args, (unsigned long)callee, (int)ot); fflush(stderr); }
+             if (glow_calldbg) { fprintf(stderr, "[CALLVAL] bm=%p bm->method=%p bm->native=%p argc=%d args=%p callee=%lx ot=%d\n", (void*)bm, (void*)bm->method, (void*)bm->native_method, argc, (void*)args, (unsigned long)callee, (int)ot); fflush(stderr); }
              if (((uintptr_t)bm & 7) || (uintptr_t)bm < 0x1000 || (uintptr_t)bm > 0x7fffffffffffUL) { fprintf(stderr, "[CALLVAL-BAD] callee=%lx bm=%p\n", (unsigned long)callee, (void*)bm); fflush(stderr); }
              if (bm->method == NULL || ((uintptr_t)bm->method & 7)) { fprintf(stderr, "[CALLVAL-BADMETHOD] callee=%lx bm=%p bm->method=%p\n", (unsigned long)callee, (void*)bm, (void*)bm->method); fflush(stderr); }
             if (bm->native_method) {
