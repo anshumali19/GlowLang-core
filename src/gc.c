@@ -324,7 +324,7 @@ void* gc_alloc_stack(size_t sz, ObjType type) {
 }
 
 void gc_free_stack_arena_range(size_t old_used, size_t new_used) {
-    if (getenv("GLOW_NOARENAFREE")) return; /* debug: disable stack-arena free */
+    if (glow_noarenafree) return; /* debug: disable stack-arena free */
     if (!stack_arena) return;
     char *ptr = stack_arena + old_used;
     char *end = stack_arena + new_used;
