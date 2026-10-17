@@ -5,9 +5,9 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
-  <img src="https://img.shields.io/badge/tests-104%2F104%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-117%2F117%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Sovereign-blue" alt="License">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WASM-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20x64%20%7C%20WASM-lightgrey" alt="Platform">
 </p>
 
 ---
@@ -17,19 +17,20 @@
 | Category | Capabilities |
 |----------|-------------|
 | **Natural Syntax** | `show`, `when`, `whenever`, `every`, `blueprint`, `action`, `can`, `use` |
-| **Runtime** | Register-based VM, JIT compiler, generational GC, optimizer |
-| **Concurrency** | `spawn` threads with GIL, reactive `whenever` patterns |
+| **Runtime** | Register-based VM, Microsoft x64 & SysV JIT, Generational GC (minor bump nursery + major mark-sweep), bytecode optimizer |
+| **Concurrency** | Multi-core `spawn` parallel execution (GIL abolished, thread-local isolates) |
 | **HTTP Server** | Built-in TCP server with `http.listen`, `http.accept`, `http.send` |
 | **Database** | Native SQLite with `sqlite.open`, `sqlite.exec`, `sqlite.query` |
-| **Tensors** | SIMD-accelerated (AVX2/SSE4.2) via `tensor.create`, `tensor.add`, `tensor.dot` |
+| **Tensors** | Hardware SIMD-accelerated (AVX2/FMA `_mm256_fmadd_pd`) via `tensor.create`, `tensor.zeros`, `tensor.ones`, `tensor.matmul` |
+| **Security** | Hardware MMU page guards (`PAGE_NOACCESS`), unsigned array bounds validation, OpenSSL SHA-256 & HMAC |
 | **AI/ML** | Neural net blueprints, matrix ops, activation functions, training loops |
 | **JSON** | Native `json.parse` and `json.stringify` |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir` |
-| **Package Manager** | `gdu (Glow Dependency Utility)` (Glow Dependency Utility) with semantic versioning, dependency resolution, SHA-256 checksums |
+| **Package Manager** | `gdu` (Glow Dependency Utility) with semantic versioning, dependency resolution, SHA-256 checksums |
 | **LSP** | Language Server Protocol with completion, hover, go-to-definition, diagnostics |
 | **Editor Support** | VSCode, Neovim, Sublime Text, Helix, JetBrains |
 | **Tooling** | Debugger, profiler, heap inspector, bytecode viewer |
-| **Testing** | 104-case test suite (all passing), 6 fuzz harnesses, ASan/TSan builds |
+| **Testing** | 117-case test suite (100% passing), fuzz harnesses, ASan/TSan builds |
 
 ## 🚀 Quick Start
 

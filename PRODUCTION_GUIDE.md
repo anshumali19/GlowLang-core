@@ -54,9 +54,11 @@ let net = SimpleNet()
 let prediction = net.predict(tensor.zeros(10))
 ```
 
-## 3. Deployment
-GlowLang is now "Mission Ready" with:
-- **Zero-Leak GC:** Minor and Full collection cycles.
-- **Stack-Safe Recursion:** Tail-Call Optimization (TCO).
-- **Fuzzer-Hardened Parser:** Resilient to malformed inputs.
-- **Async Event Loop:** Native support for high-concurrency workloads.
+## 3. Production Hardening & Reliability
+GlowLang is engineered with production-grade runtime guarantees:
+- **Generational GC:** 2 MB young generation nursery (Gen 0) triggering minor scavenge/promotion cycles, alongside an 8 MB tenured heap (Gen 1) swept via mark-and-sweep.
+- **Dual-ABI x86-64 Native JIT:** Full compliance with Microsoft x64 ABI (Windows) and System V AMD64 ABI (Linux/macOS), featuring monomorphic inline caching for integer/float arithmetic and 16-byte aligned recursive dispatch.
+- **Multi-Core Concurrency:** Native OS thread execution via `spawn` with isolated VM register stacks — the Global Interpreter Lock (GIL) has been abolished for true multi-core parallelization.
+- **Hardware MMU Memory Protection:** `glow_alloc_guarded` allocates memory flanked by hardware CPU MMU guard pages (`PAGE_NOACCESS` / `PROT_NONE`), trapping buffer overruns instantly at the hardware level.
+- **Cryptographic Security:** Standard OpenSSL 3.x HMAC-SHA256 and SHA-256 primitives (`crypto.hmac`, `crypto.sha256`) replacing insecure toy hashes.
+- **Stack-Safe Recursion:** Tail-Call Optimization (TCO) and bounded frame recursion checks.

@@ -1,5 +1,5 @@
-# Veda: GlowLang Local Cognition & Scaled Dot-Product Attention Package
-# Vectorized neural attention computation for sovereign AI inference
+# Veda: Scaled Dot-Product Attention Layer
+# Basic neural attention computation layer using tensor operations
 
 use "tensor_utils.glow"
 

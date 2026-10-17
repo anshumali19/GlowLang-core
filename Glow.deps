@@ -1,0 +1,7 @@
+# GlowLang Dependencies
+# Created: 2026-10-11
+# Format: package_name@version (optional_url)
+# Version constraints: ^1.0.0, ~1.0.0, >=1.0.0, latest
+
+transformer@1.0.0
+non_existent_dummy_pkg@latest

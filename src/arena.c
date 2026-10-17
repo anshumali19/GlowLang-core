@@ -88,3 +88,58 @@ void arena_free_all(void) {
     }
     large_allocations = NULL;
 }
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+void *glow_alloc_guarded(size_t size) {
+    if (size == 0) return NULL;
+    size_t page_sz = 4096;
+#ifndef _WIN32
+    long sc = sysconf(_SC_PAGESIZE);
+    if (sc > 0) page_sz = (size_t)sc;
+#endif
+    size_t payload_pages = (size + page_sz - 1) / page_sz;
+    size_t total_pages = payload_pages + 1; // +1 guard page
+    size_t total_size = total_pages * page_sz;
+
+#ifdef _WIN32
+    char *base = (char*)VirtualAlloc(NULL, total_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!base) return NULL;
+    DWORD old_protect;
+    VirtualProtect(base + payload_pages * page_sz, page_sz, PAGE_NOACCESS, &old_protect);
+#else
+    char *base = (char*)mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (base == MAP_FAILED) return NULL;
+    mprotect(base + payload_pages * page_sz, page_sz, PROT_NONE);
+#endif
+
+    // Place payload right against the guard page so any sequential overrun immediately triggers an MMU fault
+    char *ret = base + (payload_pages * page_sz) - size;
+    return (void*)ret;
+}
+
+void glow_free_guarded(void *ptr, size_t size) {
+    if (!ptr || size == 0) return;
+    size_t page_sz = 4096;
+#ifndef _WIN32
+    long sc = sysconf(_SC_PAGESIZE);
+    if (sc > 0) page_sz = (size_t)sc;
+#endif
+    size_t payload_pages = (size + page_sz - 1) / page_sz;
+    size_t total_size = (payload_pages + 1) * page_sz;
+    char *base = (char*)ptr + size - (payload_pages * page_sz);
+
+#ifdef _WIN32
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    munmap(base, total_size);
+#endif
+}
