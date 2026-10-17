@@ -1022,6 +1022,33 @@ void list_push(List *l, Value v) {
     if (l->size >= l->capacity) { l->capacity = (l->capacity == 0) ? 4 : l->capacity * 2; l->items = realloc(l->items, sizeof(Value)*l->capacity); } l->items[l->size++] = v;
 }
 
+Value list_pop(List *l) {
+    if (!l || l->size <= 0) return value_none();
+    return l->items[--l->size];
+}
+
+Value native_list_append(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_LIST) return value_none();
+    list_push(AS_LIST(args[0]), args[1]);
+    return args[0];
+}
+
+Value native_list_pop(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return value_none();
+    return list_pop(AS_LIST(args[0]));
+}
+
+Value native_list_len(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return value_int(0);
+    return value_int(AS_LIST(args[0])->size);
+}
+
+Value native_val_type(int argc, Value *args) {
+    if (argc < 1) return value_string_copy("none");
+    Value arg = args[0];
+    return native_type(1, &arg);
+}
+
 #define TENSOR_POOL_MAX_BINS 32
 typedef struct FreeBlock {
     struct FreeBlock *next;
@@ -1296,7 +1323,7 @@ void glow_add_error(int line, const char *msg) {
     glow_errors[glow_error_count].line = line; glow_errors[glow_error_count].message = strdup(msg); glow_error_count++;
 }
 
-static Value native_len(int argc, Value *args) { 
+Value native_len(int argc, Value *args) { 
     if (argc < 1) return value_int(0); 
     Value v = args[0]; 
     if (GET_TYPE(v) == VAL_STRING) return value_int(strlen(AS_STRING(v))); 
@@ -1325,6 +1352,8 @@ static Value os_system(int argc, Value *args) {
 }
 #include <math.h>
 #include <openssl/sha.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 static Value math_sin(int argc, Value *args) { return argc > 0 ? value_from_double(sin(val_to_double(args[0]))) : value_none(); }
 static Value math_cos(int argc, Value *args) { return argc > 0 ? value_from_double(cos(val_to_double(args[0]))) : value_none(); }
@@ -1352,6 +1381,27 @@ static Value crypto_sha256(int argc, Value *args) {
         out[i * 2 + 1] = hex_chars[hash[i] & 0x0F];
     }
     out[SHA256_DIGEST_LENGTH * 2] = '\0';
+    return value_string_copy(out);
+}
+
+static Value crypto_hmac_sha256(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_none();
+    const char *key = AS_STRING(args[0]);
+    const char *data = AS_STRING(args[1]);
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+
+    if (!HMAC(EVP_sha256(), key, (int)strlen(key), (const unsigned char*)data, strlen(data), md, &md_len)) {
+        return value_none();
+    }
+
+    static const char hex_chars[] = "0123456789abcdef";
+    char out[EVP_MAX_MD_SIZE * 2 + 1];
+    for (unsigned int i = 0; i < md_len; i++) {
+        out[i * 2]     = hex_chars[md[i] >> 4];
+        out[i * 2 + 1] = hex_chars[md[i] & 0x0F];
+    }
+    out[md_len * 2] = '\0';
     return value_string_copy(out);
 }
 
@@ -2593,6 +2643,18 @@ static Value native_tensor_zeros(int argc, Value *args) {
     return value_packed(pa);
 }
 
+static Value native_tensor_ones(int argc, Value *args) {
+    if (argc < 1 || (GET_TYPE(args[0]) != VAL_INT && GET_TYPE(args[0]) != VAL_FLOAT)) return value_none();
+    int sz = (int)val_to_double(args[0]);
+    if (sz < 0 || sz > 10000000) return value_none();
+    PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
+    if (pa->data && sz > 0) {
+        double *data = (double*)pa->data;
+        for (int i = 0; i < sz; i++) data[i] = 1.0;
+    }
+    return value_packed(pa);
+}
+
 static Value native_tensor_get(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
@@ -2754,7 +2816,7 @@ static Value native_tensor_transpose(int argc, Value *args) {
     return value_packed(res);
 }
 
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_WIN32)
+#if defined(__x86_64__) || defined(_M_X64)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
 #endif
@@ -2833,29 +2895,40 @@ static Value native_tensor_matmul(int argc, Value *args) {
         if (!res || !res->data) return value_none();
         if (pa->type == PACKED_FLOAT64) {
             double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-        
-        int num_threads = 4;
-        if (rA < num_threads) num_threads = rA;
-        if (num_threads < 1) num_threads = 1;
-        
-        pthread_t threads[8];
-        MatmulThreadData tdata[8];
-        int rows_per_thread = rA / num_threads;
-        
-        for (int t = 0; t < num_threads; t++) {
-            tdata[t].start_row = t * rows_per_thread;
-            tdata[t].end_row = (t == num_threads - 1) ? rA : (t + 1) * rows_per_thread;
-            tdata[t].da = da;
-            tdata[t].db = db;
-            tdata[t].dr = dr;
-            tdata[t].cA = cA;
-            tdata[t].cB = cB;
-            pthread_create(&threads[t], NULL, matmul_worker, &tdata[t]);
-        }
-        
-        for (int t = 0; t < num_threads; t++) {
-            pthread_join(threads[t], NULL);
-        }
+            if (rA < 32 || cB < 32 || rA * cB < 4096) {
+                MatmulThreadData tdata;
+                tdata.start_row = 0;
+                tdata.end_row = rA;
+                tdata.da = da;
+                tdata.db = db;
+                tdata.dr = dr;
+                tdata.cA = cA;
+                tdata.cB = cB;
+                matmul_worker(&tdata);
+            } else {
+                int num_threads = 4;
+                if (rA < num_threads) num_threads = rA;
+                if (num_threads < 1) num_threads = 1;
+                
+                pthread_t threads[8];
+                MatmulThreadData tdata[8];
+                int rows_per_thread = rA / num_threads;
+                
+                for (int t = 0; t < num_threads; t++) {
+                    tdata[t].start_row = t * rows_per_thread;
+                    tdata[t].end_row = (t == num_threads - 1) ? rA : (t + 1) * rows_per_thread;
+                    tdata[t].da = da;
+                    tdata[t].db = db;
+                    tdata[t].dr = dr;
+                    tdata[t].cA = cA;
+                    tdata[t].cB = cB;
+                    pthread_create(&threads[t], NULL, matmul_worker, &tdata[t]);
+                }
+                
+                for (int t = 0; t < num_threads; t++) {
+                    pthread_join(threads[t], NULL);
+                }
+            }
         } // end of if (pa->type == PACKED_FLOAT64)
     } // end of else
     
@@ -3191,7 +3264,7 @@ static Value native_string_builder_build(int argc, Value *args) {
     return value_string_copy(sb->buffer);
 }
 
-static Value native_type(int argc, Value *args) {
+Value native_type(int argc, Value *args) {
     if (argc < 1) return value_none();
     uint64_t t = GET_TYPE(args[0]);
     if (t == VAL_INT) return value_string_copy("int");
@@ -3200,6 +3273,7 @@ static Value native_type(int argc, Value *args) {
     if (t == VAL_STRING) return value_string_copy("string");
     if (t == VAL_LIST) return value_string_copy("list");
     if (t == VAL_DICT) return value_string_copy("dict");
+    if (t == VAL_NONE) return value_string_copy("none");
     if (t == VAL_OBJECT) {
         if (!(args[0] & MASK_PAYLOAD)) return value_string_copy("object");
         ObjType ot = GET_OBJ_TYPE(args[0]);
@@ -3207,9 +3281,12 @@ static Value native_type(int argc, Value *args) {
         if (ot == OBJ_INSTANCE) return value_string_copy("instance");
         if (ot == OBJ_BOUND_METHOD) return value_string_copy("method");
         if (ot == OBJ_NATIVE_FUNC) return value_string_copy("native_func");
+        if (ot == OBJ_PACKED_ARRAY) return value_string_copy("tensor");
+        if (ot == OBJ_BIGINT) return value_string_copy("bigint");
+        if (ot == OBJ_TRAIT) return value_string_copy("trait");
         return value_string_copy("object");
     }
-    return value_string_copy("unknown");
+    return value_string_copy("none");
 }
 
 static Value native_dump_stack(int argc, Value *args) {
@@ -3239,7 +3316,20 @@ static Value native_dump_stack(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_assert(int argc, Value *args) {
+    if (argc < 1 || !value_truthy(args[0])) {
+        const char *msg = "Assertion failed";
+        if (argc > 1 && GET_TYPE(args[1]) == VAL_STRING) {
+            msg = AS_STRING(args[1]);
+        }
+        fprintf(stderr, "[ASSERTION FAILED] %s\n", msg);
+        exit(1);
+    }
+    return value_bool(1);
+}
+
 void std_init(void) {
+    var_set("assert", native_func_new("assert", native_assert));
     var_set("len", native_func_new("len", native_len));
     var_set("type", native_func_new("type", native_type));
     var_set("range", native_func_new("range", native_range));
@@ -3282,12 +3372,15 @@ void std_init(void) {
 
     Dict *crypto = dict_new(4);
     dict_set(crypto, "sha256", native_func_new("sha256", crypto_sha256));
+    dict_set(crypto, "hmac", native_func_new("hmac", crypto_hmac_sha256));
+    dict_set(crypto, "hmac_sha256", native_func_new("hmac_sha256", crypto_hmac_sha256));
     dict_set(crypto, "blake3", native_func_new("blake3", native_crypto_blake_fast));
     var_set("crypto", value_dict(crypto));
 
     Dict *tensor = dict_new(4);
     dict_set(tensor, "create", native_func_new("create", native_tensor_create));
     dict_set(tensor, "zeros", native_func_new("zeros", native_tensor_zeros));
+    dict_set(tensor, "ones", native_func_new("ones", native_tensor_ones));
     dict_set(tensor, "shape", native_func_new("shape", native_tensor_shape));
     dict_set(tensor, "reshape", native_func_new("reshape", native_tensor_reshape));
     dict_set(tensor, "get", native_func_new("get", native_tensor_get));

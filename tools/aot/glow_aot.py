@@ -1,60 +1,44 @@
 #!/usr/bin/env python3
+"""
+GlowLang Standalone Binary Packager
+Wraps the native in-process binary packaging engine (`glowlang package`).
+Produces self-contained standalone executables embedding runtime and bytecode.
+"""
 import sys
 import os
 import subprocess
 
-def compile_aot(script_path, output_bin):
+def find_glowlang_bin():
+    # Search common binary locations
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    candidates = [
+        os.path.join(base, "bin", "glowlang.exe"),
+        os.path.join(base, "bin", "glowlang"),
+        os.path.join(base, "glowlang.exe"),
+        os.path.join(base, "glowlang"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return "glowlang"
+
+def package_script(script_path, output_bin):
     if not os.path.exists(script_path):
-        print(f"Error: Script {script_path} not found.")
+        print(f"Error: Script '{script_path}' not found.")
         sys.exit(1)
 
-    with open(script_path, "r") as f:
-        code = f.read()
-
-    # Escape the code for a C string literal
-    code_escaped = code.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-
-    c_stub = f"""
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-extern void var_table_init(void);
-extern void func_table_init(void);
-extern void intern_table_init(void);
-extern void glow_clear_errors(void);
-// A minimal AOT stub that uses the existing flex scanner and bison parser 
-// built into the VM to evaluate the embedded payload directly.
-// In a full AOT phase, this would serialize the exact bytecodes.
-
-int main(int argc, char **argv) {{
-    // AOT Package Execution
-    char *payload = "{code_escaped}";
-    
-    // We execute the payload via a system call to the bundled VM for the AOT V1
-    // (A true LLVM/Native AOT compiles directly to object code, which is planned for V2)
-    FILE *f = fopen("/tmp/aot_payload.glow", "w");
-    if(f) {{
-        fprintf(f, "%s", payload);
-        fclose(f);
-    }}
-    
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "./bin/glowlang /tmp/aot_payload.glow");
-    return system(cmd);
-}}
-"""
-    stub_path = "/tmp/aot_stub.c"
-    with open(stub_path, "w") as f:
-        f.write(c_stub)
-
-    # Compile the stub
-    print(f"Compiling {script_path} to standalone binary {output_bin}...")
-    subprocess.run(["gcc", stub_path, "-o", output_bin, "-O2"])
-    print("AOT Compilation successful.")
+    glowlang = find_glowlang_bin()
+    cmd = [glowlang, "package", os.path.abspath(script_path), "-o", os.path.abspath(output_bin)]
+    print(f"Packaging {script_path} into self-contained binary {output_bin}...")
+    res = subprocess.run(cmd)
+    if res.returncode == 0:
+        print(f"Standalone package successfully created: {output_bin}")
+    else:
+        print(f"Packaging failed with exit code {res.returncode}")
+        sys.exit(res.returncode)
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python3 glow_aot.py <script.glow> <output_binary>")
         sys.exit(1)
-    compile_aot(sys.argv[1], sys.argv[2])
+    package_script(sys.argv[1], sys.argv[2])

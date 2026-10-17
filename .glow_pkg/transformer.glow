@@ -1,0 +1,564 @@
+# ============================================================================
+# GlowLang Transformer Library  (lib/transformer.glow)
+# ============================================================================
+# A pure-GlowLang implementation of the Transformer architecture from
+# "Attention Is All You Need" (Vaswani et al., 2017).
+#
+# Built entirely on GlowLang's native tensor.* SIMD primitives:
+#   tensor.zeros, tensor.create, tensor.add, tensor.mul,
+#   tensor.dot, tensor.matmul, tensor.transpose, math.sqrt
+#
+# No Python wrappers. No FFI. Pure GlowLang.
+# ============================================================================
+
+# ---------- Math Helpers ----------------------------------------------------
+
+# Taylor-series approximation of exp(x), 20-term expansion.
+# Sufficient precision for softmax / activation use.
+func glow_exp(x):
+    let result = 1.0
+    let term = 1.0
+    let i = 1
+    while i < 20:
+        term = term * x / i
+        result = result + term
+        i = i + 1
+    end
+    return result
+end
+
+# ---------- Tensor Utility Functions ----------------------------------------
+
+# Element-wise scale:  out[i] = t[i] * scalar
+func tensor_scale(t, n, s):
+    let out = tensor.zeros(n)
+    let i = 0
+    while i < n:
+        out[i] = t[i] * s
+        i = i + 1
+    end
+    return out
+end
+
+# Sum all elements of a tensor
+func tensor_sum(t, n):
+    let s = 0.0
+    let i = 0
+    while i < n:
+        s = s + t[i]
+        i = i + 1
+    end
+    return s
+end
+
+# Element-wise addition (wraps tensor.add for clarity)
+func tensor_add(a, b, n):
+    return tensor.add(a, b)
+end
+
+# Element-wise subtraction:  out[i] = a[i] - b[i]
+func tensor_sub(a, b, n):
+    let out = tensor.zeros(n)
+    let i = 0
+    while i < n:
+        out[i] = a[i] - b[i]
+        i = i + 1
+    end
+    return out
+end
+
+# Element-wise multiply (wraps tensor.mul)
+func tensor_elemmul(a, b, n):
+    return tensor.mul(a, b)
+end
+
+# Max of a flat tensor
+func tensor_max(t, n):
+    let mx = t[0]
+    let i = 1
+    while i < n:
+        if t[i] > mx:
+            mx = t[i]
+        end
+        i = i + 1
+    end
+    return mx
+end
+
+# Fill tensor with a constant value
+func tensor_fill(n, val):
+    let t = tensor.zeros(n)
+    let i = 0
+    while i < n:
+        t[i] = val
+        i = i + 1
+    end
+    return t
+end
+
+# Polyfill tensor.ones(n) on native tensor dictionary
+func _tf_tensor_ones(n):
+    return tensor_fill(n, 1.0)
+end
+tensor["ones"] = _tf_tensor_ones
+
+
+# Copy a sub-region from src[offset .. offset+count-1] into a new tensor
+func tensor_slice(src, offset, count):
+    let out = tensor.zeros(count)
+    let i = 0
+    while i < count:
+        out[i] = src[offset + i]
+        i = i + 1
+    end
+    return out
+end
+
+# Write a small tensor into a larger tensor at an offset
+func tensor_write(dst, offset, src, count):
+    let i = 0
+    while i < count:
+        dst[offset + i] = src[i]
+        i = i + 1
+    end
+end
+
+# ---------- Activation Functions --------------------------------------------
+
+# ReLU:  max(0, x)
+func relu(t, n):
+    let out = tensor.zeros(n)
+    let i = 0
+    while i < n:
+        if t[i] > 0.0:
+            out[i] = t[i]
+        end
+        i = i + 1
+    end
+    return out
+end
+
+# Softmax over a flat tensor of length n (numerically stable)
+func softmax(t, n):
+    let mx = tensor_max(t, n)
+    let out = tensor.zeros(n)
+    let s = 0.0
+    let i = 0
+    while i < n:
+        out[i] = glow_exp(t[i] - mx)
+        s = s + out[i]
+        i = i + 1
+    end
+    i = 0
+    while i < n:
+        out[i] = out[i] / s
+        i = i + 1
+    end
+    return out
+end
+
+# ---------- Layer Norm (Simplified) -----------------------------------------
+# Normalizes a vector of length d_model to zero mean, unit variance,
+# then applies learnable scale (gamma) and shift (beta).
+
+blueprint LayerNorm:
+    action init(d_model):
+        self.d_model = d_model
+        self.gamma = tensor_fill(d_model, 1.0)
+        self.beta = tensor.zeros(d_model)
+    end
+
+    action forward(x):
+        let d = self.d_model
+        let mean_val = tensor_sum(x, d) / d
+        # variance
+        let var_val = 0.0
+        let i = 0
+        while i < d:
+            let diff = x[i] - mean_val
+            var_val = var_val + diff * diff
+            i = i + 1
+        end
+        var_val = var_val / d
+        let std_val = math.sqrt(var_val + 0.00001)
+        # normalize, scale, shift
+        let out = tensor.zeros(d)
+        i = 0
+        while i < d:
+            out[i] = ((x[i] - mean_val) / std_val) * self.gamma[i] + self.beta[i]
+            i = i + 1
+        end
+        return out
+    end
+end
+
+# ---------- Linear Layer (Dense / Fully-Connected) --------------------------
+# y = x * W^T + b       (x: 1 x in_dim,  W: out_dim x in_dim)
+# Stored as flat tensors for SIMD matmul compatibility.
+
+blueprint Linear:
+    action init(in_dim, out_dim):
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.weights = tensor.zeros(in_dim * out_dim)
+        self.bias = tensor.zeros(out_dim)
+        # Xavier-like init: w = (index % 7 - 3) * 0.1
+        let total = in_dim * out_dim
+        let i = 0
+        while i < total:
+            self.weights[i] = ((i % 7) - 3) * 0.1
+            i = i + 1
+        end
+    end
+
+    # x is a flat tensor of length in_dim (single token vector)
+    action forward(x):
+        let out = tensor.zeros(self.out_dim)
+        let o = 0
+        while o < self.out_dim:
+            let s = 0.0
+            let j = 0
+            while j < self.in_dim:
+                s = s + x[j] * self.weights[o * self.in_dim + j]
+                j = j + 1
+            end
+            out[o] = s + self.bias[o]
+            o = o + 1
+        end
+        return out
+    end
+
+    # Batched forward: x is (seq_len * in_dim) flat, returns (seq_len * out_dim) flat
+    action forward_seq(x, seq_len):
+        let out = tensor.zeros(seq_len * self.out_dim)
+        let t = 0
+        while t < seq_len:
+            let token = tensor_slice(x, t * self.in_dim, self.in_dim)
+            let y = self.forward(token)
+            tensor_write(out, t * self.out_dim, y, self.out_dim)
+            t = t + 1
+        end
+        return out
+    end
+end
+
+# ---------- Scaled Dot-Product Attention ------------------------------------
+# Attention(Q, K, V) = softmax(Q * K^T / sqrt(d_k)) * V
+#
+# Q: (seq_len x d_k)   K: (seq_len x d_k)   V: (seq_len x d_v)
+# All stored as flat tensors (row-major).
+
+func scaled_dot_product_attention(Q, K, V, seq_len, d_k):
+    let scale = 1.0 / math.sqrt(d_k * 1.0)
+
+    # scores = Q * K^T  => (seq_len x seq_len)
+    let Kt = tensor.transpose(K, seq_len, d_k)
+    let scores = tensor.matmul(Q, seq_len, d_k, Kt, d_k, seq_len)
+
+    # Scale scores
+    let total_scores = seq_len * seq_len
+    let i = 0
+    while i < total_scores:
+        scores[i] = scores[i] * scale
+        i = i + 1
+    end
+
+    # Row-wise softmax
+    let attn_weights = tensor.zeros(total_scores)
+    let row = 0
+    while row < seq_len:
+        let row_data = tensor_slice(scores, row * seq_len, seq_len)
+        let row_sm = softmax(row_data, seq_len)
+        tensor_write(attn_weights, row * seq_len, row_sm, seq_len)
+        row = row + 1
+    end
+
+    # output = attn_weights * V  => (seq_len x d_k)
+    let output = tensor.matmul(attn_weights, seq_len, seq_len, V, seq_len, d_k)
+    return output
+end
+
+# ---------- Multi-Head Attention --------------------------------------------
+# Splits d_model into num_heads parallel attention heads,
+# each operating on d_k = d_model / num_heads dimensions.
+# Concatenates and projects back through W_O.
+
+blueprint MultiHeadAttention:
+    action init(d_model, num_heads):
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model / num_heads
+
+        # Projection layers for Q, K, V, and output
+        self.W_Q = Linear(d_model, d_model)
+        self.W_Q.init(d_model, d_model)
+        self.W_K = Linear(d_model, d_model)
+        self.W_K.init(d_model, d_model)
+        self.W_V = Linear(d_model, d_model)
+        self.W_V.init(d_model, d_model)
+        self.W_O = Linear(d_model, d_model)
+        self.W_O.init(d_model, d_model)
+    end
+
+    # x: flat tensor of shape (seq_len * d_model)
+    action forward(x, seq_len):
+        let d_model = self.d_model
+        let num_heads = self.num_heads
+        let d_k = self.d_k
+
+        # Project to Q, K, V  (each: seq_len * d_model)
+        let Q = self.W_Q.forward_seq(x, seq_len)
+        let K = self.W_K.forward_seq(x, seq_len)
+        let V = self.W_V.forward_seq(x, seq_len)
+
+        # Multi-head: split, attend, concatenate
+        let concat = tensor.zeros(seq_len * d_model)
+        let h = 0
+        while h < num_heads:
+            # Extract head h's slice from Q, K, V
+            let Qh = tensor.zeros(seq_len * d_k)
+            let Kh = tensor.zeros(seq_len * d_k)
+            let Vh = tensor.zeros(seq_len * d_k)
+            let t = 0
+            while t < seq_len:
+                let j = 0
+                while j < d_k:
+                    Qh[t * d_k + j] = Q[t * d_model + h * d_k + j]
+                    Kh[t * d_k + j] = K[t * d_model + h * d_k + j]
+                    Vh[t * d_k + j] = V[t * d_model + h * d_k + j]
+                    j = j + 1
+                end
+                t = t + 1
+            end
+
+            # Scaled dot-product attention for this head
+            let head_out = scaled_dot_product_attention(Qh, Kh, Vh, seq_len, d_k)
+
+            # Write back into concat buffer
+            t = 0
+            while t < seq_len:
+                let j = 0
+                while j < d_k:
+                    concat[t * d_model + h * d_k + j] = head_out[t * d_k + j]
+                    j = j + 1
+                end
+                t = t + 1
+            end
+            h = h + 1
+        end
+
+        # Final output projection
+        let output = self.W_O.forward_seq(concat, seq_len)
+        return output
+    end
+end
+
+# ---------- Position-wise Feed-Forward Network ------------------------------
+# FFN(x) = ReLU(x * W1 + b1) * W2 + b2
+# With expansion factor (typically d_ff = 4 * d_model).
+
+blueprint FeedForward:
+    action init(d_model, d_ff):
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.linear1 = Linear(d_model, d_ff)
+        self.linear1.init(d_model, d_ff)
+        self.linear2 = Linear(d_ff, d_model)
+        self.linear2.init(d_ff, d_model)
+    end
+
+    # x: flat tensor of (seq_len * d_model)
+    action forward(x, seq_len):
+        let d_model = self.d_model
+        let d_ff = self.d_ff
+        let out = tensor.zeros(seq_len * d_model)
+        let t = 0
+        while t < seq_len:
+            let token = tensor_slice(x, t * d_model, d_model)
+            let h = self.linear1.forward(token)
+            h = relu(h, d_ff)
+            let y = self.linear2.forward(h)
+            tensor_write(out, t * d_model, y, d_model)
+            t = t + 1
+        end
+        return out
+    end
+end
+
+# ---------- Sinusoidal Positional Encoding ----------------------------------
+# PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+# PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+# Approximated using Taylor series for sin/cos.
+
+func glow_sin(x):
+    # Normalize x to [-pi, pi] range approximately
+    let result = 0.0
+    let term = x
+    let i = 1
+    while i < 15:
+        result = result + term
+        term = term * (0.0 - x * x) / ((2 * i) * (2 * i + 1))
+        i = i + 1
+    end
+    return result
+end
+
+func glow_cos(x):
+    let result = 1.0
+    let term = 1.0
+    let i = 1
+    while i < 15:
+        term = term * (0.0 - x * x) / ((2 * i - 1) * (2 * i))
+        result = result + term
+        i = i + 1
+    end
+    return result
+end
+
+func glow_pow(base, exp_val):
+    # Approximate base^exp via exp(exp_val * ln(base))
+    # ln(base) approximated via series for base close to 1, or
+    # for 10000^(2i/d) we precompute iteratively
+    let result = 1.0
+    let i = 0
+    while i < exp_val:
+        result = result * base
+        i = i + 1
+    end
+    return result
+end
+
+# Returns flat tensor of (seq_len * d_model) positional encodings
+func positional_encoding(seq_len, d_model):
+    let pe = tensor.zeros(seq_len * d_model)
+    let pos = 0
+    while pos < seq_len:
+        let i = 0
+        while i < d_model:
+            # div_term = 1.0 / (10000 ^ (i / d_model))
+            # Approximate: use iterative scaling
+            let exponent = (i / 2) * 2.0 / d_model
+            # 10000^exponent via exp(exponent * ln(10000))
+            # ln(10000) ~ 9.21034
+            let div_term = glow_exp(0.0 - exponent * 9.21034)
+            let angle = pos * div_term
+            if i % 2 == 0:
+                pe[pos * d_model + i] = glow_sin(angle)
+            else:
+                pe[pos * d_model + i] = glow_cos(angle)
+            end
+            i = i + 1
+        end
+        pos = pos + 1
+    end
+    return pe
+end
+
+# ---------- Transformer Encoder Layer ---------------------------------------
+# One layer of: MultiHeadAttention + Add&Norm + FeedForward + Add&Norm
+
+blueprint TransformerEncoderLayer:
+    action init(d_model, num_heads, d_ff):
+        self.d_model = d_model
+        self.mha = MultiHeadAttention(d_model, num_heads)
+        self.mha.init(d_model, num_heads)
+        self.ff = FeedForward(d_model, d_ff)
+        self.ff.init(d_model, d_ff)
+        self.norm1 = LayerNorm(d_model)
+        self.norm1.init(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm2.init(d_model)
+    end
+
+    # x: flat (seq_len * d_model)
+    action forward(x, seq_len):
+        let d_model = self.d_model
+
+        # Sub-layer 1: Multi-Head Attention + Residual + LayerNorm
+        let attn_out = self.mha.forward(x, seq_len)
+        let residual1 = tensor.add(x, attn_out)
+        # Apply layer norm per token
+        let normed1 = tensor.zeros(seq_len * d_model)
+        let t = 0
+        while t < seq_len:
+            let tok = tensor_slice(residual1, t * d_model, d_model)
+            let n_tok = self.norm1.forward(tok)
+            tensor_write(normed1, t * d_model, n_tok, d_model)
+            t = t + 1
+        end
+
+        # Sub-layer 2: Feed-Forward + Residual + LayerNorm
+        let ff_out = self.ff.forward(normed1, seq_len)
+        let residual2 = tensor.add(normed1, ff_out)
+        let normed2 = tensor.zeros(seq_len * d_model)
+        t = 0
+        while t < seq_len:
+            let tok = tensor_slice(residual2, t * d_model, d_model)
+            let n_tok = self.norm2.forward(tok)
+            tensor_write(normed2, t * d_model, n_tok, d_model)
+            t = t + 1
+        end
+
+        return normed2
+    end
+end
+
+# ---------- Transformer Encoder (N stacked layers) -------------------------
+
+blueprint TransformerEncoder:
+    action init(d_model, num_heads, d_ff, num_layers):
+        self.d_model = d_model
+        self.num_layers = num_layers
+        # Store layers in a list
+        self.layers = []
+        let i = 0
+        while i < num_layers:
+            let layer = TransformerEncoderLayer(d_model, num_heads, d_ff)
+            layer.init(d_model, num_heads, d_ff)
+            self.layers = self.layers + [layer]
+            i = i + 1
+        end
+    end
+
+    action forward(x, seq_len):
+        # Add positional encoding
+        let pe = positional_encoding(seq_len, self.d_model)
+        let h = tensor.add(x, pe)
+
+        # Pass through each encoder layer
+        let i = 0
+        while i < self.num_layers:
+            let layer = self.layers[i]
+            h = layer.forward(h, seq_len)
+            i = i + 1
+        end
+        return h
+    end
+end
+
+# ---------- Convenience: Transformer Classifier -----------------------------
+# Full pipeline: Embedding (simulated) -> Encoder -> Classify
+
+blueprint TransformerClassifier:
+    action init(d_model, num_heads, d_ff, num_layers, num_classes):
+        self.d_model = d_model
+        self.num_classes = num_classes
+        self.encoder = TransformerEncoder(d_model, num_heads, d_ff, num_layers)
+        self.encoder.init(d_model, num_heads, d_ff, num_layers)
+        self.classifier = Linear(d_model, num_classes)
+        self.classifier.init(d_model, num_classes)
+    end
+
+    # x: flat (seq_len * d_model) input embeddings
+    action forward(x, seq_len):
+        let encoded = self.encoder.forward(x, seq_len)
+
+        # Pool: take the first token's representation (CLS-style)
+        let cls_token = tensor_slice(encoded, 0, self.d_model)
+
+        # Classify
+        let logits = self.classifier.forward(cls_token)
+        let probs = softmax(logits, self.num_classes)
+        return probs
+    end
+end

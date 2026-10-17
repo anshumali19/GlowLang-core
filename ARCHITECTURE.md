@@ -21,7 +21,7 @@ Source (.glow)
   AST
     ↓  Compiler              (src/compiler.c)
   Register bytecode
-    ↓  Optimizer (SSA)       (src/opt.c, src/ssa.c)
+    ↓  Bytecode Optimizer    (src/opt.c)
   Optimized bytecode
     ↓
   Register VM  ⇄  Tiered JIT (src/vm.c ⇄ src/jit.c)
@@ -36,17 +36,18 @@ Source (.glow)
 | File | Role |
 |------|------|
 | `glowlang.l` | Flex lexer — tokenizes source. |
-| `glowlang.y` | Bison grammar — builds the AST. |
-| `glowlang.h` | Core type definitions, the `Value` representation, and the opcode set. |
-| `compiler.c` | Lowers the AST into register-based bytecode. |
-| `vm.c` | The virtual machine and its ~120 opcodes. |
-| `jit.c` | Multi-tier JIT compiler and deoptimization. |
-| `opt.c`, `ssa.c` | SSA-based optimization passes over the bytecode/MIR. |
-| `gc.c` | Generational garbage collector. |
-| `stdlib.c` | Native builtins (HTTP, SQLite, tensors, filesystem, JSON, OS, etc.). |
-| `lsp.c` | Language Server Protocol implementation. |
-| `arena.c` | Bump-pointer arena allocator for AST/compilation data. |
-| `ir.c`, `ast.c`, `run_bytecode_optimized.c` | Supporting IR and runtime helpers. |
+| `glowlang.y` | Bison grammar (447 lines) — builds AST nodes. |
+| `glowlang.h` | Core type definitions, the `Value` representation, and opcode definitions. |
+| `compiler.c` | Lowers AST into register-based bytecode; handles symbol table and code generation. |
+| `vm.c` | The virtual machine execution loop, inline caching, and opcode dispatch. |
+| `jit.c` | Native x86-64 JIT compiler (dual Microsoft x64 and System V AMD64 ABI backends). |
+| `opt.c` | Bytecode optimization passes (constant folding, dead instruction elimination). |
+| `gc.c` | Generational garbage collector (2 MB young generation nursery + 8 MB tenured heap). |
+| `stdlib.c` | Native builtins (HTTP, SQLite, AVX2 SIMD tensors, filesystem, JSON, crypto, etc.). |
+| `lsp.c` | Language Server Protocol (JSON-RPC 2.0) implementation. |
+| `arena.c` | Bump-pointer arena allocator for AST nodes and hardware MMU guard page allocations. |
+| `bigint.c` | Arbitrary-precision integer arithmetic routines. |
+| `win_pthread.h`| Windows POSIX-thread shim enabling native multi-core concurrency without GIL. |
 | `cuda/tensor_ops.cu` | Optional CUDA kernels (see *Hardware Acceleration*). |
 
 ### Value Representation
@@ -63,23 +64,38 @@ Floats are stored directly; other types pack a tag and payload (immediate value 
 portability. The VM maintains localized frame pointers for call frames and enforces instruction and
 recursion limits as safety guards.
 
-### Tiered JIT
+### Tiered JIT & Monomorphic Inline Caching
 
 `jit.c` promotes frequently executed code through tiers:
 
-1. **Interpreter** — all code starts here.
-2. **Baseline JIT** — a function/loop is compiled after ~10 executions.
-3. **Optimizing JIT** — recompiled after ~100 executions.
+1. **Interpreter with Monomorphic Inline Caching** — all code starts in `vm.c`. Generic bytecode
+   instructions (`OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_LT`, etc.) dynamically rewrite their opcodes in-place
+   to specialized integer/float variants (`OP_ADD_INT`, `OP_SUB_INT`, etc.) upon observing stable operand
+   types, eliminating type inspection dispatch overhead.
+2. **Baseline JIT** — compiled after hot loop / invocation count thresholds.
+3. **Optimizing Native JIT** — emits native x86-64 machine instructions into executable memory pages.
+   Supports both **System V AMD64 ABI** (Linux / macOS: args in RDI, RSI, RDX, RCX, R8, R9) and
+   **Microsoft x64 ABI** (Windows: args in RCX, RDX, R8, R9, with 32-byte shadow store and 16-byte stack
+   alignment). Guards can deoptimize back to the interpreter when type assertions fail.
 
-The JIT emits native machine code into executable memory. Guards can **deoptimize** back to the
-interpreter (via the `DEOPT` / `TRACE_EXIT` sentinels) when a speculative assumption fails. Inline
-caches accelerate property access and method dispatch.
+### Generational Garbage Collector
 
-### Garbage Collector
+`gc.c` implements a generational collector:
+- **Generation 0 (Nursery, 2 MB threshold)**: New object allocations land in Gen 0. Minor collections
+  scavenge active roots and promote surviving objects directly into Gen 1 without traversing tenured memory.
+- **Generation 1 (Tenured Heap, 8 MB threshold)**: Long-lived objects are tracked across generational
+  write barriers and swept via mark-and-sweep.
+- The arena allocator (`arena.c`) handles bump-pointer AST and compiler data structures that have
+  phase-bounded lifetimes.
 
-`gc.c` is a generational collector managing heap-allocated objects (strings, lists, dicts, objects,
-closures). The arena allocator (`arena.c`) is used for compile-time data that has a bump/free
-lifetime rather than being GC-managed.
+### Multi-Core Concurrency & Memory Protection
+
+- **Abolished GIL Concurrency**: The `spawn` keyword provisions true native OS threads (`CreateThread` on
+  Windows, `pthread_create` on POSIX). Each thread operates on an isolated VM execution context with
+  thread-local register stacks, achieving full CPU core parallelization without Global Interpreter Lock contention.
+- **Hardware MMU Guard Pages**: High-assurance memory buffers (`glow_alloc_guarded` in `arena.c` and
+  `lib/kavach.glow`) allocate memory flanked by CPU MMU guard pages (`PAGE_NOACCESS` / `PROT_NONE`),
+  immediately trapping buffer overruns at the hardware fault level.
 
 ---
 
@@ -139,10 +155,9 @@ A `CMakeLists.txt` is also provided for cross-platform CI (Linux, macOS, Windows
 
 ## Testing
 
-- `tests/*.glow` — language-level test cases run by `run_all_tests.sh`. The runner checks each
+- `tests/*.glow` — language-level test cases run by `run_all_tests.sh` and `run_all_tests.bat`. The runner checks each
   program's **exit code** against an expected value (most expect `0`; a few expect specific non-zero
-  codes), so it verifies that programs run to completion, not full output correctness. All 104
-  cases pass as of the last local run.
+  codes), so it verifies that programs run to completion. All 117 cases pass with 100% success.
 - `tests/c_harness/` — C fuzz harnesses (parser, bytecode, runtime, GC, string, module).
 - `tests/integration/`, `tests/stability/` — larger integration and stability scenarios.
 

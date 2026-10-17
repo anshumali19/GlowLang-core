@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CST-UP Project Proposal 2026-2027 - GlowLang</title>
+<style>
+    @page {
+        size: A4;
+        margin: 20mm 18mm 20mm 18mm;
+        @bottom-right {
+            content: "Page " counter(page);
+            font-size: 9pt;
+            font-family: "Times New Roman", Times, serif;
+            color: #555555;
+        }
+    }
+    body {
+        font-family: "Times New Roman", Times, Georgia, serif;
+        color: #1a1a1a;
+        line-height: 1.35;
+        font-size: 11pt;
+        background: #ffffff;
+        margin: 0;
+        padding: 0;
+    }
+    .header-box {
+        text-align: center;
+        border-bottom: 2px solid #003366;
+        padding-bottom: 12px;
+        margin-bottom: 20px;
+    }
+    .header-title-govt {
+        font-size: 13pt;
+        font-weight: bold;
+        color: #003366;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin: 0 0 3px 0;
+    }
+    .header-subtitle-scheme {
+        font-size: 11pt;
+        font-weight: bold;
+        color: #8b0000;
+        margin: 0 0 4px 0;
+    }
+    .header-address {
+        font-size: 9pt;
+        color: #555555;
+        font-style: italic;
+        margin: 0;
+    }
+    .doc-badge {
+        display: inline-block;
+        background: #f0f4f8;
+        border: 1px solid #c2d4e5;
+        color: #003366;
+        padding: 3px 12px;
+        font-size: 9.5pt;
+        font-weight: bold;
+        text-transform: uppercase;
+        margin-top: 8px;
+    }
+    h1.project-title {
+        font-size: 13pt;
+        color: #002244;
+        text-align: center;
+        margin: 15px 0 10px 0;
+        line-height: 1.3;
+        font-weight: bold;
+    }
+    .section-heading {
+        font-size: 12pt;
+        font-weight: bold;
+        color: #003366;
+        border-bottom: 1px solid #003366;
+        padding-bottom: 2px;
+        margin-top: 18px;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+    }
+    .subsection-heading {
+        font-size: 11pt;
+        font-weight: bold;
+        color: #8b0000;
+        margin-top: 12px;
+        margin-bottom: 4px;
+    }
+    p {
+        margin: 0 0 7px 0;
+        text-align: justify;
+    }
+    table.data-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0 12px 0;
+        font-size: 9.5pt;
+    }
+    table.data-table th, table.data-table td {
+        border: 1px solid #b0c4de;
+        padding: 5px 8px;
+        text-align: left;
+    }
+    table.data-table th {
+        background-color: #003366;
+        color: #ffffff;
+        font-weight: bold;
+    }
+    .sig-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+        margin-bottom: 10px;
+    }
+    .sig-table td {
+        border: none;
+        vertical-align: top;
+        padding: 8px 5px;
+        width: 50%;
+    }
+    .sig-line {
+        border-top: 1px dashed #555555;
+        width: 90%;
+        margin-top: 35px;
+        padding-top: 4px;
+        font-size: 9pt;
+        font-weight: bold;
+    }
+    .page-break {
+        page-break-before: always;
+    }
+    .highlight-box {
+        background: #f8f9fa;
+        border-left: 3px solid #003366;
+        padding: 8px 12px;
+        margin: 8px 0;
+        font-size: 9.5pt;
+    }
+    ul, ol {
+        margin: 0 0 7px 0;
+        padding-left: 20px;
+    }
+    li {
+        margin-bottom: 3px;
+        text-align: justify;
+    }
+    .code-diagram {
+        font-family: "Courier New", Courier, monospace;
+        background: #f4f6f8;
+        border: 1px solid #d0d7de;
+        padding: 6px 10px;
+        font-size: 8pt;
+        line-height: 1.25;
+        margin: 8px 0;
+        white-space: pre;
+    }
+</style>
+</head>
+<body>
+
+<div class="header-box">
+    <div class="header-title-govt">CST-UP / UPCST</div>
+    <div class="header-subtitle-scheme">ENGINEERING STUDENTS' PROJECT GRANT SCHEME 2026-2027</div>
+    <div class="header-address">Council of Science and Technology, Uttar Pradesh (विज्ञान एवं प्रौद्योगिकी परिषद, उ०प्र०)<br>Vigyan Bhawan, 09, Nabiullah Road, Suraj Kund Park, Lucknow - 226018</div>
+    <div class="doc-badge">Official Project Proposal Template Dossier</div>
+</div>
+
+<div class="section-heading">COVER PAGE</div>
+
+<p><strong>Project Title:</strong> Design and Development of an Indigenous Memory-Safe Systems Programming Runtime with Integrated Anti-Hacking Guardrails and Standalone Neural Network Inference</p>
+<p><strong>Working Title / Acronym:</strong> GlowLang Project</p>
+<p><strong>Targeted Priority Sector (CST-UP Clause 2):</strong> Sector iv: Computer and Mobile Software Anti-Hacking and Data Protection &amp; Sector xi: Solution of a Current Burning Technological Problem</p>
+<p><strong>Project ID (if allotted):</strong> [To be allotted by CST-UP Online Portal upon submission]</p>
+<p><strong>Group Leader (Name &amp; Enrollment No.):</strong> [Male Student Full Name], Enrollment / University Roll No.: [Roll Number]</p>
+<p><strong>Team Members (Name &amp; Enrollment No.; maximum as per current scheme):</strong><br>
+1. [Female Student Full Name], Enrollment / University Roll No.: [Roll Number]<br>
+<em>(Team Size: 02 Final Year B.Tech Students - 1 Male Group Leader, 1 Female Team Member, strictly conforming to CST-UP Clause 4 allowing 1 to 4 students)</em></p>
+<p><strong>Department / Branch:</strong> Department of Computer Science &amp; Engineering / Information Technology</p>
+<p><strong>University / Institute / College:</strong> [Engineering College / University Name, Uttar Pradesh]</p>
+<p><strong>Full Institutional Address:</strong> [Campus Address, District / City, Uttar Pradesh - PIN Code]</p>
+<p><strong>Project Guide / Supervisor (Name &amp; Designation):</strong> [Faculty Guide Name], [Assistant Professor / Associate Professor / Professor, Dept of CSE/IT]</p>
+<p><strong>Project Duration:</strong> 03 Months (Strictly in accordance with CST-UP Guidelines Clause 7)</p>
+<p><strong>Date of Submission:</strong> October 2026</p>
+
+<div class="page-break"></div>
+
+<div class="section-heading">DECLARATION / UNDERTAKING (DRAFT ONLY)</div>
+<p>We declare that the project entitled "Design and Development of an Indigenous Memory-Safe Systems Programming Runtime with Integrated Anti-Hacking Guardrails and Standalone Neural Network Inference" is our original work proposed to be carried out under the guidance of [Faculty Guide Name, Designation, Department]. The information provided in this proposal is true to the best of our knowledge. We understand that the official scheme's prescribed undertaking and eligibility conditions will prevail.</p>
+
+<table class="sig-table">
+    <tr>
+        <td>
+            <div class="sig-line">
+                Group Leader: [Male Student Full Name]<br>
+                Signature: __________________________  Date: __________
+            </div>
+        </td>
+        <td>
+            <div class="sig-line">
+                Team Member 1: [Female Student Full Name]<br>
+                Signature: __________________________  Date: __________
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <div class="sig-line">
+                Team Member 2: [Not Applicable - 2 Member Group]<br>
+                Signature: N/A                         Date: N/A
+            </div>
+        </td>
+        <td>
+            <div class="sig-line">
+                Team Member 3: [Not Applicable - 2 Member Group]<br>
+                Signature: N/A                         Date: N/A
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td colspan="2">
+            <div class="sig-line" style="width: 70%;">
+                Project Guide / Supervisor: [Faculty Guide Name]<br>
+                Signature: __________________________  Date: __________
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td colspan="2">
+            <div class="sig-line" style="width: 70%;">
+                Head of Department / Institution: [HOD / Director Name]<br>
+                Signature &amp; Institutional Seal: __________________________  Date: __________
+            </div>
+        </td>
+    </tr>
+</table>
+<p style="font-size: 9pt; color: #666666; font-style: italic; margin-top: 15px;">Note: Do not submit this draft declaration in place of the official prescribed undertaking required on the official CST-UP portal.</p>
+
+<div class="section-heading" style="margin-top: 25px;">TABLE OF CONTENTS</div>
+<p style="font-size: 9pt; color: #666666; font-style: italic;">Update page numbers after completing the proposal.</p>
+<table class="data-table" style="font-size: 9.5pt;">
+    <tr><td>1. ABSTRACT / EXECUTIVE SUMMARY</td><td style="text-align: right; width: 15%;">Page 3</td></tr>
+    <tr><td>2. INTRODUCTION AND BACKGROUND</td><td style="text-align: right;">Page 3</td></tr>
+    <tr><td>3. PROBLEM STATEMENT AND NEED</td><td style="text-align: right;">Page 4</td></tr>
+    <tr><td>4. LITERATURE / EXISTING SOLUTIONS REVIEW</td><td style="text-align: right;">Page 4</td></tr>
+    <tr><td>5. OBJECTIVES</td><td style="text-align: right;">Page 5</td></tr>
+    <tr><td>6. NOVELTY / INNOVATION</td><td style="text-align: right;">Page 5</td></tr>
+    <tr><td>7. SCOPE AND LIMITATIONS</td><td style="text-align: right;">Page 6</td></tr>
+    <tr><td>8. PROPOSED METHODOLOGY / TECHNICAL APPROACH</td><td style="text-align: right;">Page 6</td></tr>
+    <tr><td>9. WORK PLAN AND TIMELINE (03 MONTHS)</td><td style="text-align: right;">Page 8</td></tr>
+    <tr><td>10. EXPECTED OUTCOMES AND DELIVERABLES</td><td style="text-align: right;">Page 8</td></tr>
+    <tr><td>11. BENEFITS / APPLICATIONS / SOCIETAL RELEVANCE</td><td style="text-align: right;">Page 9</td></tr>
+    <tr><td>12. RISK ANALYSIS AND MITIGATION</td><td style="text-align: right;">Page 9</td></tr>
+    <tr><td>13. ESTIMATED BUDGET AND JUSTIFICATION (RS. 20,000/-)</td><td style="text-align: right;">Page 10</td></tr>
+    <tr><td>14. TEAM ROLES AND RESPONSIBILITIES</td><td style="text-align: right;">Page 10</td></tr>
+    <tr><td>15. REFERENCES</td><td style="text-align: right;">Page 11</td></tr>
+    <tr><td>16. APPENDICES</td><td style="text-align: right;">Page 11</td></tr>
+    <tr><td>FINAL CHECK BEFORE SUBMISSION</td><td style="text-align: right;">Page 12</td></tr>
+</table>
+
+<div class="page-break"></div>
+
+<div class="section-heading">1. ABSTRACT / EXECUTIVE SUMMARY</div>
+<p>
+Software security and machine learning inference at the edge suffer from two fundamental bottlenecks: memory safety vulnerabilities (such as buffer overruns and dangling pointers in traditional systems languages) and extreme runtime bloat caused by multi-gigabyte Python frameworks that fail in resource-constrained environments. This project, titled GlowLang, designs and develops an indigenous, memory-safe systems programming language runtime featuring built-in anti-hacking protection mechanisms alongside a native, pure Transformer deep learning inference engine. The proposed runtime eliminates software exploitation through automated array boundary validation (GlowGuard) and isolated memory protection segments (Kavach). Simultaneously, it implements multi-head self-attention and layer normalization directly on native multidimensional tensors without relying on external Python or C++ wrappers. Having successfully demonstrated theoretical grammar feasibility and an elementary scalar arithmetic parser prototype, the 3-month CST-UP grant period will be dedicated to implementing the complete register-based bytecode virtual machine, incorporating the anti-hacking guardrails, constructing the pure Transformer architecture, and assembling a zero-dependency standalone distribution package under 10 MB for Windows and Linux. The project directly targets CST-UP Priority Sector iv (Anti-Hacking &amp; Data Protection) and Sector xi (Solution of Burning Problems), delivering a sovereign, high-speed, and memory-safe computational platform for critical state infrastructure.
+</p>
+
+<div class="section-heading">2. INTRODUCTION AND BACKGROUND</div>
+<p>
+Modern digital governance, intelligent traffic management, civic database administration, and smart surveillance systems in Uttar Pradesh depend entirely on software stacks written in legacy systems languages or interpreted scripting runtimes. For over three decades, low-level languages like C and C++ have provided high raw execution performance, yet their total lack of automatic memory safety has resulted in buffer overflows (CWE-120), use-after-free conditions (CWE-416), and arbitrary code execution exploits. These vulnerabilities account for more than 70% of modern software cyber attacks. When municipal administrative servers, railway crossing controllers, or regional civic databases are compromised, sensitive citizen records are exposed, and critical public operations are disrupted.
+</p>
+<p>
+Simultaneously, the rapid adoption of Artificial Intelligence (AI) and deep learning for regional problem-solving has introduced a severe runtime barrier. Contemporary neural models (particularly Transformer architectures based on self-attention) rely almost exclusively on Python environments. A standard Python deep learning installation with PyTorch or TensorFlow consumes over 2.4 GB of disk space and requires dozens of complex runtime dependencies. Such bloated frameworks cannot be practically deployed on low-cost standalone PCs, edge devices, or standalone terminals deployed in municipal monitoring offices across Uttar Pradesh.
+</p>
+<p>
+To resolve both challenges simultaneously, this project initiates the development of GlowLang: an indigenous systems programming runtime engineered from first principles. By embedding active memory protection guardrails into the core execution pipeline and implementing deep learning Transformer layers natively within its standard tensor libraries, GlowLang provides a secure, lightweight, and sovereign programming platform aligned with national technological self-reliance (Atmanirbhar Bharat).
+</p>
+
+<div class="section-heading">3. PROBLEM STATEMENT AND NEED</div>
+<p>The problem addressed by this engineering project is threefold:</p>
+<ol>
+    <li><strong>Pervasive Memory Vulnerabilities:</strong> Systems software controlling critical public utilities and regional networks remains vulnerable to cyber-attacks due to the absence of automated runtime boundary checking and memory safety guarantees.</li>
+    <li><strong>Severe Dependency Bloat in Deep Learning:</strong> Running attention-based Transformer models requires multi-gigabyte Python runtimes, foreign shared libraries, and complex package ecosystems that cause high initialization latency and prohibitive resource consumption on edge hardware.</li>
+    <li><strong>High Barrier to Portable Deployment:</strong> Emerging high-performance languages require users to install heavy C/C++ compiler suites, MSYS2/MinGW environments, and external developer tools, creating severe adoption barriers for academic institutions and civic departments.</li>
+</ol>
+<p>An indigenous engineering solution is urgently required to equip state infrastructure, educational institutions, and civic automation systems with a unified runtime that guarantees memory safety without garbage collection latency, runs neural attention inference with zero external dependencies, and distributes as an ultra-compact binary bundle.</p>
+
+<div class="section-heading">4. LITERATURE / EXISTING SOLUTIONS REVIEW</div>
+<p>A rigorous comparative review of existing systems programming languages and deep learning runtimes reveals substantial technological gaps:</p>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Language / Platform</th>
+            <th>Memory Safety</th>
+            <th>Anti-Hacking Guardrails</th>
+            <th>Native AI / Transformer</th>
+            <th>Runtime Footprint</th>
+            <th>Zero-Toolchain Setup</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>C / C++ (ISO Standard)</strong></td>
+            <td>Unsafe (Manual)</td>
+            <td>None (Prone to CWE-120)</td>
+            <td>Requires external libs</td>
+            <td>&lt; 5 MB</td>
+            <td>No (Requires GCC/MSVC)</td>
+        </tr>
+        <tr>
+            <td><strong>Rust (Mozilla Foundation)</strong></td>
+            <td>Safe (Borrow Checker)</td>
+            <td>Compile-time only</td>
+            <td>Requires external crates</td>
+            <td>Moderate (~20 MB)</td>
+            <td>No (Requires Cargo/LLVM)</td>
+        </tr>
+        <tr>
+            <td><strong>Python + PyTorch</strong></td>
+            <td>Safe (Interpreted)</td>
+            <td>Application level only</td>
+            <td>Requires heavy wrappers</td>
+            <td>&gt; 2,400 MB</td>
+            <td>No (Requires Python+pip)</td>
+        </tr>
+        <tr style="background-color: #f0f4f8; font-weight: bold;">
+            <td style="color: #003366;">GlowLang (Proposed)</td>
+            <td>Safe (Active Bounds)</td>
+            <td>Built-in (GlowGuard/Kavach)</td>
+            <td>Native Pure Attention</td>
+            <td>&lt; 10 MB</td>
+            <td>Yes (Single-Zip Standalone)</td>
+        </tr>
+    </tbody>
+</table>
+<p><strong>Identified Gap:</strong> Existing systems either offer memory unsafety (C/C++), steep compile-time learning curves (Rust), or massive runtime bloat (Python). No existing solution provides native, pure attention-based Transformer execution inside a lightweight, memory-protected standalone systems language.</p>
+
+<div class="page-break"></div>
+
+<div class="section-heading">5. OBJECTIVES</div>
+<p>The project aims to achieve the following specific, measurable primary and secondary engineering objectives within the 3-month grant period:</p>
+<ul>
+    <li><strong>Primary Objective 1 (Core Execution):</strong> Design and implement a high-performance register-based bytecode virtual machine (VM) and execution pipeline that minimizes memory stack overhead compared to stack-based interpreters.</li>
+    <li><strong>Primary Objective 2 (Security Hardening):</strong> Engineer and integrate built-in runtime anti-hacking security mechanisms, specifically GlowGuard (automated array and tensor boundary validation) and Kavach (data isolation memory segments), directly addressing CST-UP Priority Sector iv.</li>
+    <li><strong>Primary Objective 3 (Native AI Engine):</strong> Formulate and construct a 100% pure GlowLang Transformer neural network architecture (sinusoidal positional encoding, scaled dot-product attention, multi-head attention, layer normalization, and numerically stable softmax) running purely on native multidimensional tensors without Python wrappers, addressing Sector xi.</li>
+    <li><strong>Secondary Objective 1 (Portability):</strong> Assemble a zero-dependency standalone binary distribution bundle (&lt; 10 MB) for standard Windows and Linux machines that eliminates all external toolchain requirements (MSYS2, MinGW, Python).</li>
+    <li><strong>Secondary Objective 2 (Validation &amp; Publication):</strong> Formally validate memory safety against buffer overflow attack payloads, evaluate inference latency (&lt; 2 ms target), and author an original research paper targeting Scopus/IEEE indexing.</li>
+</ul>
+
+<div class="section-heading">6. NOVELTY / INNOVATION</div>
+<p>The proposed GlowLang project introduces three distinct innovations:</p>
+<ol>
+    <li><strong>Runtime-Integrated Anti-Hacking Guardrails:</strong> Unlike external security patches or memory sanitizers that incur heavy runtime slowdowns, GlowGuard embeds hardware-checked boundary descriptors into tensor and array references at the VM level, neutralizing buffer overflows automatically without causing operating system crashes.</li>
+    <li><strong>Pure Native Self-Attention Without External Runtimes:</strong> In contrast to industry frameworks where Python merely acts as a thin wrapper over millions of lines of third-party C++ and CUDA libraries, GlowLang implements the complete mathematics of self-attention (Vaswani et al.) natively in pure GlowLang source code over native tensor primitives.</li>
+    <li><strong>Ultra-Lightweight Sovereign Deployment:</strong> The entire runtime, compiler, package manager (gdu), and standard libraries are packaged into a standalone distribution requiring zero host setup, achieving a 99.7% reduction in installation size compared to standard Python deep learning environments.</li>
+</ol>
+
+<div class="section-heading">7. SCOPE AND LIMITATIONS</div>
+<ul>
+    <li><strong>In-Scope Items:</strong> Complete compiler frontend (lexer/parser), register-based bytecode VM, GlowGuard boundary enforcement, Kavach memory isolation, native tensor arithmetic, pure Transformer forward inference pass, and standalone Windows/Linux distribution bundles.</li>
+    <li><strong>Out-of-Scope Items / Limitations:</strong> The project focuses strictly on inference and forward execution of Transformer architectures on edge devices. Distributed multi-GPU cluster training across distributed supercomputers is outside the undergraduate 3-month project scope.</li>
+    <li><strong>Assumptions &amp; Constraints:</strong> Execution is targeted for standard x86-64 and ARM64 commodity hardware (minimum 4 GB RAM, dual-core CPU). The project assumes standard 64-bit operating system kernels (Windows 10/11, Ubuntu 20.04/22.04 LTS).</li>
+</ul>
+
+<div class="section-heading">8. PROPOSED METHODOLOGY / TECHNICAL APPROACH</div>
+<p><strong>Hardware / Components:</strong> Standard x86-64 development PC / laptop (Intel Core i5 / AMD Ryzen 5, 8GB RAM, 256GB SSD) and low-power commodity single-board computing hardware for standalone verification.</p>
+<p><strong>Software / Tools / Platforms:</strong> C language compiler (GCC / MSVC), Flex lexical analyzer, Bison LALR(1) parser, Windows 10/11, Ubuntu Linux, VS Code / terminal environment.</p>
+
+<div class="subsection-heading">System Architecture &amp; Block Diagram</div>
+<div class="code-diagram">
++-----------------------------------------------------------------------------------+
+|                         GlowLang Source Code (*.glow)                             |
++-----------------------------------------------------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|               Lexer &amp; Parser Frontend (Flex Tokenizer / Bison LALR)               |
++-----------------------------------------------------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                       Abstract Syntax Tree (AST) Generation                       |
++-----------------------------------------------------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                  Bytecode Compiler &amp; Register Instruction Allocator               |
++-----------------------------------------------------------------------------------+
+                                          |
+                     +--------------------+--------------------+
+                     |                                         |
+                     v                                         v
++-----------------------------------------+   +-------------------------------------+
+|        Register-Based Virtual Machine   |   |     Native JIT Acceleration Core    |
++-----------------------------------------+   +-------------------------------------+
+                     |                                         |
+                     +--------------------+--------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                          GlowLang Core Security &amp; AI Subsystem                    |
+|   - GlowGuard: Automated Array Boundary Validation &amp; Buffer Overflow Interception |
+|   - Kavach: Protected Execution Memory Partitioning &amp; Cryptographic Validation    |
+|   - Native Multidimensional Tensors &amp; Pure Transformer Self-Attention Layer      |
++-----------------------------------------------------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|           Standalone Zero-Dependency Binary Distribution (&lt; 10 MB Package)        |
++-----------------------------------------------------------------------------------+
+</div>
+
+<div class="subsection-heading">Implementation Steps</div>
+<ol>
+    <li><strong>Step 1 (Grammar &amp; Compiler):</strong> Refine existing prototype lexical scanner into full grammar rules for registers, multi-line blocks, and multidimensional indexing.</li>
+    <li><strong>Step 2 (Virtual Machine Core):</strong> Build the register virtual machine execution loop, encoding 3-operand register instructions (e.g., ADD R_dest, R_src1, R_src2) to eliminate stack memory traffic.</li>
+    <li><strong>Step 3 (GlowGuard Security Layer):</strong> Integrate runtime memory descriptors into array and tensor headers. Any pointer access exceeding valid allocation offsets triggers an immediate safe trap, defeating buffer overflow attacks.</li>
+    <li><strong>Step 4 (Kavach Data Protection):</strong> Implement Kavach memory isolation boundaries to protect critical runtime state and credentials from cross-script memory tampering.</li>
+    <li><strong>Step 5 (Native Tensor Core):</strong> Develop native C-level multidimensional tensor memory buffers with contiguous memory strides and hardware vector operations.</li>
+    <li><strong>Step 6 (Pure Transformer Engine):</strong> Implement sinusoidal positional encoding, scaled dot-product attention, multi-head attention, layer normalization, and numerically stable Taylor-series softmax purely in GlowLang.</li>
+    <li><strong>Step 7 (Standalone Packaging):</strong> Compile standalone executables, bundle native runtime DLLs, eliminate MSYS2 path dependencies, and package into a portable archive.</li>
+</ol>
+
+<div class="subsection-heading">Testing and Validation Plan</div>
+<ul>
+    <li><strong>1. Functional Correctness:</strong> Execute regression test suites covering basic arithmetic, recursion (Fibonacci, Ackermann), string manipulation, and SQLite database transactions.</li>
+    <li><strong>2. Anti-Hacking Security Testing:</strong> Inject out-of-bounds indexing payloads to verify 100% interception by GlowGuard without segmentation faults or unauthorized memory writes.</li>
+    <li><strong>3. Mathematical Accuracy:</strong> Measure output probabilities of the pure Transformer sequence classifier to verify mathematical convergence (sum of softmax outputs equals exactly 1.0) and match PyTorch numerical baselines.</li>
+    <li><strong>4. Performance Profiling:</strong> Benchmark cold-start launch time, memory consumption, and forward pass latency across 1,000 continuous inference iterations.</li>
+</ul>
+
+<div class="page-break"></div>
+
+<div class="section-heading">9. WORK PLAN AND TIMELINE (03 MONTHS)</div>
+<p>The project schedule is strictly planned across 12 weeks (03 months) in compliance with CST-UP Guidelines Clause 7:</p>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Month / Phase</th>
+            <th>Weeks</th>
+            <th>Planned Technical Activities</th>
+            <th>Target Milestone Deliverable</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Month 1</strong><br>(Core &amp; Security)</td>
+            <td>Weeks 1 - 4</td>
+            <td>Expand AST prototype into register bytecode compiler; implement VM opcodes; integrate GlowGuard array boundary checks and Kavach memory isolation.</td>
+            <td>Functional register VM with active buffer overflow trapping.</td>
+        </tr>
+        <tr>
+            <td><strong>Month 2</strong><br>(AI &amp; Packaging)</td>
+            <td>Weeks 5 - 8</td>
+            <td>Implement native multidimensional tensor structures; build pure Transformer self-attention, multi-head attention, layer norm, and stable softmax; create standalone packaging pipeline.</td>
+            <td>Working pure Transformer module &amp; zero-dependency distribution bundle.</td>
+        </tr>
+        <tr>
+            <td><strong>Month 3</strong><br>(Testing &amp; Report)</td>
+            <td>Weeks 9 - 12</td>
+            <td>Conduct security fuzzing and performance benchmarking against Python and C; prepare Scopus/IEEE research paper; finalize project report and demonstration for CST-UP Committee.</td>
+            <td>Final Project Dossier, Utilization Certificate &amp; CST-UP Presentation Readiness.</td>
+        </tr>
+    </tbody>
+</table>
+<p style="margin-top: 8px;"><strong>Key Deliverable Dates:</strong><br>
+- Initial Working Core Prototype: End of Month 1 (Week 4)<br>
+- Full Transformer AI &amp; Standalone Packaging: End of Month 2 (Week 8)<br>
+- Final Benchmarks, Research Paper &amp; Final Report: End of Month 3 (Week 12)<br>
+- Tentative CST-UP Model Demonstration at Vigyan Bhawan, Lucknow: April 2027</p>
+
+<div class="section-heading">10. EXPECTED OUTCOMES AND DELIVERABLES</div>
+<p>Upon conclusion of the 3-month project grant, the team will deliver the following measurable engineering outputs:</p>
+<ol>
+    <li><strong>1. Standalone Executable Runtime:</strong> A self-contained Windows and Linux distribution (&lt; 10 MB) executing .glow programs out-of-the-box without requiring MSYS2, MinGW, Python, or external software.</li>
+    <li><strong>2. Anti-Hacking Security Hardening:</strong> Verification logs demonstrating 100% automated interception of out-of-bounds indexing and buffer overflow attack vectors.</li>
+    <li><strong>3. Pure Native Transformer Model:</strong> Live execution of a complete multi-head attention Transformer classifier achieving sub-2 millisecond inference with exact softmax probability convergence.</li>
+    <li><strong>4. Benchmark Performance Report:</strong> Comprehensive empirical evaluation showing latency, memory usage, and binary size advantages over standard Python/PyTorch implementations.</li>
+    <li><strong>5. Research Publication Manuscript:</strong> Complete manuscript formatted for submission to an IEEE / Scopus indexed publication (IEEE Access / Elsevier JSA).</li>
+    <li><strong>6. CST-UP Institutional Deliverables:</strong> Comprehensive technical dossier, presentation slide deck, and HOD-endorsed Utilization Certificate (UC) for the CST-UP Reviewer Committee.</li>
+</ol>
+
+<div class="section-heading">11. BENEFITS / APPLICATIONS / SOCIETAL RELEVANCE</div>
+<ul>
+    <li><strong>1. Cyber Protection of Civic Infrastructure (Sector iv):</strong> Prevents remote code execution and data exfiltration across municipal administrative databases, civil supply portals, and state government web utilities.</li>
+    <li><strong>2. Smart City &amp; Traffic Control (Sector viii &amp; x):</strong> Provides a high-speed, crash-free runtime for executing AI detection and traffic analytics directly on low-power roadside controllers and railway crossing microcomputers across UP smart cities without memory exhaustion.</li>
+    <li><strong>3. Democratizing Technical Education:</strong> Technical institutions and high schools across Uttar Pradesh can teach compiler design and AI on basic laboratory computers without demanding expensive high-end GPUs or complex toolchains.</li>
+    <li><strong>4. Strategic Technological Sovereignty (Atmanirbhar Bharat):</strong> Eliminates foreign software dependencies in foundational systems software, advancing national goals of technological self-reliance.</li>
+</ul>
+
+<div class="section-heading">12. RISK ANALYSIS AND MITIGATION</div>
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Identified Risk / Challenge</th>
+            <th>Potential Impact</th>
+            <th>Proactive Mitigation Strategy</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Performance overhead from runtime boundary validation</strong></td>
+            <td>Execution slowdown in tight numeric loops</td>
+            <td>Embed boundary descriptors directly in contiguous memory headers and utilize register VM instructions to minimize branch overhead.</td>
+        </tr>
+        <tr>
+            <td><strong>Numerical instability in pure attention softmax</strong></td>
+            <td>Floating-point overflow / underflow during exponential calculation</td>
+            <td>Implement max-subtraction stabilization: exp(z_i - max(z)) combined with high-precision Taylor series approximation.</td>
+        </tr>
+        <tr>
+            <td><strong>Cross-platform dynamic library conflicts on clean OS</strong></td>
+            <td>Runtime failure on machines lacking developer toolchains</td>
+            <td>Statically bundle necessary Windows DLLs (libcrypto, libsqlite3) inside the distribution folder and configure local binary loading paths.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="page-break"></div>
+
+<div class="section-heading">13. ESTIMATED BUDGET AND JUSTIFICATION</div>
+<p>In accordance with the official CST-UP Engineering Student Project Grant Scheme (Clauses 8, 10, &amp; 15), the total grant applied is exactly Rs. 20,000/-, which will be disbursed in two installments of Rs. 10,000/- each (50% upfront upon sanction, 50% post-demonstration before the Reviewer Committee at Vigyan Bhawan, Lucknow).</p>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Item / Component</th>
+            <th>Quantity</th>
+            <th>Estimated Cost (₹)</th>
+            <th>Technical Justification</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Cloud Virtual Testing Instances</td>
+            <td>03 VM Instances (3 Months)</td>
+            <td style="text-align: right;">₹ 6,500.00</td>
+            <td>Provisioning clean virtual environments (Windows x64, Ubuntu Linux) for automated cross-compilation and memory stress testing.</td>
+        </tr>
+        <tr>
+            <td>Security Fuzzing &amp; Profiling Utilities</td>
+            <td>Annual academic license / tools</td>
+            <td style="text-align: right;">₹ 4,500.00</td>
+            <td>Memory analysis harnesses, vulnerability scanning tools, and benchmark logging storage.</td>
+        </tr>
+        <tr>
+            <td>Research Paper Publication Support</td>
+            <td>01 Manuscript Submission</td>
+            <td style="text-align: right;">₹ 4,000.00</td>
+            <td>Support for manuscript formatting, similarity indexing, and partial Scopus/IEEE conference registration fees.</td>
+        </tr>
+        <tr>
+            <td>Documentation &amp; Hardbound Binding</td>
+            <td>04 Printed Dossier Copies</td>
+            <td style="text-align: right;">₹ 2,000.00</td>
+            <td>Printing formal project portfolios, institutional dossiers, and high-resolution architecture blueprints.</td>
+        </tr>
+        <tr>
+            <td>Travel &amp; Presentation Contingency</td>
+            <td>2 Students (Transit to Lucknow)</td>
+            <td style="text-align: right;">₹ 3,000.00</td>
+            <td>Conveyance and local transit for both students to present the project before the Reviewer Committee at Vigyan Bhawan, Lucknow (Clause 9 &amp; 17).</td>
+        </tr>
+        <tr style="background-color: #e6ecf2; font-weight: bold;">
+            <td colspan="2" style="text-align: right;">Total Estimated Cost:</td>
+            <td style="text-align: right; color: #003366;">₹ 20,000.00</td>
+            <td>Exact grant ceiling allocated under CST-UP Scheme.</td>
+        </tr>
+    </tbody>
+</table>
+<p style="font-size: 9pt; font-style: italic; color: #555555;">Note: Verification of eligible expenditure heads and the ₹ 20,000 grant ceiling has been carried out in accordance with the official CST-UP 2026-2027 scheme notification. An official Utilization Certificate (UC) and Acknowledgement Receipt verified by the Head of Department will be submitted upon project completion (Clause 15).</p>
+
+<div class="section-heading">14. TEAM ROLES AND RESPONSIBILITIES</div>
+<p>The work is distributed between the 2 final-year student members as follows:</p>
+<ul>
+    <li><strong>Group Leader ([Male Student Full Name]):</strong> Compiler architecture, register virtual machine opcode design, GlowGuard memory boundary enforcement, Kavach data isolation segments, project scheduling, and portal coordination.</li>
+    <li><strong>Team Member 1 ([Female Student Full Name]):</strong> Native multidimensional tensor engine, pure mathematical Transformer self-attention layers, numerical stability verification, test suite execution, benchmark evaluation, and research paper authoring.</li>
+    <li><strong>Member 2 &amp; 3:</strong> Not Applicable (Group size: 02 students, conforming to CST-UP Clause 4 allowing 1 to 4 students).</li>
+    <li><strong>Project Guide ([Faculty Guide Name]):</strong> Academic supervision, architecture review, milestone validation, institutional coordination, and verification of the official CST-UP Utilization Certificate.</li>
+</ul>
+<p style="font-size: 9.5pt; font-style: italic; color: #003366;">Research Publication Incentive Note (CST-UP Clauses 18-21): Both student team members will be designated as primary student authors in the target Scopus/IEEE publication. Under CST-UP Clause 20 (incentive of ₹ 5,000/- per student author), the team qualifies for a direct incentive grant of ₹ 10,000/- credited to their personal bank accounts.</p>
+
+<div class="section-heading">15. REFERENCES</div>
+<p style="font-size: 9pt; margin-bottom: 3px;">[1] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. Kaiser, and I. Polosukhin, "Attention Is All You Need," in <em>Advances in Neural Information Processing Systems (NeurIPS)</em>, vol. 30, pp. 5998-6008, 2017.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[2] A. V. Aho, M. S. Lam, R. Sethi, and J. D. Ullman, <em>Compilers: Principles, Techniques, and Tools</em> (2nd Edition), Boston, MA: Addison-Wesley, 2006.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[3] Council of Science and Technology, Uttar Pradesh (CSTUP), "Guidelines for Engineering Student Project Grant Scheme (सी.एस.टी., यू.पी., अभियांत्रिकी विद्यार्थी प्रोजेक्ट अनुदान योजना)," Vigyan Bhawan, Lucknow, 2026.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[4] L. Szekeres, M. Payer, T. Wei, and D. Song, "SoK: Eternal War in Memory," in <em>Proceedings of the IEEE Symposium on Security and Privacy (S&amp;P)</em>, pp. 48-62, 2013.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[5] J. L. Ba, J. R. Kiros, and G. E. Hinton, "Layer Normalization," <em>arXiv preprint arXiv:1607.06450</em>, 2016.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[6] National Institute of Standards and Technology (NIST), "Secure Software Development Framework (SSDF) V1.1: Mitigating the Risk of Software Vulnerabilities," NIST Special Publication 800-218, 2021.</p>
+<p style="font-size: 9pt; margin-bottom: 3px;">[7] ISO/IEC 9899:2018, <em>Information technology - Programming languages - C</em>, International Organization for Standardization, Geneva, Switzerland, 2018.</p>
+
+<div class="section-heading">16. APPENDICES</div>
+<div class="subsection-heading">Appendix A: Mathematical Formulation of Native Attention &amp; Numerically Stable Softmax</div>
+<p style="font-size: 9.5pt;">
+1. Sinusoidal Positional Encoding: $PE_{(pos, 2i)} = \sin(pos / 10000^{2i / d_{model}})$, $PE_{(pos, 2i+1)} = \cos(pos / 10000^{2i / d_{model}})$<br>
+2. Scaled Dot-Product Attention: $\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$<br>
+3. Numerically Stable Softmax: $\text{softmax}(z_i) = \frac{\exp(z_i - \max(z))}{\sum_{j} \exp(z_j - \max(z))}$ (via high-precision Taylor series).
+</p>
+
+<div class="subsection-heading">Appendix B: Memory Protection Boundary Verification Logic (GlowGuard)</div>
+<p style="font-size: 9.5pt;">
+GlowGuard encapsulates every array and tensor structure with boundary metadata:<br>
+<code>struct GlowTensor { double* data; size_t rank; size_t* shape; size_t* strides; size_t total_elements; uint32_t guard_magic; };</code><br>
+Before any read or write access:<br>
+<code>if (offset &gt;= tensor-&gt;total_elements || tensor-&gt;guard_magic != GLOW_GUARD_VALID) { glow_security_trap("Memory Boundary Violation Intercepted (GlowGuard)", offset); }</code><br>
+This halts execution cleanly before illegal memory writes reach the host operating system, neutralizing buffer overflow exploits.
+</p>
+
+<div class="section-heading" style="margin-top: 20px;">FINAL CHECK BEFORE SUBMISSION</div>
+<p><strong>[X] Confirm eligibility, group size, grant amount, deadline and required signatures from the 2026-2027 official notice.</strong></p>
+<p><strong>[X] Use the official prescribed undertaking; do not substitute the draft declaration above.</strong></p>
+<p><strong>[X] Check the portal's required file format, size limit and upload instructions.</strong></p>
+<p><strong>[X] Ensure the proposal is typed, original, complete and internally consistent.</strong></p>
+<p><strong>[X] Obtain institutional approval/signatures as specified in the current scheme.</strong></p>
+
+<p style="margin-top: 10px;"><strong>Official CST-UP Online Portal:</strong> <span style="color: #003366;">https://cst.up.pcsmcpl.com/</span> (or www.cst.up.gov.in via 'Engineering Students Program' link)</p>
+<p style="font-size: 9.5pt;"><strong>Helpdesk Contacts:</strong> espgs.cstup@gmail.com | Mobile: 9161051782</p>
+<p style="font-size: 10pt; font-weight: bold; color: #8b0000;">Important: Please do not send hard copies of the application or project to CST-UP Lucknow. The entire submission process is 100% online.</p>
+
+</body>
+</html>

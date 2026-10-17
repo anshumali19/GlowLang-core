@@ -1,0 +1,129 @@
+# ============================================================================
+# GlowLang Transformer Demo
+# ============================================================================
+# Demonstrates the pure-GlowLang Transformer architecture running end-to-end:
+#   - Positional Encoding
+#   - Multi-Head Self-Attention
+#   - Feed-Forward Networks
+#   - Layer Normalization
+#   - Residual Connections
+#   - Classification Head with Softmax
+#
+# No Python. No FFI. Pure GlowLang on SIMD tensors.
+# ============================================================================
+
+import "lib/transformer.glow"
+
+show "======================================================"
+show "  GlowLang Transformer Demo"
+show "  Pure GlowLang | SIMD Tensors | Attention Is All You Need"
+show "======================================================"
+show ""
+
+# ---- Configuration ----
+let d_model = 8
+let num_heads = 2
+let d_ff = 16
+let num_layers = 2
+let num_classes = 3
+let seq_len = 4
+
+show "[Config]"
+show "  d_model     = " + d_model
+show "  num_heads   = " + num_heads
+show "  d_ff        = " + d_ff
+show "  num_layers  = " + num_layers
+show "  num_classes = " + num_classes
+show "  seq_len     = " + seq_len
+show ""
+
+# ---- Step 1: Create input embeddings (simulated) ----
+show "[Step 1] Creating input embeddings (" + seq_len + " tokens x " + d_model + " dims)..."
+let input_size = seq_len * d_model
+let x = tensor.zeros(input_size)
+let idx = 0
+while idx < input_size:
+    x[idx] = ((idx % 11) - 5) * 0.1
+    idx = idx + 1
+end
+show "  Input token 0: [" + x[0] + ", " + x[1] + ", " + x[2] + ", " + x[3] + ", " + x[4] + ", " + x[5] + ", " + x[6] + ", " + x[7] + "]"
+show ""
+
+# ---- Step 2: Positional Encoding ----
+show "[Step 2] Computing sinusoidal positional encodings..."
+let pe = positional_encoding(seq_len, d_model)
+show "  PE[0,0]=" + pe[0] + " PE[0,1]=" + pe[1] + " PE[0,2]=" + pe[2] + " PE[0,3]=" + pe[3]
+show "  PE[1,0]=" + pe[d_model] + " PE[1,1]=" + pe[d_model + 1]
+show ""
+
+# ---- Step 3: Build the Transformer Classifier ----
+show "[Step 3] Building Transformer Classifier..."
+show "  Architecture: " + num_layers + " encoder layers, " + num_heads + "-head attention"
+let model = TransformerClassifier(d_model, num_heads, d_ff, num_layers, num_classes)
+model.init(d_model, num_heads, d_ff, num_layers, num_classes)
+show "  Model initialized."
+show ""
+
+# ---- Step 4: Forward Pass ----
+show "[Step 4] Running forward pass..."
+let start = os.time()
+let probs = model.forward(x, seq_len)
+let elapsed = os.time() - start
+show "  Forward pass complete."
+show ""
+
+# ---- Step 5: Results ----
+show "[Results] Classification probabilities (softmax output):"
+let c = 0
+while c < num_classes:
+    show "  Class " + c + ": " + probs[c]
+    c = c + 1
+end
+show ""
+
+# Verify probabilities sum to ~1.0
+let prob_sum = 0.0
+c = 0
+while c < num_classes:
+    prob_sum = prob_sum + probs[c]
+    c = c + 1
+end
+show "  Probability sum = " + prob_sum + " (should be ~1.0)"
+show "  Inference time  = " + elapsed + "s"
+show ""
+
+# ---- Step 6: Test individual components ----
+show "[Step 6] Component verification:"
+
+# Test softmax independently
+let test_logits = tensor.create(4)
+test_logits[0] = 1.0
+test_logits[1] = 2.0
+test_logits[2] = 3.0
+test_logits[3] = 4.0
+let sm = softmax(test_logits, 4)
+show "  Softmax([1,2,3,4]) = [" + sm[0] + ", " + sm[1] + ", " + sm[2] + ", " + sm[3] + "]"
+
+# Test LayerNorm
+let ln = LayerNorm(4)
+ln.init(4)
+let test_vec = tensor.create(4)
+test_vec[0] = 1.0
+test_vec[1] = 2.0
+test_vec[2] = 3.0
+test_vec[3] = 4.0
+let normed = ln.forward(test_vec)
+show "  LayerNorm([1,2,3,4]) = [" + normed[0] + ", " + normed[1] + ", " + normed[2] + ", " + normed[3] + "]"
+
+# Test Linear layer
+let lin = Linear(4, 2)
+lin.init(4, 2)
+let lin_out = lin.forward(test_vec)
+show "  Linear(4->2)([1,2,3,4]) = [" + lin_out[0] + ", " + lin_out[1] + "]"
+
+show ""
+show "======================================================"
+show "  Transformer demo complete."
+show "  Architecture: Vaswani et al., 'Attention Is All You Need'"
+show "  Implementation: 100% Pure GlowLang"
+show "======================================================"

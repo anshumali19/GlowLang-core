@@ -866,7 +866,8 @@ static void compile_stmt(Node *n) {
              } else {
                  compile_expr(call->left, callee_reg);
              }
-             int idx = bc_emit(compiling_bc, OP_SPAWN, ac, 0);
+             const char *fn_name = (call->type == NODE_CALL && call->name) ? call->name : ((call->left && call->left->name) ? call->left->name : NULL);
+             int idx = bc_emit(compiling_bc, OP_SPAWN, ac, (intptr_t)fn_name);
              compiling_bc->code[idx].r0 = callee_reg;
              compiling_bc->code[idx].r1 = base;
              break;

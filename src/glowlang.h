@@ -49,7 +49,7 @@ typedef struct Node Node;
 typedef struct Bytecode Bytecode;
 typedef struct Instruction Instruction;
 typedef struct FuncEntry FuncEntry;
-typedef struct { Value callee; int argc; Value *args; } ThreadData;
+typedef struct { Value callee; int argc; Value *args; const char *name; } ThreadData;
 
 /* ================================================================
  *  GC & OBJECTS
@@ -727,6 +727,7 @@ extern THREAD_LOCAL const char *error_file;
 extern THREAD_LOCAL int error_line;
 extern THREAD_LOCAL int profiling_active;
 extern THREAD_LOCAL int trace_mode;
+extern THREAD_LOCAL int debug_mode;
 extern THREAD_LOCAL Bytecode *g_dbg_bc;
 extern THREAD_LOCAL Instruction *g_dbg_pc;
 extern int next_free_reg;
@@ -782,6 +783,12 @@ Value native_str_contains(int argc, Value *args);
 Value native_str_find(int argc, Value *args);
 Value native_str_slice(int argc, Value *args);
 Value native_str_split(int argc, Value *args);
+Value native_list_append(int argc, Value *args);
+Value native_list_pop(int argc, Value *args);
+Value native_list_len(int argc, Value *args);
+Value native_val_type(int argc, Value *args);
+Value native_type(int argc, Value *args);
+Value native_len(int argc, Value *args);
 Value list_pop(List *l);
 void list_insert(List *l, int idx, Value val);
 void list_remove(List *l, int idx);

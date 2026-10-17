@@ -1,5 +1,5 @@
-# Prism: GlowLang Zero-Copy Structural Data Refraction Engine
-# Converts key-value streams into structured Arena memory arrays instantly
+# Prism: Key-Value Record Formatter
+# Projects key-value streams into formatted record arrays
 
 blueprint PrismEngine:
     action init():

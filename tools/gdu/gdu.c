@@ -472,6 +472,21 @@ void write_lock_file(const char *path, DepGraph *g) {
 /* ================================================================
  *  PACKAGE OPERATIONS
  * ================================================================ */
+static int copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in) return -1;
+    FILE *out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { fclose(in); fclose(out); return -1; }
+    }
+    fclose(in);
+    fclose(out);
+    return 0;
+}
+
 int install_package(const char *name, const char *version, const char *url) {
     char pkg_path[MAX_PATH];
     snprintf(pkg_path, sizeof(pkg_path), ".glow_pkg/%s.glow", name);
@@ -500,9 +515,7 @@ int install_package(const char *name, const char *version, const char *url) {
             "curl -sf --max-time 10 '%s' -o '%s' 2>/dev/null", url, pkg_path);
         if (system(cmd) == 0 && file_exists(pkg_path) && file_size(pkg_path) > 0) {
             /* Cache the download */
-            char cp_cmd[4096];
-            snprintf(cp_cmd, sizeof(cp_cmd), "cp '%s' '%s'", pkg_path, cache_path);
-            if (system(cp_cmd) < 0) { /* ignore cache failure */ }
+            copy_file(pkg_path, cache_path);
             return 0;
         }
     }
@@ -512,9 +525,7 @@ int install_package(const char *name, const char *version, const char *url) {
     snprintf(lib_path, sizeof(lib_path), "lib/%s.glow", name);
     if (file_exists(lib_path)) {
         printf("  Linking from standard library: %s\n", name);
-        char cp_cmd[4096];
-        snprintf(cp_cmd, sizeof(cp_cmd), "cp '%s' '%s'", lib_path, pkg_path);
-        if (system(cp_cmd) < 0) { /* ignore */ }
+        copy_file(lib_path, pkg_path);
         return 0;
     }
 
@@ -528,23 +539,12 @@ int install_package(const char *name, const char *version, const char *url) {
         
     if (system(cmd) == 0 && file_exists(pkg_path) && file_size(pkg_path) > 0) {
         /* Cache */
-        char cp_cmd[4096];
-        snprintf(cp_cmd, sizeof(cp_cmd), "cp '%s' '%s'", pkg_path, cache_path);
-        if (system(cp_cmd) < 0) { /* ignore */ }
+        copy_file(pkg_path, cache_path);
         return 0;
     }
 
-
-    /* Create stub package if nothing available */
-    printf("  Registry unavailable — creating stub for %s@%s\n", name, version);
-    FILE *f = fopen(pkg_path, "w");
-    if (f) {
-        fprintf(f, "# %s v%s\n", name, version);
-        fprintf(f, "# Package stub — replace with actual implementation\n");
-        fprintf(f, "show \"Package %s v%s loaded\"\n", name, version);
-        fclose(f);
-    }
-    return 0;
+    fprintf(stderr, "  Error: Package '%s' (version %s) not found in standard library or remote registry.\n", name, version);
+    return 1;
 }
 
 /* ================================================================
