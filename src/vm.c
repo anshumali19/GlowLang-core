@@ -361,7 +361,26 @@ static inline Value num_mul(Value a, Value b) {
 static inline Value num_div(Value a, Value b) { return num_from_double(val_to_double(a) / val_to_double(b)); }
 
 /* JIT helpers (defined here, called from jit.c). */
-Value jit_int_add(Value a, Value b) { return num_add(a, b); }
+Value jit_int_add(Value a, Value b) {
+    if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
+        Value sa, sb;
+        if (GET_TYPE(a) == VAL_STRING) sa = a;
+        else if (is_bigint(a)) { char *_bs = bigint_to_new_string(AS_BIGINT(a)); sa = value_string_copy(_bs); free(_bs); }
+        else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%lld",(long long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+        if (GET_TYPE(b) == VAL_STRING) sb = b;
+        else if (is_bigint(b)) { char *_bs = bigint_to_new_string(AS_BIGINT(b)); sb = value_string_copy(_bs); free(_bs); }
+        else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%lld",(long long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+        return rope_new(sa, sb);
+    }
+    if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
+        List *la = AS_LIST(a), *lb = AS_LIST(b);
+        List *rl = list_new(la->size + lb->size);
+        for (int i=0; i<la->size; i++) list_push(rl, la->items[i]);
+        for (int i=0; i<lb->size; i++) list_push(rl, lb->items[i]);
+        return value_list(rl);
+    }
+    return num_add(a, b);
+}
 Value jit_int_sub(Value a, Value b) { return num_sub(a, b); }
 Value jit_int_mul(Value a, Value b) { return num_mul(a, b); }
 Value jit_int_lt(Value a, Value b)  { return value_bool(value_cmp(a, b) <  0); }
@@ -383,6 +402,7 @@ pthread_mutex_t gc_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t threads_mutex = PTHREAD_MUTEX_INITIALIZER;
 ThreadStack active_stacks[128];
 int active_stack_count = 0;
+volatile int threads_ever_spawned = 0;
 
 void print_error_trace(Value exception);
 void vm_stack_init(void) {
@@ -394,6 +414,7 @@ void vm_stack_init(void) {
     sp = 0;
     vm_stack_top = 0;
     pthread_mutex_lock(&threads_mutex);
+    if (active_stack_count > 0) threads_ever_spawned = 1;
     if (active_stack_count < 128) {
         active_stacks[active_stack_count].vm_stack_ptr = &vm_stack;
         active_stacks[active_stack_count].sp_ptr = &sp;
@@ -620,13 +641,13 @@ static Value vm_self_call_jit_or_recurse(Value (*f)(Value *, int *), Bytecode *b
 
 Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
                                        int callee_local, int param_count, int *deopt_pc) {
-        if (glow_nojitexec) return MASK_NAN | ((uint64_t)15 << 48);
+        if (glow_nojitexec) return VAL_DEOPT_SENTINEL;
         /* Deep recursion: avoid JIT to prevent C stack overflow. call_depth is
          * NOT reset here so it accumulates across JIT self-/mutual-recursion;
          * once it passes the threshold we deopt to the interpreter, which then
          * drives recursion with its own clean depth guard (no 2-frames/level
          * machine-stack blowup). */
-        if (call_depth > 2000 || force_interpreter_self_call) return MASK_NAN | ((uint64_t)15 << 48);
+        if (call_depth > 2000 || force_interpreter_self_call) return VAL_DEOPT_SENTINEL;
         int new_base = vm_stack_top;
         int need = new_base + callee_local + 3;
         int saved_top = vm_stack_top;
@@ -1520,12 +1541,15 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                             for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                         }
                         
+                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         vm_stack[callee_base] = inst; // self
-                        for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+                        for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        if (ife) {
+                            for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
+                        }
 
                         Value old_self = var_get("self");
                         var_set("self", inst);
-                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
@@ -1699,12 +1723,15 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                             vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
                             for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                         }
+                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         vm_stack[callee_base] = inst; // self at R0
-                        for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+                        for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        if (ife) {
+                            for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
+                        }
 
                         Value old_self = var_get("self");
                         var_set("self", inst);
-                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
@@ -1744,13 +1771,7 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                 for (int i=ac; i<fe->param_count; i++) vm_stack[base_reg + i] = value_none();
             }
             bc = fe->body; pc = bc->code;
-            /* Tail-call reuse keeps internal_depth flat; count it so infinite
-             * tail recursion still trips the depth guard and exits cleanly. */
-            if (__builtin_expect(call_depth + internal_depth + (++tail_depth) >= 65500, 0)) {
-                pending_exception = value_string_copy("Maximum recursion depth exceeded");
-                has_exception = 1;
-                goto l_OP_THROW;
-            }
+
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
             stack_arena_used = old_arena_used;
             if (bc->jit_code) {
@@ -1974,12 +1995,15 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                         vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
                         for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                     }
+                    FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                     vm_stack[callee_base] = inst; // self at R0
-                    for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+                    for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                    if (ife) {
+                        for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
+                    }
 
                     Value old_self = var_get("self");
                     var_set("self", inst);
-                    FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                     if (ife && ife->body) {
                         DO_CALL(ife->body, NULL, callee_base, -1);
                     }
@@ -2187,12 +2211,15 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
                             vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
                             for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                         }
+                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         vm_stack[callee_base] = inst; // self at R0
-                        for (int i=0; i<count; i++) vm_stack[callee_base + i + 1] = temp[i];
+                        for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        if (ife) {
+                            for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
+                        }
 
                         Value old_self = var_get("self");
                         var_set("self", inst);
-                        FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
@@ -2307,6 +2334,7 @@ Value res = vm_call_jit_direct(f, base_reg + pc->r2, fe->body->local_count, fe->
         pc++; goto l_DISPATCH;
     }
     l_OP_SPAWN: {
+        threads_ever_spawned = 1;
         int ac = pc->arg; Value callee = R(pc->r0);
         if (ac < 0 || ac > 1024) {
             pending_exception = value_string_copy("Runtime Error: Invalid number of arguments for OP_SPAWN");

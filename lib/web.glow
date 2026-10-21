@@ -416,6 +416,13 @@ blueprint Server:
         return self
     end
 
+    action start(port):
+        if port != none:
+            self.port = port
+        end
+        return self.start_server()
+    end
+
     action start_server():
         show "[GlowWeb] Starting server on port " + self.port
         let listener = http.listen(self.port)
@@ -468,5 +475,59 @@ blueprint Server:
     action shutdown():
         self.running = false
         show "[GlowWeb] Server stopped"
+    end
+end
+
+blueprint WebResponse:
+    action init(status, body, headers):
+        self.status = status
+        self.body = body
+        self.headers = headers
+    end
+
+    action to_json():
+        if self.body != none and len(self.body) > 0:
+            return json.parse(self.body)
+        end
+        return none
+    end
+
+    action text():
+        return self.body
+    end
+end
+
+blueprint WebClient:
+    action init():
+    end
+
+    action fetch(url):
+        let raw = http.request("GET", url, dict())
+        if raw == none:
+            return none
+        end
+        return WebResponse(raw["status"], raw["body"], raw["headers"])
+    end
+
+    action get(url):
+        return self.fetch(url)
+    end
+
+    action post(url, data):
+        let body_str = ""
+        let headers = dict("Content-Type", "application/json")
+        if data != none:
+            if type(data) == "dict" or type(data) == "list":
+                body_str = json.stringify(data)
+            else:
+                body_str = str(data)
+            end
+        end
+        let opts = dict("body", body_str, "headers", headers)
+        let raw = http.request("POST", url, opts)
+        if raw == none:
+            return none
+        end
+        return WebResponse(raw["status"], raw["body"], raw["headers"])
     end
 end

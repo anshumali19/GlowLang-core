@@ -208,7 +208,7 @@ static void gc_free_object_payload(GCObject *unmarked) {
 }
 
 void gc_full_collect(void) {
-    int single_threaded = (active_stack_count <= 1);
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
     if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     if (vm_last_class) gc_mark_value(value_class(vm_last_class));
@@ -327,7 +327,7 @@ static void process_grey_stack_minor(void) {
 }
 
 void gc_minor_collect(void) {
-    int single_threaded = (active_stack_count <= 1);
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
     if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value_minor(global_table.values[i]);
     if (vm_last_class) gc_mark_value_minor(value_class(vm_last_class));
@@ -420,7 +420,7 @@ void* gc_alloc(size_t sz, ObjType type) {
         else if (allocated_since_gc >= 2 * 1024 * 1024) gc_minor_collect();
     }
     
-    int single_threaded = (active_stack_count <= 1);
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
     if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     
     sz = (sz + 7) & ~7;

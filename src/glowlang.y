@@ -70,6 +70,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | IMPORT STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | USE STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | RETURN expr { $$ = newReturnNode($2); }
+    | RETURN { $$ = newReturnNode(newVarNode(intern_string("none"))); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
