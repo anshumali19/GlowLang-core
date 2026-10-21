@@ -9,7 +9,7 @@ set TOTAL=0
 for %%f in ("tests\*.glow") do (
     set /a TOTAL+=1
     echo Running %%~nxf...
-    "%BIN%" run "%%f" > nul 2> "%TEMP%\glow_test_err.log"
+    "%BIN%" run "%%f" > "%TEMP%\glow_test_out.log" 2> "%TEMP%\glow_test_err.log"
     set RET=!errorlevel!
     set EXPECTED=0
     set "NAME=%%~nxf"
@@ -27,6 +27,7 @@ for %%f in ("tests\*.glow") do (
     ) else (
         echo   FAIL ^(Code: !RET!, Expected: !EXPECTED!^)
         if exist "%TEMP%\glow_test_err.log" type "%TEMP%\glow_test_err.log"
+        if exist "%TEMP%\glow_test_out.log" type "%TEMP%\glow_test_out.log"
         set /a FAILED+=1
     )
 )

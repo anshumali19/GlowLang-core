@@ -340,11 +340,15 @@ static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
     if (compiling_func && n->name) {
-        if (n->type == NODE_VAR || n->type == NODE_ASSIGN || n->type == NODE_LET || n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE ||
-            n->type == NODE_COMPOUND_ADD || n->type == NODE_COMPOUND_SUB || n->type == NODE_COMPOUND_MUL || n->type == NODE_COMPOUND_DIV || n->type == NODE_COMPOUND_MOD) {
+        if (n->type == NODE_LET) {
             if (get_local_reg(n->name) == -1) {
                 func_add_local(compiling_func, n->name);
-                next_free_reg++;
+            }
+        } else if (n->type == NODE_ASSIGN || n->type == NODE_COMPOUND_ADD || n->type == NODE_COMPOUND_SUB ||
+                   n->type == NODE_COMPOUND_MUL || n->type == NODE_COMPOUND_DIV || n->type == NODE_COMPOUND_MOD ||
+                   n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE) {
+            if (get_local_reg(n->name) == -1 && global_get_slot(n->name) == -1) {
+                func_add_local(compiling_func, n->name);
             }
         }
     }

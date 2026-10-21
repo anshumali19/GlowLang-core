@@ -16,6 +16,9 @@ end
 
 class Linear:
     func init(in_features, out_features):
+        if in_features == none:
+            return none
+        end
         self.in_features = in_features
         self.out_features = out_features
         

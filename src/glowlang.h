@@ -161,7 +161,8 @@ static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MA
    literals are kept exact as heap big-ints (stage 2 of the numeric tower). */
 #define INT53_MAX ((int64_t)9007199254740992LL)
 
-#define IS_DEOPT(v)      ((v) == (MASK_NAN | ((uint64_t)VAL_DEOPT << 48)))
+#define VAL_DEOPT_SENTINEL (MASK_NAN | ((uint64_t)VAL_NONE << 48) | 0xDE0FULL)
+#define IS_DEOPT(v)      ((v) == VAL_DEOPT_SENTINEL)
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
 /* Extract bits to type */
@@ -735,6 +736,7 @@ extern int global_lambda_count;
 typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
 extern ThreadStack active_stacks[128];
 extern int active_stack_count;
+extern volatile int threads_ever_spawned;
 extern pthread_mutex_t glow_gil;
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;

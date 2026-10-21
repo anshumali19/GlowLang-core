@@ -213,8 +213,19 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
         fprintf(stderr, "[DBG] jit_self_call_direct: fe=%p, &call_depth=%p, call_depth=%d, fe->body->baseline_jit_code=%p\n", (void*)fe, (void*)&call_depth, call_depth, (void*)(fe ? fe->body->baseline_jit_code : NULL));
         fflush(stderr);
     }
-    if (!fe || !fe->body || (!fe->body->baseline_jit_code && !fe->body->jit_code)) {
-        return MASK_NAN | ((uint64_t)VAL_DEOPT << 48); // deopt
+    if (!fe || !fe->body) {
+        return VAL_DEOPT_SENTINEL; // deopt
+    }
+    void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
+    if (!jit_code && fe->spec_count > 0) {
+        TypeSignature sig = compute_signature(args, fe->param_count);
+        void *spec = func_get_specialization(fe, sig);
+        if (spec && spec != (void*)1) {
+            jit_code = spec;
+        }
+    }
+    if (!jit_code) {
+        return VAL_DEOPT_SENTINEL; // deopt
     }
     if (call_depth >= 2000) {
         if (glow_jit_debug) {
@@ -225,7 +236,7 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
             fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 2000, deopt\n", call_depth);
             fflush(stderr);
         }
-        return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
+        return VAL_DEOPT_SENTINEL;
     }
 
     int new_base = vm_stack_top;
@@ -249,8 +260,7 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     typedef Value (*JITFunc)(Value *R, int *pc_idx);
     int deopt_pc = 0;
     call_depth++;
-    /* Use optimized JIT code if available, otherwise baseline JIT code. */
-    void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
+    /* Use resolved JIT code */
     if (glow_jit_debug) {
         fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d, calling JIT at %p\n", call_depth, jit_code);
         fflush(stderr);
@@ -277,7 +287,7 @@ Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
                 fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 2000, deopt\n", call_depth);
                 fflush(stderr);
             }
-            return MASK_NAN | ((uint64_t)VAL_DEOPT << 48);
+            return VAL_DEOPT_SENTINEL;
         }
 
         int new_base = vm_stack_top;
@@ -3316,6 +3326,16 @@ static Value native_dump_stack(int argc, Value *args) {
     return value_none();
 }
 
+static Value native_dict(int argc, Value *args) {
+    Dict *d = dict_new(argc > 0 ? (argc / 2 + 1) : 4);
+    for (int i = 0; i + 1 < argc; i += 2) {
+        if (GET_TYPE(args[i]) == VAL_STRING) {
+            dict_set(d, AS_STRING(args[i]), args[i + 1]);
+        }
+    }
+    return value_dict(d);
+}
+
 static Value native_assert(int argc, Value *args) {
     if (argc < 1 || !value_truthy(args[0])) {
         const char *msg = "Assertion failed";
@@ -3330,6 +3350,7 @@ static Value native_assert(int argc, Value *args) {
 
 void std_init(void) {
     var_set("assert", native_func_new("assert", native_assert));
+    var_set("dict", native_func_new("dict", native_dict));
     var_set("len", native_func_new("len", native_len));
     var_set("type", native_func_new("type", native_type));
     var_set("range", native_func_new("range", native_range));

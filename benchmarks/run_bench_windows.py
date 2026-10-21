@@ -4,7 +4,7 @@ import os
 import sys
 
 # Use Windows-compatible paths
-GLOWLANG = r"..\bin\glowlang.exe"
+GLOWLANG = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "glowlang.exe"))
 LANGUAGES = ["GlowLang", "C", "C++", "Java", "Python"]
 BENCHMARKS = ["Fibonacci", "Loop", "Ackermann", "N-Queens", "Dijkstra"]
 
