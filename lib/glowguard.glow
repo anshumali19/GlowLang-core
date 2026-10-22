@@ -1,5 +1,6 @@
-# GlowGuard - Production-grade Schema Validation and Security Library
-# Designed specifically for GlowLang to rival Zod and Pydantic.
+# GlowGuard - Declarative Schema Validation Library for GlowLang
+# Provides data validation and schema constraints (similar to Zod and Pydantic).
+# Note: Low-level memory safety and buffer protections are enforced at the C runtime level.
 
 blueprint ValidatorResult:
     action init(valid, data, errors):

@@ -33,6 +33,19 @@ func ai_min(a, b):
     return b
 end
 
+# Ensure tensor.ones(n) exists on native tensor module
+func _ai_tensor_ones(n):
+    let t = tensor.create(n)
+    let i = 0
+    while i < n:
+        t[i] = 1.0
+        i = i + 1
+    end
+    return t
+end
+tensor["ones"] = _ai_tensor_ones
+
+
 # ============================================================
 # Activation Functions
 # ============================================================
@@ -565,4 +578,13 @@ func load_model(net, filepath):
     return net
 end
 
-show "[GlowAI] Library loaded"
+# ============================================================
+# Pure GlowLang Transformer Architecture Integration
+# ============================================================
+# Exports: MultiHeadAttention, FeedForward, LayerNorm,
+#          TransformerEncoderLayer, TransformerEncoder,
+#          TransformerClassifier, positional_encoding, softmax
+import "lib/transformer.glow"
+
+show "[GlowAI] Library loaded (NeuralNet + Transformers)"
+

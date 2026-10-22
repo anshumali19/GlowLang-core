@@ -70,6 +70,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | IMPORT STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | USE STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | RETURN expr { $$ = newReturnNode($2); }
+    | RETURN { $$ = newReturnNode(newVarNode(intern_string("none"))); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
@@ -182,43 +183,43 @@ int glow_main(int argc, char **argv) {
         if (f) {
             fseek(f, 0, SEEK_END);
             long fsize = ftell(f);
-            fseek(f, -12, SEEK_END); // Marker is 12 bytes: "GLOW_ARCHIVE"
-            char marker[13];
-            if (fread(marker, 1, 12, f) == 12) {
-                marker[12] = '\0';
-                if (strcmp(marker, "GLOW_ARCHIVE") == 0) {
-                    fseek(f, -20, SEEK_END); // Read size (long)
-                    long script_size = 0;
-                    if (fread(&script_size, sizeof(long), 1, f) == 1) {
-                        fseek(f, fsize - 20 - script_size, SEEK_SET);
-                        char *script = malloc(script_size + 1);
-                        if (fread(script, 1, script_size, f) == (size_t)script_size) {
-                            script[script_size] = '\0';
-                            fclose(f);
+            if (fsize >= 20) {
+                fseek(f, -12, SEEK_END); // Marker is 12 bytes: "GLOW_ARCHIVE"
+                char marker[13];
+                if (fread(marker, 1, 12, f) == 12) {
+                    marker[12] = '\0';
+                    if (strcmp(marker, "GLOW_ARCHIVE") == 0) {
+                        fseek(f, -20, SEEK_END); // Read 8-byte uint64_t size
+                        uint64_t script_size = 0;
+                        if (fread(&script_size, sizeof(uint64_t), 1, f) == 1 && script_size < (uint64_t)fsize) {
+                            fseek(f, fsize - 20 - (long)script_size, SEEK_SET);
+                            char *script = malloc(script_size + 1);
+                            if (script && fread(script, 1, script_size, f) == (size_t)script_size) {
+                                script[script_size] = '\0';
+                                fclose(f);
 
-                            compiling_file = "<embedded>";
-                            root = NULL;
-                            YY_BUFFER_STATE bp = yy_scan_string(script);
-                            int parse_res = yyparse(); yy_delete_buffer(bp);
-                            free(script);
-                            if (parse_res != 0) {
-                                std_cleanup();
-                                return 1;
+                                compiling_file = "<embedded>";
+                                root = NULL;
+                                YY_BUFFER_STATE bp = yy_scan_string(script);
+                                int parse_res = yyparse(); yy_delete_buffer(bp);
+                                free(script);
+                                if (parse_res != 0) {
+                                    std_cleanup();
+                                    return 1;
+                                }
+                                if (root) {
+                                    Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
+                                    main_fe.body = main_bc; compile(root);
+                                    main_bc->local_count = next_free_reg;
+                                    bc_emit(main_bc, OP_RETURN, 0, 0);
+                                    optimize_bytecode(main_bc);
+                                    run_bytecode(main_bc, NULL, NULL, 0);
+                                    if (has_exception) print_error_trace(pending_exception);
+                                }
+                                std_cleanup(); return 0;
+                            } else {
+                                if (script) free(script);
                             }
-                            if (root) {
-                                Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
-                                main_fe.body = main_bc; compile(root);
-                                main_bc->local_count = next_free_reg;
-                                bc_emit(main_bc, OP_RETURN, 0, 0);
-                                optimize_bytecode(main_bc);
-                                pthread_mutex_lock(&glow_gil);
-                                run_bytecode(main_bc, NULL, NULL, 0);
-                                pthread_mutex_unlock(&glow_gil);
-                                if (has_exception) print_error_trace(pending_exception);
-                            }
-                            std_cleanup(); return 0;
-                        } else {
-                            free(script);
                         }
                     }
                 }
@@ -241,6 +242,7 @@ int glow_main(int argc, char **argv) {
         printf("  repl              Launch the interactive development shell\n");
         printf("  check <file.glow> Perform syntax and static analysis only\n");
         printf("  trace <file.glow> Execute with frame-by-frame VM tracing\n");
+        printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n\n");
@@ -278,26 +280,30 @@ int glow_main(int argc, char **argv) {
         while ((n = fread(buf, 1, sizeof(buf), fself)) > 0) fwrite(buf, 1, n, fout);
         fclose(fself);
 
+        uint64_t payload_sz = (uint64_t)src_size;
         fwrite(src_buf, 1, src_size, fout);
-        fwrite(&src_size, sizeof(long), 1, fout);
+        fwrite(&payload_sz, sizeof(uint64_t), 1, fout);
         fwrite("GLOW_ARCHIVE", 1, 12, fout);
         fclose(fout);
         free(src_buf);
         
+#ifndef _WIN32
         char chmod_cmd[1024]; snprintf(chmod_cmd, 1024, "chmod +x %s", out_file);
         if (system(chmod_cmd) == -1) {
             // handle error
         }
+#endif
         printf("Package created: %s\n", out_file);
         return 0;
     }
 
     if (strcmp(subcommand, "repl") == 0) {
         goto l_REPL;
-    } else if (strcmp(subcommand, "check") == 0 || strcmp(subcommand, "run") == 0 || strcmp(subcommand, "trace") == 0 || strcmp(subcommand, "--dump-bc") == 0) {
+    } else if (strcmp(subcommand, "check") == 0 || strcmp(subcommand, "run") == 0 || strcmp(subcommand, "trace") == 0 || strcmp(subcommand, "debug") == 0 || strcmp(subcommand, "--dump-bc") == 0) {
         int dump_bc = 0;
         int check_only = (strcmp(subcommand, "check") == 0);
         if (strcmp(subcommand, "trace") == 0) trace_mode = 1;
+        if (strcmp(subcommand, "debug") == 0) debug_mode = 1;
         const char *filename = NULL;
 
         if (strcmp(subcommand, "--dump-bc") == 0) {

@@ -1,32 +1,18 @@
-# Kavach: GlowLang Sovereign Cryptographic Shield & Hashing Package
-# Engineered for quantum-resilient data verification and tampering shields
+# Kavach: GlowLang Production Cryptographic Shield & Integrity Package
+# Built on top of native OpenSSL SHA-256 and HMAC cryptographic primitives
 
 blueprint KavachShield:
     action init(seed_num):
-        self.magic = 314159265
-        self.state = seed_num * 104729
+        self.secret_key = "kavach_key_" + seed_num
     end
 
     action compute_digest(message_str):
-        let h = self.state
-        let i = 0
-        let m_len = len(message_str)
-        while i < m_len:
-            h = (h * 33) + (i * 65537) + self.magic
-            let mod_val = h / 1000000007
-            h = h - (mod_val * 1000000007)
-            i = i + 1
-        end
-        if h < 0:
-            h = h * -1
-        end
-        return h
+        return crypto.sha256(message_str)
     end
 
     action forge_seal(data_str):
-        let d = self.compute_digest(data_str)
-        let seal_code = d * 13
-        return f"KAVACH-{seal_code}"
+        let sig = crypto.hmac(self.secret_key, data_str)
+        return "KAVACH-" + sig
     end
 
     action verify_seal(data_str, seal_token):
