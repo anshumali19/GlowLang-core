@@ -14,12 +14,16 @@
 typedef SRWLOCK pthread_mutex_t;
 #define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
 
+extern pthread_mutex_t glow_gil;
+
 static inline int pthread_mutex_lock(pthread_mutex_t *m) {
+    if (m == &glow_gil) return 0;
     AcquireSRWLockExclusive(m);
     return 0;
 }
 
 static inline int pthread_mutex_unlock(pthread_mutex_t *m) {
+    if (m == &glow_gil) return 0;
     ReleaseSRWLockExclusive(m);
     return 0;
 }
@@ -32,6 +36,13 @@ static inline int pthread_create(pthread_t *thread, void *attr, void *(*start_ro
 }
 
 static inline int pthread_detach(pthread_t thread) {
+    CloseHandle(thread);
+    return 0;
+}
+
+static inline int pthread_join(pthread_t thread, void **retval) {
+    (void)retval;
+    WaitForSingleObject(thread, INFINITE);
     CloseHandle(thread);
     return 0;
 }

@@ -628,4 +628,5 @@ when passed_tests == total_tests:
     show "ALL STRESS TESTS PASSED ✅"
 otherwise:
     show "SOME TESTS FAILED ❌"
+    os.exit(1)
 end

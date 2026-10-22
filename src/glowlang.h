@@ -49,7 +49,7 @@ typedef struct Node Node;
 typedef struct Bytecode Bytecode;
 typedef struct Instruction Instruction;
 typedef struct FuncEntry FuncEntry;
-typedef struct { Value callee; int argc; Value *args; } ThreadData;
+typedef struct { Value callee; int argc; Value *args; const char *name; } ThreadData;
 
 /* ================================================================
  *  GC & OBJECTS
@@ -161,7 +161,8 @@ static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MA
    literals are kept exact as heap big-ints (stage 2 of the numeric tower). */
 #define INT53_MAX ((int64_t)9007199254740992LL)
 
-#define IS_DEOPT(v)      ((v) == (MASK_NAN | ((uint64_t)VAL_DEOPT << 48)))
+#define VAL_DEOPT_SENTINEL (MASK_NAN | ((uint64_t)VAL_NONE << 48) | 0xDE0FULL)
+#define IS_DEOPT(v)      ((v) == VAL_DEOPT_SENTINEL)
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
 /* Extract bits to type */
@@ -727,6 +728,7 @@ extern THREAD_LOCAL const char *error_file;
 extern THREAD_LOCAL int error_line;
 extern THREAD_LOCAL int profiling_active;
 extern THREAD_LOCAL int trace_mode;
+extern THREAD_LOCAL int debug_mode;
 extern THREAD_LOCAL Bytecode *g_dbg_bc;
 extern THREAD_LOCAL Instruction *g_dbg_pc;
 extern int next_free_reg;
@@ -734,6 +736,7 @@ extern int global_lambda_count;
 typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
 extern ThreadStack active_stacks[128];
 extern int active_stack_count;
+extern volatile int threads_ever_spawned;
 extern pthread_mutex_t glow_gil;
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;
@@ -782,6 +785,12 @@ Value native_str_contains(int argc, Value *args);
 Value native_str_find(int argc, Value *args);
 Value native_str_slice(int argc, Value *args);
 Value native_str_split(int argc, Value *args);
+Value native_list_append(int argc, Value *args);
+Value native_list_pop(int argc, Value *args);
+Value native_list_len(int argc, Value *args);
+Value native_val_type(int argc, Value *args);
+Value native_type(int argc, Value *args);
+Value native_len(int argc, Value *args);
 Value list_pop(List *l);
 void list_insert(List *l, int idx, Value val);
 void list_remove(List *l, int idx);

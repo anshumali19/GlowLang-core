@@ -15,7 +15,7 @@ static void gc_mark_value(Value v);
 
 GCObject *gc_objects = NULL;
 size_t gc_allocated = 0;
-size_t gc_threshold = 128 * 1024 * 1024;
+size_t gc_threshold = 8 * 1024 * 1024;
 size_t gc_allocated_at_last_gc = 0;
 
 typedef struct GCBlock {
@@ -190,8 +190,25 @@ static void process_grey_stack(void) {
     }
 }
 
+static void gc_free_object_payload(GCObject *unmarked) {
+    if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
+    else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
+    else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
+    else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close(((SQLiteHandle*)unmarked)->db); }
+    else if (unmarked->type == OBJ_INSTANCE) { /* No fields array to free, Dict is handled as OBJ_DICT */ }
+    else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
+    else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
+    else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
+    else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
+    else if (unmarked->type == OBJ_CLOSURE) {
+        Closure *c = (Closure*)unmarked;
+        if (c->captured_names) free(c->captured_names);
+        if (c->captured_values) free(c->captured_values);
+    }
+}
+
 void gc_full_collect(void) {
-    int single_threaded = (active_stack_count <= 1);
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
     if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     for (int i=0; i<global_table.count; i++) gc_mark_value(global_table.values[i]);
     if (vm_last_class) gc_mark_value(value_class(vm_last_class));
@@ -215,20 +232,7 @@ void gc_full_collect(void) {
     while (*p) {
         if (!(*p)->marked) {
             GCObject *unmarked = *p; *p = unmarked->next;
-            if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
-            else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
-            else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
-            else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close(((SQLiteHandle*)unmarked)->db); }
-            else if (unmarked->type == OBJ_INSTANCE) { /* No fields array to free, Dict is handled as OBJ_DICT */ }
-            else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
-            else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
-            else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
-            else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
-            else if (unmarked->type == OBJ_CLOSURE) {
-                Closure *c = (Closure*)unmarked;
-                if (c->captured_names) free(c->captured_names);
-                if (c->captured_values) free(c->captured_values);
-            }
+            gc_free_object_payload(unmarked);
             if (gc_allocated >= unmarked->sz) gc_allocated -= unmarked->sz; else gc_allocated = 0;
             if (!unmarked->is_block_allocated) { free(unmarked); }
         } else {
@@ -243,16 +247,157 @@ void gc_full_collect(void) {
     while (gc_remembered_set) { RememberedSet *next = gc_remembered_set->next; gc_remembered_set->obj->in_remembered_set = 0; free(gc_remembered_set); gc_remembered_set = next; }
     gc_reclaim_empty_blocks();
     gc_allocated_at_last_gc = gc_allocated;
+    size_t next_threshold = (size_t)(gc_allocated * 1.5);
+    if (next_threshold < 8 * 1024 * 1024) next_threshold = 8 * 1024 * 1024;
+    gc_threshold = next_threshold;
     if (!single_threaded) pthread_mutex_unlock(&gc_mutex);
 }
 
-void gc_minor_collect(void) {
-    gc_full_collect();
+static void push_grey_minor(GCObject *obj) {
+    if (!obj || obj->marked || obj->generation != 0) return;
+    obj->marked = 1;
+    if (grey_count >= grey_capacity) {
+        grey_capacity = grey_capacity < 256 ? 256 : grey_capacity * 2;
+        grey_stack = realloc(grey_stack, grey_capacity * sizeof(GCObject*));
+    }
+    grey_stack[grey_count++] = obj;
 }
 
-#if 0
-static void gc_collect(void) { gc_full_collect(); }
-#endif
+static void gc_mark_value_minor(Value v) {
+    if (GET_TYPE(v) == VAL_OBJECT || GET_TYPE(v) == VAL_LIST || GET_TYPE(v) == VAL_DICT || GET_TYPE(v) == VAL_STRING) {
+        if (v & MASK_PAYLOAD) push_grey_minor((GCObject*)(uintptr_t)(v & MASK_PAYLOAD));
+    }
+}
+
+static void process_grey_stack_minor(void) {
+    while (grey_count > 0) {
+        GCObject *obj = grey_stack[--grey_count];
+        switch (obj->type) {
+            case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) gc_mark_value_minor(l->items[i]); break; }
+            case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; gc_mark_value_minor(it->iterable); break; }
+            case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { gc_mark_value_minor(d->values[i]); } } break; }
+            case OBJ_SQLITE_ITER: break; 
+            case OBJ_SQLITE_HANDLE: break;
+            case OBJ_BIGINT: break;
+            case OBJ_CLASS: { 
+                Class *c = (Class*)obj; 
+                push_grey_minor((GCObject*)c->methods); 
+                push_grey_minor((GCObject*)c->root_shape); 
+                if (c->stable_shape) push_grey_minor((GCObject*)c->stable_shape);
+                break; 
+            }
+            case OBJ_SHAPE: {
+                Shape *s = (Shape*)obj;
+                if (s->parent) push_grey_minor((GCObject*)s->parent);
+                push_grey_minor((GCObject*)s->transitions);
+                break;
+            }
+            case OBJ_TRAIT: {
+                Trait *t = (Trait*)obj;
+                push_grey_minor((GCObject*)t->methods);
+                break;
+            }
+            case OBJ_INSTANCE: { 
+                Instance *ins = (Instance*)obj; 
+                push_grey_minor((GCObject*)ins->klass); 
+                push_grey_minor((GCObject*)ins->properties); 
+                break; 
+            }
+            case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; gc_mark_value_minor(bm->instance); break; }
+            case OBJ_ROPE: {
+                RopeNode *rn = (RopeNode*)obj;
+                if (rn->is_leaf) gc_mark_value_minor(rn->leaf.flat_string);
+                else {
+                    push_grey_minor((GCObject*)rn->internal.left);
+                    push_grey_minor((GCObject*)rn->internal.right);
+                }
+                break;
+            }
+            case OBJ_PACKED_ARRAY: {
+                PackedArray *pa = (PackedArray*)obj;
+                if (pa->is_view && pa->base) {
+                    push_grey_minor((GCObject*)pa->base);
+                }
+                break;
+            }
+            case OBJ_STRING_BUILDER: break;
+            default: break;
+        }
+    }
+}
+
+void gc_minor_collect(void) {
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
+    if (!single_threaded) pthread_mutex_lock(&gc_mutex);
+    for (int i=0; i<global_table.count; i++) gc_mark_value_minor(global_table.values[i]);
+    if (vm_last_class) gc_mark_value_minor(value_class(vm_last_class));
+    if (vm_last_trait) gc_mark_value_minor(value_trait(vm_last_trait));
+    for (int i = 0; i < gc_const_roots_len; i++) gc_mark_value_minor(gc_const_roots[i]);
+    pthread_mutex_lock(&threads_mutex);
+    for (int i=0; i<active_stack_count; i++) {
+        Value *stk = *(active_stacks[i].vm_stack_ptr);
+        int stk_sp = *(active_stacks[i].top_ptr);
+        if (stk) {
+            int lim = stk_sp + 65536;
+            if (lim > vm_stack_size) lim = vm_stack_size;
+            for (int j=0; j<lim; j++) gc_mark_value_minor(stk[j]);
+        }
+        gc_mark_value_minor(*(active_stacks[i].pending_exc_ptr));
+    }
+    pthread_mutex_unlock(&threads_mutex);
+
+    for (RememberedSet *rs = gc_remembered_set; rs; rs = rs->next) {
+        GCObject *obj = rs->obj;
+        if (!obj) continue;
+        switch (obj->type) {
+            case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) gc_mark_value_minor(l->items[i]); break; }
+            case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) gc_mark_value_minor(d->values[i]); } break; }
+            case OBJ_INSTANCE: { Instance *ins = (Instance*)obj; push_grey_minor((GCObject*)ins->properties); break; }
+            default: break;
+        }
+    }
+
+    process_grey_stack_minor();
+
+    GCObject **p = &gc_objects;
+    while (*p) {
+        GCObject *obj = *p;
+        if (obj->generation == 0) {
+            if (!obj->marked) {
+                *p = obj->next;
+                gc_free_object_payload(obj);
+                if (gc_allocated >= obj->sz) gc_allocated -= obj->sz; else gc_allocated = 0;
+                if (obj->is_block_allocated && obj->block_ptr) {
+                    GCBlock *b = (GCBlock*)obj->block_ptr;
+                    if (b->live_count > 0) b->live_count--;
+                } else {
+                    free(obj);
+                }
+            } else {
+                obj->marked = 0;
+                obj->generation = 1; // Promote
+                p = &((*p)->next);
+            }
+        } else {
+            p = &((*p)->next);
+        }
+    }
+
+    while (gc_remembered_set) {
+        RememberedSet *next = gc_remembered_set->next;
+        gc_remembered_set->obj->in_remembered_set = 0;
+        free(gc_remembered_set);
+        gc_remembered_set = next;
+    }
+
+    gc_reclaim_empty_blocks();
+    gc_allocated_at_last_gc = gc_allocated;
+    if (!single_threaded) pthread_mutex_unlock(&gc_mutex);
+
+    if (gc_allocated > gc_threshold) {
+        gc_full_collect();
+    }
+}
 
 void* gc_alloc(size_t sz, ObjType type) {
     static bool checked_env = false;
@@ -272,10 +417,10 @@ void* gc_alloc(size_t sz, ObjType type) {
     if (!gc_nogc) {
         if (gc_forcefull) gc_full_collect();
         else if (gc_allocated > gc_threshold) gc_full_collect();
-        else if (allocated_since_gc > gc_threshold / 2) gc_full_collect();
+        else if (allocated_since_gc >= 2 * 1024 * 1024) gc_minor_collect();
     }
     
-    int single_threaded = (active_stack_count <= 1);
+    int single_threaded = !threads_ever_spawned && (active_stack_count <= 1);
     if (!single_threaded) pthread_mutex_lock(&gc_mutex);
     
     sz = (sz + 7) & ~7;

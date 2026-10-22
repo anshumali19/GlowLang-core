@@ -24,10 +24,55 @@ trace.log
 # Package cache
 .glow_pkg/.cache/
 
-# Temp files
+# Temp files and build outputs
 *.tmp
 *.swp
 *~
+*.obj
+*.pdb
+*.class
+*.exe
+*.msi
+*.zip
+tmp_*
+test_out.txt
+test_err.txt
+dis_*.txt
+enter*.txt
+dumpb.sh
+addr*.sh
+azfix.sh
+asan_cmp.sh
+bisect.sh
+fc_test.sh
+fix_test.sh
+lookup.sh
+noopt_test.sh
+run_arg.sh
+run_mv.sh
+test_mv.sh
+traceoff.sh
+win_sweep.sh
+disdump.sh
+disodd.sh
+runtests*.bat
+compile_test*.bat
+build_*.bat
+build2.bat
+test.glow
+1
+=
+add_debug*.py
+cmpdis.py
+disgrep.py
+disrsi*.py
+ins_arg.py
+maxoff.py
+
+# Build folders and distribution
+build/
+build_*/
+dist/
 
 # Build tools
 node_modules/

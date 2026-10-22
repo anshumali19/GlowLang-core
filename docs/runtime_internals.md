@@ -56,15 +56,15 @@ The lexer tokenizes GlowLang source code using a flex-generated scanner. Key res
 **File:** `src/glowlang.y`
 
 The parser transforms tokens into an Abstract Syntax Tree (AST). GlowLang uses a bison-generated LALR(1) parser with:
-- **183K+ lines** of grammar rules covering all language constructs
+- **447 lines** of grammar rules covering all language constructs
 - Precedence and associativity declarations for all operators
-- Error recovery productions for meaningful error messages
-- Inline compilation: AST nodes are compiled to bytecode during parsing
+- Error handling productions for syntax reporting
+- Inline compilation: AST nodes are constructed on an arena allocator and compiled to bytecode
 
-### AST Construction
-**File:** `src/ast.c`
+### AST Construction & Arena Allocation
+**Files:** `src/compiler.c`, `src/arena.c`
 
-The AST represents program structure as a tree of nodes. Each node type corresponds to a language construct (variable declaration, function call, class definition, etc.). The compiler walks this tree to emit bytecode.
+The AST represents program structure as a tree of nodes (`ASTNode`). Node memory is allocated using bump-pointer allocation in `src/arena.c`. The bytecode compiler (`src/compiler.c`) walks this tree to emit register bytecode and frees the arena in bulk upon compilation completion.
 
 ---
 
@@ -134,7 +134,7 @@ This pass uses AVX2/SSE on x86-64 and NEON on ARM64.
 
 ## 4. Register-Based Virtual Machine
 
-**File:** `src/run_bytecode_optimized.c`
+**File:** `src/vm.c`
 
 The VM is the primary execution engine, running optimized bytecode through a direct-threaded dispatch loop.
 
@@ -248,9 +248,10 @@ When a guard fails, the JIT performs **deoptimization**:
 
 | Target | Status | Notes |
 |--------|--------|-------|
-| x86-64 | ✅ Full | SSE/AVX2 SIMD support |
-| ARM64 | ✅ Full | NEON SIMD support |
-| WASM | ✅ Full | WebAssembly output for browser deployment |
+| x86-64 (System V) | ✅ Full | Linux / macOS AMD64 ABI; SSE/AVX2 SIMD support |
+| x86-64 (Microsoft x64) | ✅ Full | Windows x64 ABI; 32-byte shadow space; 16-byte stack alignment |
+| ARM64 | ⚠️ Experimental | Stubbed JIT backend; VM interpreter fallback with NEON support |
+| WASM | ⚠️ Experimental | WebAssembly interpreter build via Emscripten |
 
 ---
 
@@ -258,28 +259,35 @@ When a guard fails, the JIT performs **deoptimization**:
 
 ### Generational Garbage Collector
 
-**Architecture:** Two-generation mark-and-sweep with write barriers.
+**Architecture:** Two-generation mark-and-sweep with write barriers and young-generation nursery scavenge.
 
 ```
 ┌─────────────────────┐     ┌─────────────────────┐
 │     Nursery (Gen 0) │     │   Old Gen (Gen 1)   │
 │                     │     │                     │
 │  New allocations    │────▶│  Survived objects   │
-│  Short-lived objects│     │  Long-lived objects  │
+│  (2 MB threshold)   │     │  (8 MB initial cap) │
 │                     │     │                     │
-│  Collected often    │     │  Collected rarely    │
+│  Scavenged quickly  │     │  Mark-and-sweep     │
 └─────────────────────┘     └─────────────────────┘
 ```
 
 **Nursery (Generation 0):**
-- All new objects are allocated here
-- Collected frequently with low-latency sweeps
-- Objects that survive N collections are promoted to Old Gen
+- All new heap objects (`Value` allocations) start in Gen 0.
+- A 2 MB young generation threshold triggers `gc_minor_collect()`.
+- Active roots on the VM stack are traced, and surviving live objects are promoted directly to Gen 1 (`gc_gen = 1`), avoiding scanning the full tenured heap.
 
 **Old Generation (Generation 1):**
-- Long-lived objects
-- Collected infrequently with full mark-and-sweep
-- Write barriers track cross-generational references
+- Long-lived objects promoted from Gen 0.
+- When the tenured heap reaches its threshold (initial 8 MB, dynamically tuned), `gc_collect()` runs a full mark-and-sweep cycle across both generations.
+- Generational write barriers track any cross-generational references.
+
+### Hardware MMU Guard Pages (`glow_alloc_guarded`)
+
+For security-critical buffers and high-assurance applications, `src/arena.c` provides `glow_alloc_guarded(size)`:
+- Allocates memory aligned to OS page boundaries (`VirtualAlloc` on Windows, `mmap` on POSIX).
+- Configures an adjacent trailing guard page with hardware `PAGE_NOACCESS` / `PROT_NONE` permissions.
+- Any buffer overrun immediately raises a hardware CPU exception (`EXCEPTION_ACCESS_VIOLATION` / `SIGSEGV`), preventing memory corruption and exploits.
 
 ### Arena Allocator
 **File:** `src/arena.c`, `src/arena.h`
@@ -339,36 +347,35 @@ GlowLang provides lazy iterators for collections:
 
 ## 8. Concurrency Model
 
-### Thread Architecture
-GlowLang uses **OS-level threads** (pthreads on Linux/macOS) with a **Global Interpreter Lock (GIL)**:
+### Multi-Core Thread Architecture (GIL Abolished)
+GlowLang executes concurrent tasks using true native OS threads (`CreateThread` on Windows, `pthread_create` on POSIX) with the Global Interpreter Lock (GIL) abolished:
 
 ```
-┌────────────┐  ┌────────────┐  ┌────────────┐
-│  Thread 1  │  │  Thread 2  │  │  Thread 3  │
-│  (worker)  │  │  (worker)  │  │  (worker)  │
-└─────┬──────┘  └─────┬──────┘  └─────┬──────┘
-      │               │               │
-      └───────┬───────┘───────┬───────┘
-              │               │
-       ┌──────▼──────┐  ┌─────▼─────┐
-       │    GIL      │  │  I/O      │
-       │  (CPU work) │  │  (no GIL) │
-       └─────────────┘  └───────────┘
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│     Thread 1     │    │     Thread 2     │    │     Thread 3     │
+│   (VM Stack 1)   │    │   (VM Stack 2)   │    │   (VM Stack 3)   │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+   ┌───────────┐           ┌───────────┐           ┌───────────┐
+   │ CPU Core  │           │ CPU Core  │           │ CPU Core  │
+   │ (Parallel)│           │ (Parallel)│           │ (Parallel)│
+   └───────────┘           └───────────┘           └───────────┘
 ```
 
-- **CPU-bound work:** One thread holds the GIL at a time
-- **I/O operations:** GIL is released during `os.sleep()`, `http.*`, `sqlite.*`, etc.
-- **`spawn`:** Creates a new OS thread that competes for the GIL
+- **True Parallel CPU Execution:** Each thread runs independently with isolated VM register frames and thread-local execution state.
+- **Unrestricted I/O and Compute:** Threads do not synchronize or block on a global interpreter lock; parallel loops and computations utilize multiple hardware CPU cores concurrently.
+- **`spawn`:** Launches an asynchronous OS thread executing the target function with arguments mapped directly into the new thread's register window.
 
 ### Spawn Mechanics
 ```glow
 spawn worker(arg1, arg2)
 ```
 
-1. Allocate a new thread structure
-2. Clone function arguments
-3. Create OS thread via `pthread_create`
-4. New thread acquires GIL when scheduled
+1. Bytecode compiler lowers `spawn` calls into `OP_SPAWN`, capturing target function address and argument registers.
+2. The runtime packages the function and arguments into a `ThreadData` bundle.
+3. An OS thread is spawned (`CreateThread` / `pthread_create`), launching `thread_wrapper()`.
+4. `thread_wrapper()` provisions a dedicated VM stack, aligns argument registers, and executes the target bytecode concurrently on an available CPU core.
 
 ---
 
