@@ -1,0 +1,5 @@
+# GlowLang Dependency Lock File
+# Generated: 2026-10-11T11:52:54Z
+# DO NOT EDIT — run 'gdu resolve' to regenerate
+
+transformer@1.0.0

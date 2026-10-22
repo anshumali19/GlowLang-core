@@ -16,12 +16,9 @@ func tensor_ones(shape):
     for each dim in shape:
         size = size * dim
     end
-    let t = tensor.create(size)
-    for i from 0 to size - 1:
-        tensor.set(t, i, 1.0)
-    end
-    return t
+    return tensor.ones(size)
 end
+
 
 func tensor_rand(shape):
     let size = 1

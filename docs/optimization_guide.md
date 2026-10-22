@@ -397,22 +397,22 @@ end
 
 ## 8. Concurrency Performance
 
-### I/O-Bound: Spawn Freely
+### Multi-Core Parallelism: Spawn Freely
+With the Global Interpreter Lock (GIL) abolished, `spawn` executes tasks across multiple CPU cores in true parallel without lock serialization:
+
 ```glow
-# ✅ True parallelism for I/O
-spawn fetch_from_api(url1)
-spawn fetch_from_api(url2)
-spawn fetch_from_api(url3)
+# ✅ True CPU parallelism: runs simultaneously on multiple hardware cores
+spawn compute_shard(partition1)
+spawn compute_shard(partition2)
+spawn compute_shard(partition3)
 ```
 
-### CPU-Bound: Use Tensors
-```glow
-# ❌ Spawning CPU work: GIL limits parallelism
-spawn compute_sum(data1)
-spawn compute_sum(data2)
+### Vectorized Math: Combine Concurrency with SIMD
+For high-density numeric operations, combine multi-core worker threads with hardware AVX2 SIMD tensor operations:
 
-# ✅ Use tensor operations: they release GIL and use SIMD
-let result = tensor.add(data1, data2)   # Parallel + SIMD
+```glow
+# ✅ Vectorized SIMD matrix multiplication
+let result = tensor.matmul(A, m, k, B, k, n)
 ```
 
 ---
