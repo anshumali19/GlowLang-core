@@ -1,0 +1,16 @@
+x is y
+x is not z
+3 is in my_list
+10 is not in my_list
+Testing string membership:
+'c' is in 'abcde'
+'z' is not in 'abcde'
+Testing dict membership:
+'name' is in my_dict
+'author' is not in my_dict
+Looping from 1 to 5:
+1
+2
+3
+4
+5

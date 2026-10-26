@@ -1,0 +1,10 @@
+Init tests_run:  0
+Init tests_run:  0
+Running test_jit...
+   jit incremented tests_run to:  1
+tests_run after jit:  1
+Running test_concurrency...
+   concurrency incremented tests_run to:  2
+tests_run after concurrency:  2
+Final tests_run:  2
+   worker  1

@@ -8,10 +8,10 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     # Also disable some specific type conversion warnings to clear the build output
     add_compile_options(/wd4267 /wd4244 /wd4133 /wd4013 /wd4102)
-    # The JIT recurses via a C shim (jit_self_call) plus the generated prologue,
-    # i.e. ~2 machine-stack frames per logical recursion level, so deep recursion
-    # needs a much larger stack than the 1MB default to reach the interpreter's
-    # recursion-depth guard. Reserve 512 MB (committed 4 MB) to match behaviour.
+    # Compiled recursion uses native stack frames. The runtime checks how much
+    # stack is left and raises a recursion error before it runs out, but a big
+    # reservation lets deep recursion reach the 65,500-call limit. Reserve
+    # 512 MB (4 MB committed), as scripts/build-windows.ps1 does.
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:536870912,4194304")
     # Statically link the MSVC C runtime so the shipped .exe has no VCRUNTIME140
     # dependency. Combined with the x64-windows-static vcpkg triplet (OpenSSL +
@@ -26,14 +26,8 @@ if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang")
     # Enable optimization by default for release
     set(CMAKE_C_FLAGS_RELEASE "-O2")
     set(CMAKE_C_FLAGS_DEBUG "-O1 -g -fsanitize=address -fno-omit-frame-pointer")
-
-    # Only apply AVX2 and SSE4.2 if on x86_64 to remain cross-platform compatible
-    include(CheckCCompilerFlag)
-    check_c_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
-    check_c_compiler_flag("-msse4.2" COMPILER_SUPPORTS_SSE42)
-    if(COMPILER_SUPPORTS_AVX2 AND COMPILER_SUPPORTS_SSE42)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx2 -msse4.2")
-    endif()
+    # No -mavx2: the SIMD tensor kernels are compiled for AVX2+FMA one by one
+    # and selected at run time (CPUID), so the binary runs on any x86-64 CPU.
 endif()
 
 # Find external dependencies
@@ -74,6 +68,7 @@ set(GLOW_SOURCES
     src/gc.c
     src/stdlib.c
     src/bigint.c
+    src/regex.c
 )
 
 if(CUDAToolkit_FOUND)
@@ -105,8 +100,9 @@ endif()
 if(NOT MSVC)
     target_link_libraries(glowlang PRIVATE m)
 else()
-    # Static OpenSSL on Windows requires crypt32 (and ws2_32 for our sockets).
-    target_link_libraries(glowlang PRIVATE ws2_32 crypt32)
+    # Static OpenSSL on Windows requires crypt32 (and ws2_32 for our sockets);
+    # dbghelp symbolizes native backtraces in crash reports.
+    target_link_libraries(glowlang PRIVATE ws2_32 crypt32 dbghelp)
 endif()
 
 if(UNIX AND NOT APPLE AND X11_FOUND)

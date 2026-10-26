@@ -1,10 +1,15 @@
 use "datetime.glow"
 
-let dt = datetime_now()
-show "Current Date and Time: " , dt.to_string()
+# A fixed instant (2023-11-15 12:00:00 UTC). Only date fields are printed,
+# which are the same in every time zone between UTC-11 and UTC+11.
+let dt = DateTime(1700049600)
 show "Year: " , dt.get_year()
 show "Month: " , dt.get_month()
 show "Day: " , dt.get_day()
 
 # Test formatting
 show "Custom Format: " , dt.format("%A, %B %d, %Y")
+
+# datetime_now() returns the current time.
+let now = datetime_now()
+show "Now is after the fixed date: ", now.timestamp > dt.timestamp

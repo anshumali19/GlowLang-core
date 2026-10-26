@@ -1,0 +1,4 @@
+Parsed ID:  101
+Is Active:  true
+First Score:  90
+Stringified back:  {"id": 101, "scores": [90, 85, 92], "active": true}

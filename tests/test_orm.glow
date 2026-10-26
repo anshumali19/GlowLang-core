@@ -3,7 +3,8 @@
 use "lib/db.glow"
 
 show "=== Testing ORM Model ==="
-let m = Model("orm_test.db")
+# In-memory database: every run starts empty.
+let m = Model(":memory:")
 
 let schema = {"name": "TEXT", "age": "INTEGER"}
 m.create_table("users", schema)

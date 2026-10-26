@@ -1,5 +1,8 @@
 # Comprehensive Cross-Language Benchmark Report (June 2026 Edition)
 
+> **Historical report.** These numbers were collected by hand on an earlier build and cannot be reproduced with the scripts in this repository. That build gave a wrong answer for Ackermann(3, 8), and its Windows binary used switch dispatch, not the direct-threaded dispatch credited below. For current, reproducible measurements see [RESULTS.md](RESULTS.md).
+
+
 ## Executive Summary
 
 This report delivers a comprehensive performance benchmarking analysis comparing **GlowLang** against the languages installed on the system (**C**, **C++**, **Node.js**, **Python 3**, **Perl**) as well as two chosen extra standalone installations (**Go 1.22** and **Lua 5.4**). All benchmarks evaluate full runtime execution time (averaging 3 runs after warmup) across 5 standard algorithmic suites.

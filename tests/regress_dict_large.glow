@@ -1,0 +1,27 @@
+# Dicts with more distinct keys than the old fixed 65,536-entry intern table:
+# inserts used to slow to seconds, and d.keys() crashed.
+let d = {}
+let i = 0
+while i < 100000:
+    d["key_" + i] = i
+    i = i + 1
+end
+show "len(keys):", len(d.keys())
+show "first:", d["key_0"], "last:", d["key_99999"]
+d["key_99999"] = -1
+show "overwritten:", d["key_99999"], "len:", len(d.keys())
+show "missing key:", d["no_such_key"]
+show "has key_5:", d.has("key_5"), "has nope:", d.has("nope")
+d.remove("key_5")
+show "after remove:", d.has("key_5"), len(d.keys())
+
+# Looking up many distinct missing keys must not grow anything.
+let misses = 0
+i = 0
+while i < 50000:
+    if d.has("absent_" + i):
+        misses = misses + 1
+    end
+    i = i + 1
+end
+show "unexpected hits:", misses

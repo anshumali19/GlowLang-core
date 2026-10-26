@@ -1,0 +1,8 @@
+In try block
+Caught exception: Oops, something went wrong!
+After try-catch
+In nested try
+Caught nested: Nested error
+Caught outer: Propagated error
+In test_func
+Caught from function: Error from function

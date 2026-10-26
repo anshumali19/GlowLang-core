@@ -1,0 +1,6 @@
+Testing Database Ecosystem
+SQLite row count:  2
+User:  Alice  (ID:  1 )
+User:  Bob  (ID:  2 )
+Attempting Redis connection...
+Redis check complete.

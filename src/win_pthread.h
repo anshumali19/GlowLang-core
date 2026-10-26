@@ -11,26 +11,43 @@
 #include <winsock2.h>
 #include <windows.h>
 
+/* Minimal POSIX-thread shim over SRW locks and condition variables. Every
+   mutex really locks: the GIL is implemented on top of these primitives in
+   vm.c, so nothing here may special-case it. */
 typedef SRWLOCK pthread_mutex_t;
 #define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
 
-extern pthread_mutex_t glow_gil;
-
 static inline int pthread_mutex_lock(pthread_mutex_t *m) {
-    if (m == &glow_gil) return 0;
     AcquireSRWLockExclusive(m);
     return 0;
 }
 
 static inline int pthread_mutex_unlock(pthread_mutex_t *m) {
-    if (m == &glow_gil) return 0;
     ReleaseSRWLockExclusive(m);
+    return 0;
+}
+
+typedef CONDITION_VARIABLE pthread_cond_t;
+#define PTHREAD_COND_INITIALIZER CONDITION_VARIABLE_INIT
+
+static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+    return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : -1;
+}
+
+static inline int pthread_cond_broadcast(pthread_cond_t *c) {
+    WakeAllConditionVariable(c);
+    return 0;
+}
+
+static inline int pthread_cond_signal(pthread_cond_t *c) {
+    WakeConditionVariable(c);
     return 0;
 }
 
 typedef HANDLE pthread_t;
 
 static inline int pthread_create(pthread_t *thread, void *attr, void *(*start_routine) (void *), void *arg) {
+    (void)attr;
     *thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)start_routine, arg, 0, NULL);
     return *thread == NULL;
 }

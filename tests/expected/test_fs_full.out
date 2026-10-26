@@ -1,0 +1,11 @@
+--- fs.exists ---
+true
+false
+--- fs.size ---
+10
+--- fs.mkdir / fs.remove ---
+true
+false
+--- fs.read / fs.write ---
+hello glowlang
+fs tests passed

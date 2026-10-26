@@ -1,0 +1,28 @@
+=== Advanced Profiler Tests ===
+Test 1: profiler_time
+[PROFILE] slow_work: {{ANY}}s
+Elapsed: {{ANY}}
+PASS: profiler_time returned non-negative
+Test 2: profiler_memory
+Memory: {{ANY}}
+PASS: profiler_memory returned non-negative
+Test 3: profiler_report
+=== GlowLang Profiler Report ===
+GC Allocated: {{ANY}}
+GC Threshold: {{ANY}}
+================================
+PASS: profiler_report completed
+Test 4: profiler start/stop
+
+--- Performance Hot-Spots ---
+  Executions | Source Location
+  -----------+------------------
+       45009 | tests/test_profiler_advanced.glow:40
+       15009 | tests/test_profiler_advanced.glow:39
+           2 | tests/test_profiler_advanced.glow:38
+           2 | lib/profiler.glow:12
+           2 | tests/test_profiler_advanced.glow:42
+           2 | lib/profiler.glow:17
+------------------------------
+PASS: profiler start/stop completed
+=== All Advanced Profiler Tests Passed ===

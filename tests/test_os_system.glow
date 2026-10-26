@@ -1,4 +1,6 @@
-# Test os.system
-result = os.system("echo ok > /dev/null")
+# Test os.system: the exit status of the command is returned.
+result = os.system("exit 0")
 show "os.system exit:", result
+failed = os.system("exit 3")
+show "os.system failing exit:", failed
 show "os.system test passed"

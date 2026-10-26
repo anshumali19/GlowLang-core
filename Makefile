@@ -1,9 +1,12 @@
 CC = gcc
 NVCC := $(shell command -v nvcc 2> /dev/null)
 
-CFLAGS = -O2 -lm -pthread -lssl -lcrypto -mavx2 -msse4.2
-CFLAGS_ASAN = -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 -fsanitize=address -fno-omit-frame-pointer
-CFLAGS_TSAN = -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 -fsanitize=thread -fno-omit-frame-pointer
+# No -mavx2/-msse4.2: the SIMD tensor kernels are compiled for AVX2+FMA
+# individually and chosen at run time (CPUID), so one binary runs on any
+# x86-64 CPU, and the same flags work on ARM64.
+CFLAGS = -O2 -lm -pthread -lssl -lcrypto
+CFLAGS_ASAN = -O1 -g -lm -pthread -lssl -lcrypto -fsanitize=address -fno-omit-frame-pointer
+CFLAGS_TSAN = -O1 -g -lm -pthread -lssl -lcrypto -fsanitize=thread -fno-omit-frame-pointer
 
 FLEX = flex
 BISON = bison
@@ -14,6 +17,13 @@ BIN_DIR = bin
 
 GLOWLANG_BIN = $(BIN_DIR)/glowlang
 GDU_BIN = $(BIN_DIR)/gdu
+
+# Hand-written runtime sources (the lexer and parser are generated).
+RUNTIME_SRC = $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c \
+              $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c $(SRC_DIR)/regex.c
+GENERATED_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c
+ALL_SRC = $(GENERATED_SRC) $(RUNTIME_SRC)
+DEPS = $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(RUNTIME_SRC) $(wildcard $(SRC_DIR)/*.h)
 
 all: $(GLOWLANG_BIN) $(GDU_BIN)
 
@@ -30,45 +40,56 @@ $(SRC_DIR)/cuda/tensor_ops.o: $(SRC_DIR)/cuda/tensor_ops.cu
 	$(NVCC) -c $(SRC_DIR)/cuda/tensor_ops.cu -o $(SRC_DIR)/cuda/tensor_ops.o -O2
 endif
 
-$(GLOWLANG_BIN): $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c $(CUDA_OBJ)
+define generate
 	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
 	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	$(CC) $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c $(CUDA_OBJ) -o $(GLOWLANG_BIN) $(CFLAGS) $(LDFLAGS)
-	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+endef
 
-test-sanitized: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c
+define clean-generated
+	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+endef
+
+$(GLOWLANG_BIN): $(DEPS) $(CUDA_OBJ)
+	mkdir -p $(BIN_DIR)
+	$(generate)
+	$(CC) $(ALL_SRC) $(CUDA_OBJ) -o $(GLOWLANG_BIN) $(CFLAGS) $(LDFLAGS)
+	$(clean-generated)
+
+# The test runner compares each test's output with tests/expected/.
+test: $(GLOWLANG_BIN)
+	GLOWLANG_BIN=./$(GLOWLANG_BIN) ./scripts/run-tests.sh
+
+test-sanitized: $(DEPS)
+	mkdir -p $(BIN_DIR)
 	@echo "Building with AddressSanitizer..."
-	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
-	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	$(CC) $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c -o $(BIN_DIR)/glowlang_asan $(CFLAGS_ASAN) -lsqlite3 -lX11
+	$(generate)
+	$(CC) $(ALL_SRC) -o $(BIN_DIR)/glowlang_asan $(CFLAGS_ASAN) $(LDFLAGS)
 	@echo "Running tests with ASan..."
-	GLOWLANG_BIN=./bin/glowlang_asan ./run_all_tests.sh
+	ASAN_OPTIONS=detect_leaks=0 GLOWLANG_BIN=./$(BIN_DIR)/glowlang_asan ./scripts/run-tests.sh
 	@echo "Building with ThreadSanitizer..."
-	$(CC) $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c -o $(BIN_DIR)/glowlang_tsan $(CFLAGS_TSAN) -lsqlite3 -lX11
+	$(CC) $(ALL_SRC) -o $(BIN_DIR)/glowlang_tsan $(CFLAGS_TSAN) $(LDFLAGS)
 	@echo "Running tests with TSan..."
-	GLOWLANG_BIN=./bin/glowlang_tsan ./run_all_tests.sh
-	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+	GLOWLANG_BIN=./$(BIN_DIR)/glowlang_tsan ./scripts/run-tests.sh
+	$(clean-generated)
 
-fuzz-parser: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c
-	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
-	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	$(CC) tests/c_harness/fuzz_parser.c $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c -o $(BIN_DIR)/fuzz_parser $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -lsqlite3 -lX11
+fuzz-parser: $(DEPS)
+	mkdir -p $(BIN_DIR)
+	$(generate)
+	$(CC) tests/c_harness/fuzz_parser.c $(ALL_SRC) -o $(BIN_DIR)/fuzz_parser $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION $(LDFLAGS)
 	./$(BIN_DIR)/fuzz_parser
-	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+	$(clean-generated)
 
 $(GDU_BIN): $(TOOLS_DIR)/gdu.c
+	mkdir -p $(BIN_DIR)
 	$(CC) $(TOOLS_DIR)/gdu.c -o $(GDU_BIN) $(CFLAGS) -lsqlite3
 
-FUZZ_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c
-FUZZ_LIBS = -lsqlite3 -lX11
-
-# Build a fuzz harness helper (call: $(call build-fuzz,harness_name))
+# Build and run a fuzz harness (call: $(call build-fuzz,harness_name))
 define build-fuzz
-	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
-	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	$(CC) tests/c_harness/$(1).c $(FUZZ_SRC) -o $(BIN_DIR)/$(1) $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION $(FUZZ_LIBS)
+	mkdir -p $(BIN_DIR)
+	$(generate)
+	$(CC) tests/c_harness/$(1).c $(ALL_SRC) -o $(BIN_DIR)/$(1) $(CFLAGS_ASAN) -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION $(LDFLAGS)
 	ASAN_OPTIONS=detect_leaks=0 ./$(BIN_DIR)/$(1)
-	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+	$(clean-generated)
 endef
 
 fuzz-bytecode:
@@ -97,8 +118,7 @@ tools: $(GDU_BIN)
 	@echo "All tools built successfully."
 
 # Full verification pipeline
-verify: all
-	./run_all_tests.sh
+verify: all test
 	@echo "All tests passed."
 
 clean:
@@ -106,8 +126,10 @@ clean:
 	rm -f bin/fuzz_* bin/glow_profiler bin/glow_inspector bin/glow_debugger
 	rm -f bin/glowlang_asan bin/glowlang_tsan
 
-wasm: $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(SRC_DIR)/lsp.c $(SRC_DIR)/glowlang.h $(SRC_DIR)/lsp.h $(SRC_DIR)/arena.c $(SRC_DIR)/arena.h $(SRC_DIR)/jit.c $(SRC_DIR)/jit.h $(SRC_DIR)/opt.c $(SRC_DIR)/opt.h $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c
-	$(FLEX) -o $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.l
-	$(BISON) -Wnone -d -o $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.y
-	emcc $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c -o $(BIN_DIR)/glowlang.js -O3 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS='["cwrap"]' -lm
-	rm -f $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c $(SRC_DIR)/glowlang.tab.h
+wasm: $(DEPS)
+	mkdir -p $(BIN_DIR)
+	$(generate)
+	emcc $(ALL_SRC) -o $(BIN_DIR)/glowlang.js -O3 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS='["cwrap"]' -lm
+	$(clean-generated)
+
+.PHONY: all test test-sanitized fuzz-parser fuzz-bytecode fuzz-runtime fuzz-gc fuzz-string fuzz-module fuzz-all tools verify clean wasm

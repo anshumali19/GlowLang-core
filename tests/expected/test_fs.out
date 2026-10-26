@@ -1,0 +1,5 @@
+Created __test_fs_dir
+Entries: 2
+has a.txt: true
+has b.txt: true
+Removed __test_fs_dir: true

@@ -1,0 +1,18 @@
+=== OOP Stress Test ===
+Rex says Woof
+Rex eats bone
+Rex energy: 110
+Calc result:  12
+Team: GlowLang Core (3 members)
+  - Alice
+  - Bob
+  - Charlie
+State Machine:
+  Transition: idle -> running (on start)
+  Transition: running -> paused (on pause)
+  Transition: paused -> running (on resume)
+  Transition: running -> idle (on stop)
+Final state: idle
+Generated SQL: SELECT name, age FROM users WHERE age > 18 AND active = 1 ORDER BY name LIMIT 10
+
+=== OOP Stress Test Complete ===
