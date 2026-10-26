@@ -58,4 +58,5 @@ For rigorous results:
 - **High StdDev in Latency**: Indicates GC pauses or thread contention.
 - **Batches not getting faster**: Suggests the JIT is not optimizing the specific code path or is already at peak optimization.
 - **No multicore scaling**: expected. Threads share a global interpreter lock, so CPU-bound GlowLang code runs on one core at a time.
+- **Sub-linear Multicore Scaling**: Due to thread scheduling overhead, context switching, or memory bus saturation (GIL has been abolished).
 - **Rapid RSS Growth**: Check for memory leaks in the VM internals or inefficient object layout in the language.

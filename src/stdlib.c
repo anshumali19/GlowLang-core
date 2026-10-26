@@ -355,6 +355,106 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     }
     Value res;
     if (code && !glow_nojitexec) {
+    if (glow_jit_debug) {
+        fprintf(stderr, "[DBG] jit_self_call_direct: fe=%p, &call_depth=%p, call_depth=%d, fe->body->baseline_jit_code=%p\n", (void*)fe, (void*)&call_depth, call_depth, (void*)(fe ? fe->body->baseline_jit_code : NULL));
+        fflush(stderr);
+    }
+    if (!fe || !fe->body) {
+        return VAL_DEOPT_SENTINEL; // deopt
+    }
+    void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
+    if (!jit_code && fe->spec_count > 0) {
+        TypeSignature sig = compute_signature(args, fe->param_count);
+        void *spec = func_get_specialization(fe, sig);
+        if (spec && spec != (void*)1) {
+            jit_code = spec;
+        }
+    }
+    if (!jit_code) {
+        return VAL_DEOPT_SENTINEL; // deopt
+    }
+    if (call_depth >= 2000) {
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
+            fflush(stderr);
+        }
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 2000, deopt\n", call_depth);
+            fflush(stderr);
+        }
+        return VAL_DEOPT_SENTINEL;
+    }
+
+    int new_base = vm_stack_top;
+    int needed = new_base + fe->body->local_count + 16;
+    Value temp_args[16];
+    int copy_count = fe->param_count < 16 ? fe->param_count : 16;
+    for (int _i = 0; _i < copy_count; _i++)
+        temp_args[_i] = args[_i];
+    if (needed >= vm_stack_size) {
+        int old_size = vm_stack_size;
+        while (needed >= vm_stack_size) vm_stack_size *= 2;
+        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+        for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+    }
+    if (needed > vm_stack_top) vm_stack_top = needed;
+    for (int _i = 0; _i < copy_count; _i++)
+        vm_stack[new_base + _i] = temp_args[_i];
+    for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+        vm_stack[new_base + _i] = value_none();
+
+    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    int deopt_pc = 0;
+    call_depth++;
+    /* Use resolved JIT code */
+    if (glow_jit_debug) {
+        fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d, calling JIT at %p\n", call_depth, jit_code);
+        fflush(stderr);
+    }
+    Value res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
+    call_depth--;
+    vm_stack_top = new_base; // restore frame
+    return res;
+}
+
+/* Proper self-recursion helper: manages call stack, checks depth, handles deopt.
+ * Mirrors jit_call_helper but skips specialization lookup since callee is always `fe`.
+ * Returns DEOPT sentinel for deep recursion so caller (JIT or C) can fall back. */
+Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+    if (fe && fe->body) {
+        /* Deep recursion: return DEOPT sentinel so caller (JIT or C) falls back to interpreter. */
+        if (call_depth >= 2000) {
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
+            fflush(stderr);
+        }
+            if (glow_jit_debug) {
+                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 2000, deopt\n", call_depth);
+                fflush(stderr);
+            }
+            return VAL_DEOPT_SENTINEL;
+        }
+
+        int new_base = vm_stack_top;
+        int needed = new_base + fe->body->local_count + 3;
+        Value temp_args[16];
+        int copy_count = fe->param_count < 16 ? fe->param_count : 16;
+        for (int _i = 0; _i < copy_count; _i++)
+            temp_args[_i] = args[_i];
+        if (needed >= vm_stack_size) {
+            int old_size = vm_stack_size;
+            while (needed >= vm_stack_size) vm_stack_size *= 2;
+            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+            for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+        }
+        if (needed > vm_stack_top) vm_stack_top = needed;
+        for (int _i = 0; _i < copy_count; _i++)
+            vm_stack[new_base + _i] = temp_args[_i];
+        for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+            vm_stack[new_base + _i] = value_none();
+
+        typedef Value (*JITFunc)(Value *R, int *pc_idx);
         int deopt_pc = 0;
         call_stack_push(fe, body->code);
         call_depth++;
@@ -1581,6 +1681,11 @@ Value native_len(int argc, Value *args) {
     Value v = args[0];
     if (GET_TYPE(v) == VAL_STRING) return value_int((int64_t)rope_length(v));
     if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size);
+Value native_len(int argc, Value *args) { 
+    if (argc < 1) return value_int(0); 
+    Value v = args[0]; 
+    if (GET_TYPE(v) == VAL_STRING) return value_int(strlen(AS_STRING(v))); 
+    if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size); 
     if (GET_TYPE(v) == VAL_DICT) return value_int(AS_DICT(v)->size);
     if (GET_TYPE(v) == VAL_OBJECT) {
         if ((v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_PACKED_ARRAY) return value_int(AS_PACKED_ARRAY(v)->size);
@@ -3060,6 +3165,9 @@ static Value native_tensor_transpose(int argc, Value *args) {
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include <immintrin.h>
+#endif
 
 typedef struct {
     int start_row;
@@ -3144,6 +3252,11 @@ static Value native_tensor_matmul(int argc, Value *args) {
                 MatmulThreadData tdata[8];
                 int rows_per_thread = rA / num_threads;
 
+                
+                pthread_t threads[8];
+                MatmulThreadData tdata[8];
+                int rows_per_thread = rA / num_threads;
+                
                 for (int t = 0; t < num_threads; t++) {
                     tdata[t].start_row = t * rows_per_thread;
                     tdata[t].end_row = (t == num_threads - 1) ? rA : (t + 1) * rows_per_thread;
@@ -3155,6 +3268,7 @@ static Value native_tensor_matmul(int argc, Value *args) {
                     pthread_create(&threads[t], NULL, matmul_worker, &tdata[t]);
                 }
 
+                
                 for (int t = 0; t < num_threads; t++) {
                     pthread_join(threads[t], NULL);
                 }
