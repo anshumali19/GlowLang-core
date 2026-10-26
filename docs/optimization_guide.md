@@ -412,6 +412,19 @@ For number crunching, use tensor operations, which run in native SIMD code.
 ### Vectorized Math: Combine Concurrency with SIMD
 For high-density numeric operations, use the tensor operations, which run AVX2/FMA kernels when the CPU supports them:
 
+### Multi-Core Parallelism: Spawn Freely
+With the Global Interpreter Lock (GIL) abolished, `spawn` executes tasks across multiple CPU cores in true parallel without lock serialization:
+
+```glow
+# ✅ True CPU parallelism: runs simultaneously on multiple hardware cores
+spawn compute_shard(partition1)
+spawn compute_shard(partition2)
+spawn compute_shard(partition3)
+```
+
+### Vectorized Math: Combine Concurrency with SIMD
+For high-density numeric operations, combine multi-core worker threads with hardware AVX2 SIMD tensor operations:
+
 ```glow
 # ✅ Vectorized SIMD matrix multiplication
 let result = tensor.matmul(A, m, k, B, k, n)

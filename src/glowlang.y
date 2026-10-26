@@ -214,6 +214,7 @@ int glow_main(int argc, char **argv) {
                                     Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
                                     main_fe.body = main_bc; compile(root);
                                     main_bc->local_count = compiler_reg_peak();
+                                    main_bc->local_count = next_free_reg;
                                     bc_emit(main_bc, OP_RETURN, 0, 0);
                                     optimize_bytecode(main_bc);
                                     run_bytecode(main_bc, NULL, NULL, 0);
@@ -221,6 +222,7 @@ int glow_main(int argc, char **argv) {
                                     if (runtime_error_thrown) { fflush(stdout); return 1; }
                                 }
                                 glow_threads_join_all();
+                                }
                                 std_cleanup(); return 0;
                             } else {
                                 if (script) free(script);

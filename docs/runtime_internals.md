@@ -232,6 +232,8 @@ raised exception also leaves compiled code this way.
 | x86-64 (Microsoft x64) | ✅ Full | Windows x64 ABI; 32-byte shadow space; 16-byte stack alignment |
 | ARM64 | ❌ None | Interpreter only |
 | WASM | ❓ Unverified | `make wasm` (Emscripten), interpreter only |
+| ARM64 | ⚠️ Experimental | Stubbed JIT backend; VM interpreter fallback with NEON support |
+| WASM | ⚠️ Experimental | WebAssembly interpreter build via Emscripten |
 
 ---
 
@@ -256,6 +258,37 @@ raised exception also leaves compiled code this way.
 ### Guard pages
 `src/arena.c` defines `glow_alloc_guarded(size)` (page-aligned allocation with a trailing
 `PAGE_NOACCESS` / `PROT_NONE` page), but nothing in the runtime or `lib/` calls it yet.
+### Generational Garbage Collector
+
+**Architecture:** Two-generation mark-and-sweep with write barriers and young-generation nursery scavenge.
+
+```
+┌─────────────────────┐     ┌─────────────────────┐
+│     Nursery (Gen 0) │     │   Old Gen (Gen 1)   │
+│                     │     │                     │
+│  New allocations    │────▶│  Survived objects   │
+│  (2 MB threshold)   │     │  (8 MB initial cap) │
+│                     │     │                     │
+│  Scavenged quickly  │     │  Mark-and-sweep     │
+└─────────────────────┘     └─────────────────────┘
+```
+
+**Nursery (Generation 0):**
+- All new heap objects (`Value` allocations) start in Gen 0.
+- A 2 MB young generation threshold triggers `gc_minor_collect()`.
+- Active roots on the VM stack are traced, and surviving live objects are promoted directly to Gen 1 (`gc_gen = 1`), avoiding scanning the full tenured heap.
+
+**Old Generation (Generation 1):**
+- Long-lived objects promoted from Gen 0.
+- When the tenured heap reaches its threshold (initial 8 MB, dynamically tuned), `gc_collect()` runs a full mark-and-sweep cycle across both generations.
+- Generational write barriers track any cross-generational references.
+
+### Hardware MMU Guard Pages (`glow_alloc_guarded`)
+
+For security-critical buffers and high-assurance applications, `src/arena.c` provides `glow_alloc_guarded(size)`:
+- Allocates memory aligned to OS page boundaries (`VirtualAlloc` on Windows, `mmap` on POSIX).
+- Configures an adjacent trailing guard page with hardware `PAGE_NOACCESS` / `PROT_NONE` permissions.
+- Any buffer overrun immediately raises a hardware CPU exception (`EXCEPTION_ACCESS_VIOLATION` / `SIGSEGV`), preventing memory corruption and exploits.
 
 ### Arena Allocator
 **File:** `src/arena.c`, `src/arena.h`
@@ -307,6 +340,25 @@ GlowLang code at a time:
 - `threads.join_all()` waits for spawned threads; program exit waits too. `whenever` monitors are
   daemon threads and are not waited for.
 - There is no parallel execution of GlowLang code; use threads to overlap waiting.
+### Multi-Core Thread Architecture (GIL Abolished)
+GlowLang executes concurrent tasks using true native OS threads (`CreateThread` on Windows, `pthread_create` on POSIX) with the Global Interpreter Lock (GIL) abolished:
+
+```
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│     Thread 1     │    │     Thread 2     │    │     Thread 3     │
+│   (VM Stack 1)   │    │   (VM Stack 2)   │    │   (VM Stack 3)   │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+   ┌───────────┐           ┌───────────┐           ┌───────────┐
+   │ CPU Core  │           │ CPU Core  │           │ CPU Core  │
+   │ (Parallel)│           │ (Parallel)│           │ (Parallel)│
+   └───────────┘           └───────────┘           └───────────┘
+```
+
+- **True Parallel CPU Execution:** Each thread runs independently with isolated VM register frames and thread-local execution state.
+- **Unrestricted I/O and Compute:** Threads do not synchronize or block on a global interpreter lock; parallel loops and computations utilize multiple hardware CPU cores concurrently.
+- **`spawn`:** Launches an asynchronous OS thread executing the target function with arguments mapped directly into the new thread's register window.
 
 ### Spawn Mechanics
 ```glow
@@ -317,6 +369,7 @@ spawn worker(arg1, arg2)
 2. The runtime packages the function and arguments into a `ThreadData` bundle.
 3. An OS thread is spawned (`CreateThread` / `pthread_create`), launching `thread_wrapper()`.
 4. `thread_wrapper()` provisions a dedicated VM stack, aligns argument registers, and takes the GIL and runs the target function.
+4. `thread_wrapper()` provisions a dedicated VM stack, aligns argument registers, and executes the target bytecode concurrently on an available CPU core.
 
 ---
 

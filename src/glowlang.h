@@ -59,6 +59,7 @@ typedef struct FuncEntry FuncEntry;
 /* daemon: a background thread (a `whenever` monitor) that program exit and
    threads.join_all() do not wait for. */
 typedef struct { Value callee; int argc; Value *args; const char *name; int daemon; } ThreadData;
+typedef struct { Value callee; int argc; Value *args; const char *name; } ThreadData;
 
 /* ================================================================
  *  GC & OBJECTS
@@ -789,6 +790,7 @@ extern volatile int glow_gil_waiters;
 void glow_threads_join_all(void);
 int glow_threads_alive(void);
 void glow_thread_ctx_init(void);
+extern pthread_mutex_t glow_gil;
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;
 /* Cached debug environment flags (defined in vm.c, checked once at startup) */

@@ -422,6 +422,10 @@ static void compile_stmt(Node *n) {
                such assignment silently wrote a global: recursive functions
                clobbered each other's variables and threads raced on them. */
             if (get_local_reg(n->name) == -1 && !global_is_declared(n->name)) {
+        } else if (n->type == NODE_ASSIGN || n->type == NODE_COMPOUND_ADD || n->type == NODE_COMPOUND_SUB ||
+                   n->type == NODE_COMPOUND_MUL || n->type == NODE_COMPOUND_DIV || n->type == NODE_COMPOUND_MOD ||
+                   n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE) {
+            if (get_local_reg(n->name) == -1 && global_get_slot(n->name) == -1) {
                 func_add_local(compiling_func, n->name);
             }
         }

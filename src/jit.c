@@ -402,6 +402,8 @@ static void emit_mov_arg5_reg(JITBuffer *buf, int reg) {
    it returns the deopt sentinel only when the call raised, and then the
    interpreter takes over at this instruction to unwind. */
 static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc, int i) {
+/* Inline self-recursion fast path */
+static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc) {
     jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe2);
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xc2); jit_emit_u32(buf, pc->r2 * 8);
     emit_mov_arg2_r10(buf);
@@ -734,6 +736,59 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 /* Integer fast paths with the interpreter's own helpers as the
                    slow path, so every type combination behaves identically. */
                 if (pc->op == OP_ADD || pc->op == OP_SUB) {
+                if (pc->type == 1 && (pc->op == OP_ADD || pc->op == OP_SUB)) {
+                    emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                    emit_mov_r10_imm64(&buf, 0xFFFF000000000000ULL);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc6);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd6);
+                    emit_mov_r11_imm64(&buf, 0x7FF8000000000000ULL);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xde);
+                    uint32_t p1 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xce);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd6);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xde);
+                    uint32_t p2 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jit_emit_u32(&buf, 0);
+                    if (pc->op == OP_ADD) { 
+                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8);
+                        jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xd8);
+                    } else if (pc->op == OP_SUB) { 
+                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8);
+                        jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd8);
+                    }
+                    uint32_t pd = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                    uint32_t bailout = buf.size; *(uint32_t*)(buf.code + p1 + 2) = (uint32_t)(bailout - (p1 + 6)); *(uint32_t*)(buf.code + p2 + 2) = (uint32_t)(bailout - (p2 + 6));
+                    emit_mov_rax_imm64(&buf, (uint64_t)i); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x00);
+                    emit_mov_rax_imm64(&buf, VAL_DEOPT_SENTINEL); emit_epilogue(&buf);
+                    uint32_t done = buf.size; *(uint32_t*)(buf.code + pd + 1) = (uint32_t)(done - (pd + 5));
+                    emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->type == 2) { // FLOAT_SPECIALIZED
+                    emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc2);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xea); jit_emit_byte(&buf, 0x30);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xfa); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x7f);
+                    uint32_t pf1 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x83); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xca);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xea); jit_emit_byte(&buf, 0x30);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xfa); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x7f);
+                    uint32_t pf2 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x83); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0xc0);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0xc1);
+                    if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x58); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x5c); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_MUL) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x59); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_DIV) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x5e); jit_emit_byte(&buf, 0xc1); }
+                    else { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return; }
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x7e); jit_emit_byte(&buf, 0xc0);
+                    uint32_t pfd = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                    uint32_t fbailout = buf.size;
+                    *(uint32_t*)(buf.code + pf1 + 2) = (uint32_t)(fbailout - (pf1 + 6));
+                    *(uint32_t*)(buf.code + pf2 + 2) = (uint32_t)(fbailout - (pf2 + 6));
+                    emit_mov_rax_imm64(&buf, (uint64_t)i); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x00);
+                    emit_mov_rax_imm64(&buf, VAL_DEOPT_SENTINEL); emit_epilogue(&buf);
+                    uint32_t fdone = buf.size;
+                    *(uint32_t*)(buf.code + pfd + 1) = (uint32_t)(fdone - (pfd + 5));
+                    emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->op == OP_ADD || pc->op == OP_SUB) {
                     emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
                 } else if (pc->op == OP_MUL) {
                     emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);
@@ -1078,6 +1133,59 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 /* Integer fast paths with the interpreter's own helpers as the
                    slow path, so every type combination behaves identically. */
                 if (pc->op == OP_ADD || pc->op == OP_SUB) {
+                if (pc->type == 1 && (pc->op == OP_ADD || pc->op == OP_SUB)) {
+                    emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                    emit_mov_r10_imm64(&buf, 0xFFFF000000000000ULL);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc6);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd6);
+                    emit_mov_r11_imm64(&buf, 0x7FF8000000000000ULL);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xde);
+                    uint32_t p1 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xce);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x21); jit_emit_byte(&buf, 0xd6);
+                    jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xde);
+                    uint32_t p2 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jit_emit_u32(&buf, 0);
+                    if (pc->op == OP_ADD) { 
+                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0xc8);
+                        jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xd8);
+                    } else if (pc->op == OP_SUB) { 
+                        jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x29); jit_emit_byte(&buf, 0xc8);
+                        jit_emit_byte(&buf, 0x4c); jit_emit_byte(&buf, 0x09); jit_emit_byte(&buf, 0xd8);
+                    }
+                    uint32_t pd = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                    uint32_t bailout = buf.size; *(uint32_t*)(buf.code + p1 + 2) = (uint32_t)(bailout - (p1 + 6)); *(uint32_t*)(buf.code + p2 + 2) = (uint32_t)(bailout - (p2 + 6));
+                    emit_mov_rax_imm64(&buf, (uint64_t)i); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x00);
+                    emit_mov_rax_imm64(&buf, VAL_DEOPT_SENTINEL); emit_epilogue(&buf);
+                    uint32_t done = buf.size; *(uint32_t*)(buf.code + pd + 1) = (uint32_t)(done - (pd + 5));
+                    emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->type == 2) { // FLOAT_SPECIALIZED
+                    emit_mov_rax_reg(&buf, pc->r1); emit_mov_rcx_reg(&buf, pc->r2);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xc2);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xea); jit_emit_byte(&buf, 0x30);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xfa); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x7f);
+                    uint32_t pf1 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x83); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xca);
+                    jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0xc1); jit_emit_byte(&buf, 0xea); jit_emit_byte(&buf, 0x30);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xfa); jit_emit_byte(&buf, 0xf8); jit_emit_byte(&buf, 0x7f);
+                    uint32_t pf2 = buf.size; jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x83); jit_emit_u32(&buf, 0);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0xc0);
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x6e); jit_emit_byte(&buf, 0xc1);
+                    if (pc->op == OP_ADD) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x58); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_SUB) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x5c); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_MUL) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x59); jit_emit_byte(&buf, 0xc1); }
+                    else if (pc->op == OP_DIV) { jit_emit_byte(&buf, 0xf2); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x5e); jit_emit_byte(&buf, 0xc1); }
+                    else { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return; }
+                    jit_emit_byte(&buf, 0x66); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x7e); jit_emit_byte(&buf, 0xc0);
+                    uint32_t pfd = buf.size; jit_emit_byte(&buf, 0xe9); jit_emit_u32(&buf, 0);
+                    uint32_t fbailout = buf.size;
+                    *(uint32_t*)(buf.code + pf1 + 2) = (uint32_t)(fbailout - (pf1 + 6));
+                    *(uint32_t*)(buf.code + pf2 + 2) = (uint32_t)(fbailout - (pf2 + 6));
+                    emit_mov_rax_imm64(&buf, (uint64_t)i); jit_emit_byte(&buf, 0x41); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0x45); jit_emit_byte(&buf, 0x00);
+                    emit_mov_rax_imm64(&buf, VAL_DEOPT_SENTINEL); emit_epilogue(&buf);
+                    uint32_t fdone = buf.size;
+                    *(uint32_t*)(buf.code + pfd + 1) = (uint32_t)(fdone - (pfd + 5));
+                    emit_mov_reg_rax(&buf, pc->r0);
+                } else if (pc->op == OP_ADD || pc->op == OP_SUB) {
                     emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
                 } else if (pc->op == OP_MUL) {
                     emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);

@@ -554,6 +554,16 @@ static Value num_pow(Value a, Value b) {
 /* JIT helpers (defined here, called from jit.c). */
 Value jit_int_add(Value a, Value b) {
     if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) return glow_string_concat(a, b);
+    if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
+        Value sa, sb;
+        if (GET_TYPE(a) == VAL_STRING) sa = a;
+        else if (is_bigint(a)) { char *_bs = bigint_to_new_string(AS_BIGINT(a)); sa = value_string_copy(_bs); free(_bs); }
+        else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%lld",(long long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+        if (GET_TYPE(b) == VAL_STRING) sb = b;
+        else if (is_bigint(b)) { char *_bs = bigint_to_new_string(AS_BIGINT(b)); sb = value_string_copy(_bs); free(_bs); }
+        else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%lld",(long long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+        return rope_new(sa, sb);
+    }
     if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
         List *la = AS_LIST(a), *lb = AS_LIST(b);
         List *rl = list_new(la->size + lb->size);
@@ -668,6 +678,10 @@ static void* thread_wrapper(void *arg) {
             AS_NATIVE_FUNC(td->callee)->func(td->argc, td->args);
         } else if (ot == OBJ_BOUND_METHOD) {
             BoundMethod *bm = AS_BOUND_METHOD(td->callee);
+        if (ot == OBJ_NATIVE_FUNC) { 
+            AS_NATIVE_FUNC(td->callee)->func(td->argc, td->args); 
+        } else if (ot == OBJ_BOUND_METHOD) { 
+            BoundMethod *bm = AS_BOUND_METHOD(td->callee); 
             if (GET_TYPE(bm->instance) != VAL_NONE) {
                 var_set("self", bm->instance);
             }
@@ -908,6 +922,80 @@ static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
     if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(v);
         if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) { *out = v; return 1; }
+/* Direct-call a callee's JIT (specialized / opt / baseline) from the
+ * interpreter. The callee frame starts at vm_stack[base_reg + pc->r2] (the
+ * caller's argument area, exactly the DO_CALL contract), but the callee's
+ * JIT prologue reads its params from slots 0/1/2 and then writes spill /
+ * local slots up to its own local_count. The callee's frame must live in its
+ * OWN region, not overlaid on the caller's frame (which still has live locals
+ * at/above the arg slot). Allocate a fresh frame above vm_stack_top, copy the
+ * caller's arg window into it, run the callee there, then restore vm_stack_top.
+ * The previous version only grew vm_stack_top but still passed the caller's arg
+ * slot as R, so the callee's local stores landed inside the caller's live frame
+ * (e.g. is_even's regs) -> logical frame overlap and heap corruption that only
+ * surfaced as a late calloc SEGV (mutual recursion is_even/is_odd). */
+/* Self-recursion from the VM interpreter. Because the JIT path costs ~2
+ * machine frames per logical level (this bridge + the generated prologue),
+ * deep self-recursion must NOT re-enter the JIT, or the OS stack guard trips
+ * with STATUS_BAD_STACK long before run_bytecode's depth guard. Below the
+ * threshold we use the fast JIT path; at/above it we dispatch the body
+ * directly through run_bytecode (single frame) so the clean depth guard fires. */
+static Value vm_self_call_jit_or_recurse(Value (*f)(Value *, int *), Bytecode *body,
+                                           int callee_base, int callee_local, int *deopt_pc) {
+       if (call_depth < 2000 && !force_interpreter_self_call) {
+          return vm_call_jit_direct(f, callee_base, callee_local, body->owner->param_count, deopt_pc);
+      }
+      return run_bytecode(body, NULL, NULL, callee_base);
+  }
+
+Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base,
+                                       int callee_local, int param_count, int *deopt_pc) {
+        if (glow_nojitexec) return VAL_DEOPT_SENTINEL;
+        /* Deep recursion: avoid JIT to prevent C stack overflow. call_depth is
+         * NOT reset here so it accumulates across JIT self-/mutual-recursion;
+         * once it passes the threshold we deopt to the interpreter, which then
+         * drives recursion with its own clean depth guard (no 2-frames/level
+         * machine-stack blowup). */
+        if (call_depth > 2000 || force_interpreter_self_call) return VAL_DEOPT_SENTINEL;
+        int new_base = vm_stack_top;
+        int need = new_base + callee_local + 3;
+        int saved_top = vm_stack_top;
+        /* Copy caller's arg window to a local buffer BEFORE potential realloc, */
+        Value temp_args[16];
+        int copy_count = param_count < 16 ? param_count : 16;
+        for (int _i = 0; _i < copy_count; _i++)
+            temp_args[_i] = vm_stack[callee_base + _i];
+        if (need >= vm_stack_size) {
+            int old_size = vm_stack_size;
+            while (need >= vm_stack_size) vm_stack_size *= 2;
+            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+            for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+        }
+        if (need > vm_stack_top) vm_stack_top = need;
+        /* Copy the caller's arg window (slots callee_base .. callee_base+local) */
+        for (int _i = 0; _i < copy_count; _i++)
+            vm_stack[new_base + _i] = temp_args[_i];
+        
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: &call_depth=%p, call_depth=%d, callee_base=%d, new_base=%d, callee_local=%d, f=%p\n", (void*)&call_depth, call_depth, callee_base, new_base, callee_local, (void*)f);
+            fflush(stderr);
+        }
+        
+        Value res = f(&vm_stack[new_base], deopt_pc);
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: JIT returned, res=%llx\n", (unsigned long long)res);
+            fflush(stderr);
+        }
+        vm_stack_top = saved_top;
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: after restore\n");
+            fflush(stderr);
+        }
+        if (glow_jit_debug) {
+            fprintf(stderr, "[DBG] vm_call_jit_direct: returning res=%llx\n", (unsigned long long)res);
+            fflush(stderr);
+        }
+        return res;
     }
     return 0;
 }
@@ -918,6 +1006,56 @@ int jit_exception_pending(void) { return has_exception; }
 
 /* Back-edge threshold after which a loop is compiled for on-stack entry. */
 #define GLOW_OSR_THRESHOLD 1000
+
+THREAD_LOCAL int debug_mode = 0;
+static THREAD_LOCAL int dbg_single_step = 1;
+static THREAD_LOCAL int dbg_breakpoints[64];
+static THREAD_LOCAL int dbg_bp_count = 0;
+
+static void glow_debug_hook(Bytecode *bc, Instruction *pc, int base_reg) {
+    if (!debug_mode) return;
+    int line = pc->line;
+    int is_bp = 0;
+    for (int i = 0; i < dbg_bp_count; i++) {
+        if (dbg_breakpoints[i] == line) { is_bp = 1; break; }
+    }
+    if (!dbg_single_step && !is_bp) return;
+
+    printf("\n[DEBUG] Line %d | PC %04d: %-14s (r0:%d r1:%d r2:%d arg:%d)\n",
+           line, (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg);
+    while (1) {
+        printf("(glowdb) ");
+        fflush(stdout);
+        char cmd[128];
+        if (!fgets(cmd, sizeof(cmd), stdin)) exit(0);
+        cmd[strcspn(cmd, "\r\n")] = '\0';
+        if (strlen(cmd) == 0 || strcmp(cmd, "s") == 0 || strcmp(cmd, "step") == 0) {
+            dbg_single_step = 1;
+            break;
+        } else if (strcmp(cmd, "c") == 0 || strcmp(cmd, "continue") == 0) {
+            dbg_single_step = 0;
+            break;
+        } else if (strcmp(cmd, "r") == 0 || strcmp(cmd, "regs") == 0) {
+            printf("--- Virtual Registers (Base %d) ---\n", base_reg);
+            for (int r = 0; r < 8 && r < bc->local_count; r++) {
+                printf("  R%d = ", r);
+                print_value(vm_stack[base_reg + r]);
+                printf("\n");
+            }
+        } else if (strncmp(cmd, "b ", 2) == 0) {
+            int bp = atoi(cmd + 2);
+            if (bp > 0 && dbg_bp_count < 64) {
+                dbg_breakpoints[dbg_bp_count++] = bp;
+                printf("Breakpoint set at line %d\n", bp);
+            }
+        } else if (strcmp(cmd, "q") == 0 || strcmp(cmd, "quit") == 0) {
+            printf("Exiting debugger.\n");
+            exit(0);
+        } else {
+            printf("Commands: s (step), c (continue), r (print regs), b <line> (set breakpoint), q (quit)\n");
+        }
+    }
+}
 
  Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
      #ifdef _WIN32
@@ -1238,6 +1376,10 @@ int jit_exception_pending(void) { return has_exception; }
         } \
         if (has_exception) goto l_OP_THROW; \
     } \
+    if (debug_mode) { \
+        glow_debug_hook(bc, pc, base_reg); \
+    } \
+    if (has_exception) goto l_OP_THROW; \
     switch(pc->op) { \
         case OP_CONST_INT: goto l_OP_CONST_INT; \
         case OP_CONST_FLOAT: goto l_OP_CONST_FLOAT; \
@@ -1464,6 +1606,14 @@ int jit_exception_pending(void) { return has_exception; }
             goto l_DISPATCH;
         } else if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) {
             R(pc->r0) = glow_string_concat(a, b);
+            Value sa, sb;
+            if (GET_TYPE(a) == VAL_STRING) sa = a;
+            else if (is_bigint(a)) { char *_bs = bigint_to_new_string(AS_BIGINT(a)); sa = value_string_copy(_bs); free(_bs); }
+            else { char buf[2048]; if(GET_TYPE(a)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(a)); else if(GET_TYPE(a)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(a)); else if(GET_TYPE(a)==VAL_BOOL) strcpy(buf, AS_BOOL(a) ? "true" : "false"); else if(GET_TYPE(a)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sa = value_string_copy(buf); }
+            if (GET_TYPE(b) == VAL_STRING) sb = b;
+            else if (is_bigint(b)) { char *_bs = bigint_to_new_string(AS_BIGINT(b)); sb = value_string_copy(_bs); free(_bs); }
+            else { char buf[2048]; if(GET_TYPE(b)==VAL_INT) snprintf(buf,sizeof(buf),"%ld",(long)AS_INT(b)); else if(GET_TYPE(b)==VAL_FLOAT) format_double(buf,sizeof(buf),AS_FLOAT(b)); else if(GET_TYPE(b)==VAL_BOOL) strcpy(buf, AS_BOOL(b) ? "true" : "false"); else if(GET_TYPE(b)==VAL_NONE) strcpy(buf, "none"); else strcpy(buf, ""); sb = value_string_copy(buf); }
+            R(pc->r0) = rope_new(sa, sb);
             pc++;
             goto l_DISPATCH;
         } else if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
@@ -1515,6 +1665,41 @@ int jit_exception_pending(void) { return has_exception; }
         goto l_DISPATCH;
     }
     l_OP_DIV: {
+        }
+    }
+    l_OP_SUB: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_SUB_INT;
+            int64_t ia = AS_INT(a), ib = AS_INT(b);
+            int64_t res = ia - ib;
+            if (__builtin_expect(res >= -140737488355328LL && res <= 140737488355327LL, 1)) {
+                R(pc->r0) = value_int(res);
+                pc++;
+                goto l_DISPATCH;
+            }
+        }
+        R(pc->r0) = num_sub(a, b);
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_MUL: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_MUL_INT;
+            int64_t ia = AS_INT(a), ib = AS_INT(b);
+            int64_t res = ia * ib;
+            if (__builtin_expect((ib == 0 || res / ib == ia) && (res >= -140737488355328LL && res <= 140737488355327LL), 1)) {
+                R(pc->r0) = value_int(res);
+                pc++;
+                goto l_DISPATCH;
+            }
+        }
+        R(pc->r0) = num_mul(a, b);
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_DIV: { 
         Value a = R(pc->r1), b = R(pc->r2);
         if (val_to_double(b) == 0.0) {
             pending_exception = value_string_copy("Division by zero");
@@ -1524,6 +1709,61 @@ int jit_exception_pending(void) { return has_exception; }
         if (GET_TYPE(a)==VAL_INT && GET_TYPE(b)==VAL_INT) pc->type = 1; else pc->type = 2;
         R(pc->r0) = num_div(a, b);
         pc++; goto l_DISPATCH;
+    }
+    l_OP_LT: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_LT_INT;
+            R(pc->r0) = value_bool(AS_INT(a) < AS_INT(b));
+        } else {
+            R(pc->r0) = value_bool(value_cmp(a, b) < 0);
+        }
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_GT: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_GT_INT;
+            R(pc->r0) = value_bool(AS_INT(a) > AS_INT(b));
+        } else {
+            R(pc->r0) = value_bool(value_cmp(a, b) > 0);
+        }
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_LTE: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_LTE_INT;
+            R(pc->r0) = value_bool(AS_INT(a) <= AS_INT(b));
+        } else {
+            R(pc->r0) = value_bool(value_cmp(a, b) <= 0);
+        }
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_GTE: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_GTE_INT;
+            R(pc->r0) = value_bool(AS_INT(a) >= AS_INT(b));
+        } else {
+            R(pc->r0) = value_bool(value_cmp(a, b) >= 0);
+        }
+        pc++;
+        goto l_DISPATCH;
+    }
+    l_OP_EQ: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (IS_INT(a) && IS_INT(b)) {
+            pc->op = OP_EQ_INT;
+            R(pc->r0) = value_bool(AS_INT(a) == AS_INT(b));
+        } else {
+            R(pc->r0) = value_bool(val_eq(a, b));
+        }
+        pc++;
+        goto l_DISPATCH;
     }
     l_OP_LT: {
         Value a = R(pc->r1), b = R(pc->r2);
@@ -1722,6 +1962,7 @@ int jit_exception_pending(void) { return has_exception; }
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
 
+                        
                         FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         vm_stack[callee_base] = inst; // self
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
@@ -2234,6 +2475,7 @@ int jit_exception_pending(void) { return has_exception; }
         int is_native_dict_str_method = 0;
         Value fallback_callee = value_none();
 
+        
         const char *mname = (const char*)pc->ptr;
         if (mname && strcmp(mname, "type") == 0) {
             native_fe = native_val_type;
@@ -2266,6 +2508,7 @@ int jit_exception_pending(void) { return has_exception; }
         } else if(GET_TYPE(obj)==VAL_DICT) {
             if (dict_member_is_callable(AS_DICT(obj), mname, &dict_member)) fallback_callee = dict_member;
             else if (strcmp(mname, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
+            if (strcmp(mname, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
             else if (strcmp(mname, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
             else if (strcmp(mname, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
             else if (strcmp(mname, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
@@ -2354,6 +2597,11 @@ int jit_exception_pending(void) { return has_exception; }
                         int callee_base = base_reg + pc->r2 + start_offset;
                         if (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 + 512 >= vm_stack_size) { /* VM stack is fixed-size; never realloc it */
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
+                        if (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) {
+                            int old_size = vm_stack_size;
+                            while (callee_base + AS_BOUND_METHOD(init_method)->method->body->local_count + 16 >= vm_stack_size) vm_stack_size *= 2;
+                            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
+                            for (int i=old_size; i<vm_stack_size; i++) vm_stack[i] = 0;
                         }
                         FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
                         vm_stack[callee_base] = inst; // self at R0
@@ -2492,6 +2740,7 @@ int jit_exception_pending(void) { return has_exception; }
         }
         ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac; td->name = (const char*)pc->ptr;
         td->daemon = pc->r2 == 1;
+        ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac; td->name = (const char*)pc->ptr;
         CLAMP_REG_COUNT(pc->r1, ac);
         td->args = malloc(sizeof(Value)*(ac > 0 ? ac : 1)); for(int i=0; i<ac; i++) td->args[i] = R(pc->r1 + i);
         pending_spawns[pending_spawn_count++] = td;
@@ -2519,6 +2768,10 @@ int jit_exception_pending(void) { return has_exception; }
         Value v = R(pc->r1);
         R(pc->r0) = native_type(1, &v);
         pc++; goto l_DISPATCH;
+    l_OP_TYPE: { 
+        Value v = R(pc->r1); 
+        R(pc->r0) = native_type(1, &v); 
+        pc++; goto l_DISPATCH; 
     }
     l_OP_MOD: R(pc->r0) = value_from_double(fmod(val_to_double(R(pc->r1)), val_to_double(R(pc->r2)))); pc++; goto l_DISPATCH;
     l_OP_POW: R(pc->r0) = num_pow(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
@@ -2973,6 +3226,7 @@ int jit_exception_pending(void) { return has_exception; }
         pc++; goto l_DISPATCH;
     }
 
+    
     l_OP_ADD_INT: {
         Value a = R(pc->r1), b = R(pc->r2);
         if (__builtin_expect(IS_INT(a) && IS_INT(b), 1)) {
