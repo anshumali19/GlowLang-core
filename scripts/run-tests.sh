@@ -81,7 +81,7 @@ for t in tests/$filter.glow; do
     [ -f "$t" ] || continue
     name="$(basename "$t")"
     base="${name%.glow}"
-    run_limited "$bin" run "$t" >"$out_f" 2>"$err_f"
+    run_limited "$bin" run "$t" </dev/null >"$out_f" 2>"$err_f"
     code=$?
     [ "$code" -eq 124 ] && code=TIMEOUT
 

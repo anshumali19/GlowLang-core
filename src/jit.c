@@ -455,7 +455,7 @@ static void emit_fast_index(JITBuffer *buf, Instruction *pc, int i) {
     *(uint32_t*)&buf->code[jmp_done + 1] = done_pos - (jmp_done + 5);
 }
 
-static void emit_fast_store_index(JITBuffer *buf, Instruction *pc) {
+static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
     emit_mov_rax_reg(buf, pc->r0); // RAX = coll
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
@@ -490,6 +490,7 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc) {
     emit_mov_arg1_reg(buf, pc->r0); emit_mov_arg2_reg(buf, pc->r1); emit_mov_arg3_reg(buf, pc->r2);
     emit_mov_rax_imm64(buf, (uintptr_t)glow_store_index_jit);
     emit_call_rax(buf);
+    emit_deopt_check(buf, i);
 
     uint32_t done_pos = buf->size;
     *(uint32_t*)&buf->code[jmp_done + 1] = done_pos - (jmp_done + 5);
@@ -540,7 +541,7 @@ static void emit_call_binop_helper(JITBuffer *buf, int r1, int r2, uintptr_t fn)
 // Inline integer add/sub; promotes to a double (exact for the whole 48-bit
 // range) when the result leaves the signed 48-bit range. Mixed types fall
 // back to slow_fn (a jit_int_* helper).
-static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r2, uintptr_t slow_fn) {
+static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
     uint32_t jne_a, jne_b;
     emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
     if (is_sub) {
@@ -570,6 +571,7 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
 #endif
     emit_mov_rax_imm64(buf, slow_fn);
     emit_call_rax(buf);
+    emit_deopt_check(buf, i); /* the interpreter raises type errors */
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
@@ -583,7 +585,7 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
 /* Inline 48-bit integer multiply with overflow detection. Overflow and
    non-integer operands go through jit_int_mul (the interpreter's num_mul),
    which promotes exactly like the interpreter does. */
-static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2) {
+static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
     uint32_t jne_a, jne_b;
     emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xaf); jit_emit_byte(buf, 0xc1); // imul rax, rcx
@@ -598,6 +600,7 @@ static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2) {
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
     emit_call_binop_helper(buf, r1, r2, (uintptr_t)jit_int_mul);
+    emit_deopt_check(buf, i);
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
@@ -734,9 +737,9 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 /* Integer fast paths with the interpreter's own helpers as the
                    slow path, so every type combination behaves identically. */
                 if (pc->op == OP_ADD || pc->op == OP_SUB) {
-                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
+                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add), i);
                 } else if (pc->op == OP_MUL) {
-                    emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);
+                    emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2, i);
                 } else {
                     /* The helper declines division by zero so the interpreter
                        raises the error. */
@@ -879,7 +882,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_STORE_INDEX: {
-                emit_fast_store_index(&buf, pc);
+                emit_fast_store_index(&buf, pc, i);
                 break;
             }
             case OP_SIMD_ADD: {
@@ -899,15 +902,15 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 break;
             }
             case OP_ADD_INT: {
-                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add);
+                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add, i);
                 break;
             }
             case OP_SUB_INT: {
-                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub);
+                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub, i);
                 break;
             }
             case OP_MUL_INT: {
-                emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);
+                emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2, i);
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
@@ -1078,9 +1081,9 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 /* Integer fast paths with the interpreter's own helpers as the
                    slow path, so every type combination behaves identically. */
                 if (pc->op == OP_ADD || pc->op == OP_SUB) {
-                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add));
+                    emit_jit_int_arith(&buf, (pc->op == OP_SUB ? 1 : 0), pc->r0, pc->r1, pc->r2, (pc->op == OP_SUB ? (uintptr_t)jit_int_sub : (uintptr_t)jit_int_add), i);
                 } else if (pc->op == OP_MUL) {
-                    emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);
+                    emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2, i);
                 } else {
                     /* The helper declines division by zero so the interpreter
                        raises the error. */
@@ -1224,7 +1227,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 break;
             }
             case OP_STORE_INDEX: {
-                emit_fast_store_index(&buf, pc);
+                emit_fast_store_index(&buf, pc, i);
                 break;
             }
             case OP_SIMD_ADD: {
@@ -1244,15 +1247,15 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 break;
             }
             case OP_ADD_INT: {
-                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add);
+                emit_jit_int_arith(&buf, 0, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_add, i);
                 break;
             }
             case OP_SUB_INT: {
-                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub);
+                emit_jit_int_arith(&buf, 1, pc->r0, pc->r1, pc->r2, (uintptr_t)jit_int_sub, i);
                 break;
             }
             case OP_MUL_INT: {
-                emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2);
+                emit_jit_int_mul(&buf, pc->r0, pc->r1, pc->r2, i);
                 break;
             }
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {

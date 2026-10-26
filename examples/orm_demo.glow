@@ -1,47 +1,49 @@
 # ORM & Database Demo
-# Demonstrates SQLite ORM operations in GlowLang
+# Demonstrates SQLite ORM operations in GlowLang (lib/orm.glow)
+
+use "lib/orm.glow"
 
 show "=== GlowLang ORM Demo ==="
 
 # Create a database
-db = orm.connect("demo.db")
+let db = ORM("demo.db")
 
 # Create table
-orm.exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
+db.exec_sql("DROP TABLE IF EXISTS users")
+db.exec_sql("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
 
 # Insert records
-orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Alice', 'alice@example.com', 30)")
-orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Bob', 'bob@example.com', 25)")
-orm.exec(db, "INSERT INTO users (name, email, age) VALUES ('Charlie', 'charlie@example.com', 35)")
+db.insert("users", {"name": "Alice", "email": "alice@example.com", "age": 30})
+db.insert("users", {"name": "Bob", "email": "bob@example.com", "age": 25})
+db.insert("users", {"name": "Charlie", "email": "charlie@example.com", "age": 35})
 
 show "Inserted 3 users"
 
 # Query all users
-results = orm.query(db, "SELECT * FROM users")
+let results = db.exec_raw("SELECT name, email, age FROM users")
 show "All users:"
 every row in results:
-    show "  " + row
+    show "  " + row["name"] + " <" + row["email"] + ">, age " + row["age"]
 end
 
 # Query with condition
-young = orm.query(db, "SELECT name, age FROM users WHERE age < 30")
+let young = db.exec_raw("SELECT name, age FROM users WHERE age < 30")
 show ""
 show "Users under 30:"
 every row in young:
-    show "  " + row
+    show "  " + row["name"] + " (" + row["age"] + ")"
 end
 
 # Update
-orm.exec(db, "UPDATE users SET age = 31 WHERE name = 'Alice'")
+db.exec_sql("UPDATE users SET age = 31 WHERE name = 'Alice'")
 show ""
 show "Updated Alice's age to 31"
 
 # Count
-count = orm.query(db, "SELECT COUNT(*) as total FROM users")
-show "Total users: " + count
+show "Total users: " + db.count("users")
 
 # Cleanup
-orm.close(db)
+db.close()
 fs.remove("demo.db")
 show ""
 show "Database demo complete."

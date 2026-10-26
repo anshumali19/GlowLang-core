@@ -103,6 +103,9 @@ void intern_table_init(void) {
 }
 
 int line_num = 1;
+/* Open (, [ and { not yet closed: newlines inside them do not end the
+   statement, so literals and calls can span lines. Reset by the parser. */
+int lexer_bracket_depth = 0;
 %}
 
 %option noinput nounput nounistd noyywrap
@@ -122,8 +125,6 @@ int line_num = 1;
 "until"                { return UNTIL; }
 "repeat"               { return REPEAT; }
 "times"                { return TIMES_KW; }
-"input"                { return INPUT_KW; }
-"ask"                  { return INPUT_KW; }
 "for"                  { return FOR; }
 "every"                { return FOR; }
 "each"                 { return EACH; }
@@ -183,13 +184,19 @@ int line_num = 1;
 "/"                    { return DIV; }
 "%"                    { return MOD; }
 "="                    { return ASSIGN; }
-"["                    { return '['; }
-"]"                    { return ']'; }
-"{"                    { return '{'; }
-"}"                    { return '}'; }
+"["                    { lexer_bracket_depth++; return '['; }
+"]"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return ']'; }
+"{"                    { lexer_bracket_depth++; return '{'; }
+"}"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return '}'; }
 ","                    { return COMMA; }
-"("                    { return '('; }
-")"                    { return ')'; }
+"("                    { lexer_bracket_depth++; return '('; }
+")"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return ')'; }
+
+[0-9]+(\.[0-9]+)?[eE][+-]?[0-9]+ {
+    /* Scientific notation: 1e15, 2.5e-3 */
+    yylval.float_val = atof(yytext);
+    return FLOAT_LIT;
+}
 
 [0-9]+\.[0-9]+ {
     yylval.float_val = atof(yytext);
@@ -254,7 +261,7 @@ f\"([^"\\]|\\.)*\" {
     return ID;
 }
 
-\n                     { line_num++; return NEWLINE; }
+\n                     { line_num++; if (lexer_bracket_depth == 0) return NEWLINE; }
 [ \t\r]+               ;
 
 "//"[^\n]*             ;

@@ -23,7 +23,9 @@
 param(
     [ValidateSet('clang', 'msvc')] [string] $Compiler = 'msvc',
     [string] $Output = 'bin\glowlang.exe',
-    [string] $VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { 'C:\Users\anshu\Desktop\vcpkg' }),
+    # Default: the first of $env:VCPKG_ROOT, ..\vcpkg next to the repo, or
+    # %USERPROFILE%\Desktop\vcpkg that has the static libraries installed.
+    [string] $VcpkgRoot = '',
     [switch] $NoSign,
     [switch] $DebugBuild,
     [switch] $Asan
@@ -69,9 +71,15 @@ elseif (-not (Test-Path 'src\lex.yy.c')) { throw 'win_flex not found and src\lex
 if ($bison) { Update-Generated 'src\glowlang.y' 'src\glowlang.tab.c' { & $bison.Source -Wno-conflicts-sr -d -o src\glowlang.tab.c src\glowlang.y } }
 elseif (-not (Test-Path 'src\glowlang.tab.c')) { throw 'win_bison not found and src\glowlang.tab.c is missing.' }
 
-$deps = Join-Path $VcpkgRoot 'installed\x64-windows-static'
-if (-not (Test-Path (Join-Path $deps 'include\openssl\ssl.h'))) {
-    throw "Static OpenSSL/SQLite not found under $deps. Run: vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static"
+# Visual Studio's environment sets VCPKG_ROOT to its own bundled vcpkg, which
+# usually lacks these libraries, so check each candidate for them.
+$candidates = if ($VcpkgRoot) { @($VcpkgRoot) } else {
+    @($env:VCPKG_ROOT, (Join-Path (Split-Path -Parent $root) 'vcpkg'), (Join-Path $env:USERPROFILE 'Desktop\vcpkg')) | Where-Object { $_ }
+}
+$deps = $candidates | ForEach-Object { Join-Path $_ 'installed\x64-windows-static' } |
+    Where-Object { Test-Path (Join-Path $_ 'include\openssl\ssl.h') } | Select-Object -First 1
+if (-not $deps) {
+    throw "Static OpenSSL/SQLite not found (looked in: $($candidates -join ', ')). Run: vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static, or pass -VcpkgRoot."
 }
 
 $sources = 'glowlang.tab.c', 'lex.yy.c', 'lsp.c', 'arena.c', 'jit.c', 'opt.c', 'compiler.c',

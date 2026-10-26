@@ -275,14 +275,14 @@ extern TypeSignature compute_signature(Value *regs, int count);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
 extern Value jit_self_call_direct(struct FuncEntry *fe, Value *args);
-extern Value vm_call_jit_direct(Value (*f)(Value *, int *), struct FuncEntry *fe, int callee_base, int *deopt_pc);
+extern Value vm_call_jit_direct(Value (*f)(Value *, int *), struct FuncEntry *fe, int callee_base, int *deopt_pc, int *frame_base);
 extern Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, struct Instruction *pc);
 extern Value jit_get_property_helper(Value o, const char *n, struct Instruction *pc);
 extern Value jit_set_property_helper(Value o, const char *n, Value v, struct Instruction *pc);
 extern Value packed_array_get_jit(Value v_pa, Value v_idx);
 extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
 extern Value glow_index_jit(Value coll, Value v_idx);
-extern void glow_store_index_jit(Value coll, Value v_idx, Value v_val);
+extern Value glow_store_index_jit(Value coll, Value v_idx, Value v_val);
 /* Wide-integer helpers used by the JIT so integer arithmetic matches the
    interpreter (promote to double on overflow / cross-type compare). */
 extern Value jit_int_add(Value a, Value b);
@@ -688,6 +688,7 @@ Node* newVarNode(const char *s);
 Node* newAssignNode(const char *s, Node *e);
 Node* newBinOp(NodeType t, Node *l, Node *r);
 Node* newSeqNode(Node *l, Node *r);
+Node* newPairLoopNode(const char *a, const char *b, Node *coll, Node *body);
 Node* newFuncNode(const char *n, int pc, char **ps, Node *b);
 Node* newReturnNode(Node *e);
 Node* newIfNode(Node *c, Node *t, Node *e);

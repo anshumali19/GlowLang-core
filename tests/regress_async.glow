@@ -1,0 +1,41 @@
+use "lib/async.glow"
+
+# Channel across threads.
+let ch = Channel("work")
+func producer(n):
+    let i = 0
+    while i < n:
+        ch.send(i * i)
+        i = i + 1
+    end
+end
+spawn producer(5)
+threads.join_all()
+show "channel:", ch.size(), ch.drain()
+show "empty receive:", ch.receive()
+
+# Tasks on background threads.
+func slow_square(x):
+    os.sleep(20)
+    return x * x
+end
+let group = TaskGroup("squares")
+group.create("a", lambda(): slow_square(3))
+group.create("b", lambda(): slow_square(4))
+show "start_all:", group.start_all()
+
+# A failing task is reported, not fatal.
+let bad = Task("bad", lambda(): none + 1)
+bad.run()
+show "failed task:", bad.status, bad.error
+
+# Timer and Periodic in the background.
+let fired = [0]
+func mark():
+    fired[0] = fired[0] + 1
+end
+Timer("t", 10, mark).start()
+let ticker = Periodic("p", 5, mark).set_max(3)
+ticker.start()
+threads.join_all()
+show "timer + periodic runs:", fired[0]

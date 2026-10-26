@@ -1,0 +1,246 @@
+# GlowAsync — tasks, channels and timers for GlowLang
+#
+# Usage:
+#   use "lib/async.glow"
+#   let ch = Channel("jobs")
+#   ch.send(1)
+#   let job = ch.receive()          # none when the channel is empty
+#
+# Background work runs on `spawn` threads. Threads share one interpreter
+# lock, so they overlap waiting (sleep, sockets, HTTP), not computation.
+
+# Channel — a first-in, first-out message queue that threads can share.
+blueprint Channel:
+    action init(name):
+        self.name = name
+        self.items = []
+        self.head = 0
+    end
+
+    action send(value):
+        self.items.push(value)
+        return self
+    end
+
+    action size():
+        return len(self.items) - self.head
+    end
+
+    action has_messages():
+        return self.size() > 0
+    end
+
+    # Next message, or none when the channel is empty.
+    action receive():
+        if self.head >= len(self.items):
+            return none
+        end
+        let value = self.items[self.head]
+        self.head = self.head + 1
+        if self.head > 64 and self.head * 2 > len(self.items):
+            self.compact()
+        end
+        return value
+    end
+
+    # Wait up to timeout_ms for a message (another thread may send one).
+    action receive_wait(timeout_ms):
+        let waited = 0
+        while self.size() == 0 and waited < timeout_ms:
+            os.sleep(1)
+            waited = waited + 1
+        end
+        return self.receive()
+    end
+
+    # Every waiting message, in order; the channel is left empty.
+    action drain():
+        let out = []
+        while self.head < len(self.items):
+            out.push(self.items[self.head])
+            self.head = self.head + 1
+        end
+        self.items = []
+        self.head = 0
+        return out
+    end
+
+    action compact():
+        let rest = []
+        let i = self.head
+        while i < len(self.items):
+            rest.push(self.items[i])
+            i = i + 1
+        end
+        self.items = rest
+        self.head = 0
+    end
+end
+
+# Task — a named unit of work with a status and a result.
+blueprint Task:
+    action init(name, fn):
+        self.name = name
+        self.fn = fn
+        self.status = "pending"
+        self.result = none
+        self.error = none
+        self.done = [false]
+    end
+
+    # Run now, on this thread.
+    action run():
+        self.status = "running"
+        let fn = self.fn
+        try:
+            self.result = fn()
+            self.status = "done"
+        catch e:
+            self.error = e
+            self.status = "failed"
+        end
+        self.done[0] = true
+        return self.result
+    end
+
+    # Run on a background thread; use wait() for the result.
+    action start():
+        let task = self
+        spawn task.run()
+        return self
+    end
+
+    action wait():
+        while not self.done[0]:
+            os.sleep(1)
+        end
+        return self.result
+    end
+end
+
+# TaskGroup — a set of tasks run together.
+blueprint TaskGroup:
+    action init(name):
+        self.name = name
+        self.tasks = []
+    end
+
+    action create(name, fn):
+        let t = Task(name, fn)
+        self.tasks.push(t)
+        return t
+    end
+
+    # Run every task, one after another, on this thread.
+    action run_all():
+        for each t in self.tasks:
+            t.run()
+        end
+        return self.results()
+    end
+
+    # Start every task on its own thread and wait for all of them.
+    action start_all():
+        for each t in self.tasks:
+            t.start()
+        end
+        return self.wait_all()
+    end
+
+    action wait_all():
+        for each t in self.tasks:
+            t.wait()
+        end
+        return self.results()
+    end
+
+    action results():
+        let out = []
+        for each t in self.tasks:
+            out.push(t.result)
+        end
+        return out
+    end
+
+    action summary():
+        let done = 0
+        let failed = 0
+        for each t in self.tasks:
+            if t.status == "done":
+                done = done + 1
+            end
+            if t.status == "failed":
+                failed = failed + 1
+            end
+        end
+        show "TaskGroup '" + self.name + "': " + len(self.tasks) + " tasks, " + done + " done, " + failed + " failed"
+        return {"total": len(self.tasks), "done": done, "failed": failed}
+    end
+end
+
+# Timer — run a function once after delay_ms.
+blueprint Timer:
+    action init(name, delay_ms, fn):
+        self.name = name
+        self.delay_ms = delay_ms
+        self.fn = fn
+        self.fired = [false]
+    end
+
+    # Wait, then run, on this thread.
+    action fire_sync():
+        os.sleep(self.delay_ms)
+        let fn = self.fn
+        fn()
+        self.fired[0] = true
+    end
+
+    # Wait and run on a background thread.
+    action start():
+        let timer = self
+        spawn timer.fire_sync()
+        return self
+    end
+end
+
+# Periodic — run a function every interval_ms, max_runs times
+# (forever when max_runs is 0, until stop()).
+blueprint Periodic:
+    action init(name, interval_ms, fn):
+        self.name = name
+        self.interval_ms = interval_ms
+        self.fn = fn
+        self.max_runs = 0
+        self.runs = 0
+        self.running = [false]
+    end
+
+    action set_max(n):
+        self.max_runs = n
+        return self
+    end
+
+    action run_sync():
+        self.running[0] = true
+        let fn = self.fn
+        while self.running[0] and (self.max_runs == 0 or self.runs < self.max_runs):
+            fn()
+            self.runs = self.runs + 1
+            if self.max_runs == 0 or self.runs < self.max_runs:
+                os.sleep(self.interval_ms)
+            end
+        end
+        self.running[0] = false
+        return self.runs
+    end
+
+    action start():
+        let job = self
+        spawn job.run_sync()
+        return self
+    end
+
+    action stop():
+        self.running[0] = false
+    end
+end
