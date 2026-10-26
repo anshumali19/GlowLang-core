@@ -10,6 +10,7 @@
 #include "win_pthread.h"
 #else
 #include <pthread.h>
+#include <unistd.h>
 #endif
 #if defined(__x86_64__) || defined(_M_X64)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -418,6 +419,33 @@ int val_eq(Value a, Value b) {
         size_t l2 = rope_length(b);
         return string_equal_simd(AS_STRING(a), l1, AS_STRING(b), l2);
     }
+    /* Lists and dicts compare by contents ([1, 2] == [1, 2]); the depth
+       limit stops self-referencing structures from recursing forever. */
+    static THREAD_LOCAL int eq_depth = 0;
+    if (eq_depth > 200) return 0;
+    if (ta == VAL_LIST && tb == VAL_LIST) {
+        List *la = AS_LIST(a), *lb = AS_LIST(b);
+        if (la->size != lb->size) return 0;
+        eq_depth++;
+        int same = 1;
+        for (int i = 0; i < la->size && same; i++) same = val_eq(la->items[i], lb->items[i]);
+        eq_depth--;
+        return same;
+    }
+    if (ta == VAL_DICT && tb == VAL_DICT) {
+        Dict *da = AS_DICT(a), *db = AS_DICT(b);
+        if (da->size != db->size) return 0;
+        eq_depth++;
+        int same = 1;
+        for (int i = 0; i < da->capacity && same; i++) {
+            if (GET_TYPE(da->keys[i]) == VAL_NONE) continue;
+            const char *k = (const char*)(uintptr_t)(da->keys[i] & MASK_PAYLOAD);
+            int j = dict_get_idx(db, k);
+            same = (j >= 0) && val_eq(da->values[i], db->values[j]);
+        }
+        eq_depth--;
+        return same;
+    }
     return 0;
 }
 
@@ -551,6 +579,68 @@ static Value num_pow(Value a, Value b) {
     return num_from_double(pow(val_to_double(a), val_to_double(b)));
 }
 
+static inline int is_numeric(Value v) {
+    ValueType t = GET_TYPE(v);
+    return t == VAL_INT || t == VAL_FLOAT || is_bigint(v);
+}
+
+/* Arithmetic on values that are not numbers raises an error instead of
+   treating them as 0 (`none * 2` used to give 0). */
+static void arith_type_error(const char *op, Value a, Value b) {
+    Value ta = native_type(1, &a), tb = native_type(1, &b);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Cannot apply '%s' to %s and %s", op, AS_STRING(ta), AS_STRING(tb));
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+}
+
+/* `text * n` and `list * n` repeat the sequence; returns 0 when a and b are
+   not a sequence and an integer. */
+static int seq_repeat(Value a, Value b, Value *out) {
+    int64_t n;
+    Value seq;
+    if ((GET_TYPE(a) == VAL_STRING || GET_TYPE(a) == VAL_LIST) && GET_TYPE(b) == VAL_INT) { seq = a; n = AS_INT(b); }
+    else if ((GET_TYPE(b) == VAL_STRING || GET_TYPE(b) == VAL_LIST) && GET_TYPE(a) == VAL_INT) { seq = b; n = AS_INT(a); }
+    else return 0;
+    if (n < 0) n = 0;
+    if (GET_TYPE(seq) == VAL_STRING) {
+        size_t len = rope_length(seq);
+        if (len && (uint64_t)n > (size_t)0x7fffffff / len) { pending_exception = value_string_copy("Repeated string is too long"); has_exception = 1; *out = value_none(); return 1; }
+        char *buf = malloc(len * (size_t)n + 1);
+        const char *src = AS_STRING(seq);
+        for (int64_t i = 0; i < n; i++) memcpy(buf + (size_t)i * len, src, len);
+        buf[len * (size_t)n] = '\0';
+        *out = value_string_copy(buf);
+        free(buf);
+    } else {
+        List *src = AS_LIST(seq);
+        if (src->size && (uint64_t)n > (uint64_t)0x7fffffff / (uint64_t)src->size) { pending_exception = value_string_copy("Repeated list is too long"); has_exception = 1; *out = value_none(); return 1; }
+        int count = src->size;
+        List *l = list_new((int)(count * n) + 1);
+        Value lv = value_list(l);
+        for (int64_t i = 0; i < n; i++) for (int j = 0; j < count; j++) list_push(l, src->items[j]);
+        *out = lv;
+    }
+    return 1;
+}
+
+/* Floor modulo, like Python: the result has the sign of the divisor
+   (-7 % 3 == 2). Exact for integers. */
+static Value num_mod(Value a, Value b) {
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && ib != 0 &&
+        !is_fractional_double(a) && !is_fractional_double(b)) {
+        int64_t r = (ib == -1) ? 0 : ia % ib;
+        if (r != 0 && ((r < 0) != (ib < 0))) r += ib;
+        if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+        return value_bigint(bigint_from_int64(r));
+    }
+    double x = val_to_double(a), y = val_to_double(b);
+    double r = fmod(x, y);
+    if (r != 0 && ((r < 0) != (y < 0))) r += y;
+    return num_from_double(r);
+}
+
 /* JIT helpers (defined here, called from jit.c). */
 Value jit_int_add(Value a, Value b) {
     if (GET_TYPE(a) == VAL_STRING || GET_TYPE(b) == VAL_STRING) return glow_string_concat(a, b);
@@ -561,16 +651,23 @@ Value jit_int_add(Value a, Value b) {
         for (int i=0; i<lb->size; i++) list_push(rl, lb->items[i]);
         return value_list(rl);
     }
+    if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
     return num_add(a, b);
 }
-Value jit_int_sub(Value a, Value b) { return num_sub(a, b); }
+Value jit_int_sub(Value a, Value b) {
+    if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
+    return num_sub(a, b);
+}
 /* Division for compiled code. Division by zero is declined (deopt sentinel)
    so the interpreter raises the same error it always does. */
 Value jit_div_helper(Value a, Value b) {
-    if (val_to_double(b) == 0.0) return VAL_DEOPT_SENTINEL;
+    if (!is_numeric(a) || !is_numeric(b) || val_to_double(b) == 0.0) return VAL_DEOPT_SENTINEL;
     return num_div(a, b);
 }
-Value jit_int_mul(Value a, Value b) { return num_mul(a, b); }
+Value jit_int_mul(Value a, Value b) {
+    if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
+    return num_mul(a, b);
+}
 Value jit_int_lt(Value a, Value b)  { return value_bool(value_cmp(a, b) <  0); }
 Value jit_int_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
 Value jit_int_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
@@ -912,6 +1009,76 @@ static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
     return 0;
 }
 
+
+/* Directory part of a path ("" when there is none), with a trailing slash. */
+static void path_dir(const char *path, char *out, size_t outsz) {
+    out[0] = '\0';
+    if (!path) return;
+    const char *slash = NULL;
+    for (const char *c = path; *c; c++) if (*c == '/' || *c == '\\') slash = c;
+    if (!slash) return;
+    size_t n = (size_t)(slash - path) + 1;
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, path, n);
+    out[n] = '\0';
+}
+
+/* Find a module for `use`/`import`. A relative path is tried, in order:
+   next to the importing file, from the current directory, under lib/, and
+   under the lib/ folder beside the glowlang executable (so the standard
+   libraries work from any directory). *found gets the path that opened. */
+static FILE *glow_open_module(const char *path, const char *importer, const char **found) {
+    char cand[1024], dir[768];
+    int absolute = path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
+    if (!absolute) {
+        path_dir(importer, dir, sizeof(dir));
+        if (dir[0]) {
+            snprintf(cand, sizeof(cand), "%s%s", dir, path);
+            FILE *f = fopen(cand, "r");
+            if (f) { *found = intern_string(cand); return f; }
+        }
+    }
+    FILE *f = fopen(path, "r");
+    if (f) { *found = path; return f; }
+    if (absolute) return NULL;
+    snprintf(cand, sizeof(cand), "lib/%s", path);
+    if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+    char exe[768] = "";
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, exe, sizeof(exe));
+#elif defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    exe[n > 0 ? n : 0] = '\0';
+#endif
+    path_dir(exe, dir, sizeof(dir));
+    if (dir[0]) {
+        const char *rel = strncmp(path, "lib/", 4) == 0 ? path + 4 : path;
+        snprintf(cand, sizeof(cand), "%s../lib/%s", dir, rel);
+        if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+        snprintf(cand, sizeof(cand), "%slib/%s", dir, rel);
+        if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+    }
+    return NULL;
+}
+
+/* An index as a whole number (ints and integral floats). */
+static int index_value(Value v, int64_t *out) {
+    if (GET_TYPE(v) == VAL_INT) { *out = AS_INT(v); return 1; }
+    if (GET_TYPE(v) == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        if (d == floor(d) && fabs(d) < 9.0e15) { *out = (int64_t)d; return 1; }
+    }
+    return 0;
+}
+
+/* Raise "<what>: index i, size n" (or just <what> when size is 0 and i 0). */
+static void index_error(const char *what, int64_t i, int64_t size) {
+    char msg[160];
+    if (i == 0 && size == 0) snprintf(msg, sizeof(msg), "%s", what);
+    else snprintf(msg, sizeof(msg), "%s (index %lld, length %lld)", what, (long long)i, (long long)size);
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+}
 
 /* Lets compiled code ask whether a runtime call it just made raised. */
 int jit_exception_pending(void) { return has_exception; }
@@ -1476,6 +1643,7 @@ int jit_exception_pending(void) { return has_exception; }
             pc++;
             goto l_DISPATCH;
         } else {
+            if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("+", a, b); goto l_OP_THROW; }
             if (GET_TYPE(a) == VAL_FLOAT || GET_TYPE(b) == VAL_FLOAT) pc->type = 2;
             R(pc->r0) = num_add(a, b);
             pc++;
@@ -1494,6 +1662,7 @@ int jit_exception_pending(void) { return has_exception; }
                 goto l_DISPATCH;
             }
         }
+        if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("-", a, b); goto l_OP_THROW; }
         R(pc->r0) = num_sub(a, b);
         pc++;
         goto l_DISPATCH;
@@ -1510,12 +1679,21 @@ int jit_exception_pending(void) { return has_exception; }
                 goto l_DISPATCH;
             }
         }
+        if (!is_numeric(a) || !is_numeric(b)) {
+            Value rep_v;
+            if (seq_repeat(a, b, &rep_v)) {
+                if (has_exception) goto l_OP_THROW;
+                R(pc->r0) = rep_v; pc++; goto l_DISPATCH;
+            }
+            arith_type_error("*", a, b); goto l_OP_THROW;
+        }
         R(pc->r0) = num_mul(a, b);
         pc++;
         goto l_DISPATCH;
     }
     l_OP_DIV: {
         Value a = R(pc->r1), b = R(pc->r2);
+        if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("/", a, b); goto l_OP_THROW; }
         if (val_to_double(b) == 0.0) {
             pending_exception = value_string_copy("Division by zero");
             has_exception = 1;
@@ -1654,6 +1832,10 @@ int jit_exception_pending(void) { return has_exception; }
         }
         FuncEntry *fe = func_get(n);
         call_stack[my_frame_idx].pc = pc; // Update current frame PC
+        /* A nested function calling itself keeps its captured variables. */
+        if (fe && fe->body && current_closure && current_closure->body == fe->body) {
+            DO_CALL(fe->body, current_closure, base_reg + pc->r2, pc->r0);
+        }
         if (fe && fe->body) {
             TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
 
@@ -1795,6 +1977,10 @@ int jit_exception_pending(void) { return has_exception; }
     }
     l_OP_CALL_SELF_FAST: {
         FuncEntry *fe = bc->owner;
+        if (fe && fe->body && current_closure && current_closure->body == fe->body) {
+            call_stack[my_frame_idx].pc = pc;
+            DO_CALL(fe->body, current_closure, base_reg + pc->r2, pc->r0);
+        }
         if (fe && fe->body) {
             call_stack[my_frame_idx].pc = pc;
             TypeSignature sig = compute_signature(&vm_stack[base_reg + pc->r2], fe->param_count);
@@ -1923,16 +2109,19 @@ int jit_exception_pending(void) { return has_exception; }
                 for (int i=0; i<ac && i<fe->param_count; i++) vm_stack[base_reg + i] = vm_stack[arg_base + i];
                 for (int i=ac; i<fe->param_count; i++) vm_stack[base_reg + i] = value_none();
             }
+            /* A closure keeps its captured variables only when it calls itself;
+               any other callee runs without them. */
+            if (current_closure && current_closure->body != fe->body) current_closure = NULL;
             bc = fe->body; pc = bc->code;
 
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
             stack_arena_used = old_arena_used;
-            if (bc->jit_code) {
+            if (bc->jit_code && !(current_closure && current_closure->captured_count > 0) && !glow_nojitexec) {
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 int deopt_pc = 0;
                 Value res = ((JITFunc)bc->jit_code)(&vm_stack[base_reg], &deopt_pc);
                 if (__builtin_expect(IS_DEOPT(res), 0)) { pc = &bc->code[deopt_pc]; goto l_DISPATCH; }
-                R(pc->r0) = res; goto l_OP_RETURN;
+                vm_ret_val = res; goto l_DO_RETURN;
             }
             goto l_DISPATCH;
         }
@@ -2396,9 +2585,12 @@ int jit_exception_pending(void) { return has_exception; }
     l_OP_INDEX: {
         Value coll = R(pc->r1), idx_arg = R(pc->r2);
         if (GET_TYPE(coll) == VAL_LIST) {
-            int i = (int)AS_INT(idx_arg); if (i < 0) i += AS_LIST(coll)->size;
-            if ((size_t)i < (size_t)AS_LIST(coll)->size) R(pc->r0) = AS_LIST(coll)->items[i];
-            else R(pc->r0) = value_none();
+            int64_t i;
+            if (!index_value(idx_arg, &i)) { index_error("List index must be a whole number", 0, 0); goto l_OP_THROW; }
+            int64_t size = AS_LIST(coll)->size;
+            if (i < 0) i += size;
+            if (i < 0 || i >= size) { index_error("List index out of range", i < 0 ? i - size : i, size); goto l_OP_THROW; }
+            R(pc->r0) = AS_LIST(coll)->items[i];
         } else if (GET_TYPE(coll) == VAL_OBJECT) {
             if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
                 PackedArray *pa = AS_PACKED_ARRAY(coll);
@@ -2442,15 +2634,14 @@ int jit_exception_pending(void) { return has_exception; }
                 } else if (strcmp(mname, "split") == 0) {
                     v = bound_native_method_new(coll, native_str_split);
                 }
-            } else if (GET_TYPE(idx_arg) == VAL_INT || GET_TYPE(idx_arg) == VAL_FLOAT) {
-                const char *s = AS_STRING(coll);
-                int len = strlen(s);
-                int i = (GET_TYPE(idx_arg) == VAL_INT) ? (int)AS_INT(idx_arg) : (int)AS_FLOAT(idx_arg);
+            } else {
+                int64_t i;
+                if (!index_value(idx_arg, &i)) { index_error("String index must be a whole number", 0, 0); goto l_OP_THROW; }
+                int64_t len = (int64_t)rope_length(coll);
                 if (i < 0) i += len;
-                if ((size_t)i < (size_t)len) {
-                    char char_str[2] = { s[i], '\0' };
-                    v = value_string_copy(char_str);
-                }
+                if (i < 0 || i >= len) { index_error("String index out of range", i < 0 ? i - len : i, len); goto l_OP_THROW; }
+                char char_str[2] = { AS_STRING(coll)[i], '\0' };
+                v = value_string_copy(char_str);
             }
             R(pc->r0) = v;
         } else R(pc->r0) = value_none();
@@ -2459,11 +2650,13 @@ int jit_exception_pending(void) { return has_exception; }
     l_OP_STORE_INDEX: {
         Value coll = R(pc->r0), idx = R(pc->r1), val = R(pc->r2);
         if (GET_TYPE(coll) == VAL_LIST) {
-            int i = (int)AS_INT(idx); if (i < 0) i += AS_LIST(coll)->size;
-            if ((size_t)i < (size_t)AS_LIST(coll)->size) {
-                gc_write_barrier((GCObject*)AS_LIST(coll), val);
-                AS_LIST(coll)->items[i] = val;
-            }
+            int64_t i;
+            if (!index_value(idx, &i)) { index_error("List index must be a whole number", 0, 0); goto l_OP_THROW; }
+            int64_t size = AS_LIST(coll)->size;
+            if (i < 0) i += size;
+            if (i < 0 || i >= size) { index_error("List index out of range", i < 0 ? i - size : i, size); goto l_OP_THROW; }
+            gc_write_barrier((GCObject*)AS_LIST(coll), val);
+            AS_LIST(coll)->items[i] = val;
         } else if (GET_TYPE(coll) == VAL_OBJECT) {
             if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
                 PackedArray *pa = AS_PACKED_ARRAY(coll);
@@ -2520,9 +2713,24 @@ int jit_exception_pending(void) { return has_exception; }
         R(pc->r0) = native_type(1, &v);
         pc++; goto l_DISPATCH;
     }
-    l_OP_MOD: R(pc->r0) = value_from_double(fmod(val_to_double(R(pc->r1)), val_to_double(R(pc->r2)))); pc++; goto l_DISPATCH;
-    l_OP_POW: R(pc->r0) = num_pow(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
-    l_OP_NEG: { Value v = R(pc->r1); if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); if (x == INT48_MIN) R(pc->r0) = value_float(-(double)x); else R(pc->r0) = value_int(-x); } else R(pc->r0) = num_from_double(-val_to_double(v)); pc++; goto l_DISPATCH; }
+    l_OP_MOD: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("%", a, b); goto l_OP_THROW; }
+        if (val_to_double(b) == 0.0) { pending_exception = value_string_copy("Modulo by zero"); has_exception = 1; goto l_OP_THROW; }
+        R(pc->r0) = num_mod(a, b); pc++; goto l_DISPATCH;
+    }
+    l_OP_POW: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("**", a, b); goto l_OP_THROW; }
+        R(pc->r0) = num_pow(a, b); pc++; goto l_DISPATCH;
+    }
+    l_OP_NEG: { Value v = R(pc->r1);
+        if (!is_numeric(v)) {
+            Value t = native_type(1, &v); char msg[96];
+            snprintf(msg, sizeof(msg), "Cannot negate %s", AS_STRING(t));
+            pending_exception = value_string_copy(msg); has_exception = 1; goto l_OP_THROW;
+        }
+        if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); if (x == INT48_MIN) R(pc->r0) = value_float(-(double)x); else R(pc->r0) = value_int(-x); } else R(pc->r0) = num_from_double(-val_to_double(v)); pc++; goto l_DISPATCH; }
     l_OP_STOP: {
         if (pc->arg > 0) {
             if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("STOP out of bounds"); has_exception = 1; goto l_OP_THROW; }
@@ -2671,14 +2879,9 @@ int jit_exception_pending(void) { return has_exception; }
         if (capture_size > 0) {
             c->captured_names = malloc(sizeof(const char*) * capture_size);
             c->captured_values = malloc(sizeof(Value) * capture_size);
+            /* Lookups take the first match, so the enclosing function's own
+               variables come before the ones it inherited. */
             int idx = 0;
-            if (current_closure) {
-                for (int i=0; i<current_closure->captured_count; i++) {
-                    c->captured_names[idx] = current_closure->captured_names[i];
-                    c->captured_values[idx] = current_closure->captured_values[i];
-                    idx++;
-                }
-            }
             if (parent_fe) {
                 for (int i=0; i<parent_fe->local_count; i++) {
                     c->captured_names[idx] = parent_fe->local_names[i];
@@ -2686,6 +2889,17 @@ int jit_exception_pending(void) { return has_exception; }
                     idx++;
                 }
             }
+            if (current_closure) {
+                for (int i=0; i<current_closure->captured_count; i++) {
+                    c->captured_names[idx] = current_closure->captured_names[i];
+                    c->captured_values[idx] = current_closure->captured_values[i];
+                    idx++;
+                }
+            }
+            /* A named nested function can call itself recursively. */
+            Value self_v = value_closure(c);
+            for (int i = 0; i < idx; i++)
+                if (fe->name && strcmp(c->captured_names[i], fe->name) == 0) c->captured_values[i] = self_v;
         } else {
             c->captured_names = NULL;
             c->captured_values = NULL;
@@ -2747,15 +2961,7 @@ int jit_exception_pending(void) { return has_exception; }
                 fclose(deps);
             }
         }
-        FILE *f = fopen(resolved_path, "r");
-        if (!f) {
-            char lib_path[512];
-            snprintf(lib_path, sizeof(lib_path), "lib/%s", resolved_path);
-            f = fopen(lib_path, "r");
-            if (f) {
-                resolved_path = intern_string(lib_path);
-            }
-        }
+        FILE *f = glow_open_module(resolved_path, pc->file, &resolved_path);
         if (!f) {
             char err[512]; snprintf(err, sizeof(err), "Could not open file: %s", path);
             pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;

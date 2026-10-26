@@ -62,6 +62,23 @@ Node* newStringNode(const char *s) { Node *n = node_new(NODE_STRING_LIT); n->nam
 Node* newVarNode(const char *s) { Node *n = node_new(NODE_VAR); n->name = s; return n; }
 Node* newAssignNode(const char *s, Node *e) { Node *n = node_new(NODE_ASSIGN); n->name = s; n->left = e; return n; }
 Node* newBinOp(NodeType t, Node *l, Node *r) { Node *n = node_new(t); n->left = l; n->right = r; return n; }
+/* `for each a, b in coll:` iterates pairs(coll) — [index, item] for lists
+   and strings, [key, value] for dicts — and unpacks each pair. */
+Node* newPairLoopNode(const char *a, const char *b, Node *coll, Node *body) {
+    static int pair_count = 0;
+    char buf[48];
+    snprintf(buf, sizeof(buf), "__pair_%d", pair_count++);
+    const char *pv = intern_string(buf);
+    Node **args = malloc(sizeof(Node*));
+    args[0] = coll;
+    Node *loop = node_new(NODE_FOR_EACH);
+    loop->name = pv;
+    loop->left = newCallExprNode(newVarNode(intern_string("pairs")), args, 1);
+    Node *first = node_new(NODE_INDEX); first->left = newVarNode(pv); first->right = newIntNode(0);
+    Node *second = node_new(NODE_INDEX); second->left = newVarNode(pv); second->right = newIntNode(1);
+    loop->right = newSeqNode(newAssignNode(a, first), newSeqNode(newAssignNode(b, second), body));
+    return loop;
+}
 Node* newSeqNode(Node *l, Node *r) { if(!l) return r; if(!r) return l; Node *n = node_new(NODE_SEQ); n->left = l; n->right = r; return n; }
 Node* newFuncNode(const char *n, int pc, char **ps, Node *b) { Node *nd = node_new(NODE_FUNC_DEF); nd->name = n; nd->func_param_count = pc; nd->func_params = ps; nd->left = b; return nd; }
 Node* newReturnNode(Node *e) { Node *n = node_new(NODE_RETURN); n->left = e; return n; }
@@ -379,7 +396,11 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
 static void hoist_locals(FuncEntry *fe, Node *n) {
     if (!n) return;
     switch (n->type) {
-        case NODE_FUNC_DEF: case NODE_LAMBDA: case NODE_CLASS: case NODE_TRAIT: case NODE_WHENEVER:
+        case NODE_FUNC_DEF:
+            /* A nested function is a closure held in a local of this name. */
+            if (n->name && get_local_reg(n->name) == -1) func_add_local(fe, n->name);
+            return;
+        case NODE_LAMBDA: case NODE_CLASS: case NODE_TRAIT: case NODE_WHENEVER:
             return;
         case NODE_LET:
             if (n->name && get_local_reg(n->name) == -1) func_add_local(fe, n->name);
@@ -858,6 +879,18 @@ static void compile_stmt(Node *n) {
             analyze_escapes(compiling_bc);
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
             bc_emit(compiling_bc, is_method ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)func_name);
+            /* A function defined inside another function is a closure, like a
+               lambda: it sees the enclosing function's variables as they are
+               when the definition runs, and the enclosing code calls it
+               through the local of the same name. */
+            if (pf && !is_method) {
+                int lreg = get_local_reg(func_name);
+                if (lreg != -1) {
+                    int li = bc_emit(compiling_bc, OP_LAMBDA, 0, (intptr_t)func_name);
+                    compiling_bc->code[li].r0 = lreg;
+                    compiling_bc->code[li].cache[0].key = pf;
+                }
+            }
             break;
         }
         case NODE_SHOW: {

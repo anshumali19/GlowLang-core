@@ -688,13 +688,16 @@ void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val) {
     else ((double*)pa->data)[idx] = val_to_double(v_val);
 }
 
+/* Indexing from compiled code. Out-of-range or non-integer list/string
+   indexes return the deopt sentinel so the interpreter raises the error. */
 Value glow_index_jit(Value coll, Value v_idx) {
     if (GET_TYPE(coll) == VAL_LIST) {
-        int i = (int)AS_INT(v_idx);
+        if (GET_TYPE(v_idx) != VAL_INT) return VAL_DEOPT_SENTINEL;
+        int64_t i = AS_INT(v_idx);
         List *l = AS_LIST(coll);
         if (i < 0) i += l->size;
         if (i >= 0 && i < l->size) return l->items[i];
-        return value_none();
+        return VAL_DEOPT_SENTINEL;
     } else if (GET_TYPE(coll) == VAL_OBJECT) {
         if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
             return packed_array_get_jit(coll, v_idx);
@@ -707,36 +710,36 @@ Value glow_index_jit(Value coll, Value v_idx) {
         if (GET_TYPE(v) == VAL_NONE && GET_TYPE(v_idx) == VAL_STRING) return VAL_DEOPT_SENTINEL;
         return v;
     } else if (GET_TYPE(coll) == VAL_STRING) {
-        if (GET_TYPE(v_idx) != VAL_INT && GET_TYPE(v_idx) != VAL_FLOAT) return VAL_DEOPT_SENTINEL;
-        const char *s = AS_STRING(coll);
-        int len = (int)strlen(s);
-        int i = (GET_TYPE(v_idx) == VAL_INT) ? (int)AS_INT(v_idx) : (int)AS_FLOAT(v_idx);
+        if (GET_TYPE(v_idx) != VAL_INT) return VAL_DEOPT_SENTINEL;
+        int64_t len = (int64_t)rope_length(coll);
+        int64_t i = AS_INT(v_idx);
         if (i < 0) i += len;
-        if ((size_t)i < (size_t)len) {
-            char ch[2] = { s[i], '\0' };
-            return value_string_copy(ch);
-        }
-        return value_none();
+        if (i < 0 || i >= len) return VAL_DEOPT_SENTINEL;
+        char ch[2] = { AS_STRING(coll)[i], '\0' };
+        return value_string_copy(ch);
     }
     return value_none();
 }
 
-void glow_store_index_jit(Value coll, Value v_idx, Value v_val) {
+/* `coll[idx] = val` from compiled code. Returns the deopt sentinel, before
+   changing anything, for cases the interpreter must handle (errors). */
+Value glow_store_index_jit(Value coll, Value v_idx, Value v_val) {
     if (GET_TYPE(coll) == VAL_LIST) {
-        int i = (int)AS_INT(v_idx);
+        if (GET_TYPE(v_idx) != VAL_INT) return VAL_DEOPT_SENTINEL;
+        int64_t i = AS_INT(v_idx);
         List *l = AS_LIST(coll);
         if (i < 0) i += l->size;
-        if (i >= 0 && i < l->size) {
-            l->items[i] = v_val;
-            gc_write_barrier((GCObject*)l, v_val);
-        }
-    } else if (GET_TYPE(coll) == VAL_OBJECT) {
-        if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
-            packed_array_set_jit(coll, v_idx, v_val);
-        }
-    } else if (GET_TYPE(coll) == VAL_DICT) {
+        if (i < 0 || i >= l->size) return VAL_DEOPT_SENTINEL;
+        l->items[i] = v_val;
+        gc_write_barrier((GCObject*)l, v_val);
+    } else if (GET_TYPE(coll) == VAL_OBJECT && (coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
+        packed_array_set_jit(coll, v_idx, v_val);
+    } else if (GET_TYPE(coll) == VAL_DICT && GET_TYPE(v_idx) == VAL_STRING) {
         dict_set(AS_DICT(coll), AS_STRING(v_idx), v_val);
+    } else {
+        return VAL_DEOPT_SENTINEL;
     }
+    return value_none();
 }
 
 void simd_add_helper(Value v_a, Value v_b, Value v_target) {
@@ -1555,6 +1558,70 @@ Value value_to_string_value(Value v) {
     Value r = value_string_copy(s);
     free(s);
     return r;
+}
+
+/* pairs(coll): [index, item] for each element of a list or character of a
+   string, [key, value] for each entry of a dict. Backs `for each a, b in x`. */
+static Value native_pairs(int argc, Value *args) {
+    if (argc < 1) return value_list(list_new(0));
+    Value coll = args[0];
+    List *out = list_new(8);
+    Value out_v = value_list(out);
+    if (GET_TYPE(coll) == VAL_LIST) {
+        List *l = AS_LIST(coll);
+        for (int i = 0; i < l->size; i++) {
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int(i)); list_push(p, l->items[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        Dict *d = AS_DICT(coll);
+        for (int i = 0; i < d->capacity; i++) {
+            if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_string_copy((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD)));
+            list_push(p, d->values[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_STRING) {
+        const char *s = AS_STRING(coll);
+        size_t n = rope_length(coll);
+        for (size_t i = 0; i < n; i++) {
+            char ch[2] = { s[i], 0 };
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int((int64_t)i)); list_push(p, value_string_copy(ch));
+            list_push(out, pv);
+            s = AS_STRING(coll);
+        }
+    } else {
+        pending_exception = value_string_copy("pairs() needs a list, dict or string");
+        has_exception = 1;
+        return value_none();
+    }
+    return out_v;
+}
+
+/* input(prompt) / ask(prompt): print the prompt, read one line from stdin
+   (without its line ending). Returns none at end of input. */
+static Value native_input(int argc, Value *args) {
+    if (argc >= 1 && GET_TYPE(args[0]) != VAL_NONE) { print_value(args[0]); fflush(stdout); }
+    size_t cap = 256, len = 0;
+    char *buf = malloc(cap);
+    int c, got = 0;
+    glow_gil_release();
+    while ((c = fgetc(stdin)) != EOF) {
+        got = 1;
+        if (c == '\n') break;
+        if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+        buf[len++] = (char)c;
+    }
+    glow_gil_acquire();
+    if (!got) { free(buf); return value_none(); }
+    if (len > 0 && buf[len - 1] == '\r') len--;
+    buf[len] = '\0';
+    Value v = value_string_copy(buf);
+    free(buf);
+    return v;
 }
 
 static Value native_str(int argc, Value *args) {
@@ -3498,7 +3565,14 @@ Value native_type(int argc, Value *args) {
     if (argc < 1) return value_none();
     uint64_t t = GET_TYPE(args[0]);
     if (t == VAL_INT) return value_string_copy("int");
-    if (t == VAL_FLOAT) return value_string_copy("float");
+    if (t == VAL_FLOAT) {
+        /* Integers past the 48-bit inline range are stored as exact doubles
+           (up to 2^53); they are still integers. */
+        double d = AS_FLOAT(args[0]);
+        if (d == floor(d) && fabs(d) > 140737488355327.0 && fabs(d) <= 9007199254740992.0)
+            return value_string_copy("int");
+        return value_string_copy("float");
+    }
     if (t == VAL_BOOL) return value_string_copy("bool");
     if (t == VAL_STRING) return value_string_copy("string");
     if (t == VAL_LIST) return value_string_copy("list");
@@ -3512,7 +3586,7 @@ Value native_type(int argc, Value *args) {
         if (ot == OBJ_BOUND_METHOD) return value_string_copy("method");
         if (ot == OBJ_NATIVE_FUNC) return value_string_copy("native_func");
         if (ot == OBJ_PACKED_ARRAY) return value_string_copy("tensor");
-        if (ot == OBJ_BIGINT) return value_string_copy("bigint");
+        if (ot == OBJ_BIGINT) return value_string_copy("int");
         if (ot == OBJ_TRAIT) return value_string_copy("trait");
         return value_string_copy("object");
     }
@@ -3589,6 +3663,10 @@ void std_init(void) {
     var_set("round", native_func_new("round", math_round));
     var_set("int", native_func_new("int", native_int));
     var_set("str", native_func_new("str", native_str));
+    var_set("string", native_func_new("string", native_str));
+    var_set("pairs", native_func_new("pairs", native_pairs));
+    var_set("input", native_func_new("input", native_input));
+    var_set("ask", native_func_new("ask", native_input));
 
     Dict *debug = dict_new(4);
     dict_set(debug, "dump_stack", native_func_new("dump_stack", native_dump_stack));

@@ -1,0 +1,46 @@
+# Literals and calls may span lines inside brackets.
+let people = [
+    {"name": "Ada", "age": 36},
+    {"name": "Alan", "age": 41}
+]
+let total = sum_ages(
+    people
+)
+func sum_ages(list):
+    let s = 0
+    for each p in list:
+        s = s + p["age"]
+    end
+    return s
+end
+show "multi-line:", len(people), sum_ages(people)
+
+# Two-variable loops: index and item, key and value.
+for each i, name in ["a", "b", "c"]:
+    show "item", i, name
+end
+let ages = {"ada": 36}
+for each key, value in ages:
+    show "entry", key, value
+end
+every i, ch in "hi":
+    show "char", i, ch
+end
+show "pairs:", pairs([10, 20])
+
+# Words that are keywords elsewhere work as method names.
+blueprint Job:
+    action init():
+        self.running = true
+    end
+    action stop():
+        self.running = false
+        return "stopped"
+    end
+end
+let j = Job()
+show "stop method:", j.stop(), j.running
+
+# input/ask return none at end of input; string() is str().
+show "input at EOF:", input("")
+show "string():", string(12) + "!"

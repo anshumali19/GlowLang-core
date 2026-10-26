@@ -32,8 +32,8 @@ Starting comprehensive runtime verification...
   Large collection (10K): OK
 
 --- [7/11] Async/Concurrency Tests ---
-  Spawn basic: OK (thread launched)
-  Spawn multiple: OK (counter= 0 )
+  Spawn basic: OK
+  Spawn multiple: OK (counter= 3 )
 
 --- [8/11] Tensor Engine Tests ---
   Tensor create/set/get: OK

@@ -1,0 +1,74 @@
+# Core semantics that used to be silently wrong.
+
+# Lists and dicts compare by contents.
+show "list eq:", [1, [2, 3]] == [1, [2, 3]], [1, 2] == [2, 1]
+show "dict eq:", {"a": 1, "b": [2]} == {"b": [2], "a": 1}, {"a": 1} != {"a": 2}
+
+# Sequence repetition.
+show "repeat:", "ab" * 3, 2 * "-", [0] * 3, "x" * 0
+
+# Floor modulo (sign of the divisor), exact for integers.
+show "mod:", -7 % 3, 7 % -3, 7 % 3, 7.5 % 2
+
+# Membership in plain and natural form.
+let xs = [1, 2, 3]
+show "in:", 2 in xs, 5 in xs, 5 not in xs, 2 is in xs, 5 is not in xs
+
+# Powers bind tighter than unary minus, and exponents may be negative.
+show "pow:", 2 ** -1, -2 ** 2, (-2) ** 2, 2 ** 3 ** 2
+
+# Scientific notation.
+show "sci:", 1e3, 2.5e-3, 1E2
+
+# Integers report int however large they get.
+let big = 140737488355327 + 1
+show "types:", type(big), type(2 ** 100), type(4 / 2), type(2.5)
+
+# Errors instead of silent zeros or nones.
+func attempt(label, f):
+    try:
+        f()
+        show label, "no error"
+    catch e:
+        show label, e
+    end
+end
+attempt("none * 2:", lambda(): none * 2)
+attempt("text - 1:", lambda(): "a" - 1)
+attempt("negate list:", lambda(): -[1])
+attempt("mod zero:", lambda(): 5 % 0)
+attempt("index:", lambda(): xs[3])
+attempt("neg index:", lambda(): xs[-4])
+attempt("string index:", lambda(): "abc"[5])
+attempt("float index:", lambda(): xs[1.5])
+func store_past_end():
+    xs[10] = 1
+end
+attempt("store:", store_past_end)
+show "neg index ok:", xs[-1], "abc"[-1], xs[1.0]
+
+# The same errors from compiled loops.
+func sum_first(items, n):
+    let total = 0
+    let i = 0
+    while i < n:
+        total = total + items[i]
+        i = i + 1
+    end
+    return total
+end
+let nums = []
+let k = 0
+while k < 3000:
+    nums.push(k)
+    k = k + 1
+end
+show "compiled sum:", sum_first(nums, 3000)
+try:
+    sum_first(nums, 3001)
+catch e:
+    show "compiled index:", e
+end
+
+# Dict lookups of missing keys still give none.
+show "missing key:", {"a": 1}["b"]

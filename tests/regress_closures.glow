@@ -1,0 +1,59 @@
+# Functions defined inside functions see the enclosing function's variables
+# (as they are when the definition runs), like lambdas.
+func outer(x):
+    let a = x * 2
+    func inner(y):
+        return a + y
+    end
+    return inner(1)
+end
+show "outer:", outer(5)
+
+# A nested function can call itself; recursive calls keep the captures.
+func count_down_from(start):
+    let step = 2
+    func walk(n):
+        if n <= 0:
+            return 0
+        end
+        return 1 + walk(n - step)
+    end
+    return walk(start)
+end
+show "recursive nested:", count_down_from(10)
+
+# Tail calls inside a closure keep its captures only for self-calls.
+func make_counter(limit):
+    func loop(i, acc):
+        if i >= limit:
+            return acc
+        end
+        return loop(i + 1, acc + i)
+    end
+    return loop(0, 0)
+end
+show "tail nested:", make_counter(100)
+
+# The nearest variable wins over an outer one with the same name.
+func shadow():
+    let v = "outer"
+    let get = lambda(): v
+    func inner_shadow():
+        let v = "inner"
+        let get2 = lambda(): v
+        return get2()
+    end
+    return [get(), inner_shadow()]
+end
+show "shadow:", shadow()
+
+# Returned closures keep their captured values.
+func adder(n):
+    func add(x):
+        return x + n
+    end
+    return add
+end
+let add5 = adder(5)
+let add7 = adder(7)
+show "returned:", add5(1), add7(1)

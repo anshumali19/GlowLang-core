@@ -64,9 +64,11 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true   # tests get an empty stdin
     $psi.WorkingDirectory = $root
     foreach ($k in $ExtraEnv.Keys) { $psi.EnvironmentVariables[$k] = [string]$ExtraEnv[$k] }
     $p = [Diagnostics.Process]::Start($psi)
+    $p.StandardInput.Close()
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
