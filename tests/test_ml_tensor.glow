@@ -32,8 +32,10 @@ let large_size = 1000000
 let t1 = tensor.zeros(large_size)
 let t2 = tensor.zeros(large_size)
 
-let start = os.time()
 let t3 = tensor.add(t1, t2)
-let t_end = os.time()
+show "1M-element add shape: ", tensor.shape(t3)
 
-show "SIMD Accelerated 1M Add took: ", (t_end - start), " seconds"
+# Exercise the SIMD path on a size that is not a multiple of the vector width.
+let p = tensor.ones(1003)
+let q = tensor.ones(1003)
+show "ones(1003) . ones(1003): ", tensor.dot(p, q)

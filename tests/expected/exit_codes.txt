@@ -1,0 +1,8 @@
+# Tests that are expected to fail with a specific exit code.
+test_std.glow           42
+test_div0_stack.glow    1
+test_error_stack.glow   1
+test_jit_div0.glow      1
+test_throw_stack.glow   1
+loop_rec_test.glow      1
+test_import.glow        1

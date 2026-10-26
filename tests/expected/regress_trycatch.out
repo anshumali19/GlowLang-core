@@ -1,0 +1,9 @@
+caught: boom
+after catch in method: 1
+caught: boom
+again: 2
+caught: oops
+local survived: 42
+returned: inner
+problem is not a global: none
+caught in hot loop: 1

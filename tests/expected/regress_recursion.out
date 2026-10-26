@@ -1,0 +1,8 @@
+depth(2005): 2005
+depth(50000): 50000
+ack(2, 3): 9
+ack(3, 8): 2045
+is_even(30001): false
+caught: Maximum recursion depth exceeded
+still works: 10
+caught: bottom reached

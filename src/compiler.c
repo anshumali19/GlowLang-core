@@ -95,7 +95,7 @@ void visualize_stack(int base_reg, int local_count) {
         else if (((v) & MASK_NAN) != MASK_NAN) printf("%g", AS_FLOAT(v));
         else {
             uint64_t type = ((v) & MASK_TYPE) >> 48;
-            if (type == VAL_INT) printf("%ld", (long)AS_INT(v));
+            if (type == VAL_INT) printf("%lld", (long long)AS_INT(v));
             else if (type == VAL_BOOL) printf(AS_BOOL(v) ? "true" : "false");
             else if (type == VAL_STRING) {
                 const char *s = AS_STRING(v);
@@ -107,7 +107,16 @@ void visualize_stack(int base_reg, int local_count) {
     printf("]\n");
 }
 
+/* Highest register count the function being compiled has used. Temporaries
+   are released with reg_restore, so next_free_reg at the end of a body can be
+   lower than what some instruction needed; the frame size must cover the peak. */
+static int reg_peak = 0;
+static inline void note_reg_peak(void) { if (next_free_reg > reg_peak) reg_peak = next_free_reg; }
+int compiler_reg_peak(void) { note_reg_peak(); return reg_peak; }
+void compiler_set_reg_peak(int peak) { reg_peak = peak; }
+
 int bc_emit(Bytecode *bc, OpCode op, int arg, intptr_t ptr) {
+    note_reg_peak();
     if (bc->count >= bc->capacity) { bc->capacity = (bc->capacity == 0) ? 1024 : bc->capacity * 2; bc->code = realloc(bc->code, sizeof(Instruction)*bc->capacity); }
     int idx = bc->count;
     bc->code[idx].op = op;
@@ -151,6 +160,8 @@ void bc_free(Bytecode *bc) {
     if (bc->baseline_jit_code) munmap(bc->baseline_jit_code, bc->baseline_jit_size);
     if (bc->jit_offsets) free(bc->jit_offsets);
     if (bc->baseline_jit_offsets) free(bc->baseline_jit_offsets);
+    if (bc->osr_entries) free(bc->osr_entries);
+    if (bc->osr_code) munmap(bc->osr_code, bc->osr_code_size);
     free(bc);
 }
 
@@ -161,6 +172,10 @@ void func_entry_cleanup(FuncEntry *fe) {
     if (fe->local_names) {
         free(fe->local_names);
         fe->local_names = NULL;
+    }
+    if (fe->local_regs) {
+        free(fe->local_regs);
+        fe->local_regs = NULL;
     }
     if (fe->body) {
         bc_free(fe->body);
@@ -179,10 +194,10 @@ void func_entry_cleanup(FuncEntry *fe) {
 }
 
 
-Bytecode* bc_new(FuncEntry *owner) { 
-    Bytecode *bc = calloc(1, sizeof(Bytecode)); 
-    bc->capacity = 1024; 
-    bc->code = calloc(bc->capacity, sizeof(Instruction)); 
+Bytecode* bc_new(FuncEntry *owner) {
+    Bytecode *bc = calloc(1, sizeof(Bytecode));
+    bc->capacity = 1024;
+    bc->code = calloc(bc->capacity, sizeof(Instruction));
     bc->owner = owner;
     bc->exception_table = NULL;
     bc->exception_count = 0;
@@ -190,38 +205,56 @@ Bytecode* bc_new(FuncEntry *owner) {
     return bc;
 }
 
-static void bc_add_handler(Bytecode *bc, int start, int end, int handler) {
+static void bc_add_handler(Bytecode *bc, int start, int end, int handler, int exc_reg) {
     bc->exception_table = realloc(bc->exception_table, sizeof(ExceptionEntry) * (bc->exception_count + 1));
     bc->exception_table[bc->exception_count].start_pc = start;
     bc->exception_table[bc->exception_count].end_pc = end;
     bc->exception_table[bc->exception_count].handler_pc = handler;
+    bc->exception_table[bc->exception_count].exc_reg = exc_reg;
     bc->exception_count++;
 }
 
+/* Each local gets the next free register (not its index): temporaries are
+   allocated above every existing local, so a local declared mid-function
+   must not land on a register an enclosing loop is still using for its
+   iterator. reg_floor keeps pool restores from handing local registers back
+   out as temporaries. */
 static void func_add_local(FuncEntry *fe, const char *name) {
     if (!fe || !name) return;
     for (int i=0; i<fe->local_count; i++) if (strcmp(fe->local_names[i], name) == 0) return;
     if (fe->local_count >= fe->local_capacity) {
         fe->local_capacity = (fe->local_capacity == 0) ? 8 : fe->local_capacity * 2;
         fe->local_names = realloc(fe->local_names, sizeof(char*) * fe->local_capacity);
+        fe->local_regs = realloc(fe->local_regs, sizeof(int) * fe->local_capacity);
     }
-    fe->local_names[fe->local_count++] = (char*)name;
-    next_free_reg++; // Reserve register for the new local
+    if (next_free_reg < fe->reg_floor) next_free_reg = fe->reg_floor;
+    int reg = next_free_reg++;
+    fe->local_names[fe->local_count] = (char*)name;
+    fe->local_regs[fe->local_count] = reg;
+    fe->local_count++;
+    if (reg + 1 > fe->reg_floor) fe->reg_floor = reg + 1;
 }
 FuncEntry *compiling_func = NULL;
 
 static int get_local_reg(const char *name) {
     if (!compiling_func) return -1;
     for (int i=0; i<compiling_func->local_count; i++) {
-        if (strcmp(compiling_func->local_names[i], name) == 0) return i;
+        if (strcmp(compiling_func->local_names[i], name) == 0) return compiling_func->local_regs[i];
     }
     return -1;
+}
+
+/* Return a temporary-register pool position, never below the locals. */
+static int reg_restore(int base) {
+    note_reg_peak();
+    if (compiling_func && base < compiling_func->reg_floor) return compiling_func->reg_floor;
+    return base;
 }
 
 static void analyze_escapes(Bytecode *bc) {
     if (!bc) return;
     unsigned char *escapes = calloc(bc->local_count + 256, 1);
-    
+
     // Pass 1: Identify all registers that escape directly
     for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
@@ -240,7 +273,7 @@ static void analyze_escapes(Bytecode *bc) {
             case OP_LIST_PUSH: escapes[pc->r1] = 1; break;
             case OP_LAMBDA: {
                 // Heuristic: objects captured by lambda escape
-                for (int j = 0; j < bc->local_count; j++) escapes[j] = 1; 
+                for (int j = 0; j < bc->local_count; j++) escapes[j] = 1;
                 break;
             }
             default: break;
@@ -286,7 +319,7 @@ static void analyze_escapes(Bytecode *bc) {
             }
         }
     }
-    
+
     // Pass 2: Mark non-escaping allocations
     for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
@@ -302,7 +335,7 @@ static int compile_expr(Node *n, int target_reg);
 #if 0
 static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_arg_reg) {
     if (!fe || !fe->body || fe->body->count > 20 || fe->body->count == 0) return false;
-    
+
     // Safety check: recursion and complex ops
     for (int i = 0; i < fe->body->count; i++) {
         Instruction *pc = &fe->body->code[i];
@@ -323,7 +356,7 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
             bc_emit_reg(compiling_bc, OP_MOVE, target_reg, caller_base + pc.r0, 0);
             continue;
         }
-        
+
         int idx = bc_emit(compiling_bc, pc.op, pc.arg, pc.ptr);
         compiling_bc->code[idx].r0 = caller_base + pc.r0;
         compiling_bc->code[idx].r1 = caller_base + pc.r1;
@@ -336,23 +369,66 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
 }
 #endif
 
+/* Python-style function scope: every name a function body assigns is a local
+   for the whole body, including where it is read before the assignment (in a
+   loop, an earlier statement sees the previous iteration's value). Declaring
+   them up front also gives every local its register before any temporary is
+   allocated, so a temporary from earlier in a loop can never share a register
+   with a local declared later. Nested function, lambda, class and `whenever`
+   bodies are scopes of their own and are not entered. */
+static void hoist_locals(FuncEntry *fe, Node *n) {
+    if (!n) return;
+    switch (n->type) {
+        case NODE_FUNC_DEF: case NODE_LAMBDA: case NODE_CLASS: case NODE_TRAIT: case NODE_WHENEVER:
+            return;
+        case NODE_LET:
+            if (n->name && get_local_reg(n->name) == -1) func_add_local(fe, n->name);
+            break;
+        case NODE_ASSIGN: case NODE_COMPOUND_ADD: case NODE_COMPOUND_SUB: case NODE_COMPOUND_MUL:
+        case NODE_COMPOUND_DIV: case NODE_COMPOUND_MOD: case NODE_FOR_EACH: case NODE_FOR_RANGE:
+        case NODE_TRY_CATCH:
+            if (n->name && get_local_reg(n->name) == -1 && !global_is_declared(n->name)) func_add_local(fe, n->name);
+            break;
+        case NODE_LIST_COMP:
+            if (n->comp_var && get_local_reg(n->comp_var) == -1) func_add_local(fe, n->comp_var);
+            break;
+        default: break;
+    }
+    hoist_locals(fe, n->left); hoist_locals(fe, n->right); hoist_locals(fe, n->third);
+    hoist_locals(fe, n->comp_expr); hoist_locals(fe, n->comp_filter);
+    for (int i = 0; i < n->element_count; i++) hoist_locals(fe, n->elements[i]);
+    for (int i = 0; i < n->print_count; i++) hoist_locals(fe, n->print_items[i]);
+    for (int i = 0; i < n->dict_count; i++) { hoist_locals(fe, n->dict_keys[i]); hoist_locals(fe, n->dict_values[i]); }
+    for (int i = 0; i < n->call_arg_count; i++) hoist_locals(fe, n->call_args[i]);
+    for (int i = 0; i < n->fstring_part_count; i++) hoist_locals(fe, n->fstring_parts[i]);
+}
+
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
+    int binds_name = n->name && (n->type == NODE_LET || n->type == NODE_ASSIGN ||
+        n->type == NODE_COMPOUND_ADD || n->type == NODE_COMPOUND_SUB || n->type == NODE_COMPOUND_MUL ||
+        n->type == NODE_COMPOUND_DIV || n->type == NODE_COMPOUND_MOD ||
+        n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE);
     if (compiling_func && n->name) {
         if (n->type == NODE_LET) {
             if (get_local_reg(n->name) == -1) {
                 func_add_local(compiling_func, n->name);
             }
-        } else if (n->type == NODE_ASSIGN || n->type == NODE_COMPOUND_ADD || n->type == NODE_COMPOUND_SUB ||
-                   n->type == NODE_COMPOUND_MUL || n->type == NODE_COMPOUND_DIV || n->type == NODE_COMPOUND_MOD ||
-                   n->type == NODE_FOR_EACH || n->type == NODE_FOR_RANGE) {
-            if (get_local_reg(n->name) == -1 && global_get_slot(n->name) == -1) {
+        } else if (binds_name) {
+            /* Inside a function, assigning a name that is not already a
+               declared global creates a local (like Python). Before this used
+               global_get_slot(), which creates the slot it looks up, so every
+               such assignment silently wrote a global: recursive functions
+               clobbered each other's variables and threads raced on them. */
+            if (get_local_reg(n->name) == -1 && !global_is_declared(n->name)) {
                 func_add_local(compiling_func, n->name);
             }
         }
+    } else if (binds_name) {
+        global_mark_declared(global_get_slot(n->name));
     }
-    
+
     switch (n->type) {
         case NODE_SEQ: compile_stmt(n->left); compile_stmt(n->right); break;
         case NODE_ASSIGN: {
@@ -421,7 +497,7 @@ static void compile_stmt(Node *n) {
             int cond = compile_expr(n->left, -1);
             int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
             compiling_bc->code[jf].r0 = cond;
-            compile_stmt(n->right); 
+            compile_stmt(n->right);
             int j = bc_emit(compiling_bc, OP_JUMP, 0, 0);
             compiling_bc->code[jf].arg = compiling_bc->count;
             if (n->third) compile_stmt(n->third);
@@ -440,7 +516,7 @@ static void compile_stmt(Node *n) {
             int cond = compile_expr(n->left, -1);
             int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
             compiling_bc->code[jf].r0 = cond;
-            compile_stmt(n->right); 
+            compile_stmt(n->right);
             bc_emit(compiling_bc, OP_JUMP, start, 0);
             compiling_bc->code[jf].arg = compiling_bc->count;
 
@@ -467,7 +543,7 @@ static void compile_stmt(Node *n) {
             int cond = compile_expr(n->left, -1);
             int jt = bc_emit(compiling_bc, OP_JUMP_IF_TRUE, 0, 0);
             compiling_bc->code[jt].r0 = cond;
-            compile_stmt(n->right); 
+            compile_stmt(n->right);
             bc_emit(compiling_bc, OP_JUMP, start, 0);
             compiling_bc->code[jt].arg = compiling_bc->count;
 
@@ -498,7 +574,7 @@ static void compile_stmt(Node *n) {
                 loop->start_pc = -1; // skip jumps handled per-iteration
                 loop->end_patch_count = 0;
                 loop->skip_patch_count = 0;
-                
+
                 for (int i=0; i<unroll_limit; i++) {
                     compile_stmt(n->right);
                     // Next iteration starts here; patch all skips in this iteration
@@ -507,7 +583,7 @@ static void compile_stmt(Node *n) {
                     }
                     loop->skip_patch_count = 0; // reset for next iteration
                 }
-                
+
                 // End of loop; patch all breaks
                 for (int i = 0; i < loop->end_patch_count; i++) {
                     compiling_bc->code[loop->end_patches[i]].arg = compiling_bc->count;
@@ -575,7 +651,7 @@ static void compile_stmt(Node *n) {
             if (do_unroll) {
                 if (loop_stack_ptr >= MAX_LOOP_DEPTH) { fprintf(stderr, "Loop nesting too deep\n"); exit(1); }
                 LoopScope *loop = &loop_stack[loop_stack_ptr++];
-                loop->start_pc = -1; 
+                loop->start_pc = -1;
                 loop->end_patch_count = 0;
                 loop->skip_patch_count = 0;
 
@@ -667,17 +743,17 @@ static void compile_stmt(Node *n) {
         }
         case NODE_FOR_EACH: {
             int coll_reg = compile_expr(n->left, -1);
-            
+
             // 1. Ensure loop variable is local and get its register
             if (compiling_func && get_local_reg(n->name) == -1) {
                 func_add_local(compiling_func, n->name);
                 next_free_reg++;
             }
             int var_reg = get_local_reg(n->name);
-            
+
             // 2. Allocate internal iterator state register
             int iter_reg = next_free_reg++;
-            
+
             bc_emit_reg(compiling_bc, OP_ITER_START, iter_reg, coll_reg, 0);
             int loop_start = compiling_bc->count;
 
@@ -686,17 +762,17 @@ static void compile_stmt(Node *n) {
             loop->start_pc = loop_start;
             loop->end_patch_count = 0;
             loop->skip_patch_count = 0;
-            
+
             // 3. Directly load the next value into the loop variable's register
             int val_reg = var_reg != -1 ? var_reg : next_free_reg++;
             int jf_idx = bc_emit_reg(compiling_bc, OP_ITER_NEXT, val_reg, iter_reg, 0);
-            
+
             if (var_reg == -1) {
                 int g_slot = global_get_slot(n->name);
                 int s_idx = bc_emit(compiling_bc, OP_STORE_VAR, g_slot, 0);
                 compiling_bc->code[s_idx].r0 = val_reg;
             }
-            
+
             compile_stmt(n->right);
             bc_emit(compiling_bc, OP_JUMP, loop_start, 0);
             compiling_bc->code[jf_idx].arg = compiling_bc->count;
@@ -719,6 +795,11 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_FUNC_DEF: {
+            /* Only functions written directly in a class/trait body are
+               methods; a function nested inside a method body is an ordinary
+               function (it used to become Class::name with a `self` slot, so
+               calling or spawning it by name found nothing). */
+            int is_method = (last_compiling_class || last_compiling_trait) ? 1 : 0;
             const char *func_name = n->name;
             if (compiling_class_name) {
                 char buf[512];
@@ -729,7 +810,7 @@ static void compile_stmt(Node *n) {
                 snprintf(buf, sizeof(buf), "%s::%s", compiling_trait_name, n->name);
                 func_name = intern_string(buf);
             }
-            FuncEntry *fe = func_table_add(func_name); 
+            FuncEntry *fe = func_table_add(func_name);
             if (fe->body) bc_free(fe->body);
             if (fe->specs) {
                 for (int i=0; i<fe->spec_count; i++) {
@@ -743,29 +824,40 @@ static void compile_stmt(Node *n) {
                 fe->spec_capacity = 0;
             }
             if (fe->local_names) free(fe->local_names);
-            fe->local_names = NULL; fe->local_count = 0; fe->local_capacity = 0;
- 
+            if (fe->local_regs) free(fe->local_regs);
+            fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
+
             fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
-            Bytecode *p = compiling_bc; compiling_bc = fe->body; 
+            Bytecode *p = compiling_bc; compiling_bc = fe->body;
             FuncEntry *pf = compiling_func; compiling_func = fe;
-            int old_free = next_free_reg; 
-            
-            if (last_compiling_class || last_compiling_trait) {
+            int old_free = next_free_reg;
+            next_free_reg = 0; /* self and parameters occupy registers 0..n-1 */
+
+            if (is_method) {
                 func_add_local(fe, "self");
             }
             for (int i=0; i<fe->param_count; i++) {
                 func_add_local(fe, n->func_params[i]);
             }
             fe->body->preserved_locals = fe->local_count;
-            
+            hoist_locals(fe, n->left);
+
             next_free_reg = fe->local_count;
-            compile_stmt(n->left); 
-            fe->body->local_count = next_free_reg;
-            bc_emit(compiling_bc, OP_RETURN, 0, 0); 
+            int saved_peak = reg_peak; reg_peak = next_free_reg;
+            const char *saved_class_name = compiling_class_name, *saved_trait_name = compiling_trait_name;
+            Class *saved_class = last_compiling_class; Trait *saved_trait = last_compiling_trait;
+            compiling_class_name = NULL; compiling_trait_name = NULL;
+            last_compiling_class = NULL; last_compiling_trait = NULL;
+            compile_stmt(n->left);
+            compiling_class_name = saved_class_name; compiling_trait_name = saved_trait_name;
+            last_compiling_class = saved_class; last_compiling_trait = saved_trait;
+            note_reg_peak();
+            fe->body->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
+            bc_emit(compiling_bc, OP_RETURN, 0, 0);
             optimize_bytecode(compiling_bc);
             analyze_escapes(compiling_bc);
-            compiling_bc = p; compiling_func = pf; next_free_reg = old_free;
-            bc_emit(compiling_bc, (last_compiling_class || last_compiling_trait) ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)func_name); 
+            compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
+            bc_emit(compiling_bc, is_method ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)func_name);
             break;
         }
         case NODE_SHOW: {
@@ -826,34 +918,49 @@ static void compile_stmt(Node *n) {
                 compiling_bc->code[idx].r0 = r;
             }
             bc_emit(compiling_bc, OP_CLASS_DEF, n->parent_name ? 1 : 0, (intptr_t)n->name);
-            compile_stmt(n->left); 
-            last_compiling_class = pc; 
+            compile_stmt(n->left);
+            last_compiling_class = pc;
             compiling_class_name = old_class;
             break;
         }
-        case NODE_TRAIT: { 
+        case NODE_TRAIT: {
             const char *old_trait = compiling_trait_name;
             compiling_trait_name = n->name;
-            Trait *pt = last_compiling_trait; last_compiling_trait = (Trait*)1; 
-            bc_emit(compiling_bc, OP_TRAIT_DEF, 0, (intptr_t)n->name); 
-            compile_stmt(n->left); 
-            last_compiling_trait = pt; 
+            Trait *pt = last_compiling_trait; last_compiling_trait = (Trait*)1;
+            bc_emit(compiling_bc, OP_TRAIT_DEF, 0, (intptr_t)n->name);
+            compile_stmt(n->left);
+            last_compiling_trait = pt;
             compiling_trait_name = old_trait;
-            break; 
+            break;
         }
         case NODE_USE_TRAIT: bc_emit(compiling_bc, OP_USE_TRAIT, 0, (intptr_t)n->name); break;
         case NODE_TRY_CATCH: {
+            /* The VM delivers the caught exception into a dedicated register
+               (it used to overwrite register 0, i.e. `self` in methods or the
+               first local in functions). */
+            if (next_free_reg < (compiling_func ? compiling_func->reg_floor : 0)) next_free_reg = compiling_func->reg_floor;
+            int exc_reg = next_free_reg++;
             int start_pc = compiling_bc->count;
             compile_stmt(n->left);
             int end_pc = compiling_bc->count;
             int j = bc_emit(compiling_bc, OP_JUMP, 0, 0);
             int h = compiling_bc->count;
-            bc_add_handler(compiling_bc, start_pc, end_pc, h);
-            int err_reg = get_local_reg(n->name);
-            if (err_reg == -1) err_reg = next_free_reg++;
-            int slot = global_get_slot(n->name);
-            int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-            compiling_bc->code[idx].r0 = 0; // Exception value is in R(0)
+            bc_add_handler(compiling_bc, start_pc, end_pc, h, exc_reg);
+            if (n->name) {
+                int var_reg = get_local_reg(n->name);
+                if (compiling_func && var_reg == -1 && !global_is_declared(n->name)) {
+                    func_add_local(compiling_func, n->name);
+                    var_reg = get_local_reg(n->name);
+                }
+                if (var_reg != -1) {
+                    bc_emit_reg(compiling_bc, OP_MOVE, var_reg, exc_reg, 0);
+                } else {
+                    int slot = global_get_slot(n->name);
+                    if (!compiling_func) global_mark_declared(slot);
+                    int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                    compiling_bc->code[idx].r0 = exc_reg;
+                }
+            }
             compile_stmt(n->right); compiling_bc->code[j].arg = compiling_bc->count; break;
         }
         case NODE_THROW: { int r = compile_expr(n->left, -1); int idx = bc_emit(compiling_bc, OP_THROW, 0, 0); compiling_bc->code[idx].r0 = r; break; }
@@ -884,45 +991,49 @@ static void compile_stmt(Node *n) {
             // Refined edge-triggered semantic: spawn a background monitor
             const char *last_name = intern_string("_whenever_last");
             const char *curr_name = intern_string("_whenever_curr");
-            
+
             Node *init_last = node_new(NODE_LET);
             init_last->name = last_name;
             init_last->left = newBoolNode(0);
-            
+
             Node *get_curr = node_new(NODE_LET);
             get_curr->name = curr_name;
             get_curr->left = n->left;
-            
+
             Node *not_last = node_new(NODE_NOT);
             not_last->left = newVarNode(last_name);
             Node *trigger_cond = node_new(NODE_AND);
             trigger_cond->left = newVarNode(curr_name);
             trigger_cond->right = not_last;
-            
+
             Node *action = newIfNode(trigger_cond, n->right, NULL);
             Node *update_last = newAssignNode(last_name, newVarNode(curr_name));
-            
+
             Node *os_var = newVarNode(intern_string("os"));
             Node *sleep_var = node_new(NODE_INDEX);
             sleep_var->left = os_var;
             sleep_var->name = intern_string("sleep");
-            
+
             Node **sleep_args = malloc(sizeof(Node*));
-            sleep_args[0] = newFloatNode(0.01);
+            sleep_args[0] = newFloatNode(1.0); /* poll every millisecond */
             Node *sleep_call = newCallExprNode(sleep_var, sleep_args, 1);
-            
+
             Node *loop_content = newSeqNode(get_curr, newSeqNode(action, newSeqNode(update_last, sleep_call)));
             Node *while_loop = newWhileNode(newBoolNode(1), loop_content);
             Node *lambda_body = newSeqNode(init_last, while_loop);
-            
+
             char buf[64]; snprintf(buf, sizeof(buf), "whenever_%d", global_lambda_count++);
             Node *lambda = newFuncNode(intern_string(buf), 0, NULL, lambda_body);
             lambda->type = NODE_LAMBDA;
-            
+
             Node *spawn_node = node_new(NODE_SPAWN);
             spawn_node->left = newCallExprNode(lambda, NULL, 0);
-            
+
             compile_stmt(spawn_node);
+            /* The monitor loops forever, so it must not keep the program
+               alive: mark the spawn as a daemon thread (r2 = 1). */
+            if (compiling_bc->count > 0 && compiling_bc->code[compiling_bc->count - 1].op == OP_SPAWN)
+                compiling_bc->code[compiling_bc->count - 1].r2 = 1;
             break;
         }
         case NODE_INDEX_ASSIGN: {
@@ -946,8 +1057,8 @@ static void compile_stmt(Node *n) {
 }
 
 static int compile_expr(Node *n, int target_reg) {
-    if (!n) { 
-        return -1; 
+    if (!n) {
+        return -1;
     }
     compiling_line = n->line;
     int reg = target_reg;
@@ -1081,10 +1192,10 @@ static int compile_expr(Node *n, int target_reg) {
         case NODE_CALL: {
             int ac = n->call_arg_count;
             int start_reg = next_free_reg;
-            
+
             // 1. Identify method status
             bool is_method = (n->type == NODE_CALL_EXPR && n->left->type == NODE_INDEX && n->left->name != NULL);
-            
+
             // 2. Reserve the entire callee frame block immediately
             int callee_frame_base = start_reg;
             if (is_method) {
@@ -1102,7 +1213,7 @@ static int compile_expr(Node *n, int target_reg) {
                     compile_expr(n->call_args[i], callee_frame_base + i);
                 }
             }
-            
+
             // 3. Resolve the callee into a register outside the frame block
             int callee_obj_reg = next_free_reg++;
             if (is_method) {
@@ -1114,16 +1225,16 @@ static int compile_expr(Node *n, int target_reg) {
             } else {
                 compile_expr(n->left, callee_obj_reg);
             }
-            
+
             // 4. Emit the call
             int idx = bc_emit(compiling_bc, is_method ? OP_CALL_METHOD : ((n->type == NODE_CALL) ? OP_CALL : OP_CALL_VALUE), ac, is_method ? (intptr_t)n->left->name : ((intptr_t)n->name));
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = callee_obj_reg;
             compiling_bc->code[idx].r2 = callee_frame_base;
             compiling_bc->code[idx].is_method = is_method;
-            
+
             // 5. Restore the register pool
-            next_free_reg = start_reg;
+            next_free_reg = reg_restore(start_reg);
             break;
         }
         case NODE_INDEX: {
@@ -1145,27 +1256,27 @@ static int compile_expr(Node *n, int target_reg) {
             int obj = compile_expr(n->left, -1);
             int base = next_free_reg;
             next_free_reg += 2;
-            
+
             if (n->right) {
                 compile_expr(n->right, base);
             } else {
                 int idx = bc_emit(compiling_bc, OP_CONST_INT, -999999, 0);
                 compiling_bc->code[idx].r0 = base;
             }
-            
+
             if (n->third) {
                 compile_expr(n->third, base + 1);
             } else {
                 int idx = bc_emit(compiling_bc, OP_CONST_INT, -999999, 0);
                 compiling_bc->code[idx].r0 = base + 1;
             }
-            
+
             int idx = bc_emit(compiling_bc, OP_SLICE, 0, 0);
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = obj;
             compiling_bc->code[idx].r2 = base;
-            
-            next_free_reg = base;
+
+            next_free_reg = reg_restore(base);
             break;
         }
         case NODE_FSTRING: {
@@ -1190,11 +1301,11 @@ static int compile_expr(Node *n, int target_reg) {
                             trimmed[tl-1] = '\0';
                             tl--;
                         }
-                        
+
                         Node *var_node = newVarNode(intern_string(trimmed));
                         int var_reg = compile_expr(var_node, -1);
                         free(var_name);
-                        
+
                         if (last_reg == -1) {
                             last_reg = var_reg;
                         } else {
@@ -1214,11 +1325,11 @@ static int compile_expr(Node *n, int target_reg) {
                     char *lit_str = malloc(lit_len + 1);
                     strncpy(lit_str, str + start, lit_len);
                     lit_str[lit_len] = '\0';
-                    
+
                     Node *lit_node = newStringNode(intern_string(lit_str));
                     int lit_reg = compile_expr(lit_node, -1);
                     free(lit_str);
-                    
+
                     if (last_reg == -1) {
                         last_reg = lit_reg;
                     } else {
@@ -1231,12 +1342,12 @@ static int compile_expr(Node *n, int target_reg) {
                     }
                 }
             }
-            
+
             if (last_reg == -1) {
                 Node *empty_node = newStringNode(intern_string(""));
                 last_reg = compile_expr(empty_node, -1);
             }
-            
+
             bc_emit_reg(compiling_bc, OP_MOVE, reg, last_reg, 0);
             break;
         }
@@ -1247,7 +1358,7 @@ static int compile_expr(Node *n, int target_reg) {
             int idx = bc_emit(compiling_bc, OP_LIST_LITERAL, n->element_count, 0);
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = base;
-            next_free_reg = base; // Restore pool
+            next_free_reg = reg_restore(base); // Restore pool
             break;
         }
         case NODE_LIST_COMP: {
@@ -1312,7 +1423,7 @@ static int compile_expr(Node *n, int target_reg) {
             compiling_bc->code[jf_idx].arg = compiling_bc->count;
 
             // 14. Restore the register pool (except the returned `reg`)
-            next_free_reg = start_reg;
+            next_free_reg = reg_restore(start_reg);
             break;
         }
         case NODE_DICT_LITERAL: {
@@ -1325,7 +1436,7 @@ static int compile_expr(Node *n, int target_reg) {
             int idx = bc_emit(compiling_bc, OP_DICT_LITERAL, n->dict_count, 0);
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = base;
-            next_free_reg = base; // Restore pool
+            next_free_reg = reg_restore(base); // Restore pool
             break;
         }
         case NODE_LAMBDA: {
@@ -1343,21 +1454,26 @@ static int compile_expr(Node *n, int target_reg) {
                 fe->spec_capacity = 0;
             }
             if (fe->local_names) free(fe->local_names);
-            fe->local_names = NULL; fe->local_count = 0; fe->local_capacity = 0;
+            if (fe->local_regs) free(fe->local_regs);
+            fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
             fe->param_count = n->func_param_count;
             fe->params = n->func_params;
             fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; FuncEntry *pf = compiling_func; compiling_func = fe;
             int old_free = next_free_reg;
+            next_free_reg = 0; /* parameters occupy registers 0..n-1 */
             for (int i = 0; i < fe->param_count; i++) {
                 func_add_local(fe, n->func_params[i]);
             }
             fe->body->preserved_locals = fe->local_count;
+            hoist_locals(fe, n->left);
             next_free_reg = fe->local_count;
+            int saved_peak = reg_peak; reg_peak = next_free_reg;
             compile_stmt(n->left);
             bc_emit(compiling_bc, OP_RETURN, 0, 0);
-            compiling_bc->local_count = next_free_reg;
-            compiling_bc = p; compiling_func = pf; next_free_reg = old_free;
+            note_reg_peak();
+            compiling_bc->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
+            compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
 
             int idx = bc_emit(compiling_bc, OP_LAMBDA, 0, (intptr_t)n->name);
             compiling_bc->code[idx].r0 = reg;
@@ -1373,7 +1489,7 @@ void compile(Node *n) {
     compile_stmt(n);
 }
 
-void yyerror(const char *s) { 
+void yyerror(const char *s) {
     fprintf(stderr, "\033[31mSyntaxError:\033[0m %s\n\n", s);
     if (compiling_file) {
         print_error_line(compiling_file, line_num);

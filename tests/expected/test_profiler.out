@@ -1,0 +1,12 @@
+
+--- Performance Hot-Spots ---
+  Executions | Source Location
+  -----------+------------------
+     1400014 | tests/test_profiler.glow:4
+      400014 | tests/test_profiler.glow:3
+           4 | tests/test_profiler.glow:6
+           4 | tests/test_profiler.glow:2
+           2 | tests/test_profiler.glow:11
+           2 | tests/test_profiler.glow:12
+           2 | tests/test_profiler.glow:10
+------------------------------

@@ -12,16 +12,14 @@
 #include <unistd.h>
 #endif
 
-#define INTERN_TABLE_SIZE 65536
-static char *intern_table[INTERN_TABLE_SIZE];
-static int intern_initialized = 0;
-
-static void ensure_intern_init(void) {
-    if (!intern_initialized) {
-        memset(intern_table, 0, sizeof(intern_table));
-        intern_initialized = 1;
-    }
-}
+/* String interning: identifiers and dict keys map to one canonical char* so
+   dicts can compare keys by pointer. Open addressing with the hash stored per
+   slot; the table doubles at 50% load, so lookups stay O(1) however many
+   distinct keys a program creates. Protected by the GIL. */
+typedef struct { const char *str; uint32_t hash; } InternSlot;
+static InternSlot *intern_slots = NULL;
+static uint32_t intern_cap = 0;
+static uint32_t intern_count = 0;
 
 static char *arena_strdup(const char *s) {
     size_t len = strlen(s) + 1;
@@ -30,67 +28,78 @@ static char *arena_strdup(const char *s) {
     return dup;
 }
 
-const char *intern_string(const char *s) {
-    ensure_intern_init();
-    unsigned int h = 2166136261u;
+/* FNV-1a; the same hash that hash_string() in stdlib.c produces, so dict
+   callers can reuse it instead of hashing twice. */
+static uint32_t intern_hash(const char *s) {
+    uint32_t h = 2166136261u;
     for (int i = 0; s[i]; i++) {
         h ^= (unsigned char)s[i];
-        h *= 16777619;
+        h *= 16777619u;
     }
-    unsigned int start = h % INTERN_TABLE_SIZE;
-    unsigned int idx = start;
-    
-    do {
-        if (!intern_table[idx]) {
-            char *dup = arena_strdup(s);
-            intern_table[idx] = dup;
-            return (const char *)dup;
-        }
-        if (strcmp(intern_table[idx], s) == 0)
-            return intern_table[idx];
-        idx = (idx + 1) % INTERN_TABLE_SIZE;
-    } while (idx != start);
-
-    return arena_strdup(s);
+    return h;
 }
 
-/* Intern a string AND return the FNV-1a hash it already computed.
-   This is the same hash that hash_string() in stdlib.c produces,
-   so dict callers can reuse it instead of hashing twice. */
-const char *intern_string_hash(const char *s, uint32_t *out_hash) {
-    ensure_intern_init();
-    unsigned int h = 2166136261u;
-    for (int i = 0; s[i]; i++) {
-        h ^= (unsigned char)s[i];
-        h *= 16777619;
+static void intern_grow(void) {
+    uint32_t new_cap = intern_cap ? intern_cap * 2 : 4096;
+    InternSlot *ns = calloc(new_cap, sizeof(InternSlot));
+    uint32_t mask = new_cap - 1;
+    for (uint32_t i = 0; i < intern_cap; i++) {
+        if (!intern_slots[i].str) continue;
+        uint32_t j = intern_slots[i].hash & mask;
+        while (ns[j].str) j = (j + 1) & mask;
+        ns[j] = intern_slots[i];
     }
-    *out_hash = (uint32_t)h;
-    unsigned int start = h % INTERN_TABLE_SIZE;
-    unsigned int idx = start;
-    
-    do {
-        if (!intern_table[idx]) {
-            char *dup = arena_strdup(s);
-            intern_table[idx] = dup;
-            return (const char *)dup;
-        }
-        if (strcmp(intern_table[idx], s) == 0)
-            return intern_table[idx];
-        idx = (idx + 1) % INTERN_TABLE_SIZE;
-    } while (idx != start);
+    free(intern_slots);
+    intern_slots = ns;
+    intern_cap = new_cap;
+}
 
-    return arena_strdup(s);
+static const char *intern_lookup(const char *s, uint32_t h, int insert) {
+    if (!intern_slots) intern_grow();
+    if (insert && (intern_count + 1) * 2 > intern_cap) intern_grow();
+    uint32_t mask = intern_cap - 1;
+    uint32_t i = h & mask;
+    while (intern_slots[i].str) {
+        if (intern_slots[i].hash == h && strcmp(intern_slots[i].str, s) == 0) return intern_slots[i].str;
+        i = (i + 1) & mask;
+    }
+    if (!insert) return NULL;
+    char *dup = arena_strdup(s);
+    intern_slots[i].str = dup;
+    intern_slots[i].hash = h;
+    intern_count++;
+    return dup;
+}
+
+const char *intern_string(const char *s) {
+    return intern_lookup(s, intern_hash(s), 1);
+}
+
+/* Intern a string AND return its hash. */
+const char *intern_string_hash(const char *s, uint32_t *out_hash) {
+    uint32_t h = intern_hash(s);
+    *out_hash = h;
+    return intern_lookup(s, h, 1);
+}
+
+/* Look a string up without interning it: NULL means no dict can contain it
+   as a key, so lookups of missing keys never grow the table. */
+const char *intern_string_find(const char *s, uint32_t *out_hash) {
+    uint32_t h = intern_hash(s);
+    *out_hash = h;
+    return intern_lookup(s, h, 0);
 }
 
 void intern_cleanup(void) {
-    /* Handled by arena_free_all() now */
-    memset(intern_table, 0, sizeof(intern_table));
-    intern_initialized = 0;
+    /* The strings themselves live in the arena (freed by arena_free_all). */
+    free(intern_slots);
+    intern_slots = NULL;
+    intern_cap = 0;
+    intern_count = 0;
 }
 
 void intern_table_init(void) {
-    memset(intern_table, 0, sizeof(intern_table));
-    intern_initialized = 1;
+    if (!intern_slots) intern_grow();
 }
 
 int line_num = 1;

@@ -1,0 +1,47 @@
+# Native code builds results in C locals while allocating; the collector must
+# not free them mid-way (it scans native stacks conservatively now).
+let d = {}
+let i = 0
+while i < 20000:
+    d["key" + i] = [i, "v" + i]
+    i = i + 1
+end
+let ks = d.keys()
+show "keys:", len(ks)
+let vs = d.values()
+show "values:", len(vs)
+
+# Closures keep their captured values alive.
+func make_adder(n):
+    let base = "base" + n
+    return lambda(x): base + x
+end
+let adders = []
+i = 0
+while i < 200:
+    adders.push(make_adder(i))
+    i = i + 1
+end
+let junk = []
+i = 0
+while i < 50000:
+    junk.push("garbage" + i)
+    i = i + 1
+end
+junk = []
+show "closure:", adders[123]("!")
+
+# Nested structures survive many collections.
+let tree = []
+i = 0
+while i < 3000:
+    tree.push({"id": i, "tags": ["t" + i, "u" + i], "child": {"n": i * 2}})
+    i = i + 1
+end
+let check = 0
+for each node in tree:
+    check = check + node["child"]["n"]
+end
+show "tree check:", check, tree[2999]["tags"][1]
+
+show "str of nested:", str([1, "two", 3.5, {"k": [true, none]}])

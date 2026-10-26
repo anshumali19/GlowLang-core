@@ -397,18 +397,20 @@ end
 
 ## 8. Concurrency Performance
 
-### Multi-Core Parallelism: Spawn Freely
-With the Global Interpreter Lock (GIL) abolished, `spawn` executes tasks across multiple CPU cores in true parallel without lock serialization:
+### Threads do not add CPU parallelism
+GlowLang threads share a global interpreter lock, so only one runs GlowLang code at a time. `spawn` speeds up programs that wait (sleep, sockets, HTTP), not CPU-bound work:
 
 ```glow
-# ✅ True CPU parallelism: runs simultaneously on multiple hardware cores
-spawn compute_shard(partition1)
-spawn compute_shard(partition2)
-spawn compute_shard(partition3)
+# Overlaps waiting; CPU-bound shards would run one after another
+spawn fetch_page(url1)
+spawn fetch_page(url2)
+threads.join_all()
 ```
 
+For number crunching, use tensor operations, which run in native SIMD code.
+
 ### Vectorized Math: Combine Concurrency with SIMD
-For high-density numeric operations, combine multi-core worker threads with hardware AVX2 SIMD tensor operations:
+For high-density numeric operations, use the tensor operations, which run AVX2/FMA kernels when the CPU supports them:
 
 ```glow
 # ✅ Vectorized SIMD matrix multiplication

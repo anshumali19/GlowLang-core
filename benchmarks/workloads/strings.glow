@@ -1,0 +1,19 @@
+let parts = []
+let i = 0
+while i < 200000:
+    parts.push("item" + i)
+    i = i + 1
+end
+let total = 0
+for each p in parts:
+    total = total + len(p)
+end
+let csv = "a,b,c,d,e,f,g,h"
+let n = 0
+i = 0
+while i < 50000:
+    n = n + len(csv.split(","))
+    i = i + 1
+end
+print total
+print n

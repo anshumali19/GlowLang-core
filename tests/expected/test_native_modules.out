@@ -1,0 +1,6 @@
+Testing Native Library Ecosystem
+sin(pi/2):  0.9999999999991198
+sqrt(16):  4
+pow(2, 8):  256
+sha256('GlowLang'):  5194ac9e6eaf4bffefb2580252a8d2a00dfadbf6f5475f661e05aae6ff220d72
+Math operations are perfectly stable!

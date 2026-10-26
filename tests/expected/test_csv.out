@@ -1,0 +1,10 @@
+CSV written to test_data.csv
+Read as rows:
+  Row  0 :  [Name, Age, City]
+  Row  1 :  [Alice, 24, New York]
+  Row  2 :  [Bob, 30, London]
+  Row  3 :  [Charlie, 28, Paris]
+Read as dictionaries:
+  Record  0 :  {"City": New York, "Age": 24, "Name": Alice}
+  Record  1 :  {"City": London, "Age": 30, "Name": Bob}
+  Record  2 :  {"City": Paris, "Age": 28, "Name": Charlie}

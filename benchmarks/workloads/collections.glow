@@ -1,0 +1,26 @@
+let l = []
+let i = 0
+while i < 1000000:
+    l.push(i * 2)
+    i = i + 1
+end
+let s = 0
+for each x in l:
+    s = s + x
+end
+let d = {}
+i = 0
+while i < 200000:
+    d["k" + i] = i
+    i = i + 1
+end
+let hits = 0
+i = 0
+while i < 200000:
+    if d["k" + i] == i:
+        hits = hits + 1
+    end
+    i = i + 1
+end
+print s
+print hits

@@ -1,0 +1,61 @@
+# Deep recursion must give exact answers with and without the JIT. Past
+# about 2,000 calls the compiled path used to return wrong values
+# (ack(3, 8) printed 1790), and the interpreter crashed at depth 20,000.
+func depth(n):
+    if n == 0:
+        return 0
+    end
+    return 1 + depth(n - 1)
+end
+show "depth(2005):", depth(2005)
+show "depth(50000):", depth(50000)
+
+func ack(m, n):
+    if m == 0:
+        return n + 1
+    end
+    if n == 0:
+        return ack(m - 1, 1)
+    end
+    return ack(m - 1, ack(m, n - 1))
+end
+show "ack(2, 3):", ack(2, 3)
+show "ack(3, 8):", ack(3, 8)
+
+func is_even(n):
+    if n == 0:
+        return true
+    end
+    return is_odd(n - 1)
+end
+func is_odd(n):
+    if n == 0:
+        return false
+    end
+    return is_even(n - 1)
+end
+show "is_even(30001):", is_even(30001)
+
+# Unbounded recursion raises a catchable error instead of crashing.
+func forever(n):
+    return 1 + forever(n + 1)
+end
+try:
+    forever(0)
+catch e:
+    show "caught:", e
+end
+show "still works:", depth(10)
+
+# An exception thrown deep inside compiled recursion unwinds to the handler.
+func countdown(n):
+    if n == 0:
+        throw "bottom reached"
+    end
+    return countdown(n - 1)
+end
+try:
+    countdown(10000)
+catch e:
+    show "caught:", e
+end

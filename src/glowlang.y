@@ -171,6 +171,9 @@ int main(int argc, char **argv) {
 #else
 int glow_main(int argc, char **argv) {
 #endif
+    /* The main thread owns the GIL for its whole life except while parked in a
+       blocking native or yielding to a spawned thread. */
+    glow_gil_acquire();
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
     next_free_reg = 0;
 
@@ -210,12 +213,14 @@ int glow_main(int argc, char **argv) {
                                 if (root) {
                                     Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
                                     main_fe.body = main_bc; compile(root);
-                                    main_bc->local_count = next_free_reg;
+                                    main_bc->local_count = compiler_reg_peak();
                                     bc_emit(main_bc, OP_RETURN, 0, 0);
                                     optimize_bytecode(main_bc);
                                     run_bytecode(main_bc, NULL, NULL, 0);
                                     if (has_exception) print_error_trace(pending_exception);
+                                    if (runtime_error_thrown) { fflush(stdout); return 1; }
                                 }
+                                glow_threads_join_all();
                                 std_cleanup(); return 0;
                             } else {
                                 if (script) free(script);
@@ -339,7 +344,7 @@ int glow_main(int argc, char **argv) {
                     Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
                     main_fe.body = main_bc;
                     compile(root);
-                    main_bc->local_count = next_free_reg;
+                    main_bc->local_count = compiler_reg_peak();
                     bc_emit(main_bc, OP_RETURN, 0, 0);
                     optimize_bytecode(main_bc);
 
@@ -355,13 +360,14 @@ int glow_main(int argc, char **argv) {
                     }
 
                     if (!check_only) {
-                        pthread_mutex_lock(&glow_gil);
                         run_bytecode(main_bc, NULL, NULL, 0);
-                        pthread_mutex_unlock(&glow_gil);
                         if (runtime_error_thrown) {
-                            std_cleanup();
+                            /* Spawned threads may still be parked on the GIL, so
+                               leave the heap alone and just exit. */
+                            fflush(stdout);
                             return 1;
                         }
+                        glow_threads_join_all();
                     } else {
                         printf("Syntax Check: OK\n");
                     }
@@ -398,16 +404,15 @@ int glow_main(int argc, char **argv) {
                 Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
                 main_fe.body = main_bc;
                 compile(root);
-                main_bc->local_count = next_free_reg;
+                main_bc->local_count = compiler_reg_peak();
                 bc_emit(main_bc, OP_RETURN, 0, 0);
                 optimize_bytecode(main_bc);
-                pthread_mutex_lock(&glow_gil);
                 run_bytecode(main_bc, NULL, NULL, 0);
-                pthread_mutex_unlock(&glow_gil);
                 if (runtime_error_thrown) {
-                    std_cleanup();
+                    fflush(stdout);
                     return 1;
                 }
+                glow_threads_join_all();
             }
             if (yyin) fclose(yyin);
         } else {
@@ -436,18 +441,17 @@ l_REPL:
             int old_count = main_bc->count;
             compile(root);
             if (main_bc->count > old_count) {
-                main_bc->local_count = next_free_reg;
+                main_bc->local_count = compiler_reg_peak();
                 int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
                 Instruction *start_pc = &main_bc->code[old_count];
-                pthread_mutex_lock(&glow_gil);
                 Value res = run_bytecode(main_bc, start_pc, NULL, 0);
-                pthread_mutex_unlock(&glow_gil);
                 if (has_exception) { print_error_trace(pending_exception); has_exception = 0; }
                 else if (res != 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
                 main_bc->count = ret_idx;
             }
         }
     }
+    glow_threads_join_all();
     std_cleanup();
     return 0;
 }

@@ -1,0 +1,13 @@
+=== Testing has ===
+has name: true
+has gender: false
+=== Testing keys and values ===
+keys: [age, name]
+values: [30, Alice]
+=== Testing remove ===
+removed value: 30
+after remove keys: [name]
+=== Testing merge ===
+after merge keys: [gender, city, name]
+after merge values: [female, NYC, Alice]
+original d has gender: true

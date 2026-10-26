@@ -105,6 +105,7 @@ static void closedir(DIR *dir) {
 #define unlink _unlink
 #else
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -127,12 +128,127 @@ static void closedir(DIR *dir) {
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <sqlite3.h>
-#if defined(__x86_64__) || defined(_M_X64)
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-#include <immintrin.h>
-#endif
-#endif
 #include <ctype.h>
+
+/* ---- Runtime-dispatched SIMD kernels -----------------------------------
+   The binary is built for baseline x86-64. The AVX2/FMA kernels below are
+   compiled for those extensions individually and only called after CPUID
+   confirms the CPU (and OS) support them; otherwise the scalar loops run.
+   Each kernel processes whole 4-lane groups and returns how many elements
+   it handled, leaving the tail to the calling scalar loop. */
+#if defined(__x86_64__) || defined(_M_X64)
+#define GLOW_X86_SIMD 1
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#define GLOW_TARGET_AVX2 __attribute__((target("avx2,fma")))
+#else
+#define GLOW_TARGET_AVX2
+#endif
+
+static void glow_cpuid(int leaf, int sub, unsigned int out[4]) {
+#if defined(_MSC_VER)
+    int r[4]; __cpuidex(r, leaf, sub);
+    out[0] = (unsigned)r[0]; out[1] = (unsigned)r[1]; out[2] = (unsigned)r[2]; out[3] = (unsigned)r[3];
+#else
+    unsigned int a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(leaf), "c"(sub));
+    out[0] = a; out[1] = b; out[2] = c; out[3] = d;
+#endif
+}
+
+static unsigned long long glow_xgetbv0(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    unsigned int lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return ((unsigned long long)hi << 32) | lo;
+#else
+    return _xgetbv(0);
+#endif
+}
+
+int glow_cpu_has_avx2_fma(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    int ok = 0;
+    if (!getenv("GLOW_NO_SIMD")) {
+        unsigned int r[4];
+        glow_cpuid(0, 0, r);
+        if (r[0] >= 7) {
+            glow_cpuid(1, 0, r);
+            int osxsave = (r[2] >> 27) & 1, avx = (r[2] >> 28) & 1, fma = (r[2] >> 12) & 1;
+            if (osxsave && avx && fma && (glow_xgetbv0() & 6) == 6) {
+                glow_cpuid(7, 0, r);
+                ok = (r[1] >> 5) & 1;
+            }
+        }
+    }
+    cached = ok;
+    return ok;
+}
+
+GLOW_TARGET_AVX2 static int simd_add_f64(double *r, const double *a, const double *b, int n) {
+    int i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_pd(&r[i], _mm256_add_pd(_mm256_loadu_pd(&a[i]), _mm256_loadu_pd(&b[i])));
+    return i;
+}
+GLOW_TARGET_AVX2 static int simd_sub_f64(double *r, const double *a, const double *b, int n) {
+    int i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_pd(&r[i], _mm256_sub_pd(_mm256_loadu_pd(&a[i]), _mm256_loadu_pd(&b[i])));
+    return i;
+}
+GLOW_TARGET_AVX2 static int simd_mul_f64(double *r, const double *a, const double *b, int n) {
+    int i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_pd(&r[i], _mm256_mul_pd(_mm256_loadu_pd(&a[i]), _mm256_loadu_pd(&b[i])));
+    return i;
+}
+GLOW_TARGET_AVX2 static int simd_add_i64(int64_t *r, const int64_t *a, const int64_t *b, int n) {
+    int i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_si256((__m256i*)&r[i], _mm256_add_epi64(_mm256_loadu_si256((const __m256i*)&a[i]), _mm256_loadu_si256((const __m256i*)&b[i])));
+    return i;
+}
+GLOW_TARGET_AVX2 static int simd_sub_i64(int64_t *r, const int64_t *a, const int64_t *b, int n) {
+    int i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_si256((__m256i*)&r[i], _mm256_sub_epi64(_mm256_loadu_si256((const __m256i*)&a[i]), _mm256_loadu_si256((const __m256i*)&b[i])));
+    return i;
+}
+/* Fused multiply-add dot product over the 4-lane prefix; *sum gets the
+   partial result. */
+GLOW_TARGET_AVX2 static int simd_dot_f64(const double *a, const double *b, int n, double *sum) {
+    __m256d acc = _mm256_setzero_pd();
+    int i = 0;
+    for (; i + 4 <= n; i += 4) acc = _mm256_fmadd_pd(_mm256_loadu_pd(&a[i]), _mm256_loadu_pd(&b[i]), acc);
+    double t[4];
+    _mm256_storeu_pd(t, acc);
+    *sum = t[0] + t[1] + t[2] + t[3];
+    return i;
+}
+/* One output cell of a row-major matmul: dot(row of A, column j of B). */
+GLOW_TARGET_AVX2 static int simd_matmul_cell(const double *row_a, const double *db, int cA, int cB, int j, double *sum) {
+    __m256d acc = _mm256_setzero_pd();
+    int k = 0;
+    for (; k + 4 <= cA; k += 4) {
+        __m256d va = _mm256_loadu_pd(&row_a[k]);
+        __m256d vb = _mm256_set_pd(db[(k+3) * cB + j], db[(k+2) * cB + j], db[(k+1) * cB + j], db[k * cB + j]);
+        acc = _mm256_fmadd_pd(va, vb, acc);
+    }
+    double t[4];
+    _mm256_storeu_pd(t, acc);
+    *sum = t[0] + t[1] + t[2] + t[3];
+    return k;
+}
+#else
+int glow_cpu_has_avx2_fma(void) { return 0; }
+static int simd_add_f64(double *r, const double *a, const double *b, int n) { (void)r; (void)a; (void)b; (void)n; return 0; }
+static int simd_sub_f64(double *r, const double *a, const double *b, int n) { (void)r; (void)a; (void)b; (void)n; return 0; }
+static int simd_mul_f64(double *r, const double *a, const double *b, int n) { (void)r; (void)a; (void)b; (void)n; return 0; }
+static int simd_add_i64(int64_t *r, const int64_t *a, const int64_t *b, int n) { (void)r; (void)a; (void)b; (void)n; return 0; }
+static int simd_sub_i64(int64_t *r, const int64_t *a, const int64_t *b, int n) { (void)r; (void)a; (void)b; (void)n; return 0; }
+static int simd_dot_f64(const double *a, const double *b, int n, double *sum) { (void)a; (void)b; (void)n; *sum = 0; return 0; }
+static int simd_matmul_cell(const double *row_a, const double *db, int cA, int cB, int j, double *sum) { (void)row_a; (void)db; (void)cA; (void)cB; (void)j; *sum = 0; return 0; }
+#endif
 
 Class *vm_last_class = NULL;
 Trait *vm_last_trait = NULL;
@@ -148,6 +264,11 @@ const char *compiling_file = NULL;
   Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
       (void)argc;
       if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+      if (glow_stack_low()) {
+          pending_exception = value_string_copy("Maximum recursion depth exceeded");
+          has_exception = 1;
+          return value_none();
+      }
       if (fe && fe->body) {
           /* Allocate a fresh register frame for the callee instead of reusing the
            * caller's window via an offset (R + r2*8). The offset model lets nested
@@ -157,6 +278,11 @@ const char *compiling_file = NULL;
            * DO_CALL frame chaining, so each level's register window resets. */
  int new_base = vm_stack_top;
            int needed = new_base + fe->body->local_count + 16;
+           if (needed + 512 >= vm_stack_size) {
+               pending_exception = value_string_copy("Maximum recursion depth exceeded");
+               has_exception = 1;
+               return value_none();
+           }
            Value temp_args[16];
           int copy_count = fe->param_count < argc ? fe->param_count : argc;
           if (copy_count > 16) copy_count = 16;
@@ -203,148 +329,44 @@ const char *compiling_file = NULL;
 return value_none();
 }
 
-/* Fast self-recursion helper for JIT direct calls: checks depth and either
- * calls JIT entry directly (single C frame) or returns a deopt sentinel.
- * The JIT code checks for the sentinel and jumps to a fallback that calls
- * the full C shim jit_self_call_with_depth. This ensures proper C stack
- * unwinding on deopt. */
+/* Self-recursion from compiled code (OP_CALL_SELF_FAST). The compiled caller
+   stores the result straight into its register, so this always finishes the
+   call: a deopt inside the callee is completed by the interpreter, and running
+   out of machine or VM stack raises the usual recursion error. It returns the
+   deopt sentinel only when an exception is pending; the caller then leaves
+   compiled code at the call and the interpreter unwinds it. */
 Value jit_self_call_direct(FuncEntry *fe, Value *args) {
-    if (glow_jit_debug) {
-        fprintf(stderr, "[DBG] jit_self_call_direct: fe=%p, &call_depth=%p, call_depth=%d, fe->body->baseline_jit_code=%p\n", (void*)fe, (void*)&call_depth, call_depth, (void*)(fe ? fe->body->baseline_jit_code : NULL));
-        fflush(stderr);
-    }
-    if (!fe || !fe->body) {
-        return VAL_DEOPT_SENTINEL; // deopt
-    }
-    void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
-    if (!jit_code && fe->spec_count > 0) {
-        TypeSignature sig = compute_signature(args, fe->param_count);
-        void *spec = func_get_specialization(fe, sig);
-        if (spec && spec != (void*)1) {
-            jit_code = spec;
-        }
-    }
-    if (!jit_code) {
-        return VAL_DEOPT_SENTINEL; // deopt
-    }
-    if (call_depth >= 2000) {
-        if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
-            fflush(stderr);
-        }
-        if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d >= 2000, deopt\n", call_depth);
-            fflush(stderr);
-        }
+    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    Bytecode *body = fe->body;
+    int new_base = vm_stack_top;
+    int needed = new_base + body->local_count + 4;
+    if (call_depth >= 65500 || glow_stack_low() || needed + 512 >= vm_stack_size) {
+        pending_exception = value_string_copy("Maximum recursion depth exceeded");
+        has_exception = 1;
         return VAL_DEOPT_SENTINEL;
     }
+    for (int i = 0; i < fe->param_count; i++) vm_stack[new_base + i] = args[i];
+    vm_stack_top = needed;
 
-    int new_base = vm_stack_top;
-    int needed = new_base + fe->body->local_count + 16;
-    Value temp_args[16];
-    int copy_count = fe->param_count < 16 ? fe->param_count : 16;
-    for (int _i = 0; _i < copy_count; _i++)
-        temp_args[_i] = args[_i];
-    if (needed >= vm_stack_size) {
-        int old_size = vm_stack_size;
-        while (needed >= vm_stack_size) vm_stack_size *= 2;
-        vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
-        for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
+    void *code = body->jit_code ? body->jit_code : body->baseline_jit_code;
+    if (!code && fe->spec_count > 0) {
+        void *spec = func_get_specialization(fe, compute_signature(&vm_stack[new_base], fe->param_count));
+        if (spec != (void*)1) code = spec;
     }
-    if (needed > vm_stack_top) vm_stack_top = needed;
-    for (int _i = 0; _i < copy_count; _i++)
-        vm_stack[new_base + _i] = temp_args[_i];
-    for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
-        vm_stack[new_base + _i] = value_none();
-
-    typedef Value (*JITFunc)(Value *R, int *pc_idx);
-    int deopt_pc = 0;
-    call_depth++;
-    /* Use resolved JIT code */
-    if (glow_jit_debug) {
-        fprintf(stderr, "[DBG] jit_self_call_direct: depth=%d, calling JIT at %p\n", call_depth, jit_code);
-        fflush(stderr);
-    }
-    Value res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
-    call_depth--;
-    vm_stack_top = new_base; // restore frame
-    return res;
-}
-
-/* Proper self-recursion helper: manages call stack, checks depth, handles deopt.
- * Mirrors jit_call_helper but skips specialization lookup since callee is always `fe`.
- * Returns DEOPT sentinel for deep recursion so caller (JIT or C) can fall back. */
-Value jit_self_call_proper(FuncEntry *fe, Value *args, Instruction *pc) {
-    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
-    if (fe && fe->body) {
-        /* Deep recursion: return DEOPT sentinel so caller (JIT or C) falls back to interpreter. */
-        if (call_depth >= 2000) {
-        if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_with_depth: depth=%d >= 2000, deopt\n", call_depth);
-            fflush(stderr);
-        }
-            if (glow_jit_debug) {
-                fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d >= 2000, deopt\n", call_depth);
-                fflush(stderr);
-            }
-            return VAL_DEOPT_SENTINEL;
-        }
-
-        int new_base = vm_stack_top;
-        int needed = new_base + fe->body->local_count + 3;
-        Value temp_args[16];
-        int copy_count = fe->param_count < 16 ? fe->param_count : 16;
-        for (int _i = 0; _i < copy_count; _i++)
-            temp_args[_i] = args[_i];
-        if (needed >= vm_stack_size) {
-            int old_size = vm_stack_size;
-            while (needed >= vm_stack_size) vm_stack_size *= 2;
-            vm_stack = realloc(vm_stack, sizeof(Value) * vm_stack_size);
-            for (int _i = old_size; _i < vm_stack_size; _i++) vm_stack[_i] = value_none();
-        }
-        if (needed > vm_stack_top) vm_stack_top = needed;
-        for (int _i = 0; _i < copy_count; _i++)
-            vm_stack[new_base + _i] = temp_args[_i];
-        for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
-            vm_stack[new_base + _i] = value_none();
-
-        typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    Value res;
+    if (code && !glow_nojitexec) {
         int deopt_pc = 0;
-        Value res;
-        call_stack_push(fe, NULL);
+        call_stack_push(fe, body->code);
         call_depth++;
-        /* Use optimized JIT code if available, otherwise baseline JIT code. */
-        void *jit_code = fe->body->jit_code ? fe->body->jit_code : fe->body->baseline_jit_code;
-        if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_proper: depth=%d, calling JIT at %p with R=%p, new_base=%d, local_count=%d, copy_count=%d, fe->body->jit_code=%p, fe->body->baseline_jit_code=%p\n", 
-                    call_depth, jit_code, (void*)&vm_stack[new_base], new_base, fe->body->local_count, copy_count, (void*)fe->body->jit_code, (void*)fe->body->baseline_jit_code);
-            fflush(stderr);
-        }
-        res = ((JITFunc)jit_code)(&vm_stack[new_base], &deopt_pc);
-        if (glow_jit_debug) {
-            fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned, deopt_pc=%d, res=%llx\n", deopt_pc, (unsigned long long)res);
-            fflush(stderr);
-        }
+        res = ((JITFunc)code)(&vm_stack[new_base], &deopt_pc);
         call_depth--;
         call_stack_pop();
-        if (IS_DEOPT(res)) {
-            if (glow_jit_debug) {
-                fprintf(stderr, "[DBG] jit_self_call_proper: JIT returned DEOPT pc=%d\n", deopt_pc);
-                fflush(stderr);
-            }
-            res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
-        }
-        vm_stack_top = new_base; /* restore frame */
-        return res;
+        if (IS_DEOPT(res)) res = run_bytecode(body, &body->code[deopt_pc], NULL, new_base);
+    } else {
+        res = run_bytecode(body, NULL, NULL, new_base);
     }
-    return value_none();
-}
-/* Monomorphic self-recursion fast path with call depth tracking: the callee is always `fe` itself,
- * so once its JIT code exists we call it directly (no signature/hash lookup).
- * Checks recursion depth before entering JIT to avoid stack overflow (STATUS_BAD_STACK).
- * Falls back to interpreter if depth limit exceeded, matching vm_self_call_jit_or_recurse. */
-Value jit_self_call_with_depth(FuncEntry *fe, Value *args) {
-    return jit_self_call_proper(fe, args, NULL);
+    vm_stack_top = new_base;
+    return has_exception ? VAL_DEOPT_SENTINEL : res;
 }
 
  Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
@@ -357,9 +379,14 @@ Value jit_self_call_with_depth(FuncEntry *fe, Value *args) {
 
 Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+    /* Anything this helper cannot complete exactly like the interpreter
+       (constructing an instance runs `init`; calling a non-callable raises)
+       returns the deopt sentinel before doing any work, and the compiled
+       code then lets the interpreter execute the call instruction. */
+    if (!(GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD))) return VAL_DEOPT_SENTINEL;
     if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(callee);
-        if (ot == OBJ_CLASS) return value_instance(instance_new(AS_CLASS(callee)));
+        if (ot == OBJ_CLASS) return VAL_DEOPT_SENTINEL;
         if (ot == OBJ_BOUND_METHOD) {
              BoundMethod *bm = AS_BOUND_METHOD(callee);
              if (glow_calldbg) { fprintf(stderr, "[CALLVAL] bm=%p bm->method=%p bm->native=%p argc=%d args=%p callee=%lx ot=%d\n", (void*)bm, (void*)bm->method, (void*)bm->native_method, argc, (void*)args, (unsigned long)callee, (int)ot); fflush(stderr); }
@@ -380,8 +407,23 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
         }
         if (ot == OBJ_CLOSURE) {
             Closure *c = AS_CLOSURE(callee);
-            if (c->body) return jit_call_helper(c->body->owner, argc, args, pc);
-            return value_none();
+            if (!c->body) return value_none();
+            if (c->captured_count == 0) return jit_call_helper(c->body->owner, argc, args, pc);
+            /* Run with the closure attached so captured variables resolve. */
+            int new_base = vm_stack_top;
+            int needed = new_base + c->body->local_count + 16;
+            if (needed + 512 >= vm_stack_size) {
+                pending_exception = value_string_copy("Maximum recursion depth exceeded");
+                has_exception = 1;
+                return value_none();
+            }
+            int nparams = c->param_count;
+            for (int i = 0; i < nparams; i++) vm_stack[new_base + i] = (i < argc) ? args[i] : value_none();
+            int saved_top = vm_stack_top;
+            vm_stack_top = needed;
+            Value res = run_bytecode(c->body, NULL, c, new_base);
+            vm_stack_top = saved_top;
+            return res;
         }
         if (ot == OBJ_NATIVE_FUNC) {
             NativeFunc *nf = AS_NATIVE_FUNC(callee);
@@ -391,7 +433,7 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
             return AS_NATIVE_FUNC(callee)->func(argc, args);
         }
     }
-    return value_none();
+    return VAL_DEOPT_SENTINEL;
 }
 
 Value jit_get_property_helper(Value o, const char *n, Instruction *pc) {
@@ -467,25 +509,43 @@ Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) 
     return v;
 }
 
+/* A callable stored in a dict under `name` (module functions such as
+   fs.remove or os.exit live in dicts) takes precedence over the built-in
+   dict methods of the same name. */
+static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
+    Value v = dict_get(d, name);
+    if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(v);
+        if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) { *out = v; return 1; }
+    }
+    return 0;
+}
+
 Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
-    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     extern THREAD_LOCAL Bytecode *g_dbg_bc;
     extern THREAD_LOCAL Instruction *g_dbg_pc;
     extern THREAD_LOCAL int vm_stack_top;
-    g_dbg_pc = pc;
-    int old_top = vm_stack_top;
-    int curr_offset = (int)(args - vm_stack);
-    if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
     FuncEntry *fe = NULL;
     NativeFuncPtr native_fe = NULL;
     int is_native_dict_str_method = 0;
     Value fallback_callee = value_none();
-    
-    if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
+
+    /* Resolve the target exactly as the interpreter's OP_CALL_METHOD does.
+       If there is nothing this helper can run, return the deopt sentinel
+       before touching any state so the interpreter executes the instruction
+       (and raises the proper error). */
+    if (n && strcmp(n, "type") == 0) {
+        native_fe = native_val_type; is_native_dict_str_method = 1;
+    } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(obj);
         if(ot==OBJ_INSTANCE) {
             Instance *inst = AS_INSTANCE(obj);
             if (pc && pc->cache[0].key == inst->klass && pc->cache[1].key == (void*)1) {
+                if (call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+                g_dbg_pc = pc;
+                int old_top = vm_stack_top;
+                int curr_offset = (int)(args - vm_stack);
+                if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
                 FuncEntry *cached_fe = (FuncEntry*)pc->cache[0].val;
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 JITFunc cached_jit = (JITFunc)pc->cache[1].val;
@@ -496,8 +556,10 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 Value old_self = (self_slot >= 0 && self_slot < global_table.count) ? global_table.values[self_slot] : value_none();
                 if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = obj;
                 Value res = cached_jit(args, &deopt_pc);
-                if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = old_self;
                 call_stack_pop();
+                /* Compiled code can bail out mid-method; finish in the interpreter. */
+                if (IS_DEOPT(res)) res = run_bytecode(cached_fe->body, &cached_fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
+                if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = old_self;
                 vm_stack_top = old_top;
                 return res;
             }
@@ -505,31 +567,55 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 fe = (FuncEntry*)pc->cache[0].val;
             } else {
                 Value m = class_get_method(inst->klass, n);
-                if (GET_TYPE(m) == VAL_OBJECT && GET_OBJ_TYPE(m) == OBJ_BOUND_METHOD) {
+                if (GET_TYPE(m) == VAL_OBJECT && (m & MASK_PAYLOAD) && GET_OBJ_TYPE(m) == OBJ_BOUND_METHOD) {
                     fe = AS_BOUND_METHOD(m)->method;
                     if (pc) {
                         pc->cache[0].key = inst->klass;
                         pc->cache[0].val = (intptr_t)fe;
                     }
-                } else {
-                    fallback_callee = m;
                 }
             }
+            if (!fe) {
+                /* A callable stored on the object, invoked as obj.handler(...). */
+                Value field = dict_get(inst->properties, n);
+                if (GET_TYPE(field) != VAL_NONE) fallback_callee = field;
+            }
         }
+    } else if(GET_TYPE(obj)==VAL_LIST) {
+        if (strcmp(n, "append") == 0 || strcmp(n, "push") == 0) { native_fe = native_list_append; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "pop") == 0) { native_fe = native_list_pop; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "len") == 0) { native_fe = native_list_len; is_native_dict_str_method = 1; }
     } else if(GET_TYPE(obj)==VAL_DICT) {
-        if (strcmp(n, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
+        Value dict_member;
+        if (dict_member_is_callable(AS_DICT(obj), n, &dict_member)) fallback_callee = dict_member;
+        else if (strcmp(n, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
         else if (strcmp(n, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
         else if (strcmp(n, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
         else if (strcmp(n, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
         else if (strcmp(n, "merge") == 0) { native_fe = native_dict_merge; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
         else fallback_callee = dict_get(AS_DICT(obj), n);
     } else if(GET_TYPE(obj)==VAL_STRING) {
         if (strcmp(n, "contains") == 0) { native_fe = native_str_contains; is_native_dict_str_method = 1; }
         else if (strcmp(n, "find") == 0) { native_fe = native_str_find; is_native_dict_str_method = 1; }
         else if (strcmp(n, "slice") == 0) { native_fe = native_str_slice; is_native_dict_str_method = 1; }
         else if (strcmp(n, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
+        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
     }
-    
+
+    if (!(fe && fe->body) && !(native_fe && is_native_dict_str_method)) {
+        /* Only plain native functions are completed here; closures, bound
+           methods and classes stored as fields go back to the interpreter. */
+        if (!(GET_TYPE(fallback_callee) == VAL_OBJECT && (fallback_callee & MASK_PAYLOAD) &&
+              GET_OBJ_TYPE(fallback_callee) == OBJ_NATIVE_FUNC)) return VAL_DEOPT_SENTINEL;
+    }
+
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+    g_dbg_pc = pc;
+    int old_top = vm_stack_top;
+    int curr_offset = (int)(args - vm_stack);
+    if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
+
     Value final_res = value_none();
     if (fe && fe->body) {
         g_dbg_bc = fe->body;
@@ -549,6 +635,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
             call_stack_push(fe, NULL);
             final_res = ((JITFunc)jit)(args, &deopt_pc);
             call_stack_pop();
+            if (IS_DEOPT(final_res)) final_res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
         } else if (fe->body->baseline_jit_code && !fe->body->jit_code) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
@@ -559,6 +646,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
             call_stack_push(fe, NULL);
             final_res = ((JITFunc)fe->body->baseline_jit_code)(args, &deopt_pc);
             call_stack_pop();
+            if (IS_DEOPT(final_res)) final_res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, (int)(args - vm_stack));
         } else {
             final_res = run_bytecode(fe->body, NULL, NULL, (int)(args - vm_stack));
         }
@@ -571,12 +659,13 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         int start_offset = (pc && pc->is_method) ? 1 : 0;
         for (int i=0; i<count; i++) temp_args[i+1] = args[start_offset + i];
         final_res = native_fe(count + 1, temp_args);
-    } else if (GET_TYPE(fallback_callee) != VAL_NONE) {
-        final_res = jit_call_helper_val(fallback_callee, argc, args, pc);
     } else {
-        runtime_error_thrown = 1;
+        NativeFunc *nf = AS_NATIVE_FUNC(fallback_callee);
+        Value *fargs = args;
+        if (pc && pc->is_method) fargs++;
+        final_res = nf->func(argc, fargs);
     }
-    
+
     vm_stack_top = old_top;
     return final_res;
 }
@@ -612,7 +701,22 @@ Value glow_index_jit(Value coll, Value v_idx) {
         }
         return value_none();
     } else if (GET_TYPE(coll) == VAL_DICT) {
-        return dict_get(AS_DICT(coll), AS_STRING(v_idx));
+        Value v = dict_get(AS_DICT(coll), AS_STRING(v_idx));
+        /* Missing keys that name dict methods produce bound methods in the
+           interpreter; let it handle those. */
+        if (GET_TYPE(v) == VAL_NONE && GET_TYPE(v_idx) == VAL_STRING) return VAL_DEOPT_SENTINEL;
+        return v;
+    } else if (GET_TYPE(coll) == VAL_STRING) {
+        if (GET_TYPE(v_idx) != VAL_INT && GET_TYPE(v_idx) != VAL_FLOAT) return VAL_DEOPT_SENTINEL;
+        const char *s = AS_STRING(coll);
+        int len = (int)strlen(s);
+        int i = (GET_TYPE(v_idx) == VAL_INT) ? (int)AS_INT(v_idx) : (int)AS_FLOAT(v_idx);
+        if (i < 0) i += len;
+        if ((size_t)i < (size_t)len) {
+            char ch[2] = { s[i], '\0' };
+            return value_string_copy(ch);
+        }
+        return value_none();
     }
     return value_none();
 }
@@ -679,18 +783,9 @@ Value value_string_copy(const char *s) {
     size_t len = strlen(s);
     GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
     gs->size = (int)len;
-    if (len >= 32) {
-        size_t i = 0;
-        #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-for (; i + 32 <= len; i += 32) {
-            __m256i v = _mm256_loadu_si256((__m256i*)&s[i]);
-            _mm256_storeu_si256((__m256i*)&gs->chars[i], v);
-        }
-#endif
-        strcpy(gs->chars + i, s + i);
-    } else {
-        strcpy(gs->chars, s);
-    }
+    /* memcpy is already vectorised by the C runtime for whatever the CPU
+       supports; hand-written AVX2 here made every build require AVX2. */
+    memcpy(gs->chars, s, len + 1);
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
@@ -743,19 +838,84 @@ const char* rope_flatten(Value v) {
     if (obj->type == OBJ_STRING) return ((GCString*)obj)->chars;
     if (obj->type == OBJ_ROPE) {
         RopeNode *rn = (RopeNode*)obj;
-        char *s = malloc(rn->length + 1);
+        if (rn->is_leaf && rn->leaf.offset == 0) {
+            GCString *gs = (GCString*)(uintptr_t)(rn->leaf.flat_string & MASK_PAYLOAD);
+            if ((size_t)gs->size == rn->length) return gs->chars;
+        }
+        /* Flatten straight into the final string and keep it on the node, so
+           the rope is copied once however often it is read. */
+        GCString *gs = gc_alloc(sizeof(GCString) + rn->length + 1, OBJ_STRING);
+        gs->size = (int)rn->length;
         size_t offset = 0;
-        rope_flatten_recursive(rn, s, &offset);
-        s[rn->length] = '\0';
-        Value flat = value_string_copy(s);
-        free(s);
-        // Cache it in the rope node? 
+        rope_flatten_recursive(rn, gs->chars, &offset);
+        gs->chars[rn->length] = '\0';
         rn->is_leaf = true;
-        rn->leaf.flat_string = flat;
+        rn->leaf.flat_string = make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
         rn->leaf.offset = 0;
-        return AS_STRING(flat);
+        return gs->chars;
     }
     return "";
+}
+
+/* The bytes of a string value without copying, or of a small int formatted
+   into buf. Returns 0 for anything else (including unflattened ropes). */
+static int concat_piece(Value v, char *buf, const char **p, size_t *len) {
+    if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) {
+        GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+        if (o->type == OBJ_STRING) { GCString *gs = (GCString*)o; *p = gs->chars; *len = (size_t)gs->size; return 1; }
+        RopeNode *rn = (RopeNode*)o;
+        if (o->type == OBJ_ROPE && rn->is_leaf) {
+            GCString *gs = (GCString*)(uintptr_t)(rn->leaf.flat_string & MASK_PAYLOAD);
+            *p = gs->chars + rn->leaf.offset; *len = rn->length;
+            return 1;
+        }
+        return 0;
+    }
+    if (buf && GET_TYPE(v) == VAL_INT) {
+        int64_t x = AS_INT(v);
+        uint64_t u = x < 0 ? (uint64_t)0 - (uint64_t)x : (uint64_t)x;
+        char tmp[24]; int n = 0;
+        do { tmp[n++] = (char)('0' + u % 10); u /= 10; } while (u);
+        int k = 0;
+        if (x < 0) buf[k++] = '-';
+        while (n) buf[k++] = tmp[--n];
+        *p = buf; *len = (size_t)k;
+        return 1;
+    }
+    return 0;
+}
+
+/* `a + b` where either side is a string. Short results are built as one flat
+   string: one allocation and nothing to flatten later. Longer results become
+   a rope node, so a string grown by repeated appends is copied once, not on
+   every append. */
+#define CONCAT_FLAT_MAX 256
+Value glow_string_concat(Value a, Value b) {
+    char abuf[24], bbuf[24];
+    const char *pa, *pb;
+    size_t la, lb;
+    if (!concat_piece(a, abuf, &pa, &la)) {
+        a = value_to_string_value(a);
+        if (!concat_piece(a, NULL, &pa, &la)) goto rope;
+    }
+    if (!concat_piece(b, bbuf, &pb, &lb)) {
+        b = value_to_string_value(b);
+        if (!concat_piece(b, NULL, &pb, &lb)) goto rope;
+        /* Converting b may have allocated; a's bytes did not move (the
+           collector never moves objects) and a is still referenced here. */
+    }
+    if (la + lb <= CONCAT_FLAT_MAX) {
+        GCString *gs = gc_alloc(sizeof(GCString) + la + lb + 1, OBJ_STRING);
+        gs->size = (int)(la + lb);
+        memcpy(gs->chars, pa, la);
+        memcpy(gs->chars + la, pb, lb);
+        gs->chars[la + lb] = '\0';
+        return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+    }
+rope:
+    a = value_to_string_value(a);
+    b = value_to_string_value(b);
+    return rope_new(a, b);
 }
 
 static uint32_t hash_string(const char *s);
@@ -777,6 +937,43 @@ static void global_index_rebuild(int new_cap) {
     for (int s = 0; s < global_table.count; s++) {
         if (global_table.names[s]) global_index_insert_slot(s);
     }
+}
+
+/* Which global slots have actually been declared (assigned at module level,
+   defined as a function, or registered as a builtin), as opposed to merely
+   referenced. The compiler uses this to decide whether an assignment inside a
+   function targets a global or creates a new local. */
+static unsigned char *global_declared = NULL;
+static int global_declared_cap = 0;
+
+void global_mark_declared(int slot) {
+    if (slot < 0) return;
+    if (slot >= global_declared_cap) {
+        int ncap = global_declared_cap ? global_declared_cap : 1024;
+        while (ncap <= slot) ncap *= 2;
+        global_declared = realloc(global_declared, (size_t)ncap);
+        memset(global_declared + global_declared_cap, 0, (size_t)(ncap - global_declared_cap));
+        global_declared_cap = ncap;
+    }
+    global_declared[slot] = 1;
+}
+
+/* Look a global up without creating its slot. */
+int global_find_slot(const char *name) {
+    if (!name || global_table.index_cap == 0) return -1;
+    uint32_t mask = (uint32_t)(global_table.index_cap - 1);
+    uint32_t h = hash_string(name) & mask;
+    while (global_table.index[h] != -1) {
+        int s = global_table.index[h];
+        if (global_table.names[s] && strcmp(global_table.names[s], name) == 0) return s;
+        h = (h + 1) & mask;
+    }
+    return -1;
+}
+
+int global_is_declared(const char *name) {
+    int slot = global_find_slot(name);
+    return slot >= 0 && slot < global_declared_cap && global_declared[slot];
 }
 
 int global_get_slot(const char *name) {
@@ -824,7 +1021,7 @@ int global_get_slot(const char *name) {
 
 void var_set(const char *name, Value value) {
     int slot = global_get_slot(name);
-    if (slot >= 0) global_table.values[slot] = value;
+    if (slot >= 0) { global_table.values[slot] = value; global_mark_declared(slot); }
 }
 
 Value var_get(const char *name) {
@@ -837,33 +1034,15 @@ void var_table_init(void) {
     // No longer needed
 }
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-#include <nmmintrin.h>
-#endif
-
 static unsigned int hash_str(const char *s) {
-    unsigned int h = 5381;
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-    const uint64_t *p = (const uint64_t*)s;
-    size_t len = strlen(s);
-    size_t i = 0;
-    for (; i + 8 <= len; i += 8) {
-        h = _mm_crc32_u64(h, *p++);
-    }
-    s = (const char*)p;
-    for (; i < len; i++) {
-        h = _mm_crc32_u8(h, *s++);
-    }
-#else
-    while (*s) {
-        h = ((h << 5) + h) + (*s++);
-    }
-#endif
+    /* FNV-1a: portable (the previous CRC32 version required SSE4.2). */
+    unsigned int h = 2166136261u;
+    while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
     return h;
 }
 
- void func_table_init(void) { 
-     func_table = calloc(func_table_size, sizeof(FuncEntry)); 
+ void func_table_init(void) {
+     func_table = calloc(func_table_size, sizeof(FuncEntry));
      func_table_capacity = func_table_size;
      main_fe.name = "<main>";
      main_fe.param_count = 0;
@@ -882,6 +1061,7 @@ FuncEntry* func_table_add(const char *name) {
             int gslot = global_get_slot(name);
             if (gslot >= 0) {
                 global_table.values[gslot] = bound_method_new(value_none(), &func_table[idx]);
+                global_mark_declared(gslot);
             }
             return &func_table[idx];
         }
@@ -957,14 +1137,14 @@ void dict_set(Dict *d, const char *key, Value val) {
     const char *interned = intern_string_hash(key, &h);
     gc_write_barrier((GCObject*)d, val);
     int idx = h & (d->capacity - 1);
-    
+
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) {
             d->values[idx] = val; return;
         }
         idx = (idx + 1) & (d->capacity - 1);
     }
-    
+
     if (d->size * 2 >= d->capacity) {
         int old_cap = d->capacity;
         Value *old_keys = d->keys;
@@ -997,7 +1177,7 @@ void dict_set(Dict *d, const char *key, Value val) {
         d->size++;
         return;
     }
-    
+
     d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
     d->values[idx] = val;
     d->size++;
@@ -1006,7 +1186,8 @@ void dict_set(Dict *d, const char *key, Value val) {
 Value dict_get(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return value_none();
     uint32_t h;
-    const char *interned = intern_string_hash(key, &h);
+    const char *interned = intern_string_find(key, &h);
+    if (!interned) return value_none();
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return d->values[idx];
@@ -1018,7 +1199,8 @@ Value dict_get(Dict *d, const char *key) {
 int dict_get_idx(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return -1;
     uint32_t h;
-    const char *interned = intern_string_hash(key, &h);
+    const char *interned = intern_string_find(key, &h);
+    if (!interned) return -1;
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return idx;
@@ -1189,62 +1371,62 @@ void packed_array_set(PackedArray *pa, int idx, Value v) {
     else ((double*)pa->data)[idx] = val_to_double(v);
 }
 
-static Shape* shape_new(Shape *p, const char *n, int o) { 
-    Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE); 
-    s->parent = p; 
-    s->name = n; 
-    s->offset = o; 
+static Shape* shape_new(Shape *p, const char *n, int o) {
+    Shape *s = gc_alloc(sizeof(Shape), OBJ_SHAPE);
+    s->parent = p;
+    s->name = n;
+    s->offset = o;
     s->transitions = NULL;
     vm_stack[vm_stack_top++] = value_obj(s);
-    s->transitions = dict_new(4); 
+    s->transitions = dict_new(4);
     vm_stack_top--;
-    return s; 
+    return s;
 }
 #if 0
-static Shape* shape_get_next(Shape* curr, const char *name) { 
-    for (int i=0; i<curr->transitions->size; i++) 
-        if (strcmp(AS_STRING(curr->transitions->keys[i]), name) == 0) 
-            return (Shape*)(uintptr_t)(curr->transitions->values[i] & MASK_PAYLOAD); 
-    Shape *next = shape_new(curr, name, curr->offset + 1); 
-    dict_set(curr->transitions, name, value_obj(next)); 
-    return next; 
+static Shape* shape_get_next(Shape* curr, const char *name) {
+    for (int i=0; i<curr->transitions->size; i++)
+        if (strcmp(AS_STRING(curr->transitions->keys[i]), name) == 0)
+            return (Shape*)(uintptr_t)(curr->transitions->values[i] & MASK_PAYLOAD);
+    Shape *next = shape_new(curr, name, curr->offset + 1);
+    dict_set(curr->transitions, name, value_obj(next));
+    return next;
 }
 #endif
-Class* class_new(const char *name, Class *parent) { 
-    Class *c = gc_alloc(sizeof(Class), OBJ_CLASS); 
-    c->name = strdup(name); 
-    c->parent = parent; 
+Class* class_new(const char *name, Class *parent) {
+    Class *c = gc_alloc(sizeof(Class), OBJ_CLASS);
+    c->name = strdup(name);
+    c->parent = parent;
     c->methods = NULL;
     c->root_shape = NULL;
     c->stable_shape = NULL;
     c->instances_created = 0;
-    
+
     vm_stack[vm_stack_top++] = value_class(c);
-    c->methods = dict_new(8); 
+    c->methods = dict_new(8);
     vm_stack[vm_stack_top++] = value_dict(c->methods);
-    c->root_shape = shape_new(NULL, "__root__", -1); 
+    c->root_shape = shape_new(NULL, "__root__", -1);
     vm_stack_top -= 2;
-    return c; 
+    return c;
 }
 Instance* instance_new(Class *k) {
     Instance *i = gc_alloc(sizeof(Instance), OBJ_INSTANCE);
     i->klass = k;
     i->properties = NULL;
     k->instances_created++;
-    
+
     vm_stack[vm_stack_top++] = value_instance(i);
     i->properties = dict_new(8);
     vm_stack_top--;
     return i;
 }
 
-Value class_get_method(Class *k, const char *n) { 
-    while(k) { 
-        Value m = dict_get(k->methods, n); 
-        if(GET_TYPE(m) != VAL_NONE) return m; 
-        k=k->parent; 
-    } 
-    return value_none(); 
+Value class_get_method(Class *k, const char *n) {
+    while(k) {
+        Value m = dict_get(k->methods, n);
+        if(GET_TYPE(m) != VAL_NONE) return m;
+        k=k->parent;
+    }
+    return value_none();
 }
 
 Value instance_get(Instance *inst, const char *name) {
@@ -1260,14 +1442,14 @@ void instance_set(Instance *inst, const char *name, Value val) {
     gc_write_barrier((GCObject*)inst, val);
 }
 
-Trait* trait_new(const char *name) { 
-    Trait *t = gc_alloc(sizeof(Trait), OBJ_TRAIT); 
-    t->name = strdup(name); 
+Trait* trait_new(const char *name) {
+    Trait *t = gc_alloc(sizeof(Trait), OBJ_TRAIT);
+    t->name = strdup(name);
     t->methods = NULL;
     vm_stack[vm_stack_top++] = value_trait(t);
-    t->methods = dict_new(8); 
+    t->methods = dict_new(8);
     vm_stack_top--;
-    return t; 
+    return t;
 }
 Value bound_method_new(Value inst, FuncEntry *m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = m; bm->native_method = NULL; return value_bound_method(bm); }
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = NULL; bm->native_method = native_m; return value_bound_method(bm); }
@@ -1277,53 +1459,114 @@ Value native_func_new(const char *name, NativeFuncPtr ptr) { NativeFunc *nf = gc
 /* Render an integer-valued double without exponent/decimal so integers that
    were promoted out of the 48-bit inline range still print like integers. */
 void format_double(char *buf, size_t n, double d) {
-    if (isfinite(d) && d == floor(d) && fabs(d) < 1e16)
-        snprintf(buf, n, "%.0f", d);
-    else
-        snprintf(buf, n, "%g", d);
+    if (isnan(d)) { snprintf(buf, n, "nan"); return; }
+    if (isinf(d)) { snprintf(buf, n, d < 0 ? "-inf" : "inf"); return; }
+    if (d == floor(d) && fabs(d) < 1e16) { snprintf(buf, n, "%.0f", d); return; }
+    /* Shortest text that reads back as the same double (what Python and
+       JavaScript print). Plain %g kept only 6 significant digits, so e.g. a
+       timestamp printed as 1.79297e+09. */
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, n, "%.*g", prec, d);
+        if (strtod(buf, NULL) == d) return;
+    }
 }
 
-void print_value(Value v) {
-    if (v == 0) { printf("none"); return; }
-    if ((v & MASK_NAN) != MASK_NAN) { char _b[64]; format_double(_b, sizeof(_b), AS_FLOAT(v)); printf("%s", _b); return; }
+/* Growable output buffer used to render values as text. */
+typedef struct { char *p; size_t n; size_t cap; } DStr;
+
+static void ds_putn(DStr *d, const char *s, size_t len) {
+    if (d->n + len + 1 > d->cap) {
+        size_t ncap = d->cap ? d->cap : 64;
+        while (d->n + len + 1 > ncap) ncap *= 2;
+        d->p = realloc(d->p, ncap);
+        d->cap = ncap;
+    }
+    memcpy(d->p + d->n, s, len);
+    d->n += len;
+    d->p[d->n] = '\0';
+}
+static void ds_puts(DStr *d, const char *s) { ds_putn(d, s, strlen(s)); }
+
+static void ds_value(DStr *d, Value v, int depth) {
+    char nb[64];
+    if (depth > 64) { ds_puts(d, "..."); return; }
+    /* All-zero bits are the float +0.0 (none has its own tag); printing them
+       as "none" made `show 0.0` and tensor.dot of zeros print none. */
+    if ((v & MASK_NAN) != MASK_NAN) { format_double(nb, sizeof(nb), AS_FLOAT(v)); ds_puts(d, nb); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
-    if (type == VAL_INT) printf("%ld", (long)AS_INT(v));
-    else if (type == VAL_BOOL) printf(AS_BOOL(v) ? "true" : "false");
-    else if (type == VAL_STRING) printf("%s", AS_STRING(v));
-    else if (type == VAL_LIST) { List *l = AS_LIST(v); printf("["); for (int i=0; i<l->size; i++) { print_value(l->items[i]); if (i < l->size - 1) printf(", "); } printf("]"); }
+    if (type == VAL_INT) { snprintf(nb, sizeof(nb), "%lld", (long long)AS_INT(v)); ds_puts(d, nb); }
+    else if (type == VAL_BOOL) ds_puts(d, AS_BOOL(v) ? "true" : "false");
+    else if (type == VAL_STRING) { if (v & MASK_PAYLOAD) ds_puts(d, AS_STRING(v)); }
+    else if (type == VAL_LIST) {
+        List *l = AS_LIST(v);
+        ds_puts(d, "[");
+        for (int i = 0; i < l->size; i++) { ds_value(d, l->items[i], depth + 1); if (i < l->size - 1) ds_puts(d, ", "); }
+        ds_puts(d, "]");
+    }
     else if (type == VAL_DICT) {
-        Dict *d = AS_DICT(v);
-        printf("{");
+        Dict *dict = AS_DICT(v);
+        ds_puts(d, "{");
         int printed = 0;
-        for (int i = 0; i < d->capacity; i++) {
-            if (GET_TYPE(d->keys[i]) != VAL_NONE) {
-                if (printed > 0) printf(", ");
-                const char *key_str = (const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD);
-                printf("\"%s\": ", key_str);
-                print_value(d->values[i]);
+        for (int i = 0; i < dict->capacity; i++) {
+            if (GET_TYPE(dict->keys[i]) != VAL_NONE) {
+                if (printed > 0) ds_puts(d, ", ");
+                ds_puts(d, "\"");
+                ds_puts(d, (const char*)(uintptr_t)(dict->keys[i] & MASK_PAYLOAD));
+                ds_puts(d, "\": ");
+                ds_value(d, dict->values[i], depth + 1);
                 printed++;
             }
         }
-        printf("}");
+        ds_puts(d, "}");
     }
     else if (type == VAL_OBJECT) {
-        if (!(v & MASK_PAYLOAD)) { printf("none"); return; }
+        if (!(v & MASK_PAYLOAD)) { ds_puts(d, "none"); return; }
         ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_CLASS) printf("<class %s>", AS_CLASS(v)->name);
-        else if (ot == OBJ_INSTANCE) printf("<instance of %s>", AS_INSTANCE(v)->klass->name);
+        if (ot == OBJ_CLASS) { ds_puts(d, "<class "); ds_puts(d, AS_CLASS(v)->name); ds_puts(d, ">"); }
+        else if (ot == OBJ_INSTANCE) { ds_puts(d, "<instance of "); ds_puts(d, AS_INSTANCE(v)->klass->name); ds_puts(d, ">"); }
         else if (ot == OBJ_PACKED_ARRAY) {
             PackedArray *pa = AS_PACKED_ARRAY(v);
-            printf("[");
-            for (int i=0; i<pa->size; i++) {
-                if (pa->type == PACKED_INT64) printf("%ld", (long)((int64_t*)pa->data)[i]);
-                else printf("%g", ((double*)pa->data)[i]);
-                if (i < pa->size - 1) printf(", ");
+            ds_puts(d, "[");
+            for (int i = 0; i < pa->size; i++) {
+                if (pa->type == PACKED_INT64) snprintf(nb, sizeof(nb), "%lld", (long long)((int64_t*)pa->data)[i]);
+                else format_double(nb, sizeof(nb), ((double*)pa->data)[i]);
+                ds_puts(d, nb);
+                if (i < pa->size - 1) ds_puts(d, ", ");
             }
-            printf("]");
+            ds_puts(d, "]");
         }
-        else if (ot == OBJ_BIGINT) { char *_bb = bigint_to_new_string(AS_BIGINT(v)); printf("%s", _bb); free(_bb); }
-        else printf("<object>");
-    } else printf("none");
+        else if (ot == OBJ_BIGINT) { char *bb = bigint_to_new_string(AS_BIGINT(v)); ds_puts(d, bb); free(bb); }
+        else ds_puts(d, "<object>");
+    } else ds_puts(d, "none");
+}
+
+/* Render any value as a newly malloc'd C string (caller frees). */
+char *value_to_new_cstring(Value v) {
+    DStr d = {0};
+    ds_putn(&d, "", 0);
+    ds_value(&d, v, 0);
+    return d.p;
+}
+
+/* Render any value as a GlowLang string value. */
+Value value_to_string_value(Value v) {
+    if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) return v;
+    char *s = value_to_new_cstring(v);
+    Value r = value_string_copy(s);
+    free(s);
+    return r;
+}
+
+static Value native_str(int argc, Value *args) {
+    if (argc < 1) return value_string_copy("");
+    return value_to_string_value(args[0]);
+}
+
+void print_value(Value v) {
+    if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) { fputs(AS_STRING(v), stdout); return; }
+    char *s = value_to_new_cstring(v);
+    fputs(s, stdout);
+    free(s);
 }
 
 GlowError *glow_errors = NULL; int glow_error_count = 0; static int glow_error_capacity = 0;
@@ -1333,16 +1576,16 @@ void glow_add_error(int line, const char *msg) {
     glow_errors[glow_error_count].line = line; glow_errors[glow_error_count].message = strdup(msg); glow_error_count++;
 }
 
-Value native_len(int argc, Value *args) { 
-    if (argc < 1) return value_int(0); 
-    Value v = args[0]; 
-    if (GET_TYPE(v) == VAL_STRING) return value_int(strlen(AS_STRING(v))); 
-    if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size); 
+Value native_len(int argc, Value *args) {
+    if (argc < 1) return value_int(0);
+    Value v = args[0];
+    if (GET_TYPE(v) == VAL_STRING) return value_int((int64_t)rope_length(v));
+    if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size);
     if (GET_TYPE(v) == VAL_DICT) return value_int(AS_DICT(v)->size);
     if (GET_TYPE(v) == VAL_OBJECT) {
         if ((v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_PACKED_ARRAY) return value_int(AS_PACKED_ARRAY(v)->size);
     }
-    return value_int(0); 
+    return value_int(0);
 }
 static Value native_range(int argc, Value *args) { int n = (argc > 0) ? (int)AS_INT(args[0]) : 0; List *l = list_new(n); for (int i = 0; i < n; i++) list_push(l, value_int(i)); return value_list(l); }
 static Value native_os_gc_info(int argc, Value *args) {
@@ -1357,7 +1600,16 @@ static Value os_exit(int argc, Value *args) { exit(argc > 0 ? AS_INT(args[0]) : 
 static Value os_system(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_int(-1);
     const char *cmd = AS_STRING(args[0]);
+    /* Keep our buffered output ahead of the child's, and let other GlowLang
+       threads run while the command executes. */
+    fflush(stdout); fflush(stderr);
+    glow_gil_release();
     int status = system(cmd);
+    glow_gil_acquire();
+#ifndef _WIN32
+    /* POSIX system() returns a wait status; report the exit code. */
+    if (status != -1 && WIFEXITED(status)) status = WEXITSTATUS(status);
+#endif
     return value_int(status);
 }
 #include <math.h>
@@ -1514,14 +1766,13 @@ static void json_append_str(const char *s, StringBuilder *sb) {
 
 static void json_stringify_helper(Value v, StringBuilder *sb) {
     // For now, keep it simple but use the efficient append
-    if (v == 0) { json_append_str("null", sb); return; }
-    if ((v & MASK_NAN) != MASK_NAN) { 
-        char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return; 
+    if ((v & MASK_NAN) != MASK_NAN) {
+        char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return;
     }
     if (is_bigint(v)) { char *_s = bigint_to_new_string(AS_BIGINT(v)); json_append_str(_s, sb); free(_s); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {
-        char tmp[64]; snprintf(tmp, sizeof(tmp), "%ld", (long)AS_INT(v)); json_append_str(tmp, sb);
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%lld", (long long)AS_INT(v)); json_append_str(tmp, sb);
     } else if (type == VAL_BOOL) {
         json_append_str(AS_BOOL(v) ? "true" : "false", sb);
     } else if (type == VAL_STRING) {
@@ -1541,9 +1792,9 @@ static void json_stringify_helper(Value v, StringBuilder *sb) {
         for (int i = 0; i < d->capacity; i++) {
             if (GET_TYPE(d->keys[i]) != VAL_NONE) {
                 if (printed > 0) json_append_str(", ", sb);
-                json_append_str("\"", sb); 
+                json_append_str("\"", sb);
                 const char *key = (const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD);
-                json_append_str(key, sb); 
+                json_append_str(key, sb);
                 json_append_str("\": ", sb);
                 json_stringify_helper(d->values[i], sb);
                 printed++;
@@ -1607,7 +1858,7 @@ static Value json_parse_value(const char **src) {
     } else if (strncmp(*src, "true", 4) == 0) { *src += 4; return value_bool(1); }
     else if (strncmp(*src, "false", 5) == 0) { *src += 5; return value_bool(0); }
     else if (strncmp(*src, "null", 4) == 0) { *src += 4; return value_none(); }
-    
+
     // Invalid JSON, prevent infinite loops by advancing src
     if (**src) (*src)++;
     return value_none();
@@ -1678,8 +1929,9 @@ Value native_dict_remove(int argc, Value *args) {
     }
     Dict *d = AS_DICT(args[0]);
     const char *key = AS_STRING(args[1]);
-    const char *interned = intern_string(key);
-    uint32_t h = hash_string(interned);
+    uint32_t h;
+    const char *interned = intern_string_find(key, &h);
+    if (!interned || d->capacity == 0) return value_none();
     int idx = h & (d->capacity - 1);
     while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
         if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) {
@@ -1687,7 +1939,7 @@ Value native_dict_remove(int argc, Value *args) {
             d->keys[idx] = value_none();
             d->values[idx] = value_none();
             d->size--;
-            
+
             // Rehash cluster following idx
             int next_idx = (idx + 1) & (d->capacity - 1);
             while (GET_TYPE(d->keys[next_idx]) != VAL_NONE) {
@@ -1748,20 +2000,20 @@ Value native_str_slice(int argc, Value *args) {
     }
     const char *s = AS_STRING(args[0]);
     int len = strlen(s);
-    
+
     int start = 0;
     if (GET_TYPE(args[1]) == VAL_INT) {
         start = (int)AS_INT(args[1]);
     } else if (GET_TYPE(args[1]) == VAL_FLOAT) {
         start = (int)AS_FLOAT(args[1]);
     }
-    
+
     if (start < 0) {
         start = len + start;
         if (start < 0) start = 0;
     }
     if (start > len) start = len;
-    
+
     int end = len;
     if (argc >= 3 && GET_TYPE(args[2]) != VAL_NONE) {
         if (GET_TYPE(args[2]) == VAL_INT) {
@@ -1775,11 +2027,11 @@ Value native_str_slice(int argc, Value *args) {
         }
         if (end > len) end = len;
     }
-    
+
     if (start > end) {
         return value_string_copy("");
     }
-    
+
     int slice_len = end - start;
     return value_string_copy_len(s + start, (size_t)slice_len);
 }
@@ -1793,9 +2045,9 @@ Value native_str_split(int argc, Value *args) {
     if (argc >= 2 && GET_TYPE(args[1]) == VAL_STRING) {
         delim = AS_STRING(args[1]);
     }
-    
+
     List *l = list_new(8);
-    
+
     // Pause GC during split to protect the unrooted list 'l' and its items
     size_t old_gc_thresh = gc_threshold;
     gc_threshold = (size_t)-1;
@@ -1810,7 +2062,7 @@ Value native_str_split(int argc, Value *args) {
         gc_threshold = old_gc_thresh;
         return value_list(l);
     }
-    
+
     const char *current = s;
     const char *next = strstr(current, delim);
     while (next != NULL) {
@@ -1820,7 +2072,7 @@ Value native_str_split(int argc, Value *args) {
         next = strstr(current, delim);
     }
     list_push(l, value_string_copy(current));
-    
+
     gc_threshold = old_gc_thresh;
     return value_list(l);
 }
@@ -1882,7 +2134,8 @@ static Value http_request_native(int argc, Value *args) {
             Dict *hdrs = AS_DICT(v_headers);
             for (int i = 0; i < hdrs->capacity; i++) {
                 if (GET_TYPE(hdrs->keys[i]) == VAL_STRING && GET_TYPE(hdrs->values[i]) == VAL_STRING) {
-                    req_len += snprintf(req + req_len, sizeof(req) - req_len, "%s: %s\r\n", AS_STRING(hdrs->keys[i]), AS_STRING(hdrs->values[i]));
+                    /* Dict keys are interned C strings, not GC strings. */
+                    req_len += snprintf(req + req_len, sizeof(req) - req_len, "%s: %s\r\n", (const char*)(uintptr_t)(hdrs->keys[i] & MASK_PAYLOAD), AS_STRING(hdrs->values[i]));
                 }
             }
         }
@@ -1895,17 +2148,17 @@ static Value http_request_native(int argc, Value *args) {
     }
     req_len += snprintf(req + req_len, sizeof(req) - req_len, "\r\n");
 
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
 
     struct hostent *he = gethostbyname(hostname);
     if (!he) {
-        pthread_mutex_lock(&glow_gil);
+        glow_gil_acquire();
         return value_none();
     }
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        pthread_mutex_lock(&glow_gil);
+        glow_gil_acquire();
         return value_none();
     }
 
@@ -1923,7 +2176,7 @@ static Value http_request_native(int argc, Value *args) {
 
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(sockfd);
-        pthread_mutex_lock(&glow_gil);
+        glow_gil_acquire();
         return value_none();
     }
 
@@ -1934,14 +2187,14 @@ static Value http_request_native(int argc, Value *args) {
         ctx = SSL_CTX_new(TLS_client_method());
         if (!ctx) {
             close(sockfd);
-            pthread_mutex_lock(&glow_gil);
+            glow_gil_acquire();
             return value_none();
         }
         ssl = SSL_new(ctx);
         if (!ssl) {
             SSL_CTX_free(ctx);
             close(sockfd);
-            pthread_mutex_lock(&glow_gil);
+            glow_gil_acquire();
             return value_none();
         }
         SSL_set_fd(ssl, sockfd);
@@ -1949,7 +2202,7 @@ static Value http_request_native(int argc, Value *args) {
             SSL_free(ssl);
             SSL_CTX_free(ctx);
             close(sockfd);
-            pthread_mutex_lock(&glow_gil);
+            glow_gil_acquire();
             return value_none();
         }
     }
@@ -1990,7 +2243,7 @@ static Value http_request_native(int argc, Value *args) {
     }
     close(sockfd);
 
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
 
     int status = 0;
     const char *body = "";
@@ -2055,49 +2308,37 @@ static Value os_format_time(int argc, Value *args) {
     return value_string_copy(buffer);
 }
 
-#ifndef _WIN32
-#include <regex.h>
-#endif
+/* Regular expressions use GlowLang's own engine (regex.c) on every platform,
+   so patterns behave identically on Windows, Linux and macOS. */
+int glow_regex_search(const char *pattern, const char *text, int *match_start, int *match_len,
+                      char *err, size_t errlen);
 
 static Value native_re_match(int argc, Value *args) {
-#ifndef _WIN32
-    if (argc < 2) return value_bool(0);
-    const char *pattern = AS_STRING(args[0]);
-    const char *text = AS_STRING(args[1]);
-    regex_t regex;
-    int reti = regcomp(&regex, pattern, REG_EXTENDED);
-    if (reti) return value_bool(0);
-    reti = regexec(&regex, text, 0, NULL, 0);
-    regfree(&regex);
-    return value_bool(!reti);
-#else
-    return value_bool(0);
-#endif
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_bool(0);
+    int ms, ml;
+    char err[128];
+    int r = glow_regex_search(AS_STRING(args[0]), AS_STRING(args[1]), &ms, &ml, err, sizeof(err));
+    if (r < 0) {
+        pending_exception = value_string_copy(err);
+        has_exception = 1;
+        return value_bool(0);
+    }
+    return value_bool(r == 1);
 }
 
 static Value native_re_search(int argc, Value *args) {
-#ifndef _WIN32
-    if (argc < 2) return value_none();
-    const char *pattern = AS_STRING(args[0]);
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_none();
     const char *text = AS_STRING(args[1]);
-    regex_t regex;
-    regmatch_t pmatch[1];
-    if (regcomp(&regex, pattern, REG_EXTENDED)) return value_none();
-    if (regexec(&regex, text, 1, pmatch, 0) == 0) {
-        int len = pmatch[0].rm_eo - pmatch[0].rm_so;
-        char *matched = malloc(len + 1);
-        strncpy(matched, text + pmatch[0].rm_so, len);
-        matched[len] = '\0';
-        regfree(&regex);
-        Value res = value_string_copy(matched);
-        free(matched);
-        return res;
+    int ms, ml;
+    char err[128];
+    int r = glow_regex_search(AS_STRING(args[0]), text, &ms, &ml, err, sizeof(err));
+    if (r < 0) {
+        pending_exception = value_string_copy(err);
+        has_exception = 1;
+        return value_none();
     }
-    regfree(&regex);
-    return value_none();
-#else
-    return value_none();
-#endif
+    if (r == 0) return value_none();
+    return value_string_copy_len(text + ms, (size_t)ml);
 }
 
 static SSL_CTX *ssl_ctx = NULL;
@@ -2117,14 +2358,14 @@ static Value ssl_listen(int argc, Value *args) {
 static Value ssl_accept(int argc, Value *args) {
     if (argc < 1) return value_none();
     int server_fd = AS_INT(args[0]);
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
     int client_fd = accept(server_fd, NULL, NULL);
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
     if (client_fd < 0) return value_none();
     SSL *ssl = SSL_new(ssl_ctx); SSL_set_fd(ssl, client_fd);
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
     int accept_res = SSL_accept(ssl);
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
     if (accept_res <= 0) { SSL_free(ssl); close(client_fd); return value_none(); }
     return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)ssl);
 }
@@ -2151,18 +2392,18 @@ static Value http_accept(int argc, Value *args) {
     if (argc < 1) return value_int(-1);
     int sockfd = AS_INT(args[0]);
     struct sockaddr_in client_addr; socklen_t client_len = sizeof(client_addr);
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
     int client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_len);
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
     return value_int(client_fd);
 }
 static Value http_read(int argc, Value *args) {
     if (argc < 1) return value_none();
     int fd = AS_INT(args[0]);
     char buf[4096];
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
     int n = read(fd, buf, 4095);
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
     if (n <= 0) return value_none();
     buf[n] = '\0';
     return value_string_copy(buf);
@@ -2171,9 +2412,9 @@ static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
     int fd = AS_INT(args[0]);
     const char *resp = AS_STRING(args[1]);
-    pthread_mutex_unlock(&glow_gil);
+    glow_gil_release();
     int res = write(fd, resp, strlen(resp));
-    pthread_mutex_lock(&glow_gil);
+    glow_gil_acquire();
     if (res < 0) return value_int(-1);
     return value_none();
 }
@@ -2183,7 +2424,7 @@ static Value http_close(int argc, Value *args) { if (argc < 1) return value_int(
 static Value native_packed_int(int argc, Value *args) { int sz = argc > 0 ? (int)AS_INT(args[0]) : 0; return value_packed(packed_array_new(PACKED_INT64, sz)); }
 static Value native_packed_float(int argc, Value *args) { int sz = argc > 0 ? (int)AS_INT(args[0]) : 0; return value_packed(packed_array_new(PACKED_FLOAT64, sz)); }
 
-static Value native_packed_add(int argc, Value *args) { 
+static Value native_packed_add(int argc, Value *args) {
     if (argc < 2) return value_none();
     Value a = args[0], b = args[1];
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
@@ -2195,21 +2436,11 @@ static Value native_packed_add(int argc, Value *args) {
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                    int i = 0;
-                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                    for (; i <= sz - 4; i += 4) {
-                        _mm256_storeu_pd(&dr[i], _mm256_add_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
-                    }
-                    #endif
+                    int i = glow_cpu_has_avx2_fma() ? simd_add_f64(dr, da, db, sz) : 0;
                     for (; i < sz; i++) dr[i] = da[i] + db[i];
                 } else {
                     int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                    int i = 0;
-                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                    for (; i <= sz - 4; i += 4) {
-                        _mm256_storeu_si256((__m256i*)&ir[i], _mm256_add_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
-                    }
-                    #endif
+                    int i = glow_cpu_has_avx2_fma() ? simd_add_i64(ir, ia, ib, sz) : 0;
                     for (; i < sz; i++) ir[i] = ia[i] + ib[i];
                 }
                 // Copy shape from pa
@@ -2242,7 +2473,7 @@ static Value native_packed_add(int argc, Value *args) {
     return value_none();
 }
 
-static Value native_packed_sub(int argc, Value *args) { 
+static Value native_packed_sub(int argc, Value *args) {
     if (argc < 2) return value_none();
     Value a = args[0], b = args[1];
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
@@ -2254,21 +2485,11 @@ static Value native_packed_sub(int argc, Value *args) {
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                    int i = 0;
-                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                    for (; i <= sz - 4; i += 4) {
-                        _mm256_storeu_pd(&dr[i], _mm256_sub_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
-                    }
-                    #endif
+                    int i = glow_cpu_has_avx2_fma() ? simd_sub_f64(dr, da, db, sz) : 0;
                     for (; i < sz; i++) dr[i] = da[i] - db[i];
                 } else {
                     int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
-                    int i = 0;
-                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                    for (; i <= sz - 4; i += 4) {
-                        _mm256_storeu_si256((__m256i*)&ir[i], _mm256_sub_epi64(_mm256_loadu_si256((__m256i*)&ia[i]), _mm256_loadu_si256((__m256i*)&ib[i])));
-                    }
-                    #endif
+                    int i = glow_cpu_has_avx2_fma() ? simd_sub_i64(ir, ia, ib, sz) : 0;
                     for (; i < sz; i++) ir[i] = ia[i] - ib[i];
                 }
                 res->ndims = pa->ndims;
@@ -2294,7 +2515,7 @@ static Value native_packed_sub(int argc, Value *args) {
     return value_none();
 }
 
-static Value native_packed_mul(int argc, Value *args) { 
+static Value native_packed_mul(int argc, Value *args) {
     if (argc < 2) return value_none();
     Value a = args[0], b = args[1];
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
@@ -2306,12 +2527,7 @@ static Value native_packed_mul(int argc, Value *args) {
                 int sz = pa->size;
                 if (pa->type == PACKED_FLOAT64) {
                     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-                    int i = 0;
-                    #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                    for (; i <= sz - 4; i += 4) {
-                        _mm256_storeu_pd(&dr[i], _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
-                    }
-                    #endif
+                    int i = glow_cpu_has_avx2_fma() ? simd_mul_f64(dr, da, db, sz) : 0;
                     for (; i < sz; i++) dr[i] = da[i] * db[i];
                 } else {
                     int64_t *ia = (int64_t*)pa->data, *ib = (int64_t*)pb->data, *ir = (int64_t*)res->data;
@@ -2342,7 +2558,7 @@ static Value native_packed_mul(int argc, Value *args) {
     return value_none();
 }
 
-static Value native_packed_dot(int argc, Value *args) { 
+static Value native_packed_dot(int argc, Value *args) {
     if (argc < 2) return value_none();
     Value a = args[0], b = args[1];
     if (GET_TYPE(a) == VAL_OBJECT && GET_OBJ_TYPE(a) == OBJ_PACKED_ARRAY &&
@@ -2353,16 +2569,7 @@ static Value native_packed_dot(int argc, Value *args) {
             if (pa->type == PACKED_FLOAT64) {
                 double *da = (double*)pa->data, *db = (double*)pb->data;
                 double sum = 0;
-int i = 0;
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-__m256d sum_vec = _mm256_setzero_pd();
-for (; i <= sz - 4; i += 4) {
-    sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(_mm256_loadu_pd(&da[i]), _mm256_loadu_pd(&db[i])));
-}
-double temp[4];
-_mm256_storeu_pd(temp, sum_vec);
-sum = temp[0] + temp[1] + temp[2] + temp[3];
-#endif
+                int i = glow_cpu_has_avx2_fma() ? simd_dot_f64(da, db, sz, &sum) : 0;
                 for (; i < sz; i++) sum += da[i] * db[i];
                 return value_float(sum);
             } else {
@@ -2391,18 +2598,19 @@ static Value native_sqlite_exec(int argc, Value *args) {
     if (argc >= 3 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
     if (argc < 2) return value_int(-1);
     if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) {
-        printf("Error: sqlite.exec requires a SQLite handle. Raw: 0x%lx (Type: %d, ObjType: %d)\n", 
+        printf("Error: sqlite.exec requires a SQLite handle. Raw: 0x%lx (Type: %d, ObjType: %d)\n",
                (unsigned long)args[0], (int)GET_TYPE(args[0]), (args[0] & MASK_PAYLOAD) ? (int)GET_OBJ_TYPE(args[0]) : -1);
         return value_int(-2);
     }
     SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
     sqlite3 *db = (sqlite3*)h->db;
+    if (!db) { printf("SQLite Error: database is closed\n"); return value_int(SQLITE_MISUSE); }
     const char *sql = AS_STRING(args[1]);
     char *err_msg = 0;
     int rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
-    if (rc != SQLITE_OK) { 
+    if (rc != SQLITE_OK) {
         if (err_msg) { printf("SQLite Error: %s\n", err_msg); sqlite3_free(err_msg); }
-        return value_int(rc); 
+        return value_int(rc);
     }
     return value_int(0);
 }
@@ -2413,10 +2621,11 @@ static Value native_sqlite_step_query(int argc, Value *args) {
     if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
     SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
     sqlite3 *db = (sqlite3*)h->db;
+    if (!db) return value_none();
     const char *sql = AS_STRING(args[1]);
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
-    
+
     SQLiteIter *it = gc_alloc(sizeof(SQLiteIter), OBJ_SQLITE_ITER);
     it->stmt = res;
     it->done = 0;
@@ -2429,13 +2638,14 @@ static Value native_sqlite_query(int argc, Value *args) {
     if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
     SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
     sqlite3 *db = (sqlite3*)h->db;
+    if (!db) return value_none();
     const char *sql = AS_STRING(args[1]);
     sqlite3_stmt *res;
     if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
 
     List *rows = list_new(8);
     int cols = sqlite3_column_count(res);
-    
+
     vm_stack[vm_stack_top++] = value_list(rows);
 
     while (sqlite3_step(res) == SQLITE_ROW) {
@@ -2488,7 +2698,7 @@ static Value native_redis_set(int argc, Value *args) {
     char cmd[1024];
     int len = sprintf(cmd, "*3\r\n$3\r\nSET\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n", strlen(key), key, strlen(val), val);
     if (write(fd, cmd, len) < 0) return value_bool(0);
-    char buf[128]; 
+    char buf[128];
     if (read(fd, buf, 127) <= 0) return value_bool(0);
     return value_bool(buf[0] == '+');
 }
@@ -2500,7 +2710,7 @@ static Value native_redis_get(int argc, Value *args) {
     char cmd[1024];
     int len = sprintf(cmd, "*2\r\n$3\r\nGET\r\n$%zu\r\n%s\r\n", strlen(key), key);
     if (write(fd, cmd, len) < 0) return value_none();
-    
+
     char head[1];
     if (read(fd, head, 1) <= 0) return value_none();
     if (head[0] == '$') {
@@ -2510,7 +2720,7 @@ static Value native_redis_get(int argc, Value *args) {
         int bulk_len = atoi(len_buf);
         if (bulk_len == -1) { char nl[1]; if (read(fd, nl, 1) > 0) {} return value_none(); }
         char nl[1]; if (read(fd, nl, 1) > 0) {} // skip \n
-        
+
         char *data = malloc(bulk_len + 1);
         int total = 0;
         while (total < bulk_len) {
@@ -2532,7 +2742,13 @@ static Value native_sqlite_close(int argc, Value *args) {
     if (argc < 1) return value_int(-1);
     if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_int(-2);
     SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
-    return value_int(sqlite3_close(h->db));
+    if (!h->db) return value_int(SQLITE_OK);
+    /* Clear the handle so neither a second close nor the collector's
+       finalizer closes the same connection again (that was a use after free).
+       close_v2 defers the real close until open query iterators finish. */
+    int rc = sqlite3_close_v2(h->db);
+    h->db = NULL;
+    return value_int(rc);
 }
 
 static Value native_stacktrace(int argc, Value *args) {
@@ -2541,9 +2757,14 @@ static Value native_stacktrace(int argc, Value *args) {
     return value_none();
 }
 
+/* Compiled code does not count instructions, so profiling runs everything
+   in the interpreter (the counts are then exact and repeatable). */
+static int profile_saved_nojit = 0;
 static Value native_profile_start(int argc, Value *args) {
     (void)argc; (void)args;
+    if (!profiling_active) profile_saved_nojit = glow_nojitexec;
     profiling_active = 1;
+    glow_nojitexec = 1;
     return value_none();
 }
 
@@ -2554,6 +2775,7 @@ static int profile_compare(const void *a, const void *b) {
 
 static Value native_profile_stop(int argc, Value *args) {
     (void)argc; (void)args;
+    if (profiling_active) glow_nojitexec = profile_saved_nojit;
     profiling_active = 0;
     typedef struct { const char *file; int line; long count; } ProfileEntry;
     int max_entries = 10000;
@@ -2626,11 +2848,22 @@ void print_error_trace(Value exception);
 
 static Value os_sleep(int argc, Value *args) {
     if (argc > 0) {
-        int ms = (int)AS_INT(args[0]);
+        /* Milliseconds, int or float (`whenever` polls with 0.01). Reading a
+           float with AS_INT used to turn 0.01 into an endless sleep. */
+        double ms = val_to_double(args[0]);
+        if (!(ms > 0)) ms = 0;
+        if (ms > 86400000.0) ms = 86400000.0;
         // Drop GIL while sleeping so other threads can run
-        pthread_mutex_unlock(&glow_gil);
-        usleep(ms * 1000);
-        pthread_mutex_lock(&glow_gil);
+        glow_gil_release();
+#ifdef _WIN32
+        Sleep((DWORD)ms);
+#else
+        struct timespec ts;
+        ts.tv_sec = (time_t)(ms / 1000.0);
+        ts.tv_nsec = (long)((ms - (double)ts.tv_sec * 1000.0) * 1000000.0);
+        while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {}
+#endif
+        glow_gil_acquire();
     }
     return value_none();
 }
@@ -2682,7 +2915,7 @@ static Value native_tensor_get(int argc, Value *args) {
     } else {
         return value_none();
     }
-    
+
     idx += pa->offset;
     if (idx < 0 || idx >= pa->size) return value_none();
     return packed_array_get(pa, idx);
@@ -2705,7 +2938,7 @@ static Value native_tensor_set(int argc, Value *args) {
     } else {
         return value_none();
     }
-    
+
     idx += pa->offset;
     if (idx >= 0 && idx < pa->size) {
         packed_array_set(pa, idx, args[2]);
@@ -2740,7 +2973,7 @@ static Value native_tensor_reshape(int argc, Value *args) {
             total_elements *= new_shape[i];
         }
         if (total_elements != orig->size) return value_none();
-        
+
         PackedArray *view = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
         view->type = orig->type;
         view->size = orig->size;
@@ -2748,7 +2981,7 @@ static Value native_tensor_reshape(int argc, Value *args) {
         view->data = orig->data;
         view->is_view = true;
         view->base = orig->base ? orig->base : orig;
-        
+
         view->ndims = new_ndims;
         int current_stride = 1;
         for (int i = new_ndims - 1; i >= 0; i--) {
@@ -2764,25 +2997,25 @@ static Value native_tensor_reshape(int argc, Value *args) {
         return value_none();
     }
     List *shape_list = (List*)(uintptr_t)(args[1] & MASK_PAYLOAD);
-    
+
     int new_shape[8];
     int new_ndims = shape_list->size;
     if (new_ndims > 8) {
         printf("reshape fail: ndims > 8\n");
         return value_none();
     }
-    
+
     int total_elements = 1;
     for (int i = 0; i < new_ndims; i++) {
         new_shape[i] = (int)val_to_double(shape_list->items[i]);
         total_elements *= new_shape[i];
     }
-    
+
     if (total_elements != orig->size) {
         printf("reshape fail: size mismatch. expected %d got %d\n", orig->size, total_elements);
         return value_none();
     }
-    
+
     // Create view
     PackedArray *view = gc_alloc(sizeof(PackedArray), OBJ_PACKED_ARRAY);
     view->type = orig->type;
@@ -2791,7 +3024,7 @@ static Value native_tensor_reshape(int argc, Value *args) {
     view->data = orig->data;
     view->is_view = true;
     view->base = orig->base ? orig->base : orig;
-    
+
     view->ndims = new_ndims;
     int current_stride = 1;
     for (int i = new_ndims - 1; i >= 0; i--) {
@@ -2800,7 +3033,7 @@ static Value native_tensor_reshape(int argc, Value *args) {
         current_stride *= new_shape[i];
     }
     view->offset = orig->offset;
-    
+
     return value_packed(view);
 }
 
@@ -2816,20 +3049,17 @@ static Value native_tensor_transpose(int argc, Value *args) {
         double *s = (double*)src->data, *r = (double*)res->data;
         for (int i = 0; i < rows; i++) for (int j = 0; j < cols; j++) r[j * rows + i] = s[i * cols + j];
     }
-    
+
     res->ndims = 2;
     res->shape[0] = cols;
     res->shape[1] = rows;
     res->strides[0] = rows;
     res->strides[1] = 1;
-    
+
     return value_packed(res);
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-#include <immintrin.h>
-#endif
 
 typedef struct {
     int start_row;
@@ -2843,21 +3073,11 @@ typedef struct {
 
 static void* matmul_worker(void* arg) {
     MatmulThreadData *data = (MatmulThreadData*)arg;
+    int use_simd = glow_cpu_has_avx2_fma();
     for (int i = data->start_row; i < data->end_row; i++) {
         for (int j = 0; j < data->cB; j++) {
             double sum = 0;
-            int k = 0;
-            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-            __m256d sum_vec = _mm256_setzero_pd();
-            for (; k <= data->cA - 4; k += 4) {
-                __m256d va = _mm256_loadu_pd(&data->da[i * data->cA + k]);
-                __m256d vb = _mm256_set_pd(data->db[(k+3) * data->cB + j], data->db[(k+2) * data->cB + j], data->db[(k+1) * data->cB + j], data->db[k * data->cB + j]);
-                sum_vec = _mm256_add_pd(sum_vec, _mm256_mul_pd(va, vb));
-            }
-            double temp[4];
-            _mm256_storeu_pd(temp, sum_vec);
-            sum = temp[0] + temp[1] + temp[2] + temp[3];
-            #endif
+            int k = use_simd ? simd_matmul_cell(&data->da[i * data->cA], data->db, data->cA, data->cB, j, &sum) : 0;
             for (; k < data->cA; k++) sum += data->da[i * data->cA + k] * data->db[k * data->cB + j];
             data->dr[i * data->cB + j] = sum;
         }
@@ -2869,16 +3089,16 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none(); // A, rowsA, colsA, B, rowsB, colsB
     if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     if (GET_TYPE(args[3]) != VAL_OBJECT || !(args[3] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[3]) != OBJ_PACKED_ARRAY) return value_none();
-    
+
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
     int rA = (int)val_to_double(args[1]), cA = (int)val_to_double(args[2]);
     PackedArray *pb = AS_PACKED_ARRAY(args[3]);
     int rB = (int)val_to_double(args[4]), cB = (int)val_to_double(args[5]);
-    
+
     if (rA < 0 || cA < 0 || rB < 0 || cB < 0) return value_none();
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
-    
+
     PackedArray *res;
     if (strcmp(pa->device, "cuda") == 0) {
 #ifdef GLOW_USE_CUDA
@@ -2919,11 +3139,11 @@ static Value native_tensor_matmul(int argc, Value *args) {
                 int num_threads = 4;
                 if (rA < num_threads) num_threads = rA;
                 if (num_threads < 1) num_threads = 1;
-                
+
                 pthread_t threads[8];
                 MatmulThreadData tdata[8];
                 int rows_per_thread = rA / num_threads;
-                
+
                 for (int t = 0; t < num_threads; t++) {
                     tdata[t].start_row = t * rows_per_thread;
                     tdata[t].end_row = (t == num_threads - 1) ? rA : (t + 1) * rows_per_thread;
@@ -2934,20 +3154,20 @@ static Value native_tensor_matmul(int argc, Value *args) {
                     tdata[t].cB = cB;
                     pthread_create(&threads[t], NULL, matmul_worker, &tdata[t]);
                 }
-                
+
                 for (int t = 0; t < num_threads; t++) {
                     pthread_join(threads[t], NULL);
                 }
             }
         } // end of if (pa->type == PACKED_FLOAT64)
     } // end of else
-    
+
     res->ndims = 2;
     res->shape[0] = rA;
     res->shape[1] = cB;
     res->strides[0] = cB;
     res->strides[1] = 1;
-    
+
     return value_packed(res);
 }
 #else
@@ -2956,16 +3176,16 @@ static Value native_tensor_matmul(int argc, Value *args) {
     if (argc < 6) return value_none();
     if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     if (GET_TYPE(args[3]) != VAL_OBJECT || !(args[3] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[3]) != OBJ_PACKED_ARRAY) return value_none();
-    
+
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
     int rA = (int)val_to_double(args[1]), cA = (int)val_to_double(args[2]);
     PackedArray *pb = AS_PACKED_ARRAY(args[3]);
     int rB = (int)val_to_double(args[4]), cB = (int)val_to_double(args[5]);
-    
+
     if (rA < 0 || cA < 0 || rB < 0 || cB < 0) return value_none();
     if (rA * cA > pa->size || rB * cB > pb->size) return value_none();
     if (cA != rB) return value_none();
-    
+
     PackedArray *res;
     if (strcmp(pa->device, "cuda") == 0) {
 #ifdef GLOW_USE_CUDA
@@ -2988,11 +3208,11 @@ static Value native_tensor_matmul(int argc, Value *args) {
         return value_none();
 #endif
     }
-    
+
     res = packed_array_new(pa->type, rA * cB);
     if (!res || !res->data) return value_none();
     double *da = (double*)pa->data, *db = (double*)pb->data, *dr = (double*)res->data;
-    
+
     for (int i = 0; i < rA; i++) {
         for (int j = 0; j < cB; j++) {
             double sum = 0.0;
@@ -3010,14 +3230,14 @@ static Value native_tensor_to(int argc, Value *args) {
     if (argc < 2) return value_none();
     if (GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     if (GET_TYPE(args[1]) != VAL_STRING) return value_none();
-    
+
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
     const char *target_device = AS_STRING(args[1]);
-    
+
     if (strcmp(target_device, pa->device) == 0) {
         return args[0]; // Already on target device
     }
-    
+
     if (strcmp(target_device, "cuda") == 0) {
 #ifdef GLOW_USE_CUDA
         PackedArray *new_pa = packed_array_new(pa->type, 0); // No CPU mem
@@ -3310,11 +3530,10 @@ static Value native_dump_stack(int argc, Value *args) {
         if (idx >= vm_stack_size) break;
         Value v = vm_stack[idx];
         printf("  [%d]: ", idx);
-        if (v == 0) printf("nil\n");
-        else if (((v) & MASK_NAN) != MASK_NAN) printf("float(%g)\n", AS_FLOAT(v));
+        if (((v) & MASK_NAN) != MASK_NAN) printf("float(%g)\n", AS_FLOAT(v));
         else {
             uint64_t t = GET_TYPE(v);
-            if (t == VAL_INT) printf("int(%ld)\n", (long)AS_INT(v));
+            if (t == VAL_INT) printf("int(%lld)\n", (long long)AS_INT(v));
             else if (t == VAL_STRING) printf("string(\"%s\")\n", AS_STRING(v));
             else if (t == VAL_BOOL) printf("bool(%s)\n", AS_BOOL(v) ? "true" : "false");
             else if (t == VAL_LIST) printf("list(size=%d)\n", AS_LIST(v)->size);
@@ -3348,6 +3567,17 @@ static Value native_assert(int argc, Value *args) {
     return value_bool(1);
 }
 
+static Value native_threads_join_all(int argc, Value *args) {
+    (void)argc; (void)args;
+    glow_threads_join_all();
+    return value_none();
+}
+
+static Value native_threads_active(int argc, Value *args) {
+    (void)argc; (void)args;
+    return value_int(glow_threads_alive());
+}
+
 void std_init(void) {
     var_set("assert", native_func_new("assert", native_assert));
     var_set("dict", native_func_new("dict", native_dict));
@@ -3358,14 +3588,15 @@ void std_init(void) {
     var_set("ceil", native_func_new("ceil", math_ceil));
     var_set("round", native_func_new("round", math_round));
     var_set("int", native_func_new("int", native_int));
-    
+    var_set("str", native_func_new("str", native_str));
+
     Dict *debug = dict_new(4);
     dict_set(debug, "dump_stack", native_func_new("dump_stack", native_dump_stack));
     dict_set(debug, "stacktrace", native_func_new("stacktrace", native_stacktrace));
     dict_set(debug, "profile_start", native_func_new("profile_start", native_profile_start));
     dict_set(debug, "profile_stop", native_func_new("profile_stop", native_profile_stop));
     var_set("debug", value_dict(debug));
-    
+
     var_set("packed_int", native_func_new("packed_int", native_packed_int));
     var_set("packed_float", native_func_new("packed_float", native_packed_float));
     var_set("packed_add", native_func_new("packed_add", native_packed_add));
@@ -3438,17 +3669,22 @@ void std_init(void) {
     dict_set(gui, "poll", native_func_new("poll", native_gui_poll));
     var_set("gui", value_dict(gui));
 
-    Dict *os = dict_new(4); 
-    dict_set(os, "exit", native_func_new("exit", os_exit)); 
-    dict_set(os, "time", native_func_new("time", os_time)); 
+    Dict *os = dict_new(4);
+    dict_set(os, "exit", native_func_new("exit", os_exit));
+    dict_set(os, "time", native_func_new("time", os_time));
     dict_set(os, "format_time", native_func_new("format_time", os_format_time));
-    dict_set(os, "sleep", native_func_new("sleep", os_sleep)); 
+    dict_set(os, "sleep", native_func_new("sleep", os_sleep));
     dict_set(os, "getenv", native_func_new("getenv", native_os_getenv));
     dict_set(os, "gc_info", native_func_new("gc_info", native_os_gc_info));
     dict_set(os, "verify_gc", native_func_new("verify_gc", native_verify_gc));
     dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
 #endif
+
+    Dict *threads = dict_new(4);
+    dict_set(threads, "join_all", native_func_new("join_all", native_threads_join_all));
+    dict_set(threads, "active", native_func_new("active", native_threads_active));
+    var_set("threads", value_dict(threads));
 
     Dict *re_native = dict_new(4);
     dict_set(re_native, "match", native_func_new("match", native_re_match));
@@ -3469,18 +3705,18 @@ void std_init(void) {
     var_set("fs", value_dict(fs));
 
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
-    Dict *http = dict_new(4); 
-    dict_set(http, "listen", native_func_new("listen", http_listen)); 
-    dict_set(http, "accept", native_func_new("accept", http_accept)); 
-    dict_set(http, "read", native_func_new("read", http_read)); 
-    dict_set(http, "send", native_func_new("send", http_write)); 
-    dict_set(http, "close", native_func_new("close", http_close)); 
+    Dict *http = dict_new(4);
+    dict_set(http, "listen", native_func_new("listen", http_listen));
+    dict_set(http, "accept", native_func_new("accept", http_accept));
+    dict_set(http, "read", native_func_new("read", http_read));
+    dict_set(http, "send", native_func_new("send", http_write));
+    dict_set(http, "close", native_func_new("close", http_close));
     dict_set(http, "request", native_func_new("request", http_request_native));
     var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
 #endif
-    Dict *json = dict_new(4); 
-    dict_set(json, "stringify", native_func_new("stringify", native_json_stringify)); 
+    Dict *json = dict_new(4);
+    dict_set(json, "stringify", native_func_new("stringify", native_json_stringify));
     dict_set(json, "parse", native_func_new("parse", native_json_parse));
     dict_set(json, "scan_fast", native_func_new("scan_fast", native_fast_json_scan));
     var_set("json", value_dict(json));
@@ -3512,7 +3748,7 @@ void std_cleanup(void) {
     for (int i = 0; i < global_table.count; i++) {
         global_table.values[i] = value_none();
     }
-    
+
     // 2. Clear VM stack values and reset top to allow them to be GC'd
     if (vm_stack) {
         for (int i = 0; i < vm_stack_size; i++) {
@@ -3530,7 +3766,7 @@ void std_cleanup(void) {
 
     // 4. Perform a full garbage collection sweep to free now-unreferenced objects
     gc_full_collect();
-    
+
     // 3. Free the global_table allocations
     if (global_table.names) {
         free(global_table.names);

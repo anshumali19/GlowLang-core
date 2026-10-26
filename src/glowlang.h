@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <setjmp.h>
 #ifdef _WIN32
 #include "win_pthread.h"
 #else
@@ -18,10 +19,16 @@
 #endif
 #include "arena.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(__clang__)
 #ifndef __builtin_expect
 #define __builtin_expect(x, expected_value) (x)
 #endif
+#endif
+
+/* True when the compiler supports GNU labels-as-values (computed goto). MSVC
+   does not; clang-cl and GCC do, so the VM uses threaded dispatch with them. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GLOW_COMPUTED_GOTO 1
 #endif
 
 /* ================================================================
@@ -49,7 +56,9 @@ typedef struct Node Node;
 typedef struct Bytecode Bytecode;
 typedef struct Instruction Instruction;
 typedef struct FuncEntry FuncEntry;
-typedef struct { Value callee; int argc; Value *args; const char *name; } ThreadData;
+/* daemon: a background thread (a `whenever` monitor) that program exit and
+   threads.join_all() do not wait for. */
+typedef struct { Value callee; int argc; Value *args; const char *name; int daemon; } ThreadData;
 
 /* ================================================================
  *  GC & OBJECTS
@@ -265,11 +274,8 @@ void call_stack_pop(void);
 extern TypeSignature compute_signature(Value *regs, int count);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
-extern Value jit_self_call(struct FuncEntry *fe, Value *args);
-extern Value jit_self_call_with_depth(struct FuncEntry *fe, Value *args);
-extern Value jit_self_call_proper(struct FuncEntry *fe, Value *args, struct Instruction *pc);
 extern Value jit_self_call_direct(struct FuncEntry *fe, Value *args);
-extern Value vm_call_jit_direct(Value (*f)(Value *, int *), int callee_base, int callee_local, int callee_param, int *deopt_pc);
+extern Value vm_call_jit_direct(Value (*f)(Value *, int *), struct FuncEntry *fe, int callee_base, int *deopt_pc);
 extern Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, struct Instruction *pc);
 extern Value jit_get_property_helper(Value o, const char *n, struct Instruction *pc);
 extern Value jit_set_property_helper(Value o, const char *n, Value v, struct Instruction *pc);
@@ -453,6 +459,7 @@ typedef struct {
     int start_pc;
     int end_pc;
     int handler_pc;
+    int exc_reg;      /* register that receives the caught exception */
 } ExceptionEntry;
 
 typedef enum {
@@ -480,6 +487,15 @@ struct Bytecode {
     void *baseline_jit_code;
     size_t baseline_jit_size;
     uint32_t *baseline_jit_offsets;
+    /* On-stack replacement: native entry points at loop headers (indexed by
+       instruction), so a hot loop can switch into compiled code mid-call.
+       osr_code may contain side exits back to the interpreter for opcodes the
+       JIT does not handle; it is only ever entered through osr_entries. */
+    void **osr_entries;
+    void *osr_code;
+    size_t osr_code_size;
+    int osr_failed;
+    uint32_t loop_iterations;
 };
 
 /* ================================================================
@@ -573,6 +589,8 @@ struct FuncEntry {
     int used;
     int uses_let;
     char **local_names;
+    int *local_regs;  /* register assigned to each local (not its index) */
+    int reg_floor;    /* first register above every local; temps start here */
     int local_count;
     int local_capacity;
     Specialization *specs;
@@ -732,15 +750,47 @@ extern THREAD_LOCAL int debug_mode;
 extern THREAD_LOCAL Bytecode *g_dbg_bc;
 extern THREAD_LOCAL Instruction *g_dbg_pc;
 extern int next_free_reg;
+/* Frame size needed by the top-level code compiled so far. */
+int compiler_reg_peak(void);
+void compiler_set_reg_peak(int peak);
 extern int global_lambda_count;
-typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; } ThreadStack;
+/* Per-thread machine-stack bounds and a register snapshot, used by the GC to
+   scan native C stacks conservatively. stack_lo/regs are refreshed every time
+   the thread releases the GIL, so a parked thread's roots are always visible. */
+typedef struct GlowThreadCtx {
+    void *stack_hi;
+    void *volatile stack_lo;
+    jmp_buf regs;
+    /* Lowest address recursion may reach before it must raise a recursion
+       error instead of overflowing the machine stack (limit plus a margin). */
+    void *stack_limit;
+} GlowThreadCtx;
+typedef struct { Value **vm_stack_ptr; int *sp_ptr; int *top_ptr; Value *pending_exc_ptr; GlowThreadCtx *ctx; } ThreadStack;
 extern ThreadStack active_stacks[128];
 extern int active_stack_count;
 extern volatile int threads_ever_spawned;
-extern pthread_mutex_t glow_gil;
+extern THREAD_LOCAL GlowThreadCtx glow_thread_ctx;
+
+/* True when the current thread is close to the end of its machine stack.
+   Every path that nests native frames per GlowLang call checks this. */
+static inline int glow_stack_low(void) {
+    char probe;
+    return (char*)&probe < (char*)glow_thread_ctx.stack_limit;
+}
+
+/* Global interpreter lock. Exactly one thread runs GlowLang code at a time;
+   blocking natives release it (glow_gil_release / glow_gil_acquire) and the
+   interpreter hands it over at loop back-edges when another thread waits. */
+void glow_gil_acquire(void);
+void glow_gil_release(void);
+void glow_gil_yield(void);
+extern volatile int glow_gil_waiters;
+#define GLOW_GIL_POLL() do { if (__builtin_expect(glow_gil_waiters != 0, 0)) glow_gil_yield(); } while (0)
+void glow_threads_join_all(void);
+int glow_threads_alive(void);
+void glow_thread_ctx_init(void);
 extern THREAD_LOCAL int call_stack_ptr;
 extern THREAD_LOCAL int call_depth;
-extern THREAD_LOCAL int force_interpreter_self_call;
 /* Cached debug environment flags (defined in vm.c, checked once at startup) */
 extern int glow_jit_debug;
 extern int glow_nojitexec;
@@ -799,6 +849,7 @@ void list_sort(List *l);
 void list_reverse(List *l);
 Value value_string_copy(const char *s);
 Value rope_new(Value left, Value right);
+Value glow_string_concat(Value a, Value b);
 const char* rope_flatten(Value v);
 Class* class_new(const char *name, Class *parent);
 Value class_get_method(Class *c, const char *name);
@@ -811,11 +862,17 @@ Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 const char *intern_string(const char *s);
 const char *intern_string_hash(const char *s, uint32_t *out_hash);
+const char *intern_string_find(const char *s, uint32_t *out_hash);
 void intern_table_init(void);
 void intern_cleanup(void);
 void lexer_cleanup(void);
 void var_table_init(void);
 int global_get_slot(const char *name);
+int global_find_slot(const char *name);
+void global_mark_declared(int slot);
+int global_is_declared(const char *name);
+char *value_to_new_cstring(Value v);
+Value value_to_string_value(Value v);
 void var_set(const char *name, Value val);
 Value var_get(const char *name);
 void func_table_init(void);

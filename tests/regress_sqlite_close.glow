@@ -1,0 +1,28 @@
+# Closing a database and later letting the collector free its handle used to
+# close the same connection twice (a use after free that crashed at exit).
+let db = sqlite.open(":memory:")
+sqlite.exec(db, "CREATE TABLE t (x INTEGER)")
+sqlite.exec(db, "INSERT INTO t VALUES (7)")
+show "rows:", sqlite.query(db, "SELECT x FROM t")
+show "close:", sqlite.close(db)
+show "close again:", sqlite.close(db)
+show "exec after close:", sqlite.exec(db, "SELECT 1")
+show "query after close:", sqlite.query(db, "SELECT 1")
+
+# A connection that is never closed is closed by the collector.
+func open_and_forget():
+    let tmp = sqlite.open(":memory:")
+    sqlite.exec(tmp, "CREATE TABLE u (y INTEGER)")
+end
+let i = 0
+while i < 50:
+    open_and_forget()
+    i = i + 1
+end
+let junk = []
+i = 0
+while i < 20000:
+    junk.push("x" + i)
+    i = i + 1
+end
+show "done"

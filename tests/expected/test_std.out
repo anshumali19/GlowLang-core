@@ -1,0 +1,5 @@
+Testing os.time(): 
+Time is after 2023:  true
+Running a shell command:
+Exit status:  0
+Exiting with code 42...

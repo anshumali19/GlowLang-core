@@ -1,0 +1,101 @@
+# Hot loops are compiled mid-execution (on-stack replacement). Each loop
+# below runs well past the compile threshold and must give exactly the
+# interpreter's answer.
+
+# Method calls on lists inside a compiled loop.
+let l = []
+let i = 0
+while i < 5000:
+    l.push(i)
+    i = i + 1
+end
+show "pushed:", len(l), l[4999]
+
+# for-each over a list.
+let s = 0
+for each x in l:
+    s = s + x
+end
+show "sum:", s
+
+# Negative results and mixed signs.
+let neg = 0
+i = 0
+while i < 4000:
+    neg = neg - 3
+    i = i + 1
+end
+show "negative:", neg
+show "product:", -7 * 6
+
+# Floats.
+let f = 0.0
+i = 0
+while i < 4000:
+    f = f + i * 0.5
+    i = i + 1
+end
+show "float:", f
+
+# Strings and dicts.
+let text = ""
+let d = {}
+i = 0
+while i < 3000:
+    if i % 1000 == 0:
+        text = text + i + ";"
+    end
+    d["k" + i] = i
+    i = i + 1
+end
+show "text:", text
+show "dict:", d["k2999"]
+
+# Division inside a loop, including by a value that is zero once.
+let q = 0.0
+let errors = 0
+i = 0
+while i < 3000:
+    try:
+        q = q + 6000 / (i - 1500)
+    catch e:
+        errors = errors + 1
+    end
+    i = i + 1
+end
+show "division errors:", errors
+
+# Indexing strings in a loop.
+let word = "glowlang"
+let letters = ""
+i = 0
+while i < 2400:
+    letters = letters + word[i % 8]
+    i = i + 1
+end
+show "letters:", len(letters), word[3]
+
+# Constructing objects in a hot loop runs init every time.
+blueprint P:
+    can init(v):
+        self.v = v
+    end
+end
+let ps = []
+i = 0
+while i < 3000:
+    ps.push(P(i))
+    i = i + 1
+end
+show "objects:", len(ps), ps[2999].v
+
+# Large multiplications promote instead of overflowing.
+let m = 1
+i = 0
+while i < 2000:
+    if i < 60:
+        m = m * 3
+    end
+    i = i + 1
+end
+show "3^60:", m

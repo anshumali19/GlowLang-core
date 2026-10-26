@@ -1,0 +1,30 @@
+=== BASIC ===
+7
+Glow
+G
+[10, 20, 30]
+20
+=== BUILTINS ===
+4
+3
+[0, 1, 2, 3, 4]
+=== WHILE + RANGE ===
+0
+1
+2
+3
+4
+=== NESTED WHILE ===
+10
+20
+30
+10
+20
+30
+=== IF ===
+outer if
+nested if
+=== MIXED NESTING ===
+G
+l
+o

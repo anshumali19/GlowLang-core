@@ -1,0 +1,8 @@
+# Module used by tests/regress_modules.glow. Its top-level variables are
+# globals, visible to its own functions and to the importing program.
+let PI = 3.5
+let calls = 0
+func area(r):
+    calls = calls + 1
+    return PI * r * r
+end

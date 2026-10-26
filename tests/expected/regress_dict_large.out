@@ -1,0 +1,7 @@
+len(keys): 100000
+first: 0 last: 99999
+overwritten: -1 len: 100000
+missing key: none
+has key_5: true has nope: false
+after remove: false 99999
+unexpected hits: 0
