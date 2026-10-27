@@ -1,6 +1,9 @@
-let db = sqlite.open("orm_test.db")
-let rows = sqlite.query(db, "SELECT * FROM users")
-show "Direct rows:", rows
+let db = sqlite.open(":memory:")
+sqlite.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, age INTEGER, name TEXT)")
+sqlite.exec(db, "INSERT INTO users (age, name) VALUES (28, 'Charlie')")
+sqlite.exec(db, "INSERT INTO users (age, name) VALUES (35, 'Diana')")
+let rows = sqlite.query(db, "SELECT * FROM users ORDER BY id")
+show "Direct row count:", len(rows)
 for each row in rows:
     show "Row name:", row["name"], "Age:", row["age"]
 end

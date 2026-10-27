@@ -1,0 +1,5 @@
+outer: 11
+recursive nested: 5
+tail nested: 4950
+shadow: [outer, inner]
+returned: 6 8

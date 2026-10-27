@@ -1,0 +1,8 @@
+--- Testing GlowTorch Autograd Engine ---
+Forward pass complete.
+Z shape:  [2]
+Backward pass complete.
+x.grad (expected: y + 1.0 = [5.0, 6.0]): 
+  [ 5 ,  6 ]
+y.grad (expected: x = [2.0, 3.0]): 
+  [ 2 ,  3 ]

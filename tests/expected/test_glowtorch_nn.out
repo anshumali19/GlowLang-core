@@ -1,0 +1,8 @@
+--- GlowTorch Training Pipeline Test ---
+Model initialized. Weight shape:  [2, 1]
+Linear out shape:  [4, 1]
+ReLU out shape:  [4, 1]
+act.shape[0]:  4
+Initial Loss:  11.835821000000001
+Weight Gradients:  2.2300000000000004 ,  -9.591999999999999
+One training step complete.

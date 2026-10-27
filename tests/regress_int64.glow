@@ -1,0 +1,35 @@
+# Integers above 2^31 used to print truncated to 32 bits on Windows.
+let a = 3000000000
+show a
+show 2000000000 + 2000000000
+show 100000 * 100000
+show "concat: " + a
+show str(a)
+show -5000000000
+show [a, -a]
+show {"big": a}
+
+# Accumulating in a loop (runs long enough to be compiled).
+func total(n):
+    let s = 0
+    let i = 0
+    while i < n:
+        s = s + 100000
+        i = i + 1
+    end
+    return s
+end
+show total(100000)
+
+# Past the 48-bit inline range: promoted, never wrapped.
+show 140737488355327 + 1
+show 9007199254740993
+
+# Integer powers are exact (they used to go through floating point, so
+# 2 ** 60 printed 1.152921504606847e+18).
+show "2 ** 60:", 2 ** 60
+show "2 ** 100:", 2 ** 100
+show "(-3) ** 3:", (-3) ** 3
+show "7 ** 0:", 7 ** 0
+show "2 ** (-1):", 2 ** (-1)
+show "1.5 ** 2:", 1.5 ** 2

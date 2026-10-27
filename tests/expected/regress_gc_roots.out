@@ -1,0 +1,5 @@
+keys: 20000
+values: 20000
+closure: base123!
+tree check: 8997000 u2999
+str of nested: [1, two, 3.5, {"k": [true, none]}]

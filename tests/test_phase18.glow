@@ -20,7 +20,7 @@ let global_routes = {}
 let global_middlewares = []
 
 func use_middleware(mw):
-    global_middlewares[len(global_middlewares)] = mw
+    global_middlewares.push(mw)
 end
 
 func get_route(path, handler):

@@ -1,0 +1,7 @@
+rows: [{"x": 7}]
+close: 0
+close again: 0
+SQLite Error: database is closed
+exec after close: 21
+query after close: none
+done

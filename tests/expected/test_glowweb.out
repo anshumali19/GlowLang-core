@@ -1,0 +1,78 @@
+=== GlowWeb Test Suite ===
+
+--- Test 1: Request Parser ---
+Method: GET
+Path: /api/users
+Query string: page=1&limit=10
+Query param page: 1
+Query param limit: 10
+Header Host: localhost
+Header Content-Type: application/json
+Body: {"test": true}
+PASS: Request parser works
+
+--- Test 2: Response Builder ---
+Status code: 200
+Body: Hello World
+Content-Type: text/plain
+Sent: true
+JSON status: 201
+JSON body: {"id": 1, "name": "Alice"}
+PASS: Response builder works
+
+--- Test 3: Router ---
+Found GET /users: true
+Found POST /users: true
+Found DELETE /users: true
+Not found route: true
+PASS: Router works
+
+--- Test 4: Router with Prefix ---
+Found prefixed route: true
+PASS: Router prefix works
+
+--- Test 5: Middleware Chain ---
+Middleware log: [before:GET, after:200]
+Before hooks ran: true
+After hooks ran: true
+PASS: Middleware chain works
+
+--- Test 6: JSON API Helpers ---
+json_ok status: 200
+json_ok body: {"status": "ok"}
+json_error status: 400
+json_error body: {"error": "Bad Request"}
+json_not_found status: 404
+PASS: JSON API helpers work
+
+--- Test 7: Server Creation ---
+Server port: 8080
+Server running: false
+Routes registered: 2
+PASS: Server creation works
+
+--- Test 8: Response HTTP Build ---
+Contains status line: true
+Contains X-Custom: true
+Contains body: true
+PASS: HTTP response build works
+
+--- Test 9: Route Entry ---
+Route method: GET
+Route path: /test
+PASS: Route entry works
+
+--- Test 10: Request Context ---
+Context user_id: 42
+Context role: admin
+Context missing: none
+PASS: Request context works
+
+--- Test 11: POST with JSON Body ---
+POST method: POST
+POST path: /api/data
+POST body name: test
+POST body value: 42
+PASS: POST with JSON body works
+
+=== All GlowWeb Tests Passed ===

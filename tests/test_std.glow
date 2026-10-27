@@ -1,7 +1,7 @@
 show "Testing os.time(): "
 t = os.time()
-show t
-show "System info:"
-os.system("uname -a")
+show "Time is after 2023: ", t > 1700000000
+show "Running a shell command:"
+show "Exit status: ", os.system("exit 0")
 show "Exiting with code 42..."
 os.exit(42)

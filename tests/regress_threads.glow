@@ -1,0 +1,42 @@
+# spawn runs under the global interpreter lock, threads keep their own locals,
+# and threads.join_all() waits for every thread.
+let results = []
+func worker(id, n):
+    i = 0
+    total = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    end
+    results.push(id * 1000000000 + total)
+end
+
+spawn worker(1, 20000)
+spawn worker(2, 30000)
+spawn worker(3, 40000)
+spawn worker(4, 50000)
+threads.join_all()
+show "threads still running:", threads.active()
+show "results:", len(results)
+let sum = 0
+for each r in results:
+    sum = sum + r
+end
+show "checksum:", sum
+
+# Many short threads allocating while others run.
+let words = []
+func make_words(prefix):
+    let k = 0
+    while k < 200:
+        words.push(prefix + k)
+        k = k + 1
+    end
+end
+let t = 0
+while t < 8:
+    spawn make_words("w" + t + "_")
+    t = t + 1
+end
+threads.join_all()
+show "words:", len(words)

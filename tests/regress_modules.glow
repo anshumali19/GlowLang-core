@@ -1,0 +1,17 @@
+# Variables declared at a module's top level used to become hidden locals of
+# the import, so the module's own functions saw none.
+use "tests/modules/geometry.glow"
+show "area(2):", area(2)
+show "area(1):", area(1)
+show "calls:", calls
+show "PI:", PI
+
+# Importing from inside a deep call chain is not a circular import.
+func nest(n):
+    if n == 0:
+        use "tests/modules/geometry.glow"
+        return area(1)
+    end
+    return nest(n - 1)
+end
+show "nested import:", nest(100)

@@ -74,24 +74,14 @@ The compiler translates AST nodes into a flat array of bytecode instructions for
 
 ### Register Allocation
 GlowLang uses a register-based (not stack-based) architecture:
-- **256 virtual registers** per function frame
-- Register allocation during compilation assigns temporaries to registers
-- Eliminates stack push/pop overhead found in stack VMs
+- Every name a function assigns is a local for the whole function and gets a register before any temporary
+- Temporaries are allocated above the locals and released after each expression
+- A frame's size (`local_count`) is the highest register any instruction of the function uses
 
 ### Opcode Design
-The instruction set includes operations for:
-
-| Category | Example Opcodes |
-|----------|----------------|
-| Arithmetic | `OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_DIV`, `OP_MOD` |
-| Comparison | `OP_EQ`, `OP_LT`, `OP_GT`, `OP_LE`, `OP_GE` |
-| Control | `OP_JMP`, `OP_JMP_IF_FALSE`, `OP_CALL`, `OP_RET` |
-| Load/Store | `OP_LOAD_CONST`, `OP_LOAD_LOCAL`, `OP_STORE_LOCAL` |
-| Objects | `OP_GET_PROP`, `OP_SET_PROP`, `OP_NEW_INSTANCE` |
-| Collections | `OP_INDEX_GET`, `OP_INDEX_SET`, `OP_NEW_LIST`, `OP_NEW_DICT` |
-| SIMD | `OP_SIMD_ADD`, `OP_SIMD_MUL`, `OP_SIMD_DOT` |
-| Concurrency | `OP_SPAWN`, `OP_YIELD` |
-| Exception | `OP_TRY_PUSH`, `OP_TRY_POP`, `OP_THROW` |
+The full instruction set is the `OpCode` enum in `src/glowlang.h` (for example `OP_ADD`, `OP_LT`,
+`OP_JUMP_IF_FALSE`, `OP_CALL`, `OP_CALL_SELF_FAST`, `OP_TAIL_CALL`, `OP_RETURN`, `OP_GET_PROPERTY`,
+`OP_INDEX`, `OP_SPAWN`, `OP_THROW`, `OP_SIMD_ADD`).
 
 ---
 
@@ -99,7 +89,7 @@ The instruction set includes operations for:
 
 **File:** `src/opt.c`, `src/opt.h`
 
-Before execution, bytecode passes through a 4-pass ahead-of-time optimizer:
+Before execution, bytecode passes through these optimizer passes (`optimize_bytecode`):
 
 ### Pass 1: Block Boundary Analysis
 Identifies basic blocks and constructs a control flow graph (CFG). This enables subsequent passes to reason about data flow within and across blocks.
@@ -128,7 +118,7 @@ end
 # After: single OP_SIMD_ADD instruction
 ```
 
-This pass uses AVX2/SSE on x86-64 and NEON on ARM64.
+The pattern matcher recognizes only this `res[i] = a[i] + b[i]` shape. `OP_SIMD_ADD` uses AVX2 when the CPU has it; there is no NEON path.
 
 ---
 
@@ -136,28 +126,17 @@ This pass uses AVX2/SSE on x86-64 and NEON on ARM64.
 
 **File:** `src/vm.c`
 
-The VM is the primary execution engine, running optimized bytecode through a direct-threaded dispatch loop.
+The VM is the primary execution engine.
 
-### Direct-Threaded Dispatch
-Instead of a `switch` statement (indirect dispatch), GlowLang uses **computed goto** for dispatch:
+### Dispatch
+Built with GCC or Clang, the loop dispatches with computed `goto` (`goto *dt[pc->op]`). MSVC has no
+computed `goto`, so the MSVC build (the default on Windows) uses a `switch`. Each dispatch checks one
+combined flag for the slow paths (pending exception, profiler, tracing, debugger).
 
-```c
-// Conceptual dispatch mechanism
-static void *dispatch_table[] = {
-    &&op_add, &&op_sub, &&op_mul, ...
-};
-
-#define DISPATCH() goto *dispatch_table[*ip++]
-
-op_add:
-    regs[A] = regs[B] + regs[C];
-    DISPATCH();
-```
-
-This eliminates branch misprediction overhead, yielding ~30% faster dispatch versus switch-based VMs.
-
-### Execution Profiling
-The VM instruments function entry points with execution counters. When a function's count exceeds the **JIT threshold** (default: 100 invocations), it is promoted to the JIT compiler.
+### Tiering
+A function is compiled by the baseline JIT after 5 executions and by the optimizing JIT after 50; a
+type-specialized version is built after 10 calls with the same argument types. A loop is compiled
+mid-execution (on-stack replacement) after 1,000 back-edge iterations.
 
 ### Call Frame Management
 Each function call pushes a frame onto the call stack:
@@ -239,10 +218,11 @@ guard: is arg0 an integer?
   → no:  DEOPTIMIZE → fall back to VM interpreter
 ```
 
-When a guard fails, the JIT performs **deoptimization**:
-1. Reconstruct the interpreter state (registers, stack)
-2. Transfer execution back to the VM
-3. Mark the function for re-specialization with updated type info
+Compiled code keeps every value in the same VM register file the interpreter uses, so
+deoptimization needs no state reconstruction: compiled code stores the index of the current
+instruction and returns a sentinel, and the interpreter continues from that instruction in the same
+frame. Runtime helpers that cannot complete an operation exactly decline before doing any work, and a
+raised exception also leaves compiled code this way.
 
 ### Cross-Platform Backends
 
@@ -250,44 +230,32 @@ When a guard fails, the JIT performs **deoptimization**:
 |--------|--------|-------|
 | x86-64 (System V) | ✅ Full | Linux / macOS AMD64 ABI; SSE/AVX2 SIMD support |
 | x86-64 (Microsoft x64) | ✅ Full | Windows x64 ABI; 32-byte shadow space; 16-byte stack alignment |
-| ARM64 | ⚠️ Experimental | Stubbed JIT backend; VM interpreter fallback with NEON support |
-| WASM | ⚠️ Experimental | WebAssembly interpreter build via Emscripten |
+| ARM64 | ❌ None | Interpreter only |
+| WASM | ❓ Unverified | `make wasm` (Emscripten), interpreter only |
 
 ---
 
 ## 6. Memory Management
 
-### Generational Garbage Collector
+### Garbage Collector
 
-**Architecture:** Two-generation mark-and-sweep with write barriers and young-generation nursery scavenge.
+**Architecture:** non-moving, stop-the-world mark-and-sweep.
 
-```
-┌─────────────────────┐     ┌─────────────────────┐
-│     Nursery (Gen 0) │     │   Old Gen (Gen 1)   │
-│                     │     │                     │
-│  New allocations    │────▶│  Survived objects   │
-│  (2 MB threshold)   │     │  (8 MB initial cap) │
-│                     │     │                     │
-│  Scavenged quickly  │     │  Mark-and-sweep     │
-└─────────────────────┘     └─────────────────────┘
-```
+- Objects smaller than a quarter block are bump-allocated in 1 MB blocks (with a per-block bitmap of
+  object starts); larger objects are allocated individually.
+- **Roots:** globals, constants, every thread's VM register stack, pending exceptions and the
+  arguments of threads that have not started yet (precise), plus a conservative scan of every
+  thread's native stack and saved registers. Interior pointers are recognized, so a value held only
+  in a C local of a native function stays alive.
+- **Trigger:** when allocated bytes exceed max(32 MB, 2 x the live size after the previous collection).
+  `GLOWLANG_GC_STRESS=1` collects every 64 KB and `GLOW_FORCEFULL=1` on every allocation (testing only).
+- **Generational mode** (`GLOW_GC_GENERATIONAL=1`) is experimental: a minor collection still walks the
+  whole object list, so it saves little.
+- Finalizers release native resources (SQLite connections and statements, tensor buffers).
 
-**Nursery (Generation 0):**
-- All new heap objects (`Value` allocations) start in Gen 0.
-- A 2 MB young generation threshold triggers `gc_minor_collect()`.
-- Active roots on the VM stack are traced, and surviving live objects are promoted directly to Gen 1 (`gc_gen = 1`), avoiding scanning the full tenured heap.
-
-**Old Generation (Generation 1):**
-- Long-lived objects promoted from Gen 0.
-- When the tenured heap reaches its threshold (initial 8 MB, dynamically tuned), `gc_collect()` runs a full mark-and-sweep cycle across both generations.
-- Generational write barriers track any cross-generational references.
-
-### Hardware MMU Guard Pages (`glow_alloc_guarded`)
-
-For security-critical buffers and high-assurance applications, `src/arena.c` provides `glow_alloc_guarded(size)`:
-- Allocates memory aligned to OS page boundaries (`VirtualAlloc` on Windows, `mmap` on POSIX).
-- Configures an adjacent trailing guard page with hardware `PAGE_NOACCESS` / `PROT_NONE` permissions.
-- Any buffer overrun immediately raises a hardware CPU exception (`EXCEPTION_ACCESS_VIOLATION` / `SIGSEGV`), preventing memory corruption and exploits.
+### Guard pages
+`src/arena.c` defines `glow_alloc_guarded(size)` (page-aligned allocation with a trailing
+`PAGE_NOACCESS` / `PROT_NONE` page), but nothing in the runtime or `lib/` calls it yet.
 
 ### Arena Allocator
 **File:** `src/arena.c`, `src/arena.h`
@@ -297,75 +265,48 @@ The arena allocator provides bump-pointer allocation for AST nodes and compiler 
 - Deallocation: O(1) bulk free of entire arena
 - No per-object free — the entire arena is released at once after compilation
 
-### Object Model: Hidden Classes (Shapes)
-GlowLang objects use a Hidden Class / Shapes system (similar to V8's approach):
-
-1. Each object has a **shape pointer** describing its property layout
-2. Adding a property creates a new shape (transition)
-3. Objects with the same properties in the same order share the same shape
-4. The JIT uses shapes for fast property access via known offsets
-
-```
-Shape A: { name: offset 0 }
-    │
-    ▼ (add 'age' property)
-Shape B: { name: offset 0, age: offset 1 }
-    │
-    ▼ (add 'email' property)
-Shape C: { name: offset 0, age: offset 1, email: offset 2 }
-```
+### Object Model
+Each instance stores its fields in its own dictionary. `OP_GET_PROPERTY` / `OP_SET_PROPERTY` cache
+the slot index of the last field they found, so repeated access to the same field skips the hash
+lookup. (Classes create `Shape` objects, but instances do not use them for layout.)
 
 ---
 
 ## 7. Data Structures
 
-### Rope Strings
-GlowLang strings are backed by a **Rope** data structure — a balanced binary tree of string fragments:
-
-| Operation | Rope Complexity | Flat String Complexity |
-|-----------|----------------|----------------------|
-| Concatenation | O(log n) | O(n) |
-| Index Access | O(log n) | O(1) |
-| Substring | O(log n) | O(n) |
-| Length | O(1) cached | O(1) |
-
-Ropes excel at workloads with frequent concatenation (template rendering, log building, protocol construction).
+### Strings
+Strings are flat, length-prefixed byte arrays. `a + b` builds a flat string when the result is at most
+256 bytes; longer results become a rope node (an unbalanced pair of pieces), so building a long string
+by repeated appends stays linear. A rope is flattened once, the first time its bytes are needed, and
+the flat copy is kept. `len` is O(1).
 
 ### Packed Arrays (Tensors)
 Tensors are contiguous arrays of `double` values, allocated outside the GC heap:
 - Direct memory layout for SIMD alignment
-- AVX2 / NEON instructions operate on 256-bit / 128-bit chunks
+- AVX2 (+FMA for dot and matmul) kernels are selected at run time by CPUID, with scalar fallbacks
 - Tensor operations bypass the object system for maximum throughput
 
 ### Iterators
 GlowLang provides lazy iterators for collections:
 - `for each` loops use iterator protocol internally
-- `range()` returns a lazy range iterator
+- `range(n)` builds a list of `n` integers
 - List comprehensions build results via iterators
 
 ---
 
 ## 8. Concurrency Model
 
-### Multi-Core Thread Architecture (GIL Abolished)
-GlowLang executes concurrent tasks using true native OS threads (`CreateThread` on Windows, `pthread_create` on POSIX) with the Global Interpreter Lock (GIL) abolished:
+### Threads and the GIL
+`spawn` starts a native OS thread (`CreateThread` on Windows, `pthread_create` on POSIX). Threads share
+globals and the heap, so a global interpreter lock (a FIFO ticket lock) lets exactly one thread run
+GlowLang code at a time:
 
-```
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│     Thread 1     │    │     Thread 2     │    │     Thread 3     │
-│   (VM Stack 1)   │    │   (VM Stack 2)   │    │   (VM Stack 3)   │
-└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-   ┌───────────┐           ┌───────────┐           ┌───────────┐
-   │ CPU Core  │           │ CPU Core  │           │ CPU Core  │
-   │ (Parallel)│           │ (Parallel)│           │ (Parallel)│
-   └───────────┘           └───────────┘           └───────────┘
-```
-
-- **True Parallel CPU Execution:** Each thread runs independently with isolated VM register frames and thread-local execution state.
-- **Unrestricted I/O and Compute:** Threads do not synchronize or block on a global interpreter lock; parallel loops and computations utilize multiple hardware CPU cores concurrently.
-- **`spawn`:** Launches an asynchronous OS thread executing the target function with arguments mapped directly into the new thread's register window.
+- A thread releases the lock during `os.sleep`, `os.system` and HTTP/TLS socket calls.
+- A running thread hands the lock to a waiting one at loop back-edges and calls (compiled loops poll
+  too).
+- `threads.join_all()` waits for spawned threads; program exit waits too. `whenever` monitors are
+  daemon threads and are not waited for.
+- There is no parallel execution of GlowLang code; use threads to overlap waiting.
 
 ### Spawn Mechanics
 ```glow
@@ -375,7 +316,7 @@ spawn worker(arg1, arg2)
 1. Bytecode compiler lowers `spawn` calls into `OP_SPAWN`, capturing target function address and argument registers.
 2. The runtime packages the function and arguments into a `ThreadData` bundle.
 3. An OS thread is spawned (`CreateThread` / `pthread_create`), launching `thread_wrapper()`.
-4. `thread_wrapper()` provisions a dedicated VM stack, aligns argument registers, and executes the target bytecode concurrently on an available CPU core.
+4. `thread_wrapper()` provisions a dedicated VM stack, aligns argument registers, and takes the GIL and runs the target function.
 
 ---
 
@@ -401,7 +342,7 @@ GlowLang's standard library modules are implemented as native C functions expose
 Native modules follow a registration pattern:
 1. Implement the C function with the GlowLang calling convention
 2. Register it in the VM's function table
-3. The parser recognizes `module.function()` syntax and emits `OP_NATIVE_CALL`
+3. Expose it in a module dictionary (`var_set("name", value_dict(...))` in the stdlib init); `module.function()` calls go through `OP_CALL_METHOD`
 
 ---
 
@@ -418,30 +359,17 @@ The build system compiles GlowLang in the following order:
 
 ### Build Targets
 ```bash
-make              # Build the full GlowLang binary
-make clean        # Remove build artifacts
-make test         # Run the test suite
+make              # bin/glowlang and bin/gdu (gcc -O2)
+make test         # output-checked test suite
+make clean        # remove build artifacts
 ```
-
-### Compiler Flags
-Production builds use aggressive optimization:
-```
--O3 -march=native -flto -fomit-frame-pointer
-```
+On Windows, `build.bat` runs `scripts/build-windows.ps1` (MSVC `/O2`, static libraries, signed).
 
 ---
 
 ## 11. Performance Characteristics
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Peak IPS (JIT) | ~1.86 Billion | Instructions per second |
-| Fibonacci(30) | 0.048s | Recursive, JIT-optimized |
-| 1M Tensor Add | 0.003s | SIMD-accelerated |
-| GC Pause (Nursery) | <1ms | Generational collection |
-| Startup Time | <5ms | Lexer + parser + compile |
-| Binary Size | ~200KB | Statically linked |
-
----
-
-*GlowLang Runtime Internals v1.0*
+Measured numbers, with the machine and method, are in
+[benchmarks/RESULTS.md](../benchmarks/RESULTS.md) (generated by `benchmarks/run-benchmarks.ps1`).
+On that machine the Windows release binary is about 11 MB (OpenSSL and SQLite are linked
+statically) and starts and exits in about 13 ms.

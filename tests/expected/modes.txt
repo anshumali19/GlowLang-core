@@ -1,0 +1,7 @@
+# Per-test comparison modes (see scripts/run-tests.ps1).
+# Threads interleave nondeterministically, so compare their lines as a multiset.
+test_spawn.glow               unordered
+simple_test.glow              unordered
+complex_industrial_test.glow  unordered
+# Infinite recursion: stdout is 65k identical lines; the stderr error is what matters.
+loop_rec_test.glow            skip-stdout

@@ -1,0 +1,12 @@
+=== Testing local compound assignment ===
+x += 5: 15
+x -= 3: 12
+x *= 2: 24
+x /= 4: 6
+x %= 3: 0
+=== Testing global compound assignment ===
+global_x += 50: 150
+global_x -= 30: 120
+global_x *= 2: 240
+global_x /= 4: 60
+global_x %= 7: 4

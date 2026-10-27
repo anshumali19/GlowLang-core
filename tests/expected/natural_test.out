@@ -1,0 +1,4 @@
+c is: instance
+c has methods: method
+c.val after manual init: 10
+c.val after inc: 11

@@ -1,21 +1,24 @@
 show "GlowLang Advanced StdLib Test"
 
-# FS Test
-let files = fs.readdir(".")
-show "Files in current directory: ", len(files)
+# FS Test (on a directory this test creates, so the result is reproducible)
+fs.mkdir("__test_stdlib_dir")
+fs.write("__test_stdlib_dir/data.txt", "twelve bytes")
+let files = fs.readdir("__test_stdlib_dir")
+show "Files in test directory: ", len(files)
 
-# Find Makefile
 every each f in files:
-    when f == "Makefile":
-        let info = fs.stat(f)
-        show "Makefile Size: ", info["size"], " bytes"
+    when f == "data.txt":
+        let info = fs.stat("__test_stdlib_dir/data.txt")
+        show "data.txt size: ", info["size"], " bytes"
     end
 end
+fs.remove("__test_stdlib_dir/data.txt")
+fs.remove("__test_stdlib_dir")
 
 # OS Test
 let path = os.getenv("PATH")
 when path is not none:
-    show "Environment PATH length: ", len(path)
+    show "Environment PATH present: ", len(path) > 0
 otherwise:
     show "PATH not found."
 end

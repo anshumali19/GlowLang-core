@@ -1,0 +1,8 @@
+Main finished spawning threads.
+Thread B: 0
+Thread B: 1
+Thread A: 0
+Thread B: 2
+Thread A: 1
+Thread A: 2
+Main exiting.
