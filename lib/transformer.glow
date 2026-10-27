@@ -126,7 +126,9 @@ end
 # ---------- Activation Functions --------------------------------------------
 
 # ReLU:  max(0, x)
-func relu(t, n):
+# Named tf_relu so it does not replace the scalar relu(x) of lib/ai.glow,
+# which imports this file (functions share one global namespace).
+func tf_relu(t, n):
     let out = tensor.zeros(n)
     let i = 0
     while i < n:
@@ -376,7 +378,7 @@ blueprint FeedForward:
         while t < seq_len:
             let token = tensor_slice(x, t * d_model, d_model)
             let h = self.linear1.forward(token)
-            h = relu(h, d_ff)
+            h = tf_relu(h, d_ff)
             let y = self.linear2.forward(h)
             tensor_write(out, t * d_model, y, d_model)
             t = t + 1
