@@ -21,15 +21,12 @@ extern void lexer_cleanup(void);
 
 #ifdef _WIN32
 #include <windows.h>
-static int get_self_exe_path(char *path, size_t max_len) {
-    DWORD len = GetModuleFileNameA(NULL, path, (DWORD)max_len);
-    return (len > 0) ? (int)len : -1;
-}
-#else
-static int get_self_exe_path(char *path, size_t max_len) {
-    return (int)readlink("/proc/self/exe", path, max_len);
-}
 #endif
+/* Callers pass max_len one short of their buffer and NUL-terminate at the
+   returned length themselves. */
+static int get_self_exe_path(char *path, size_t max_len) {
+    return glow_self_exe_path(path, max_len + 1);
+}
 /* A parameter with a default (`func f(a, b = 2)`) starts the body with
    `when b is none: b = 2`. A missing argument arrives as none, so the
    default is used both when it is left out and when none is passed. */
