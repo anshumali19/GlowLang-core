@@ -1,3 +1,0 @@
-let t1 = tensor.zeros(5)
-let t2 = tensor.zeros(0)
-let t3 = tensor.add(t1, t2)
