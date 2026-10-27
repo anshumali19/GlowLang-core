@@ -1,0 +1,56 @@
+# Missing arguments are none; parameters may have default values.
+func f(a, b):
+    print b
+end
+f(1, 9)
+f(1)
+func g(a, b):
+    let z = 5
+    print b
+end
+g(1, 2)
+g(1)
+func greet(name, greeting = "Hello", mark = "!"):
+    return greeting + ", " + name + mark
+end
+print greet("Ana")
+print greet("Ana", "Hi")
+print greet("Ana", "Hi", "?")
+print greet("Ana", none, ".")
+let add = lambda(x, y = 10): x + y
+print add(1)
+print add(1, 2)
+class Box:
+    func init(w, h = 3):
+        self.w = w
+        self.h = h
+    end
+    func area(scale = 1):
+        return self.w * self.h * scale
+    end
+end
+let b = Box(2)
+print b.area()
+print b.area(10)
+let m = b.area
+print m()
+func count(n, acc = 0):
+    when n == 0:
+        return acc
+    end
+    return count(n - 1, acc + n)
+end
+print count(100000)
+func fib(n, memo = none):
+    when n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+let i = 0
+let s = 0
+while i < 25:
+    s = s + fib(i)
+    i = i + 1
+end
+print s
