@@ -5,7 +5,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
-  <img src="https://img.shields.io/badge/tests-129%20(output--checked)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-135%20(output--checked)-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Sovereign-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-Windows%20x64%20(verified)%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
 </p>
@@ -16,19 +16,21 @@
 
 | Category | What exists today |
 |----------|-------------------|
-| **Natural syntax** | `show`, `when`, `whenever`, `every`, `blueprint`, `action`/`can`, `use`/`import` |
+| **Natural syntax** | `show`, `when`/`eif`/`otherwise`, `whenever`, `every`, `for each key, value in`, `is in`, `blueprint`, `action`/`can`, `use`/`import`, `ask` |
 | **Runtime** | Register-based bytecode VM; x86-64 template JIT (Windows x64 and System V ABIs) with on-stack replacement for hot loops; non-moving mark-and-sweep GC |
-| **Numbers** | 48-bit inline integers that promote to exact doubles and then big integers instead of overflowing; exact integer `**` |
-| **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()` |
+| **Numbers** | Integers of any size (never overflow), floats, exact integer `**`, floor `%`; arithmetic on non-numbers raises a clear error |
+| **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()`; `lib/async.glow` channels, tasks and timers |
 | **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and client |
 | **Database** | SQLite bindings (`sqlite.open`, `sqlite.exec`, `sqlite.query`, `sqlite.close`) |
 | **Tensors** | `tensor.zeros/ones/add/dot/matmul`; AVX2+FMA kernels chosen at run time when the CPU has them, scalar code otherwise |
-| **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`); list indexing is bounds-checked (an out-of-range index gives `none`) |
-| **Text** | Built-in regular expressions (same engine on every OS), JSON (`json.parse`, `json.stringify`) |
+| **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`), BLAKE3 |
+| **Text** | f-strings with any expression, string methods (`upper`, `replace`, `trim`, `split`, `join`, ...), regular expressions, JSON |
+| **Collections** | Lists and dicts compared by contents; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`; out-of-range indexes raise errors |
+| **Functions** | Closures (lambdas and nested functions), recursion to 65,500 calls with or without the JIT |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir`, `fs.remove` |
 | **Tooling** | `trace`, `debug`, `check` and `package` subcommands, profiler, LSP server, `gdu` package manager |
 | **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
-| **Testing** | 129 test programs whose output is compared line by line with `tests/expected/`, fuzz harnesses, ASan/TSan make targets |
+| **Testing** | 135 test programs whose output is compared line by line with `tests/expected/`, fuzz harnesses, ASan/TSan make targets |
 
 ## ⚡ Performance
 
@@ -36,13 +38,13 @@ Measured with `benchmarks/run-benchmarks.ps1` on Windows (Intel i7-14650HX, MSVC
 
 | Benchmark | GlowLang | CPython | CPython time / GlowLang time |
 |---|---:|---:|---:|
-| Fibonacci (sum fib 0..29) | 57 ms | 128 ms | 2.24x |
-| Loop (1M additions) | 17 ms | 90 ms | 5.18x |
-| Ackermann(3, 8) | 64 ms | 190 ms | 2.98x |
-| N-Queens (N=10, objects) | 41 ms | 98 ms | 2.42x |
-| Dijkstra (1000 nodes) | 77 ms | 174 ms | 2.26x |
-| Lists + dict (1M push, 200k keys) | 110 ms | 253 ms | 2.31x |
-| Strings (200k concat + split) | 48 ms | 72 ms | 1.48x |
+| Fibonacci (sum fib 0..29) | 58 ms | 131 ms | 2.27x |
+| Loop (1M additions) | 17 ms | 90 ms | 5.23x |
+| Ackermann(3, 8) | 64 ms | 182 ms | 2.82x |
+| N-Queens (N=10, objects) | 41 ms | 97 ms | 2.38x |
+| Dijkstra (1000 nodes) | 78 ms | 177 ms | 2.28x |
+| Lists + dict (1M push, 200k keys) | 109 ms | 235 ms | 2.16x |
+| Strings (200k concat + split) | 48 ms | 70 ms | 1.44x |
 
 GlowLang is faster than CPython on these workloads, and far slower than compiled languages such as C, Go or Rust.
 
@@ -55,7 +57,7 @@ Requirements: Visual Studio 2022+ Build Tools (C++), `win_flex`/`win_bison` (`wi
 ```powershell
 .\build.bat                      # builds and signs bin\glowlang.exe (see scripts\build-windows.ps1)
 .\bin\glowlang.exe run examples\hello.glow
-.\run_all_tests.bat              # 129 tests, output-checked
+.\run_all_tests.bat              # 135 tests, output-checked
 ```
 
 `build.bat -NoSign` skips signing. The build signs with a self-signed development certificate; Windows does not trust that certificate on other machines, and Smart App Control (when enabled) may block a fresh build. In that case rebuild, or sign with a trusted code-signing certificate.

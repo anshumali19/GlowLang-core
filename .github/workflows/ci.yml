@@ -42,7 +42,9 @@ jobs:
               -lfl -lsqlite3 -lX11
 
       - name: Run tests under ASan
-        run: ASAN_OPTIONS=detect_leaks=0 TEST_TIMEOUT=300 GLOWLANG_BIN=./bin/glowlang_asan ./scripts/run-tests.sh
+        # The GC scans native stacks conservatively, so locals must stay on the real
+        # stack: turn off ASan's fake stack (use-after-return detection).
+        run: ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 TEST_TIMEOUT=300 GLOWLANG_BIN=./bin/glowlang_asan ./scripts/run-tests.sh
 
       - name: Run parser fuzzer
         run: make fuzz-parser

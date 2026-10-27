@@ -1,0 +1,19 @@
+# f-strings interpolate whole expressions and join the parts as text.
+let name = "Ada"
+let a = 2
+let b = 3
+show f"Hello, {name}!"
+show f"{a}{b}"
+show f"sum = {a + b}, product = {a * b}"
+show f"upper: {name.upper()}, len: {len(name)}"
+show f"list: {[a, b]}, item: {[10, 20][1]}"
+show f"nested call: {max(a, b) * 10}"
+show f"{{literal braces}} and {a}"
+show f"tab\there\nnew line"
+let s = "x"
+s = f"{s}{s}!"
+show s
+func greet(who):
+    return f"Hi {who}, you are {len(who)} letters long"
+end
+show greet("Bob")
