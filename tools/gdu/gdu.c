@@ -302,6 +302,16 @@ int dep_graph_resolve_order(DepGraph *g, int *order, int *order_count) {
 /* ================================================================
  *  FILESYSTEM HELPERS
  * ================================================================ */
+/* Shell quoting for the curl commands: cmd.exe on Windows has no single
+   quotes and no /dev/null. */
+#ifdef _WIN32
+#define SHQ "\""
+#define DEVNULL "NUL"
+#else
+#define SHQ "'"
+#define DEVNULL "/dev/null"
+#endif
+
 void ensure_dir(const char *path) {
     struct stat st = {0};
     if (stat(path, &st) == -1) {
@@ -488,6 +498,7 @@ static int copy_file(const char *src, const char *dst) {
 }
 
 int install_package(const char *name, const char *version, const char *url) {
+    ensure_pkg_dirs(); /* works without `gdu init` */
     char pkg_path[MAX_PATH];
     snprintf(pkg_path, sizeof(pkg_path), ".glow_pkg/%s.glow", name);
 
@@ -512,7 +523,7 @@ int install_package(const char *name, const char *version, const char *url) {
         printf("  Downloading %s from %s...\n", name, url);
         char cmd[2048];
         snprintf(cmd, sizeof(cmd),
-            "curl -sf --max-time 10 '%s' -o '%s' 2>/dev/null", url, pkg_path);
+            "curl -sf --max-time 10 " SHQ "%s" SHQ " -o " SHQ "%s" SHQ " 2>" DEVNULL, url, pkg_path);
         if (system(cmd) == 0 && file_exists(pkg_path) && file_size(pkg_path) > 0) {
             /* Cache the download */
             copy_file(pkg_path, cache_path);
@@ -534,7 +545,7 @@ int install_package(const char *name, const char *version, const char *url) {
     char cmd[2048];
     /* Try fetching the single .glow file directly from the main branch of the repository */
     snprintf(cmd, sizeof(cmd),
-        "curl -sf --max-time 10 'https://raw.githubusercontent.com/anshumali19/GlowLang-packages/main/packages/%s/%s.glow' -o '%s' 2>/dev/null",
+        "curl -sf --max-time 10 " SHQ "https://raw.githubusercontent.com/anshumali19/GlowLang-packages/main/packages/%s/%s.glow" SHQ " -o " SHQ "%s" SHQ " 2>" DEVNULL,
         name, name, pkg_path);
         
     if (system(cmd) == 0 && file_exists(pkg_path) && file_size(pkg_path) > 0) {
@@ -555,7 +566,7 @@ static void install_glowlang_toolchain() {
     
 #ifdef _WIN32
     printf("Downloading and installing pre-compiled release for Windows...\n");
-    const char *cmd = "powershell -Command \"mkdir $env:USERPROFILE\\.glowlang\\bin -Force; Invoke-WebRequest -Uri 'https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.1/glowlang-windows-x64.zip' -OutFile '$env:USERPROFILE\\.glowlang\\glowlang.zip'; Expand-Archive -Path '$env:USERPROFILE\\.glowlang\\glowlang.zip' -DestinationPath '$env:USERPROFILE\\.glowlang\\bin' -Force; Remove-Item '$env:USERPROFILE\\.glowlang\\glowlang.zip'\"";
+    const char *cmd = "powershell -Command \"mkdir $env:USERPROFILE\\.glowlang\\bin -Force; Invoke-WebRequest -Uri 'https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-windows-x64.zip' -OutFile '$env:USERPROFILE\\.glowlang\\glowlang.zip'; Expand-Archive -Path '$env:USERPROFILE\\.glowlang\\glowlang.zip' -DestinationPath '$env:USERPROFILE\\.glowlang\\bin' -Force; Remove-Item '$env:USERPROFILE\\.glowlang\\glowlang.zip'\"";
     if (system(cmd) == 0) {
         printf("\033[32mInstallation complete!\033[0m\n");
         printf("Configuring PATH...\n");
@@ -568,10 +579,16 @@ static void install_glowlang_toolchain() {
 #else
     #ifdef __APPLE__
         printf("Downloading and installing pre-compiled release for macOS...\n");
-        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -L -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.1/glowlang-macos-x64.tar.gz && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm ~/.glowlang/glowlang.tar.gz";
+        /* -f: fail on HTTP 4xx/5xx (e.g. a draft/private release) instead of
+         *     silently saving the error page; gzip -t: reject a non-archive
+         *     body before it reaches tar so the user gets a clear message. */
+        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -fL --retry 3 -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-macos-x64.tar.gz && (gzip -t ~/.glowlang/glowlang.tar.gz 2>/dev/null || { echo 'Downloaded file is not a valid archive (release asset missing, draft, or private).'; exit 1; }) && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm -f ~/.glowlang/glowlang.tar.gz";
     #else
         printf("Downloading and installing pre-compiled release for Linux...\n");
-        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -L -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/download/v1.1.1/glowlang-linux-x64.tar.gz && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm ~/.glowlang/glowlang.tar.gz";
+        /* -f: fail on HTTP 4xx/5xx (e.g. a draft/private release) instead of
+         *     silently saving the error page; gzip -t: reject a non-archive
+         *     body before it reaches tar so the user gets a clear message. */
+        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -fL --retry 3 -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-linux-x64.tar.gz && (gzip -t ~/.glowlang/glowlang.tar.gz 2>/dev/null || { echo 'Downloaded file is not a valid archive (release asset missing, draft, or private).'; exit 1; }) && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm -f ~/.glowlang/glowlang.tar.gz";
     #endif
 
     if (system(cmd) == 0) {
@@ -583,6 +600,8 @@ static void install_glowlang_toolchain() {
         printf("Please run \033[33msource ~/.bashrc\033[0m or restart your terminal to start using `glowlang`.\n");
     } else {
         printf("\033[31mInstallation failed.\033[0m\n");
+        printf("The release asset may be missing, or the release may still be a draft/private.\n");
+        printf("Check: https://github.com/anshumali19/GlowLang-packages/releases\n");
     }
 #endif
 }
@@ -752,7 +771,7 @@ void cmd_install(int argc, char **argv) {
         }
 
         printf("Installing %s@%s...\n", name, version);
-        install_package(name, version, NULL);
+        if (install_package(name, version, NULL) != 0) return;
 
         /* Add to deps if not present */
         DepGraph g = {0};

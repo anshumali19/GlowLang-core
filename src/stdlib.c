@@ -1791,9 +1791,21 @@ static Value native_fast_json_scan(int argc, Value *args) {
     const char *colon = strchr(k_end, ':');
     if (!colon) return value_none();
     const char *v_start = colon + 1;
-    while (*v_start == ' ') v_start++;
-    int v_len = strlen(v_start);
-    if (v_len > 0 && v_start[v_len - 1] == '}') v_len--;
+    while (*v_start == ' ' || *v_start == '\t' || *v_start == '\n' || *v_start == '\r') v_start++;
+    /* Only the first value: a quoted string without its quotes, otherwise
+       the text up to the next ',' or '}'. */
+    int v_len;
+    if (*v_start == '"') {
+        const char *e = v_start + 1;
+        while (*e && *e != '"') { if (*e == '\\' && e[1]) e++; e++; }
+        v_start++;
+        v_len = (int)(e - v_start);
+    } else {
+        const char *e = v_start;
+        while (*e && *e != ',' && *e != '}') e++;
+        while (e > v_start && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r')) e--;
+        v_len = (int)(e - v_start);
+    }
     char val[128];
     if (v_len >= 128) v_len = 127;
     memcpy(val, v_start, v_len);
