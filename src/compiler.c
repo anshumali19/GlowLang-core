@@ -253,6 +253,25 @@ static void func_add_local(FuncEntry *fe, const char *name) {
 }
 FuncEntry *compiling_func = NULL;
 
+/* Functions enclosing the one being compiled (innermost last; NULL for a
+   method, which captures nothing). Assigning to one of their variables from a
+   closure updates the closure's captured copy rather than making a new local,
+   so `count = count + 1` in a returned lambda counts up across calls. */
+static FuncEntry *outer_funcs[64];
+static int outer_func_count = 0;
+static void push_outer(FuncEntry *f) { if (outer_func_count < 64) outer_funcs[outer_func_count] = f; outer_func_count++; }
+static void pop_outer(void) { if (outer_func_count > 0) outer_func_count--; }
+static int is_outer_local(const char *name) {
+    int top = outer_func_count < 64 ? outer_func_count : 64;
+    for (int k = top - 1; k >= 0; k--) {
+        FuncEntry *o = outer_funcs[k];
+        if (!o) return 0;   /* a method boundary: nothing further out is captured */
+        for (int i = 0; i < o->local_count; i++)
+            if (strcmp(o->local_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
 static int get_local_reg(const char *name) {
     if (!compiling_func) return -1;
     for (int i=0; i<compiling_func->local_count; i++) {
@@ -408,7 +427,7 @@ static void hoist_locals(FuncEntry *fe, Node *n) {
         case NODE_ASSIGN: case NODE_COMPOUND_ADD: case NODE_COMPOUND_SUB: case NODE_COMPOUND_MUL:
         case NODE_COMPOUND_DIV: case NODE_COMPOUND_MOD: case NODE_FOR_EACH: case NODE_FOR_RANGE:
         case NODE_TRY_CATCH:
-            if (n->name && get_local_reg(n->name) == -1 && !global_is_declared(n->name)) func_add_local(fe, n->name);
+            if (n->name && get_local_reg(n->name) == -1 && !global_is_declared(n->name) && !is_outer_local(n->name)) func_add_local(fe, n->name);
             break;
         case NODE_LIST_COMP:
             if (n->comp_var && get_local_reg(n->comp_var) == -1) func_add_local(fe, n->comp_var);
@@ -442,7 +461,7 @@ static void compile_stmt(Node *n) {
                global_get_slot(), which creates the slot it looks up, so every
                such assignment silently wrote a global: recursive functions
                clobbered each other's variables and threads raced on them. */
-            if (get_local_reg(n->name) == -1 && !global_is_declared(n->name)) {
+            if (get_local_reg(n->name) == -1 && !global_is_declared(n->name) && !is_outer_local(n->name)) {
                 func_add_local(compiling_func, n->name);
             }
         }
@@ -851,6 +870,7 @@ static void compile_stmt(Node *n) {
             fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body;
             FuncEntry *pf = compiling_func; compiling_func = fe;
+            push_outer(is_method ? NULL : pf);
             int old_free = next_free_reg;
             next_free_reg = 0; /* self and parameters occupy registers 0..n-1 */
 
@@ -878,6 +898,7 @@ static void compile_stmt(Node *n) {
             optimize_bytecode(compiling_bc);
             analyze_escapes(compiling_bc);
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
+            pop_outer();
             bc_emit(compiling_bc, is_method ? OP_METHOD_DEF : OP_FUNC_DEF, 0, (intptr_t)func_name);
             /* A function defined inside another function is a closure, like a
                lambda: it sees the enclosing function's variables as they are
@@ -1493,6 +1514,7 @@ static int compile_expr(Node *n, int target_reg) {
             fe->params = n->func_params;
             fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; FuncEntry *pf = compiling_func; compiling_func = fe;
+            push_outer(pf);
             int old_free = next_free_reg;
             next_free_reg = 0; /* parameters occupy registers 0..n-1 */
             for (int i = 0; i < fe->param_count; i++) {
@@ -1507,6 +1529,7 @@ static int compile_expr(Node *n, int target_reg) {
             note_reg_peak();
             compiling_bc->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
+            pop_outer();
 
             int idx = bc_emit(compiling_bc, OP_LAMBDA, 0, (intptr_t)n->name);
             compiling_bc->code[idx].r0 = reg;

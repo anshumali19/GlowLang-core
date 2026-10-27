@@ -615,7 +615,7 @@ extern Value jit_div_helper(Value a, Value b);
 
 // Inline integer ordered comparisons; produces a bool value. Mixed types fall
 // back to slow_fn (a jit_int_* helper).
-static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn) {
+static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
     uint32_t jne_a, jne_b;
     emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xc8); // cmp rax, rcx
@@ -641,6 +641,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
 #endif
     emit_mov_rax_imm64(buf, slow_fn);
     emit_call_rax(buf);
+    emit_deopt_check(buf, i); /* incomparable operands: the interpreter raises */
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
@@ -784,12 +785,13 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                     default:     int_op = -1; break;
                 }
                 if (int_op >= 0) {
-                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 } else {
                     emit_mov_arg1_reg(&buf, pc->r1);
                     emit_mov_arg2_reg(&buf, pc->r2);
                     emit_mov_rax_imm64(&buf, cmp_fn);
                     emit_call_rax(&buf);
+                    emit_deopt_check(&buf, i);
                     emit_mov_reg_rax(&buf, pc->r0);
                 }
                 break;
@@ -919,7 +921,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 break;
             }
             case OP_RETURN: {
@@ -1128,12 +1130,13 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                     default:     int_op = -1; break;
                 }
                 if (int_op >= 0) {
-                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 } else {
                     emit_mov_arg1_reg(&buf, pc->r1);
                     emit_mov_arg2_reg(&buf, pc->r2);
                     emit_mov_rax_imm64(&buf, cmp_fn);
                     emit_call_rax(&buf);
+                    emit_deopt_check(&buf, i);
                     emit_mov_reg_rax(&buf, pc->r0);
                 }
                 break;
@@ -1264,7 +1267,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn);
+                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 break;
             }
             case OP_RETURN: {

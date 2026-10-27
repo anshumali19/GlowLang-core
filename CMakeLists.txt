@@ -69,6 +69,7 @@ set(GLOW_SOURCES
     src/stdlib.c
     src/bigint.c
     src/regex.c
+    src/corelib.c
 )
 
 if(CUDAToolkit_FOUND)

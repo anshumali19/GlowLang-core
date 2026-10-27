@@ -503,8 +503,37 @@ static inline BigInt* value_to_bigint(Value v) {
     return bigint_from_int64((int64_t)val_to_double(v));
 }
 /* Exact three-way comparison of two values (int/bigint vs double). */
+int glow_value_cmp(Value a, Value b);
+/* Can a and b be ordered with < and >? Numbers (and booleans) with numbers,
+   strings with strings, lists with lists. */
+static int values_comparable(Value a, Value b) {
+    ValueType ta = GET_TYPE(a), tb = GET_TYPE(b);
+    int na = ta == VAL_INT || ta == VAL_FLOAT || ta == VAL_BOOL || is_bigint(a);
+    int nb = tb == VAL_INT || tb == VAL_FLOAT || tb == VAL_BOOL || is_bigint(b);
+    if (na && nb) return 1;
+    if (ta == VAL_STRING && tb == VAL_STRING) return 1;
+    if (ta == VAL_LIST && tb == VAL_LIST) return 1;
+    return 0;
+}
 static inline int value_cmp(Value a, Value b) {
     int64_t ia, ib;
+    if (GET_TYPE(a) == VAL_STRING && GET_TYPE(b) == VAL_STRING) {
+        size_t la = rope_length(a), lb = rope_length(b);
+        int c = memcmp(AS_STRING(a), AS_STRING(b), la < lb ? la : lb);
+        if (c) return c < 0 ? -1 : 1;
+        return (la > lb) - (la < lb);
+    }
+    if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
+        List *x = AS_LIST(a), *y = AS_LIST(b);
+        int n = x->size < y->size ? x->size : y->size;
+        for (int i = 0; i < n; i++) {
+            if (val_eq(x->items[i], y->items[i])) continue;
+            return values_comparable(x->items[i], y->items[i]) ? value_cmp(x->items[i], y->items[i]) : 0;
+        }
+        return (x->size > y->size) - (x->size < y->size);
+    }
+    if (GET_TYPE(a) == VAL_BOOL) a = value_int(AS_BOOL(a));
+    if (GET_TYPE(b) == VAL_BOOL) b = value_int(AS_BOOL(b));
     if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib))
         return (ia > ib) ? 1 : (ia < ib) ? -1 : 0;
     if (is_bigint(a) || is_bigint(b))
@@ -512,6 +541,8 @@ static inline int value_cmp(Value a, Value b) {
     double da = val_to_double(a), db = val_to_double(b);
     return (da > db) ? 1 : (da < db) ? -1 : 0;
 }
+/* Ordering used by sorted(), min() and max(). */
+int glow_value_cmp(Value a, Value b) { return value_cmp(a, b); }
 
 // Numeric tower: inline int (48-bit) -> double (exact to 2^53) -> heap big-int
 // (exact beyond 2^53).
@@ -594,6 +625,14 @@ static void arith_type_error(const char *op, Value a, Value b) {
     has_exception = 1;
 }
 
+static void compare_type_error(const char *op, Value a, Value b) {
+    Value ta = native_type(1, &a), tb = native_type(1, &b);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Cannot compare %s and %s with '%s'", AS_STRING(ta), AS_STRING(tb), op);
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+}
+
 /* `text * n` and `list * n` repeat the sequence; returns 0 when a and b are
    not a sequence and an integer. */
 static int seq_repeat(Value a, Value b, Value *out) {
@@ -668,17 +707,17 @@ Value jit_int_mul(Value a, Value b) {
     if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
     return num_mul(a, b);
 }
-Value jit_int_lt(Value a, Value b)  { return value_bool(value_cmp(a, b) <  0); }
-Value jit_int_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
-Value jit_int_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
-Value jit_int_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
+Value jit_int_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
+Value jit_int_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
+Value jit_int_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) <= 0); }
+Value jit_int_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
 /* Generic value comparison helpers for JIT (non-specialized paths). */
-Value jit_val_lt(Value a, Value b)  { if (glow_jit_debug) { fprintf(stderr, "[DBG] jit_val_lt: a=%llx b=%llx cmp=%d\n", (unsigned long long)a, (unsigned long long)b, value_cmp(a, b)); fflush(stderr); } return value_bool(value_cmp(a, b) <  0); }
-Value jit_val_gt(Value a, Value b)  { return value_bool(value_cmp(a, b) >  0); }
-Value jit_val_lte(Value a, Value b) { return value_bool(value_cmp(a, b) <= 0); }
-Value jit_val_gte(Value a, Value b) { return value_bool(value_cmp(a, b) >= 0); }
+Value jit_val_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
+Value jit_val_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
+Value jit_val_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) <= 0); }
+Value jit_val_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) >= 0); }
 Value jit_val_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 Value jit_val_neq(Value a, Value b) { return value_bool(!val_eq(a, b)); }
 
@@ -1391,20 +1430,7 @@ int jit_exception_pending(void) { return has_exception; }
 #endif
 
 #ifndef GLOW_COMPUTED_GOTO
-#define DISPATCH() { \
-    if (__builtin_expect(has_exception | profiling_active | trace_mode | debug_mode, 0)) { \
-        g_dbg_bc = bc; g_dbg_pc = pc; \
-        CHECK_FUZZ_TIMEOUT(); \
-        if (profiling_active) pc->exec_count++; \
-        if (trace_mode) { \
-            printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
-            visualize_stack(base_reg, bc->local_count); \
-        } \
-        if (debug_mode) { \
-            glow_debug_hook(bc, pc, base_reg); \
-        } \
-        if (has_exception) goto l_OP_THROW; \
-    } \
+#define DISPATCH_SWITCH() \
     switch(pc->op) { \
         case OP_CONST_INT: goto l_OP_CONST_INT; \
         case OP_CONST_FLOAT: goto l_OP_CONST_FLOAT; \
@@ -1526,7 +1552,23 @@ int jit_exception_pending(void) { return has_exception; }
         case OP_GTE_INT: goto l_OP_GTE_INT; \
         case OP_EQ_INT: goto l_OP_EQ_INT; \
         case OP_CALL_METHOD: goto l_OP_CALL_METHOD; \
+    }
+
+#define DISPATCH() { \
+    if (__builtin_expect(has_exception | profiling_active | trace_mode | debug_mode, 0)) { \
+        g_dbg_bc = bc; g_dbg_pc = pc; \
+        CHECK_FUZZ_TIMEOUT(); \
+        if (profiling_active) pc->exec_count++; \
+        if (trace_mode) { \
+            printf("DEBUG %04d: %-15s r0:%d r1:%d r2:%d arg:%d\n", (int)(pc - bc->code), op_names[pc->op], pc->r0, pc->r1, pc->r2, pc->arg); \
+            visualize_stack(base_reg, bc->local_count); \
+        } \
+        if (debug_mode) { \
+            glow_debug_hook(bc, pc, base_reg); \
+        } \
+        if (has_exception) goto l_OP_THROW; \
     } \
+    DISPATCH_SWITCH(); \
 }
 #else
 #define DISPATCH() { \
@@ -1547,7 +1589,8 @@ int jit_exception_pending(void) { return has_exception; }
 }
 #endif
 #ifndef GLOW_COMPUTED_GOTO
-#define DISPATCH_CURRENT() goto l_DISPATCH
+/* Re-run the current (just rewritten) instruction without counting it again. */
+#define DISPATCH_CURRENT() { DISPATCH_SWITCH(); }
 #else
 #define DISPATCH_CURRENT() goto *dt[pc->op]
 #endif
@@ -1709,6 +1752,7 @@ int jit_exception_pending(void) { return has_exception; }
             pc->op = OP_LT_INT;
             R(pc->r0) = value_bool(AS_INT(a) < AS_INT(b));
         } else {
+            if (!values_comparable(a, b)) { compare_type_error("<", a, b); goto l_OP_THROW; }
             R(pc->r0) = value_bool(value_cmp(a, b) < 0);
         }
         pc++;
@@ -1720,6 +1764,7 @@ int jit_exception_pending(void) { return has_exception; }
             pc->op = OP_GT_INT;
             R(pc->r0) = value_bool(AS_INT(a) > AS_INT(b));
         } else {
+            if (!values_comparable(a, b)) { compare_type_error(">", a, b); goto l_OP_THROW; }
             R(pc->r0) = value_bool(value_cmp(a, b) > 0);
         }
         pc++;
@@ -1731,6 +1776,7 @@ int jit_exception_pending(void) { return has_exception; }
             pc->op = OP_LTE_INT;
             R(pc->r0) = value_bool(AS_INT(a) <= AS_INT(b));
         } else {
+            if (!values_comparable(a, b)) { compare_type_error("<=", a, b); goto l_OP_THROW; }
             R(pc->r0) = value_bool(value_cmp(a, b) <= 0);
         }
         pc++;
@@ -1742,6 +1788,7 @@ int jit_exception_pending(void) { return has_exception; }
             pc->op = OP_GTE_INT;
             R(pc->r0) = value_bool(AS_INT(a) >= AS_INT(b));
         } else {
+            if (!values_comparable(a, b)) { compare_type_error(">=", a, b); goto l_OP_THROW; }
             R(pc->r0) = value_bool(value_cmp(a, b) >= 0);
         }
         pc++;
@@ -2265,9 +2312,15 @@ int jit_exception_pending(void) { return has_exception; }
                 }
                 R(pc->r0) = v;
             } else R(pc->r0) = value_none();
+        } else if(GET_TYPE(o)==VAL_LIST) {
+            NativeFuncPtr bfn = glow_builtin_method(o, n);
+            R(pc->r0) = bfn ? bound_native_method_new(o, bfn) : value_none();
         } else if(GET_TYPE(o)==VAL_DICT) {
             Value v = dict_get(AS_DICT(o), n);
-            if (GET_TYPE(v) == VAL_NONE) {
+            NativeFuncPtr bfn;
+            if (GET_TYPE(v) == VAL_NONE && (bfn = glow_builtin_method(o, n)) != NULL) {
+                v = bound_native_method_new(o, bfn);
+            } else if (GET_TYPE(v) == VAL_NONE) {
                 if (strcmp(n, "has") == 0) {
                     v = bound_native_method_new(o, native_dict_has);
                 } else if (strcmp(n, "keys") == 0) {
@@ -2283,7 +2336,10 @@ int jit_exception_pending(void) { return has_exception; }
             R(pc->r0) = v;
         } else if(GET_TYPE(o)==VAL_STRING) {
             Value v = value_none();
-            if (strcmp(n, "contains") == 0) {
+            NativeFuncPtr bfn = glow_builtin_method(o, n);
+            if (bfn) {
+                v = bound_native_method_new(o, bfn);
+            } else if (strcmp(n, "contains") == 0) {
                 v = bound_native_method_new(o, native_str_contains);
             } else if (strcmp(n, "find") == 0) {
                 v = bound_native_method_new(o, native_str_find);
@@ -2426,6 +2482,8 @@ int jit_exception_pending(void) { return has_exception; }
         const char *mname = (const char*)pc->ptr;
         if (mname && strcmp(mname, "type") == 0) {
             native_fe = native_val_type;
+            is_native_dict_str_method = 1;
+        } else if ((native_fe = glow_builtin_method(obj, mname)) != NULL) {
             is_native_dict_str_method = 1;
         } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(obj);
