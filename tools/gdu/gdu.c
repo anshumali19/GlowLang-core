@@ -582,7 +582,11 @@ static void install_glowlang_toolchain() {
         /* -f: fail on HTTP 4xx/5xx (e.g. a draft/private release) instead of
          *     silently saving the error page; gzip -t: reject a non-archive
          *     body before it reaches tar so the user gets a clear message. */
+#if defined(__aarch64__) || defined(__arm64__)
+        const char *cmd = "mkdir -p ~/.glowlang/bin && curl -fL --retry 3 -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-macos-arm64.tar.gz && (gzip -t ~/.glowlang/glowlang.tar.gz 2>/dev/null || { echo 'Downloaded file is not a valid archive (release asset missing, draft, or private).'; exit 1; }) && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm -f ~/.glowlang/glowlang.tar.gz";
+#else
         const char *cmd = "mkdir -p ~/.glowlang/bin && curl -fL --retry 3 -o ~/.glowlang/glowlang.tar.gz https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-macos-x64.tar.gz && (gzip -t ~/.glowlang/glowlang.tar.gz 2>/dev/null || { echo 'Downloaded file is not a valid archive (release asset missing, draft, or private).'; exit 1; }) && tar -xzf ~/.glowlang/glowlang.tar.gz -C ~/.glowlang/bin && rm -f ~/.glowlang/glowlang.tar.gz";
+#endif
     #else
         printf("Downloading and installing pre-compiled release for Linux...\n");
         /* -f: fail on HTTP 4xx/5xx (e.g. a draft/private release) instead of
