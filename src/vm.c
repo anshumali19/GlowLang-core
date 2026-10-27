@@ -1226,6 +1226,13 @@ int jit_exception_pending(void) { return has_exception; }
     /* The VM register stack never moves (compiled code holds pointers into
        it), so running out of it is reported like any other deep recursion. */
 #define VM_STACK_HEADROOM 512
+/* Parameters the caller did not pass start as none, not as whatever an
+   earlier call left in those stack slots. abs_base is the callee's first
+   slot, filled the number of slots the caller wrote (self included) and
+   total the callee's self and parameter slots. */
+#define CLEAR_MISSING_ARGS(abs_base, filled, total) do { \
+    for (int _k = (filled); _k < (total); _k++) vm_stack[(abs_base) + _k] = value_none(); \
+} while (0)
 #define DO_CALL(target_bc, target_closure, new_base_reg, target_ret_reg) \
     DO_CALL_AT(target_bc, target_closure, new_base_reg, target_ret_reg, 0)
 /* Push a frame and continue in the callee at instruction start_idx. A
@@ -1903,6 +1910,7 @@ int jit_exception_pending(void) { return has_exception; }
             has_exception = 1; goto l_OP_THROW;
         }
         FuncEntry *fe = func_get(n);
+        if (fe && fe->body) CLEAR_MISSING_ARGS(base_reg + pc->r2, ac, fe->body->preserved_locals);
         call_stack[my_frame_idx].pc = pc; // Update current frame PC
         /* A nested function calling itself keeps its captured variables. */
         if (fe && fe->body && current_closure && current_closure->body == fe->body) {
@@ -2020,12 +2028,14 @@ int jit_exception_pending(void) { return has_exception; }
                         int slot = callee_base;
                         if (has_self) { vm_stack[slot] = bm->instance; slot++; }
                         for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
+                        CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     }
                 }
                 else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(v);
                     if (c->body) {
+                        CLEAR_MISSING_ARGS(base_reg + pc->r2, ac, c->body->preserved_locals);
                         DO_CALL(c->body, c, base_reg + pc->r2, pc->r0);
                     } else R(pc->r0) = value_none();
                 }
@@ -2049,6 +2059,7 @@ int jit_exception_pending(void) { return has_exception; }
     }
     l_OP_CALL_SELF_FAST: {
         FuncEntry *fe = bc->owner;
+        if (fe && fe->body) CLEAR_MISSING_ARGS(base_reg + pc->r2, pc->arg, fe->body->preserved_locals);
         if (fe && fe->body && current_closure && current_closure->body == fe->body) {
             call_stack[my_frame_idx].pc = pc;
             DO_CALL(fe->body, current_closure, base_reg + pc->r2, pc->r0);
@@ -2464,11 +2475,13 @@ int jit_exception_pending(void) { return has_exception; }
                     int slot = callee_base;
                     if (has_self) { vm_stack[slot] = bm->instance; slot++; } // self at R0
                     for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
+                    CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                     DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                 } else R(pc->r0) = value_none();
             } else if(ot==OBJ_CLOSURE) {
                 Closure *c = AS_CLOSURE(callee);
                 if(c->body) {
+                    CLEAR_MISSING_ARGS(base_reg + pc->r2, ac + (pc->is_method ? 1 : 0), c->body->preserved_locals);
                     DO_CALL(c->body, c, base_reg + pc->r2, pc->r0);
                 } else R(pc->r0) = value_none();
             } else if (ot == OBJ_NATIVE_FUNC) {
@@ -2563,6 +2576,7 @@ int jit_exception_pending(void) { return has_exception; }
                 pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
             }
             vm_stack[callee_base] = obj; // SET SELF
+            CLEAR_MISSING_ARGS(callee_base, 1 + ac, fe->body->preserved_locals);
 
             DO_CALL(fe->body, NULL, callee_base, pc->r0);
         } else if (native_fe && is_native_dict_str_method) {
@@ -2587,6 +2601,7 @@ int jit_exception_pending(void) { return has_exception; }
                 } else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(fallback_callee);
                     if (c->body) {
+                        CLEAR_MISSING_ARGS(base_reg + pc->r2 + (pc->is_method ? 1 : 0), ac, c->body->preserved_locals);
                         // A callable field/value is a plain function, so its arguments
                         // begin after the receiver slot on a method-style call.
                         DO_CALL(c->body, c, base_reg + pc->r2 + (pc->is_method ? 1 : 0), pc->r0);

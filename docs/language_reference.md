@@ -392,6 +392,27 @@ let result = square(5)   # 25
 ### Default Returns
 Functions without an explicit `return` statement return `none`.
 
+### Default Parameter Values
+A parameter can have a default value, used when the caller leaves that
+argument out (or passes `none`). A parameter with no default that the caller
+leaves out is `none`.
+
+```glow
+func greet(name, greeting = "Hello", mark = "!"):
+    return greeting + ", " + name + mark
+end
+
+greet("Ana")              # Hello, Ana!
+greet("Ana", "Hi")        # Hi, Ana!
+greet("Ana", none, ".")   # Hello, Ana.
+
+let add = lambda(x, y = 10): x + y
+add(1)                    # 11
+```
+
+The default is evaluated each time the function is called, so `items = []`
+gives every call its own new list.
+
 ### Recursive Functions
 ```glow
 func fibonacci(n):
