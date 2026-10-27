@@ -1,107 +1,167 @@
 name: GlowLang Release
 
+# Builds glowlang and gdu for Windows, Linux and macOS (Intel and Apple
+# silicon), runs the test suite on each, packages them with the standard
+# library, and publishes a release to anshumali19/GlowLang-packages.
+#
+#   Publish:  git tag v1.3.0 && git push origin v1.3.0
+#   Check:    a push that changes this file builds and tests everything,
+#             without publishing.
+#
+# Publishing needs the RELEASE_TOKEN secret: a token with "contents: write"
+# on GlowLang-packages.
+
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+    branches: ['**']
+    paths: ['.github/workflows/release.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a release (needs a tag name below)'
+        type: boolean
+        default: false
+      tag:
+        description: 'Release tag, e.g. v1.3.0'
+        required: false
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    
+        include:
+          - target: linux-x64
+            os: ubuntu-22.04        # older glibc: runs on more distributions
+          - target: macos-x64
+            os: macos-13            # Intel
+          - target: macos-arm64
+            os: macos-14            # Apple silicon
+          - target: windows-x64
+            os: windows-latest
+
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc make
+          sudo apt-get install -y flex bison libsqlite3-dev libssl-dev libx11-dev gcc cmake
 
       - name: Install dependencies (macOS)
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install sqlite openssl flex bison
+          brew install openssl@3 flex bison coreutils
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
 
       - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
-          choco install winflexbison3
-          vcpkg install openssl sqlite3:x64-windows-static
+          choco install winflexbison3 --no-progress
+          vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static
 
+      # OpenSSL is linked statically so the binaries do not need it installed.
       - name: Build (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: make clean && make
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build build --config Release --parallel
 
       - name: Build (macOS)
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         run: |
-          cmake -B build -S . -DOPENSSL_ROOT_DIR=$(brew --prefix openssl) -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DOPENSSL_USE_STATIC_LIBS=TRUE \
+                -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake --build build --config Release --parallel
 
       - name: Build (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
           cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
-          cmake --build build --config Release
+          cmake --build build --config Release --parallel
 
-      - name: Prepare Artifacts (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Test (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: .\scripts\run-tests.ps1 -Binary bin\Release\glowlang.exe
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
-          mkdir -p release_package
-          cp bin/glowlang release_package/
-          cp bin/gdu release_package/
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            tar -czvf glowlang-linux-x64.tar.gz -C release_package glowlang gdu
-          else
-            tar -czvf glowlang-macos-x64.tar.gz -C release_package glowlang gdu
-          fi
+          mkdir -p dist/glowlang
+          cp bin/glowlang bin/gdu dist/glowlang/
+          cp -R lib dist/glowlang/lib
+          cp LICENSE NOTICE dist/glowlang/
+          printf 'GlowLang %s (%s)\n\nRun programs with: ./glowlang run app.glow\nInstall packages with: ./gdu install <name>\nThe lib/ folder holds the standard GlowLang libraries; keep it next to glowlang.\n' \
+            "${GITHUB_REF_NAME}" "${{ matrix.target }}" > dist/glowlang/README.txt
+          tar -czf glowlang-${{ matrix.target }}.tar.gz -C dist/glowlang .
+          ./dist/glowlang/glowlang run examples/hello.glow
 
-      - name: Prepare Artifacts (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
         run: |
-          mkdir release_package
-          # CMake creates a Release folder for MSVC generator
-          if (Test-Path "bin\Release\glowlang.exe") {
-            Copy-Item "bin\Release\glowlang.exe" -Destination "release_package\"
-            Copy-Item "bin\Release\gdu.exe" -Destination "release_package\"
-          } else {
-            Copy-Item "bin\glowlang.exe" -Destination "release_package\"
-            Copy-Item "bin\gdu.exe" -Destination "release_package\"
-          }
-          Compress-Archive -Path release_package\* -DestinationPath glowlang-windows-x64.zip
+          New-Item -ItemType Directory -Force dist\glowlang | Out-Null
+          Copy-Item bin\Release\glowlang.exe, bin\Release\gdu.exe dist\glowlang\
+          Copy-Item -Recurse lib dist\glowlang\lib
+          Copy-Item LICENSE, NOTICE dist\glowlang\
+          "GlowLang $env:GITHUB_REF_NAME (${{ matrix.target }})`r`n`r`nRun programs with: glowlang run app.glow`r`nInstall packages with: gdu install <name>`r`nThe lib\ folder holds the standard GlowLang libraries; keep it next to glowlang.exe.`r`n" | Set-Content dist\glowlang\README.txt
+          Compress-Archive -Path dist\glowlang\* -DestinationPath glowlang-${{ matrix.target }}.zip
+          & dist\glowlang\glowlang.exe run examples\hello.glow
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
-          name: glowlang-${{ matrix.os }}
+          name: glowlang-${{ matrix.target }}
           path: |
             glowlang-*.tar.gz
             glowlang-*.zip
+          if-no-files-found: error
 
   release:
-    name: Create Release
+    name: Publish release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v8
-      
-      - name: Create GitHub Release
-        run: |
-          gh release create ${{ github.ref_name }} \
-            --repo anshumali19/GlowLang-packages \
-            --title "GlowLang ${{ github.ref_name }}" \
-            --notes "Optimized GlowLang compiler and package manager binaries." \
-            glowlang-ubuntu-latest/glowlang-linux-x64.tar.gz \
-            glowlang-macos-latest/glowlang-macos-x64.tar.gz \
-            glowlang-windows-latest/glowlang-windows-x64.zip
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd assets && sha256sum glowlang-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create release in GlowLang-packages
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then echo "No tag given"; exit 1; fi
+          cat > notes.md <<EOF
+          GlowLang ${TAG}, built from [GlowLang-core@${GITHUB_SHA::7}](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}).
+
+          | Download | Platform |
+          |---|---|
+          | glowlang-windows-x64.zip | Windows 10/11, x64 |
+          | glowlang-linux-x64.tar.gz | Linux x64 (glibc 2.35+, needs libX11 and libsqlite3) |
+          | glowlang-macos-arm64.tar.gz | macOS, Apple silicon |
+          | glowlang-macos-x64.tar.gz | macOS, Intel |
+
+          Each archive contains \`glowlang\`, \`gdu\`, the standard library (\`lib/\`), LICENSE and NOTICE.
+          Every build passed the full test suite on its platform before packaging.
+          Verify downloads with SHA256SUMS. Or install with: \`gdu install glowlang\`.
+          EOF
+          gh release create "$TAG" assets/glowlang-* assets/SHA256SUMS \
+            --repo anshumali19/GlowLang-packages \
+            --title "GlowLang $TAG" \
+            --notes-file notes.md

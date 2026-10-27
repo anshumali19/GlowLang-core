@@ -64,6 +64,9 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # Programs print UTF-8; do not depend on the console's code page.
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
     $psi.RedirectStandardInput = $true   # tests get an empty stdin
     $psi.WorkingDirectory = $root
     foreach ($k in $ExtraEnv.Keys) { $psi.EnvironmentVariables[$k] = [string]$ExtraEnv[$k] }

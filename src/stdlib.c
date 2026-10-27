@@ -105,6 +105,7 @@ static void closedir(DIR *dir) {
 #define unlink _unlink
 #else
 #include <sys/time.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -1595,6 +1596,62 @@ static Value native_pairs(int argc, Value *args) {
             list_push(out, pv);
             s = AS_STRING(coll);
         }
+        }
+        else if (ot == OBJ_BIGINT) { char *bb = bigint_to_new_string(AS_BIGINT(v)); ds_puts(d, bb); free(bb); }
+        else ds_puts(d, "<object>");
+    } else ds_puts(d, "none");
+}
+
+/* Render any value as a newly malloc'd C string (caller frees). */
+char *value_to_new_cstring(Value v) {
+    DStr d = {0};
+    ds_putn(&d, "", 0);
+    ds_value(&d, v, 0);
+    return d.p;
+}
+
+/* Render any value as a GlowLang string value. */
+Value value_to_string_value(Value v) {
+    if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) return v;
+    char *s = value_to_new_cstring(v);
+    Value r = value_string_copy(s);
+    free(s);
+    return r;
+}
+
+/* pairs(coll): [index, item] for each element of a list or character of a
+   string, [key, value] for each entry of a dict. Backs `for each a, b in x`. */
+static Value native_pairs(int argc, Value *args) {
+    if (argc < 1) return value_list(list_new(0));
+    Value coll = args[0];
+    List *out = list_new(8);
+    Value out_v = value_list(out);
+    if (GET_TYPE(coll) == VAL_LIST) {
+        List *l = AS_LIST(coll);
+        for (int i = 0; i < l->size; i++) {
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int(i)); list_push(p, l->items[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        Dict *d = AS_DICT(coll);
+        for (int i = 0; i < d->capacity; i++) {
+            if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_string_copy((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD)));
+            list_push(p, d->values[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_STRING) {
+        const char *s = AS_STRING(coll);
+        size_t n = rope_length(coll);
+        for (size_t i = 0; i < n; i++) {
+            char ch[2] = { s[i], 0 };
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int((int64_t)i)); list_push(p, value_string_copy(ch));
+            list_push(out, pv);
+            s = AS_STRING(coll);
+        }
     } else {
         pending_exception = value_string_copy("pairs() needs a list, dict or string");
         has_exception = 1;
@@ -1744,18 +1801,15 @@ static Value crypto_hmac_sha256(int argc, Value *args) {
     return value_string_copy(out);
 }
 
+/* crypto.blake3(text): the 256-bit BLAKE3 hash as 64 hex digits. (This used
+   to be a 64-bit FNV-style hash under the BLAKE3 name.) */
+extern void glow_blake3(const void *input, size_t len, uint8_t *out, size_t out_len);
 static Value native_crypto_blake_fast(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
-    const char *str = AS_STRING(args[0]);
-    size_t len = strlen(str);
-    uint64_t h = 0xCBF29CE484222325ULL;
-    for (size_t i = 0; i < len; i++) {
-        h ^= (uint8_t)str[i];
-        h *= 0x100000001B3ULL;
-        h = (h << 13) | (h >> 51);
-    }
-    char out[32];
-    sprintf(out, "%016llx", (unsigned long long)h);
+    uint8_t digest[32];
+    glow_blake3(AS_STRING(args[0]), rope_length(args[0]), digest, sizeof(digest));
+    char out[65];
+    for (int i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", digest[i]);
     return value_string_copy(out);
 }
 
@@ -1766,9 +1820,11 @@ static Value native_tensor_dequant_int4(int argc, Value *args) {
     PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
     if (pa->data && sz > 0 && src->data) {
         double *out = (double*)pa->data;
-        uint8_t *in = (uint8_t*)src->data;
+        /* Each element holds one byte (0-255) packing two 4-bit weights; the
+           tensor stores doubles or int64s, not raw bytes. */
         for (int i = 0; i < src->size; i++) {
-            uint8_t b = in[i];
+            uint8_t b = src->type == PACKED_FLOAT64 ? (uint8_t)(int64_t)((double*)src->data)[i]
+                                                     : (uint8_t)((int64_t*)src->data)[i];
             out[i * 2] = (double)(b & 0x0F) - 8.0;
             out[i * 2 + 1] = (double)((b >> 4) & 0x0F) - 8.0;
         }
@@ -1791,9 +1847,21 @@ static Value native_fast_json_scan(int argc, Value *args) {
     const char *colon = strchr(k_end, ':');
     if (!colon) return value_none();
     const char *v_start = colon + 1;
-    while (*v_start == ' ') v_start++;
-    int v_len = strlen(v_start);
-    if (v_len > 0 && v_start[v_len - 1] == '}') v_len--;
+    while (*v_start == ' ' || *v_start == '\t' || *v_start == '\n' || *v_start == '\r') v_start++;
+    /* Only the first value: a quoted string without its quotes, otherwise
+       the text up to the next ',' or '}'. */
+    int v_len;
+    if (*v_start == '"') {
+        const char *e = v_start + 1;
+        while (*e && *e != '"') { if (*e == '\\' && e[1]) e++; e++; }
+        v_start++;
+        v_len = (int)(e - v_start);
+    } else {
+        const char *e = v_start;
+        while (*e && *e != ',' && *e != '}') e++;
+        while (e > v_start && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r')) e--;
+        v_len = (int)(e - v_start);
+    }
     char val[128];
     if (v_len >= 128) v_len = 127;
     memcpy(val, v_start, v_len);
@@ -1804,8 +1872,24 @@ static Value native_fast_json_scan(int argc, Value *args) {
     return value_dict(d);
 }
 
+/* net_fast.poll_fast(socket, timeout_ms): true when the socket has data (or
+   a connection) waiting, waiting up to timeout_ms (default 0). It used to
+   return true without looking at anything. */
 static Value native_net_poll_fast(int argc, Value *args) {
-    return value_bool(1);
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) < 0) return value_bool(0);
+    int fd = (int)AS_INT(args[0]);
+    double ms = argc >= 2 ? val_to_double(args[1]) : 0;
+    if (!(ms > 0)) ms = 0;
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(fd, &readable);
+    struct timeval tv;
+    tv.tv_sec = (long)(ms / 1000);
+    tv.tv_usec = (long)((ms - (double)tv.tv_sec * 1000) * 1000);
+    glow_gil_release();
+    int r = select(fd + 1, &readable, NULL, NULL, &tv);
+    glow_gil_acquire();
+    return value_bool(r > 0 && FD_ISSET(fd, &readable));
 }
 
 static Value native_media_png_dims(int argc, Value *args) {
@@ -2489,6 +2573,16 @@ static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
     int fd = AS_INT(args[0]);
     const char *resp = AS_STRING(args[1]);
+    size_t total = rope_length(args[1]), sent = 0;
+    glow_gil_release();
+    /* A socket write may take only part of the data; keep going. */
+    while (sent < total) {
+        int res = write(fd, resp + sent, (int)(total - sent));
+        if (res <= 0) break;
+        sent += (size_t)res;
+    }
+    glow_gil_acquire();
+    if (sent < total) return value_int(-1);
     glow_gil_release();
     int res = write(fd, resp, strlen(resp));
     glow_gil_acquire();
@@ -3675,6 +3769,12 @@ static Value native_threads_active(int argc, Value *args) {
 }
 
 void std_init(void) {
+#ifdef _WIN32
+    /* Sockets (http, net, ssl, redis) need Winsock started once per process;
+       without it every socket() call failed and http.listen returned -1. */
+    static int winsock_started = 0;
+    if (!winsock_started) { WSADATA wsa; winsock_started = WSAStartup(MAKEWORD(2, 2), &wsa) == 0; }
+#endif
     var_set("assert", native_func_new("assert", native_assert));
     var_set("dict", native_func_new("dict", native_dict));
     var_set("len", native_func_new("len", native_len));

@@ -240,10 +240,7 @@ func json_pretty(data):
 end
 
 func _pretty_format(data, indent):
-    let pad = ""
-    for i from 0 to indent:
-        pad = pad + "  "
-    end
+    let pad = "  " * indent
     let inner_pad = pad + "  "
 
     when type(data) == "dict":
