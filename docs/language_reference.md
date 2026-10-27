@@ -168,6 +168,7 @@ let full = "Hello" + " " + "World"   # "Hello World"
 ```glow
 let s1 = "Hello, World!"       # Double-quoted string
 let s2 = "Line1\nLine2"        # Escape sequences: \n, \t, \r, \\, \"
+let s3 = '{"ok": true}'        # Single quotes: handy for JSON
 ```
 
 ### F-Strings (Interpolation)
