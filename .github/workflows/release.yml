@@ -40,7 +40,7 @@ jobs:
           - target: linux-x64
             os: ubuntu-22.04        # older glibc: runs on more distributions
           - target: macos-x64
-            os: macos-13            # Intel
+            os: macos-15-intel      # Intel
           - target: macos-arm64
             os: macos-14            # Apple silicon
           - target: windows-x64
