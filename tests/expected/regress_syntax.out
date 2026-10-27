@@ -9,3 +9,4 @@ pairs: [[0, 10], [1, 20]]
 stop method: stopped false
 input at EOF: none
 string(): 12!
+single quotes: {"status": "ok", "count": 2} 2 it's it's

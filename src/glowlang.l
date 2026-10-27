@@ -228,7 +228,9 @@ f\"([^"\\]|\\.)*\" {
     return FSTRING;
 }
 
-\"([^"\\]|\\.)*\" {
+\"([^"\\]|\\.)*\" |
+'([^'\\\n]|\\.)*' {
+    /* Double- or single-quoted; single quotes make JSON easy to write. */
     char *raw = strdup(yytext + 1);
     raw[strlen(raw) - 1] = '\0';
     char *out = malloc(strlen(raw) + 1);
@@ -238,6 +240,7 @@ f\"([^"\\]|\\.)*\" {
             r++;
             switch (*r) {
                 case '"':  *p++ = '"';  break;
+                case '\'': *p++ = '\''; break;
                 case '\\': *p++ = '\\'; break;
                 case 'n':  *p++ = '\n'; break;
                 case 't':  *p++ = '\t'; break;
