@@ -1,0 +1,37 @@
+# Inline conditional: value when condition otherwise other.
+let x = 5
+print "big" when x > 3 otherwise "small"
+print "big" when x > 9 otherwise "small"
+let n = 7
+let kind = "even" when n % 2 == 0 otherwise "odd"
+print kind
+print 1 + 2 when false otherwise 10 + 20
+let grade = "A" when n > 8 otherwise "B" when n > 6 otherwise "C"
+print grade
+func absval(v):
+    return v when v >= 0 otherwise -v
+end
+print absval(-4), absval(3)
+let label = lambda(v): "pos" when v > 0 otherwise "neg"
+print label(2), label(-2)
+let items = [1, 2, 3, 4, 5, 6]
+print [("e" when i % 2 == 0 otherwise "o") for each i in items]
+print [i for each i in items when i > 3]
+print [i * 10 for each i in items when i > 3 and i < 6]
+func side(msg):
+    print msg
+    return msg
+end
+let r = side("yes") when true otherwise side("no")
+let total = 0
+let i = 0
+while i < 100000:
+    total = total + (i when i % 3 == 0 otherwise 0)
+    i = i + 1
+end
+print total
+when x > 3:
+    print "statement when still works"
+otherwise:
+    print "no"
+end
