@@ -1,120 +1,86 @@
 # Contributing to GlowLang
 
-Thank you for your interest in contributing to GlowLang.
+Thank you for your interest in GlowLang! It is an Indian-origin programming language with
+natural-language syntax, created by Anshumali Sharma and Anamika Mukherjee, and contributions
+of every size are welcome:
 
-GlowLang is an Indian-origin programming language project focused on innovation, ethical technology, enterprise readiness, and long-term ecosystem growth.
-
-We welcome:
-
-* bug fixes,
-* performance improvements,
-* tooling enhancements,
-* ecosystem packages,
-* documentation improvements,
-* and constructive language discussions.
+* bug reports and fixes,
+* performance work on the VM, JIT and garbage collector,
+* standard-library functions and `lib/` modules,
+* tooling, editor support and documentation,
+* example programs and tests.
 
 ---
 
-# Before Contributing
+## How to contribute
 
-Please:
+1. **Fork** the repository on GitHub and clone your fork. Forking to contribute is explicitly
+   allowed by the [LICENSE](LICENSE).
+2. Create a branch: `git checkout -b fix/short-description`.
+3. Build:
+   * Windows: `.\build.bat -NoSign` (see `scripts\build-windows.ps1` for requirements)
+   * Linux/macOS: `make`
+4. Make your change, and add a test in `tests/` with its expected output in
+   `tests/expected/<name>.out` (check the output by hand before recording it).
+5. Run the test suite — it compares every program's output, not just its exit code:
+   * Windows: `.\run_all_tests.bat`
+   * Linux/macOS: `make test`
+   For runtime changes, also run with the JIT off (`GLOW_NOJITEXEC=1`) and under GC stress
+   (`GLOWLANG_GC_STRESS=1`).
+6. Commit with a sign-off (see below) and open a pull request against `main`.
 
-* read the GlowLang Sovereign License (GSL),
-* search existing issues and discussions,
-* and discuss major architectural changes before implementation.
-
-Large compiler/runtime changes should be proposed through Discussions before opening a Pull Request.
-
----
-
-# Contribution Rules
-
-By contributing to GlowLang, you agree that:
-
-* you have the legal right to submit the contribution,
-* your contribution does not intentionally violate third-party rights,
-* your contribution may be reviewed, modified, or rejected,
-* and your contribution follows the GlowLang Sovereign License (GSL).
-
-Contributors retain ownership of their contributions.
-
-However, by submitting contributions, you grant the GlowLang maintainers perpetual rights to:
-
-* use,
-* modify,
-* distribute,
-* sublicense,
-* and commercially utilize the contribution within the GlowLang ecosystem.
+For large changes to the compiler, VM, JIT or GC, please open an issue or discussion first so
+we can agree on the design before you spend time on it.
 
 ---
 
-# Pull Request Guidelines
+## Sign your commits (Developer Certificate of Origin)
 
-Please:
+Every commit must be signed off, which certifies the [Developer Certificate of Origin
+1.1](https://developercertificate.org/): that you wrote the change, or otherwise have the right to
+submit it under the project's license. Add the sign-off with `-s`:
 
-* keep pull requests focused and clean,
-* write clear commit messages,
-* include documentation where appropriate,
-* and test your changes before submission.
+```bash
+git commit -s -m "Fix list index error message"
+```
 
-Avoid:
-
-* unrelated refactors,
-* unnecessary formatting-only commits,
-* or massive unreviewed changes.
+This adds a line such as `Signed-off-by: Your Name <you@example.com>` to the commit.
 
 ---
 
-# Code Style
+## License of contributions
 
-Consistency matters.
+GlowLang is licensed under the Apache License 2.0 with the Commons Clause and the GlowLang
+Additional Terms ([LICENSE](LICENSE)). By contributing you agree that:
 
-Follow:
-
-* existing project structure,
-* naming conventions,
-* formatting standards,
-* and architecture patterns used in the repository.
-
----
-
-# Security Contributions
-
-Do NOT publicly disclose security vulnerabilities.
-
-Please follow the instructions in SECURITY.md for responsible disclosure.
+* your contribution is licensed under those same terms (Apache License 2.0, Section 5);
+* you keep the copyright in your contribution;
+* the contribution becomes part of GlowLang, which remains the work of Anshumali Sharma and
+  Anamika Mukherjee, and which nobody — including contributors — may sell or patent.
 
 ---
 
-# Forks and Redistributed Versions
+## Pull request checklist
 
-Public forks or redistributed versions of GlowLang require permission under the GlowLang Sovereign License (GSL).
-
-Unauthorized forks may not use official GlowLang branding or identity.
-
----
-
-# Community Standards
-
-Be respectful and constructive.
-
-GlowLang aims to build:
-
-* a welcoming developer ecosystem,
-* ethical technology,
-* and a collaborative global community.
-
-Harassment, abuse, spam, or intentionally disruptive behavior may result in contribution restrictions.
+* Focused: one fix or feature per pull request; no unrelated reformatting.
+* Tested: new behaviour has a test; the full suite passes.
+* Documented: user-visible changes are reflected in `docs/` or the README. Documentation states
+  only what the code really does — performance claims come from `benchmarks/run-benchmarks.ps1`.
+* Matches the surrounding code style: naming, comment density and structure.
 
 ---
 
-# Questions
+## Reporting bugs and security issues
 
+* Bugs and feature requests: open a GitHub issue with a minimal `.glow` program that shows the
+  problem, the output you expected and the output you got.
+* Security vulnerabilities: do **not** open a public issue — follow [SECURITY.md](SECURITY.md).
 
-Use:
+---
 
-* Discussions for ideas and community conversations,
-* Issues for bugs and feature requests,
-* and Pull Requests for code contributions.
+## Community standards
+
+Be respectful, patient and constructive. Harassment, abuse, spam or deliberately disruptive
+behaviour may lead to being blocked from contributing.
 
 Thank you for helping build GlowLang.
