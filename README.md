@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
   <img src="https://img.shields.io/badge/tests-135%20(output--checked)-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Apache%202.0%20%2B%20Commons%20Clause-blue" alt="License">
+  <img src="https://img.shields.io/badge/license-Sovereign-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-Windows%20x64%20(verified)%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
 </p>
 
@@ -253,6 +254,7 @@ GlowLang is licensed under the **Apache License 2.0 with the Commons Clause** an
 - Use it for free, for anything, including commercial work. Programs you write in GlowLang are yours to sell or license as you like.
 - Read, modify and fork the source, and contribute back (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - GlowLang itself may not be sold or patented; it remains the work of Anshumali Sharma and Anamika Mukherjee.
+GlowLang is released under the **GlowLang Sovereign License (GSL) v1.0** — see [GlowLang Sovereign License](GlowLang%20Soverign%20License.md) for the full terms. All rights reserved by the GlowLang maintainers.
 
 ---
 
