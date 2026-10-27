@@ -90,26 +90,32 @@ jobs:
           cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
           cmake --build build --config Release --parallel
 
-      # Sign glowlang.exe and gdu.exe with Azure Trusted Signing so Windows
-      # (SmartScreen, Smart App Control) trusts the downloads. Skipped, and the
-      # release ships unsigned, until the AZURE_* secrets and TRUSTED_SIGNING_*
-      # variables are set (see docs/release_signing.md). Signing comes before
-      # the tests, so the tests run the signed binaries.
+      # Sign glowlang.exe and gdu.exe with Azure Artifact Signing (formerly
+      # Trusted Signing) so Windows (SmartScreen, Smart App Control) trusts the
+      # downloads. Skipped, and the release ships unsigned, until the AZURE_*
+      # secrets and TRUSTED_SIGNING_* variables are set (see
+      # docs/release_signing.md). Signing comes before the tests, so the tests
+      # run the signed binaries. This calls Microsoft's ArtifactSigning module
+      # directly, because the repository allows only GitHub's own actions.
       - name: Sign (Windows)
         if: runner.os == 'Windows' && env.SIGNING_CLIENT_ID != ''
-        uses: azure/trusted-signing-action@v2.0.0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\bin\Release
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.8 -Force -Scope CurrentUser -Repository PSGallery
+          $params = @{
+            Endpoint               = '${{ vars.TRUSTED_SIGNING_ENDPOINT }}'
+            CodeSigningAccountName = '${{ vars.TRUSTED_SIGNING_ACCOUNT }}'
+            CertificateProfileName = '${{ vars.TRUSTED_SIGNING_PROFILE }}'
+            FilesFolder            = "$env:GITHUB_WORKSPACE\bin\Release"
+            FilesFolderFilter      = 'exe'
+            FileDigest             = 'SHA256'
+            TimestampRfc3161       = 'http://timestamp.acs.microsoft.com'
+            TimestampDigest        = 'SHA256'
+          }
+          Invoke-ArtifactSigning @params
 
       - name: Check signature (Windows)
         if: runner.os == 'Windows' && env.SIGNING_CLIENT_ID != ''
