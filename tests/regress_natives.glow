@@ -13,3 +13,8 @@ show "int4:", tensor.dequantize_int4(packed)
 let server = http.listen(0)
 show "poll idle:", net_fast.poll_fast(server, 10)
 show "poll bad:", net_fast.poll_fast(-1)
+
+# json.scan_fast returns just the first key and its value.
+let first = json.scan_fast('{"txn": "SOV-8821", "amount": 10}')
+show "scan_fast:", first["key"], first["val"]
+show "scan_fast number:", json.scan_fast('{"n": 42 , "x": 1}')["val"]
