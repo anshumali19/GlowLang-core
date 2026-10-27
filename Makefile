@@ -65,7 +65,7 @@ test-sanitized: $(DEPS)
 	$(generate)
 	$(CC) $(ALL_SRC) -o $(BIN_DIR)/glowlang_asan $(CFLAGS_ASAN) $(LDFLAGS)
 	@echo "Running tests with ASan..."
-	ASAN_OPTIONS=detect_leaks=0 GLOWLANG_BIN=./$(BIN_DIR)/glowlang_asan ./scripts/run-tests.sh
+	ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 GLOWLANG_BIN=./$(BIN_DIR)/glowlang_asan ./scripts/run-tests.sh
 	@echo "Building with ThreadSanitizer..."
 	$(CC) $(ALL_SRC) -o $(BIN_DIR)/glowlang_tsan $(CFLAGS_TSAN) $(LDFLAGS)
 	@echo "Running tests with TSan..."

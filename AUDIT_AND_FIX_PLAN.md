@@ -1,12 +1,12 @@
-# GlowLang Audit & Fix Status (updated 2026-10-26)
+# GlowLang Audit & Fix Status (updated 2026-10-27)
 
 Branch: `feat/windows-jit-abi` (based on `361670c`). Everything below was measured on Windows x64
-(Intel i7-14650HX) with the MSVC build from `build.bat`. Linux and macOS builds were updated but
-not run (no toolchain on the test machine); CI is configured to build and test them.
+(Intel i7-14650HX) with the MSVC build from `build.bat`. CI builds and runs the same suite on
+Linux (GCC, plus an ASan run) and macOS (ARM64, Clang).
 
 ## Verification
 
-- 129 test programs, each with expected stdout in `tests/expected/` (`scripts/run-tests.ps1`,
+- 135 test programs, each with expected stdout in `tests/expected/` (`scripts/run-tests.ps1`,
   `scripts/run-tests.sh`). All pass in four modes: default, `GLOW_NOJITEXEC=1`,
   `GLOWLANG_GC_STRESS=1`, `GLOW_NO_SIMD=1`.
 - Stress: regression and thread tests give correct output with `GLOW_FORCEFULL=1` (a collection on
@@ -47,14 +47,20 @@ README, ARCHITECTURE, PRODUCTION_GUIDE, WINDOWS_JIT_PORT, `docs/runtime_internal
 no "GIL abolished", no concurrent/nursery GC, no MMU guard pages in use, no 14.5 ms Fibonacci,
 switch dispatch stated for MSVC, hand-typed benchmark tables marked historical.
 
+## Language work since the audit
+
+Lists/dicts compare by contents; ordering works for text and lists; arithmetic and comparisons on
+incompatible types raise; floor modulo; out-of-range indexes raise; `type()` reports `int` for
+all integers; `x in xs`, `2 ** -1`, `1e3`, multi-line literals, `for each key, value in`;
+expression f-strings; closures for nested functions and assignable captures; `input`/`ask`;
+a core library (`src/corelib.c`) of string, list and dict methods and global helpers;
+`lib/async.glow`; imports relative to the importing file.
+
 ## Still open
 
 - Real multi-core execution (isolates or fine-grained locking) — not started.
 - A real nursery GC.
-- `type()` reports `float` for integers between 2^47 and 2^53.
-- Out-of-range list index returns `none` instead of raising.
+- Closures capture copies; the enclosing function does not see a closure's assignments.
 - Self-signed certificate: Smart App Control may block fresh builds; a trusted code-signing
   certificate is needed to ship to other machines.
-- Verify the Linux/macOS builds in CI.
-- Repo hygiene: tracked build outputs and scratch files at the root; `__test_file_gl.txt` and
-  `test_data.csv` are test artifacts that should be removed from git.
+- Repo hygiene: tracked build outputs and scratch files at the root.

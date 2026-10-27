@@ -443,6 +443,31 @@ static void hoist_locals(FuncEntry *fe, Node *n) {
     for (int i = 0; i < n->fstring_part_count; i++) hoist_locals(fe, n->fstring_parts[i]);
 }
 
+/* Parse the expression inside an f-string's braces with the language's own
+   parser (wrapped as an assignment), so any expression works there. */
+extern Node *root;
+int yyparse(void);
+static Node *parse_fstring_expr(const char *src) {
+    size_t n = strlen(src);
+    char *code = malloc(n + 32);
+    snprintf(code, n + 32, "__fexpr = (%s)\n", src);
+    Node *saved_root = root;
+    int saved_line = line_num;
+    YY_BUFFER_STATE old = get_current_buffer();
+    YY_BUFFER_STATE b = yy_scan_string(code);
+    root = NULL;
+    int rc = yyparse();
+    yy_delete_buffer(b);
+    if (old) yy_switch_to_buffer(old);
+    Node *r = root;
+    root = saved_root;
+    line_num = saved_line;
+    free(code);
+    if (rc != 0) return NULL;
+    while (r && r->type == NODE_SEQ) r = r->left ? r->left : r->right;
+    return (r && r->type == NODE_ASSIGN) ? r->left : NULL;
+}
+
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
@@ -1334,75 +1359,56 @@ static int compile_expr(Node *n, int target_reg) {
             break;
         }
         case NODE_FSTRING: {
+            /* f"text {expression} text": each {...} is a full expression,
+               {{ and }} are literal braces, and the usual escapes apply.
+               The pieces are joined as text, starting from "" so numbers
+               are converted, not added. */
             const char *str = n->name;
-            int len = strlen(str);
-            int last_reg = -1;
-            int i = 0;
-            while (i < len) {
-                if (str[i] == '{') {
-                    i++;
-                    int start = i;
-                    while (i < len && str[i] != '}') i++;
-                    if (i < len && str[i] == '}') {
-                        int var_len = i - start;
-                        char *var_name = malloc(var_len + 1);
-                        strncpy(var_name, str + start, var_len);
-                        var_name[var_len] = '\0';
-                        char *trimmed = var_name;
-                        while (*trimmed == ' ') trimmed++;
-                        int tl = strlen(trimmed);
-                        while (tl > 0 && trimmed[tl-1] == ' ') {
-                            trimmed[tl-1] = '\0';
-                            tl--;
-                        }
-
-                        Node *var_node = newVarNode(intern_string(trimmed));
-                        int var_reg = compile_expr(var_node, -1);
-                        free(var_name);
-
-                        if (last_reg == -1) {
-                            last_reg = var_reg;
-                        } else {
-                            int new_reg = next_free_reg++;
-                            int idx = bc_emit(compiling_bc, OP_ADD, 0, 0);
-                            compiling_bc->code[idx].r0 = new_reg;
-                            compiling_bc->code[idx].r1 = last_reg;
-                            compiling_bc->code[idx].r2 = var_reg;
-                            last_reg = new_reg;
-                        }
-                    }
-                    i++;
-                } else {
-                    int start = i;
-                    while (i < len && str[i] != '{') i++;
-                    int lit_len = i - start;
-                    char *lit_str = malloc(lit_len + 1);
-                    strncpy(lit_str, str + start, lit_len);
-                    lit_str[lit_len] = '\0';
-
-                    Node *lit_node = newStringNode(intern_string(lit_str));
-                    int lit_reg = compile_expr(lit_node, -1);
-                    free(lit_str);
-
-                    if (last_reg == -1) {
-                        last_reg = lit_reg;
-                    } else {
-                        int new_reg = next_free_reg++;
-                        int idx = bc_emit(compiling_bc, OP_ADD, 0, 0);
-                        compiling_bc->code[idx].r0 = new_reg;
-                        compiling_bc->code[idx].r1 = last_reg;
-                        compiling_bc->code[idx].r2 = lit_reg;
-                        last_reg = new_reg;
-                    }
+            size_t len = strlen(str);
+            char *lit = malloc(len + 1);
+            size_t lit_len = 0;
+            int acc = compile_expr(newStringNode(intern_string("")), -1);
+            size_t i = 0;
+            while (i <= len) {
+                int flush = (i == len);
+                if (!flush && str[i] == '{' && i + 1 < len && str[i + 1] == '{') { lit[lit_len++] = '{'; i += 2; continue; }
+                if (!flush && str[i] == '}' && i + 1 < len && str[i + 1] == '}') { lit[lit_len++] = '}'; i += 2; continue; }
+                if (!flush && str[i] == '\\' && i + 1 < len) {
+                    char e = str[i + 1];
+                    lit[lit_len++] = e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e;
+                    i += 2;
+                    continue;
                 }
+                if (!flush && str[i] != '{') { lit[lit_len++] = str[i++]; continue; }
+                /* A literal run ends here. */
+                if (lit_len > 0) {
+                    lit[lit_len] = '\0';
+                    int lr = compile_expr(newStringNode(intern_string(lit)), -1);
+                    int idx = bc_emit_reg(compiling_bc, OP_ADD, acc, acc, lr);
+                    (void)idx;
+                    lit_len = 0;
+                }
+                if (flush) break;
+                /* An expression: up to the matching closing brace. */
+                size_t start = ++i;
+                int depth = 1;
+                while (i < len && depth > 0) {
+                    if (str[i] == '{') depth++;
+                    else if (str[i] == '}') depth--;
+                    if (depth > 0) i++;
+                }
+                size_t elen = i - start;
+                char *src = malloc(elen + 1);
+                memcpy(src, str + start, elen);
+                src[elen] = '\0';
+                Node *e = parse_fstring_expr(src);
+                free(src);
+                if (i < len) i++; /* skip '}' */
+                int er = compile_expr(e ? e : newVarNode(intern_string("none")), -1);
+                bc_emit_reg(compiling_bc, OP_ADD, acc, acc, er);
             }
-
-            if (last_reg == -1) {
-                Node *empty_node = newStringNode(intern_string(""));
-                last_reg = compile_expr(empty_node, -1);
-            }
-
-            bc_emit_reg(compiling_bc, OP_MOVE, reg, last_reg, 0);
+            free(lit);
+            bc_emit_reg(compiling_bc, OP_MOVE, reg, acc, 0);
             break;
         }
         case NODE_LIST_LITERAL: {

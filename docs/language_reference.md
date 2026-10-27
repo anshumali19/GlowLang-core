@@ -42,7 +42,15 @@ Complete reference for the GlowLang programming language — covering every synt
 Identifiers begin with a letter or underscore, followed by letters, digits, or underscores. GlowLang is case-sensitive.
 
 ### Statement Termination
-Statements are terminated by newlines. No semicolons required.
+Statements are terminated by newlines. No semicolons required. Inside open brackets `( [ {`,
+newlines do not end the statement, so long literals and calls can span lines:
+
+```glow
+let people = [
+    {"name": "Ada", "age": 36},
+    {"name": "Alan", "age": 41}
+]
+```
 
 ### Blocks
 All block constructs end with the `end` keyword:
@@ -60,9 +68,9 @@ GlowLang is dynamically typed with the following value types:
 
 | Type | Example | Description |
 |------|---------|-------------|
-| Integer | `42`, `-7`, `0` | 64-bit signed integer |
-| Float | `3.14`, `-0.5`, `1.0` | 64-bit double-precision |
-| String | `"hello"`, `f"hi {x}"` | Rope-backed UTF-8 string |
+| Integer | `42`, `-7`, `2 ** 100` | Exact integer of any size (never overflows) |
+| Float | `3.14`, `-0.5`, `1e-3` | 64-bit double-precision |
+| String | `"hello"`, `f"hi {x}"` | Byte string (UTF-8 text) |
 | Boolean | `true`, `false` | Boolean value |
 | List | `[1, 2, 3]` | Dynamic array |
 | Dictionary | `{"a": 1}` | Hash map |
@@ -75,6 +83,8 @@ GlowLang is dynamically typed with the following value types:
 ```glow
 let t = type(value)   # Returns type as string: "int", "float", "string", "list", "dict", etc.
 ```
+
+Conversions: `int(x)`, `float(x)`, `str(x)` (also `string(x)`), `bool(x)`.
 
 ---
 
@@ -107,21 +117,30 @@ x /= 4    # x = x / 4
 ### Arithmetic
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `+` | Addition | `3 + 4` → `7` |
+| `+` | Addition (or joining text / lists) | `3 + 4` → `7`, `"a" + 1` → `"a1"` |
 | `-` | Subtraction | `10 - 3` → `7` |
-| `*` | Multiplication | `5 * 6` → `30` |
+| `*` | Multiplication (or repeating text / lists) | `5 * 6` → `30`, `"ab" * 2` → `"abab"` |
 | `/` | Division | `15 / 4` → `3.75` |
-| `%` | Modulo | `17 % 5` → `2` |
+| `%` | Modulo (sign of the divisor) | `17 % 5` → `2`, `-7 % 3` → `2` |
+| `**` | Power (exact for integers) | `2 ** 10` → `1024`, `2 ** -1` → `0.5` |
+
+Arithmetic on values that are not numbers raises an error (`none * 2` →
+"Cannot apply '*' to none and int"). Division and modulo by zero raise errors.
 
 ### Comparison
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `==` | Equal | `x == 5` |
+| `==` | Equal (lists and dicts compare by contents) | `[1, 2] == [1, 2]` → `true` |
 | `!=` | Not equal | `x != 5` |
-| `<` | Less than | `x < 10` |
-| `>` | Greater than | `x > 0` |
-| `<=` | Less or equal | `x <= 10` |
-| `>=` | Greater or equal | `x >= 0` |
+| `<` `>` `<=` `>=` | Ordering of numbers, text (by character codes) and lists | `"apple" < "banana"` |
+
+Ordering values of different kinds (`"a" < 1`) raises an error.
+
+### Membership
+| Operator | Example |
+|----------|---------|
+| `in`, `is in` | `2 in [1, 2, 3]`, `"x" is in letters` |
+| `not in`, `is not in` | `5 not in [1, 2, 3]` |
 
 ### Logical
 | Operator | Description | Example |
@@ -133,8 +152,8 @@ x /= 4    # x = x / 4
 ### Identity
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `is` | Identity check | `x is true` |
-| `is not` | Negative identity | `x is not none` |
+| `is` | Same as `==` | `x is true` |
+| `is not` | Same as `!=` | `x is not none` |
 
 ### String Concatenation
 ```glow
@@ -152,23 +171,35 @@ let s2 = "Line1\nLine2"        # Escape sequences: \n, \t, \r, \\, \"
 ```
 
 ### F-Strings (Interpolation)
+Any expression can go between braces; `{{` and `}}` are literal braces.
 ```glow
 let name = "GlowLang"
 let version = 1
 show f"Welcome to {name} v{version}!"
+show f"{name.upper()} has {len(name)} letters, next version {version + 1}"
 ```
 
 ### String Operations
 ```glow
 let s = "Hello, World"
-let length = len(s)         # String length
-let ch = s[0]               # Character access by index
-let sub = s[0:5]            # Slicing: "Hello"
-let parts = s.split(", ")   # Split into list
+let length = len(s)          # String length
+let ch = s[0]                # Character by index (s[-1] is the last); out of range raises
+let sub = s[0:5]             # Slicing: "Hello"
+let parts = s.split(", ")    # Split into a list
 ```
 
-### Rope-Backed Strings
-GlowLang strings use a Rope data structure internally, providing O(log n) concatenation and efficient manipulation of large strings.
+### String Methods
+| Method | Result |
+|--------|--------|
+| `s.upper()`, `s.lower()` | Changed case |
+| `s.trim()` (`strip`), `s.trim_start()`, `s.trim_end()` | Whitespace removed |
+| `s.replace(old, new)` | Every occurrence replaced |
+| `s.contains(x)`, `s.starts_with(x)`, `s.ends_with(x)` | `true` / `false` |
+| `s.find(x)` | Position of `x`, or `-1` |
+| `s.count(x)` | Number of occurrences |
+| `s.split(sep)`, `s.lines()` | List of parts |
+| `sep.join(list)` | Items joined with `sep` |
+| `s.is_number()` | Whether `float(s)` would succeed |
 
 ---
 
@@ -191,6 +222,9 @@ nums[0] = 100                # Index assignment
 let tail = nums[-1]           # Last element
 ```
 
+Indexing past either end raises "List index out of range". Looking up a missing
+dictionary key gives `none` (or use `d.get(key, default)`).
+
 ### Slicing
 ```glow
 let sub = nums[1:3]          # Elements at index 1, 2
@@ -200,9 +234,29 @@ let to3 = nums[:3]           # From start to index 2
 
 ### List Operations
 ```glow
-append(nums, 6)              # Append element
+nums.push(6)                 # Append (also append(nums, 6))
 let length = len(nums)       # Length
-let r = range(10)            # Create [0, 1, 2, ..., 9]
+let r = range(10)            # [0, 1, 2, ..., 9]
+```
+
+### List Methods
+| Method | Result |
+|--------|--------|
+| `push(x)` / `append(x)`, `pop()`, `insert(i, x)`, `extend(list)` | Change the list |
+| `remove(x)` | Removes the first `x`; `true` if one was removed |
+| `index(x)`, `contains(x)` | Position (or `-1`), membership |
+| `sort(key, descending)`, `reverse()` | Reorder in place |
+| `map(f)`, `filter(f)`, `reduce(f, start)`, `each(f)` | Functional helpers |
+| `join(sep)`, `copy()`, `clear()`, `first()`, `last()`, `is_empty()` | |
+
+Global helpers: `sorted(list, key, descending)`, `reversed(x)`, `min(...)`, `max(...)`,
+`sum(list)`, `abs(x)`.
+
+```glow
+let scores = [72, 95, 88]
+show sorted(scores, none, true)                 # [95, 88, 72]
+show scores.map(lambda(x): x + 5)               # [77, 100, 93]
+show scores.filter(lambda(x): x > 80).join(", ")
 ```
 
 ---
@@ -226,11 +280,19 @@ user["email"] = "alice@glow.dev"  # Add/update key
 for each key, value in user:
     show key, ":", value
 end
+
+for each i, item in ["a", "b"]:     # index and item for lists
+    show i, item
+end
 ```
 
 ### Dictionary Methods
 ```glow
-let has = user.has("name")        # Check key existence
+let has = user.has("name")              # Key exists?
+let city = user.get("city", "unknown")  # Value or a default
+let names = user.keys()
+let entries = user.items()              # [[key, value], ...]
+user.remove("email")
 ```
 
 ---
@@ -355,21 +417,27 @@ show add(3, 4)    # 7
 ```
 
 ### Closures
-Lambdas capture variables from their enclosing scope:
+Lambdas and functions defined inside other functions see the enclosing
+function's variables. Each closure keeps its own copy of them, taken when it is
+created; assigning to one updates that copy, so the value persists across calls:
 
 ```glow
 func make_counter():
     let count = 0
-    return lambda():
+    func next():
         count = count + 1
         return count
     end
+    return next
 end
 
 let counter = make_counter()
 show counter()   # 1
 show counter()   # 2
 ```
+
+The enclosing function does not see the closure's changes, and a variable
+declared with `let` inside the closure is a new local.
 
 ### Lambdas in Collections
 ```glow
@@ -602,18 +670,26 @@ show "Main thread continues..."
 os.sleep(1000)
 ```
 
-### Task Declaration
+### Tasks, Channels and Timers
+`lib/async.glow` provides `Channel`, `Task`, `TaskGroup`, `Timer` and `Periodic`:
+
 ```glow
-task fetch_data(url):
-    let response = http.get(url)
-    show "Fetched:", response
+use "lib/async.glow"
+
+let results = Channel("results")
+func fetch(n):
+    results.send(n * n)
 end
 
-spawn fetch_data("http://api.example.com/data")
+let group = TaskGroup("work")
+group.create("a", lambda(): fetch(2))
+group.create("b", lambda(): fetch(3))
+group.start_all()                  # run on threads and wait
+show results.drain()
 ```
 
 ### Concurrency Model
-GlowLang uses OS-level threads with a Global Interpreter Lock (GIL). The GIL is automatically released during I/O operations (`os.sleep`, `http.*`, `sqlite.*`) allowing true concurrency for I/O-bound workloads.
+GlowLang uses OS-level threads with a Global Interpreter Lock (GIL): one thread runs GlowLang code at a time. The GIL is released during `os.sleep`, `os.system` and HTTP/TLS socket calls, so threads overlap waiting, not computation. `threads.join_all()` waits for all spawned threads; the program also waits for them before exiting.
 
 ---
 
@@ -674,98 +750,71 @@ show chars   # ["h", "e", "l", "l", "o"]
 
 ## 18. Standard Library
 
-### Output
-| Function | Description |
-|----------|-------------|
-| `show value` | Print value(s) to stdout |
-| `show a, b, c` | Print multiple values separated by spaces |
+Every name below exists in the runtime (checked against `<module>.keys()`).
 
-### Math
+### Built-in Functions
 | Function | Description |
 |----------|-------------|
-| `sqrt(n)` | Square root |
-| `abs(n)` | Absolute value |
-| `math.vec2_dist(x1,y1,x2,y2)` | 2D Euclidean distance |
+| `show a, b` / `print` | Print values separated by spaces |
+| `len(x)` | Length of a string, list or dict |
+| `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, class name, ... |
+| `int(x)`, `float(x)`, `str(x)` / `string(x)`, `bool(x)` | Conversions |
+| `range(n)` | `[0, 1, ..., n-1]` |
+| `append(list, x)` | Add to a list |
+| `pairs(x)` | `[index, item]` / `[key, value]` pairs |
+| `abs`, `min`, `max`, `sum`, `round`, `floor`, `ceil` | Numbers (`min`/`max` take values or one list) |
+| `sorted(list, key, descending)`, `reversed(x)` | New ordered list (or reversed string) |
+| `input(prompt)` / `ask(prompt)` | Read a line from standard input (`none` at end of input) |
+| `assert(condition, message)` | Raise when the condition is false |
+| `dict()` | Empty dictionary |
 
-### Collections
-| Function | Description |
-|----------|-------------|
-| `len(x)` | Length of string, list, or dict |
-| `range(n)` | Create list `[0, 1, ..., n-1]` |
-| `append(list, item)` | Append item to list |
-| `type(x)` | Return type as string |
+### Math (`math.`)
+`sqrt`, `pow`, `exp`, `log(x, base)`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
+`atan2`, `hypot`, `abs`, `min`, `max`, `floor`, `ceil`, `round`, `vec2_add`, `vec2_dist`, and the
+constants `pi`, `e`, `inf`.
 
-### Tensor / AI
+### Tensors (`tensor.`)
 | Function | Description |
 |----------|-------------|
-| `tensor.zeros(n)` | Create zero-filled tensor of size n |
-| `tensor.create(n)` | Create uninitialized tensor |
-| `tensor.add(a, b)` | Element-wise addition |
-| `tensor.mul(a, b)` | Element-wise multiplication |
-| `tensor.dot(a, b)` | Dot product |
-| `tensor.matmul(A,r1,c1,B,r2,c2)` | Matrix multiplication |
-| `tensor.transpose(A,rows,cols)` | Matrix transposition |
+| `zeros(n)`, `ones(n)`, `create(n)` | New tensor of n numbers |
+| `get(t, i)`, `set(t, i, x)` | Element access |
+| `add`, `sub`, `mul`, `dot` | Element-wise operations and dot product (AVX2/FMA when available) |
+| `matmul(A, rA, cA, B, rB, cB)` | Matrix product |
+| `transpose(A, rows, cols)`, `reshape(t, shape)`, `shape(t)` | Shape operations |
+| `to_device(t, "cpu" / "cuda")` | Device placement (CUDA only in builds with nvcc) |
 
-### HTTP / Networking
-| Function | Description |
-|----------|-------------|
-| `http.listen(port)` | Start TCP listener on port |
-| `http.accept(server)` | Accept incoming connection |
-| `http.read(client)` | Read request data |
-| `http.send(client, data)` | Send response data |
-| `http.close(handle)` | Close connection/server |
+### HTTP (`http.`)
+`listen(port)`, `accept(server)`, `read(client)`, `send(client, data)`, `close(handle)`,
+`request(method, url, ...)`.
 
-### Database (SQLite)
-| Function | Description |
-|----------|-------------|
-| `sqlite.open(path)` | Open SQLite database |
-| `sqlite.exec(db, query)` | Execute SQL statement |
-| `sqlite.query(db, query)` | Execute query, return rows |
-| `sqlite.close(db)` | Close database connection |
+### SQLite (`sqlite.`)
+`open(path)`, `exec(db, sql)`, `query(db, sql)` (list of row dicts), `step_query(db, sql)`, `close(db)`.
 
-### Database (Redis)
-| Function | Description |
-|----------|-------------|
-| `redis.connect(host, port)` | Connect to Redis server |
-| `redis.set(conn, key, value)` | Set key-value pair |
-| `redis.get(conn, key)` | Get value by key |
+### Redis (`redis.`)
+`connect(host, port)`, `get(conn, key)`, `set(conn, key, value)`.
 
-### JSON
-| Function | Description |
-|----------|-------------|
-| `json.stringify(obj)` | Convert object to JSON string |
-| `json.parse(str)` | Parse JSON string to object |
+### JSON (`json.`)
+`parse(text)`, `stringify(value)`.
 
-### OS
-| Function | Description |
-|----------|-------------|
-| `os.time()` | Current time in seconds (float) |
-| `os.sleep(ms)` | Sleep for milliseconds (non-blocking, yields GIL) |
+### OS (`os.`)
+`time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
+`env(name)` / `getenv(name)`, `exit(code)`, `gc_info()`.
 
-### File System
-| Function | Description |
-|----------|-------------|
-| `fs.read(path)` | Read file contents as string |
-| `fs.write(path, content)` | Write string to file |
-| `fs.exists(path)` | Check if file exists |
+### Files (`fs.`)
+`read(path)`, `write(path, text)`, `exists(path)`, `remove(path)`, `mkdir(path)`, `list(dir)` /
+`readdir(dir)`, `size(path)`, `stat(path)`.
 
-### GUI (X11)
-| Function | Description |
-|----------|-------------|
-| `gui.open()` | Open X11 window |
-| `gui.clear()` | Clear the window |
-| `gui.draw_rect(x,y,w,h)` | Draw rectangle |
-| `gui.poll()` | Poll for events |
+### Crypto (`crypto.`)
+`sha256(text)`, `hmac(key, text)` / `hmac_sha256`, `blake3(text)`.
 
-### Collision Detection
-| Function | Description |
-|----------|-------------|
-| `collision.aabb(x1,y1,w1,h1,x2,y2,w2,h2)` | Axis-Aligned Bounding Box check |
+### Threads (`threads.`)
+`join_all()`, `active()`. See also `lib/async.glow` and `lib/sync.glow`.
 
-### Debug
-| Function | Description |
-|----------|-------------|
-| `debug.stacktrace()` | Print the current call stack |
+### Debugging (`debug.`)
+`assert(condition, message)`, `stacktrace()`, `dump_stack()`, `profile_start()`, `profile_stop()`.
+
+### Other modules
+`gui` (X11: `open`, `clear`, `draw_rect`, `poll`), `collision.aabb(...)`, `crypto`, `net`, `ssl`.
 
 ---
 

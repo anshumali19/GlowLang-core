@@ -196,7 +196,7 @@ volatile int glow_gil_waiters = 0;
 THREAD_LOCAL GlowThreadCtx glow_thread_ctx;
 
 void glow_thread_ctx_init(void) {
-    char here;
+    char *here = GLOW_STACK_POS();
     void *hi = NULL;
 #if defined(_WIN32)
     hi = ((NT_TIB*)NtCurrentTeb())->StackBase;
@@ -212,9 +212,9 @@ void glow_thread_ctx_init(void) {
 #endif
     /* Fallback: everything above this frame is the thread's live stack. Give
        it some headroom so caller frames of the entry point are included. */
-    if (!hi) hi = &here + 4096;
+    if (!hi) hi = here + 4096;
     glow_thread_ctx.stack_hi = hi;
-    glow_thread_ctx.stack_lo = &here;
+    glow_thread_ctx.stack_lo = here;
 
     /* Lowest usable stack address. Recursion stops with a recursion error
        once less than a quarter of the stack (at most 1 MB) is left, which
@@ -222,7 +222,7 @@ void glow_thread_ctx_init(void) {
     char *lo = NULL;
 #if defined(_WIN32)
     MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(&here, &mbi, sizeof(mbi))) lo = (char*)mbi.AllocationBase;
+    if (VirtualQuery(here, &mbi, sizeof(mbi))) lo = (char*)mbi.AllocationBase;
 #elif defined(__APPLE__)
     lo = (char*)hi - pthread_get_stacksize_np(pthread_self());
 #elif defined(__linux__)
@@ -232,7 +232,7 @@ void glow_thread_ctx_init(void) {
         pthread_attr_destroy(&attr);
     }
 #endif
-    if (!lo || lo >= &here) lo = &here - 512 * 1024;
+    if (!lo || lo >= here) lo = here - 512 * 1024;
     size_t margin = (size_t)((char*)hi - lo) / 4;
     if (margin > 1024 * 1024) margin = 1024 * 1024;
     glow_thread_ctx.stack_limit = lo + margin;
@@ -253,9 +253,9 @@ __attribute__((noinline))
 __declspec(noinline)
 #endif
 void glow_gil_release(void) {
-    char here;
+    char *here = GLOW_STACK_POS();
     setjmp(glow_thread_ctx.regs);
-    glow_thread_ctx.stack_lo = &here;
+    glow_thread_ctx.stack_lo = here;
     pthread_mutex_lock(&gil_mutex);
     gil_now_serving++;
     pthread_cond_broadcast(&gil_cond);

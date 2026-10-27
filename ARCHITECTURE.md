@@ -137,7 +137,7 @@ Other make targets: `make test`, `make test-sanitized` (ASan + TSan), `make fuzz
 
 ## Testing
 
-- `tests/*.glow` (129 programs). `scripts/run-tests.ps1` (Windows) and `scripts/run-tests.sh`
+- `tests/*.glow` (135 programs). `scripts/run-tests.ps1` (Windows) and `scripts/run-tests.sh`
   (Linux/macOS/Git Bash) run each with a timeout and check the exit code
   (`tests/expected/exit_codes.txt`), compare stdout with `tests/expected/<name>.out` (`{{ANY}}`
   matches variable text such as timings), and check required stderr lines (`<name>.err`).

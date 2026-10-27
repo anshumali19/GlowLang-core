@@ -459,9 +459,9 @@ static void gc_set_next_threshold(void) {
 }
 
 GC_NOINLINE static void gc_full_collect_impl(void) {
-    char stack_marker;
+    char *stack_marker = GLOW_STACK_POS();
     gc_mark_precise_roots(gc_mark_root_checked);
-    gc_scan_native_stacks(&stack_marker, push_grey);
+    gc_scan_native_stacks(stack_marker, push_grey);
     process_grey_stack();
 
     GCObject **p = &gc_objects;
@@ -513,9 +513,9 @@ static void gc_mark_root_checked_minor(Value v) {
 }
 
 GC_NOINLINE static void gc_minor_collect_impl(void) {
-    char stack_marker;
+    char *stack_marker = GLOW_STACK_POS();
     gc_mark_precise_roots(gc_mark_root_checked_minor);
-    gc_scan_native_stacks(&stack_marker, push_grey_minor);
+    gc_scan_native_stacks(stack_marker, push_grey_minor);
     for (RememberedSet *rs = gc_remembered_set; rs; rs = rs->next) {
         if (rs->obj) gc_trace_object(rs->obj, gc_mark_value_minor, push_grey_minor);
     }

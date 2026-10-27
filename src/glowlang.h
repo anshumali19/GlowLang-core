@@ -774,9 +774,17 @@ extern THREAD_LOCAL GlowThreadCtx glow_thread_ctx;
 
 /* True when the current thread is close to the end of its machine stack.
    Every path that nests native frames per GlowLang call checks this. */
+/* The current machine-stack position. The address of a local is not good
+   enough: AddressSanitizer may place locals on a heap "fake stack". */
+#if defined(__GNUC__) || defined(__clang__)
+#define GLOW_STACK_POS() ((char*)__builtin_frame_address(0))
+#else
+#include <intrin.h>
+#define GLOW_STACK_POS() ((char*)_AddressOfReturnAddress())
+#endif
+
 static inline int glow_stack_low(void) {
-    char probe;
-    return (char*)&probe < (char*)glow_thread_ctx.stack_limit;
+    return GLOW_STACK_POS() < (char*)glow_thread_ctx.stack_limit;
 }
 
 /* Global interpreter lock. Exactly one thread runs GlowLang code at a time;

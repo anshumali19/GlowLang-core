@@ -4,7 +4,7 @@
 
 - `bin\glowlang.exe` is built with MSVC by `build.bat` (`scripts\build-windows.ps1`), statically
   linked (OpenSSL, SQLite, C runtime), and signed.
-- The 129-program test suite passes with output comparison (`.\run_all_tests.bat`) in four modes:
+- The 135-program test suite passes with output comparison (`.\run_all_tests.bat`) in four modes:
   default, `GLOW_NOJITEXEC=1`, `GLOWLANG_GC_STRESS=1` and `GLOW_NO_SIMD=1`.
 - Benchmarks against CPython: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
