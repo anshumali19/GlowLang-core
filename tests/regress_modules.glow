@@ -15,3 +15,9 @@ func nest(n):
     return nest(n - 1)
 end
 show "nested import:", nest(100)
+
+# The .glow extension is optional, and packages installed by gdu into a
+# .glow_pkg folder next to the program are found by name.
+use "modules/geometry"
+use "greeter"
+show "package:", greet("Glow")

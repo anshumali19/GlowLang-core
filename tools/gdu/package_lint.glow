@@ -7,14 +7,14 @@
 
 # Validate version string (semver-like: X.Y.Z)
 func is_valid_version(v):
-    let parts = str.split(v, ".")
+    let parts = v.split(".")
     if len(parts) != 3:
         return false
     end
     # Check each part is numeric
     for each part in parts:
-        let trimmed = str.trim(part)
-        if len(trimmed) == 0:
+        let trimmed = part.trim()
+        if len(trimmed) == 0 or not trimmed.is_number() or "." in trimmed:
             return false
         end
     end
@@ -26,12 +26,12 @@ func is_valid_package_name(name):
     if len(name) == 0:
         return false
     end
-    let lower = str.lower(name)
+    let lower = name.lower()
     if lower != name:
         return false
     end
     # Check for invalid characters
-    if str.contains(name, " "):
+    if name.contains(" "):
         return false
     end
     return true
@@ -97,15 +97,18 @@ blueprint PackageLinter:
         let deps_path = self.project_path + "/Glow.deps"
         if fs.exists(deps_path):
             let content = fs.read(deps_path)
-            let lines = str.split(content, "\n")
+            let lines = content.split("\n")
             let line_num = 0
             for each line in lines:
                 line_num = line_num + 1
-                let trimmed = str.trim(line)
-                if len(trimmed) > 0:
-                    # Each line should have a URL and a destination path in quotes
-                    if not str.starts_with(trimmed, "\""):
-                        self._add_issue("warn", "Glow.deps line " + string(line_num) + ": should start with quoted URL")
+                let trimmed = line.trim()
+                if len(trimmed) > 0 and not trimmed.starts_with("#"):
+                    # gdu writes one dependency per line: name@version, optionally
+                    # followed by (url).
+                    let spec = trimmed.split("(")[0].trim()
+                    let parts = spec.split("@")
+                    if len(parts) != 2 or not is_valid_package_name(parts[0]) or not is_valid_version(parts[1]):
+                        self._add_issue("warn", "Glow.deps line " + string(line_num) + ": expected name@version, got '" + trimmed + "'")
                     end
                 end
             end
@@ -122,8 +125,8 @@ blueprint PackageLinter:
         if fs.exists(lib_path):
             let files = fs.readdir(lib_path)
             for each f in files:
-                if str.ends_with(f, ".glow"):
-                    let name = str.replace(f, ".glow", "")
+                if f.ends_with(".glow"):
+                    let name = f.replace(".glow", "")
                     if not is_valid_package_name(name):
                         self._add_issue("warn", "lib/" + f + " does not follow naming conventions (use lowercase)")
                     otherwise:

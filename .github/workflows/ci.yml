@@ -35,6 +35,7 @@ jobs:
           flex -o src/lex.yy.c src/glowlang.l
           bison -Wnone -d -o src/glowlang.tab.c src/glowlang.y
           gcc src/lex.yy.c src/glowlang.tab.c src/lsp.c src/arena.c src/jit.c \
+              src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c src/bigint.c src/regex.c src/corelib.c src/blake3.c \
               src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c src/bigint.c src/regex.c src/corelib.c \
               -o bin/glowlang_asan \
               -O1 -g -lm -pthread -lssl -lcrypto \
