@@ -1596,6 +1596,62 @@ static Value native_pairs(int argc, Value *args) {
             list_push(out, pv);
             s = AS_STRING(coll);
         }
+        }
+        else if (ot == OBJ_BIGINT) { char *bb = bigint_to_new_string(AS_BIGINT(v)); ds_puts(d, bb); free(bb); }
+        else ds_puts(d, "<object>");
+    } else ds_puts(d, "none");
+}
+
+/* Render any value as a newly malloc'd C string (caller frees). */
+char *value_to_new_cstring(Value v) {
+    DStr d = {0};
+    ds_putn(&d, "", 0);
+    ds_value(&d, v, 0);
+    return d.p;
+}
+
+/* Render any value as a GlowLang string value. */
+Value value_to_string_value(Value v) {
+    if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) return v;
+    char *s = value_to_new_cstring(v);
+    Value r = value_string_copy(s);
+    free(s);
+    return r;
+}
+
+/* pairs(coll): [index, item] for each element of a list or character of a
+   string, [key, value] for each entry of a dict. Backs `for each a, b in x`. */
+static Value native_pairs(int argc, Value *args) {
+    if (argc < 1) return value_list(list_new(0));
+    Value coll = args[0];
+    List *out = list_new(8);
+    Value out_v = value_list(out);
+    if (GET_TYPE(coll) == VAL_LIST) {
+        List *l = AS_LIST(coll);
+        for (int i = 0; i < l->size; i++) {
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int(i)); list_push(p, l->items[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        Dict *d = AS_DICT(coll);
+        for (int i = 0; i < d->capacity; i++) {
+            if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_string_copy((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD)));
+            list_push(p, d->values[i]);
+            list_push(out, pv);
+        }
+    } else if (GET_TYPE(coll) == VAL_STRING) {
+        const char *s = AS_STRING(coll);
+        size_t n = rope_length(coll);
+        for (size_t i = 0; i < n; i++) {
+            char ch[2] = { s[i], 0 };
+            List *p = list_new(2); Value pv = value_list(p);
+            list_push(p, value_int((int64_t)i)); list_push(p, value_string_copy(ch));
+            list_push(out, pv);
+            s = AS_STRING(coll);
+        }
     } else {
         pending_exception = value_string_copy("pairs() needs a list, dict or string");
         has_exception = 1;
@@ -2527,6 +2583,10 @@ static Value http_write(int argc, Value *args) {
     }
     glow_gil_acquire();
     if (sent < total) return value_int(-1);
+    glow_gil_release();
+    int res = write(fd, resp, strlen(resp));
+    glow_gil_acquire();
+    if (res < 0) return value_int(-1);
     return value_none();
 }
 
