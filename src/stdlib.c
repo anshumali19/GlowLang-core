@@ -536,6 +536,8 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
        (and raises the proper error). */
     if (n && strcmp(n, "type") == 0) {
         native_fe = native_val_type; is_native_dict_str_method = 1;
+    } else if ((native_fe = glow_builtin_method(obj, n)) != NULL) {
+        is_native_dict_str_method = 1;
     } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(obj);
         if(ot==OBJ_INSTANCE) {
@@ -1607,16 +1609,24 @@ static Value native_input(int argc, Value *args) {
     if (argc >= 1 && GET_TYPE(args[0]) != VAL_NONE) { print_value(args[0]); fflush(stdout); }
     size_t cap = 256, len = 0;
     char *buf = malloc(cap);
-    int c, got = 0;
+    int c, got = 0, newline = 0;
     glow_gil_release();
     while ((c = fgetc(stdin)) != EOF) {
         got = 1;
-        if (c == '\n') break;
+        if (c == '\n') { newline = 1; break; }
         if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
         buf[len++] = (char)c;
     }
     glow_gil_acquire();
     if (!got) { free(buf); return value_none(); }
+    /* Drop a UTF-8 byte-order mark some tools put at the start of the stream. */
+    static int first_line = 1;
+    if (first_line && len >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF) {
+        memmove(buf, buf + 3, len - 3); len -= 3;
+    }
+    first_line = 0;
+    /* Only a byte-order mark before the end of input: no line was read. */
+    if (len == 0 && !newline) { free(buf); return value_none(); }
     if (len > 0 && buf[len - 1] == '\r') len--;
     buf[len] = '\0';
     Value v = value_string_copy(buf);
@@ -2837,7 +2847,13 @@ static Value native_profile_start(int argc, Value *args) {
 
 static int profile_compare(const void *a, const void *b) {
     typedef struct { const char *file; int line; long count; } ProfileEntry;
-    return (int)(((ProfileEntry*)b)->count - ((ProfileEntry*)a)->count);
+    const ProfileEntry *x = a, *y = b;
+    /* Most executions first; ties by file and line so the report is the
+       same on every platform (qsort is not stable). */
+    if (x->count != y->count) return x->count < y->count ? 1 : -1;
+    int f = strcmp(x->file ? x->file : "", y->file ? y->file : "");
+    if (f) return f;
+    return (x->line > y->line) - (x->line < y->line);
 }
 
 static Value native_profile_stop(int argc, Value *args) {
@@ -3289,6 +3305,12 @@ static Value native_tensor_matmul(int argc, Value *args) {
             dr[i * cB + j] = sum;
         }
     }
+    /* The result is an rA x cB matrix, as on x86. */
+    res->ndims = 2;
+    res->shape[0] = rA;
+    res->shape[1] = cB;
+    res->strides[0] = cB;
+    res->strides[1] = 1;
     return value_packed(res);
 }
 #endif
@@ -3806,7 +3828,11 @@ void std_init(void) {
     Dict *media = dict_new(2);
     dict_set(media, "png_dims", native_func_new("png_dims", native_media_png_dims));
     var_set("media", value_dict(media));
+
+    glow_corelib_init();
 }
+
+Value glow_native_pairs(int argc, Value *args) { return native_pairs(argc, args); }
 
 static void func_table_cleanup(void) {
     if (func_table) {

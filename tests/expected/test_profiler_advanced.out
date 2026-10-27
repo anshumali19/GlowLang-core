@@ -19,10 +19,10 @@ Test 4: profiler start/stop
   -----------+------------------
        45009 | tests/test_profiler_advanced.glow:40
        15009 | tests/test_profiler_advanced.glow:39
-           2 | tests/test_profiler_advanced.glow:38
            2 | lib/profiler.glow:12
-           2 | tests/test_profiler_advanced.glow:42
            2 | lib/profiler.glow:17
+           2 | tests/test_profiler_advanced.glow:38
+           2 | tests/test_profiler_advanced.glow:42
 ------------------------------
 PASS: profiler start/stop completed
 === All Advanced Profiler Tests Passed ===

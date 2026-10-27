@@ -860,6 +860,9 @@ void instance_set(Instance *inst, const char *name, Value val);
 Trait* trait_new(const char *name);
 Value bound_method_new(Value inst, FuncEntry *fe);
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
+/* Core library (corelib.c): built-in list/string/dict methods and globals. */
+NativeFuncPtr glow_builtin_method(Value v, const char *name);
+void glow_corelib_init(void);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 const char *intern_string(const char *s);
 const char *intern_string_hash(const char *s, uint32_t *out_hash);
