@@ -7,7 +7,7 @@ only when asked, and each one ends with the test suite passing in all four modes
 
 ---
 
-## Phase 1 — Verify Linux and macOS (small)
+## Phase 1 — Verify Linux and macOS (small) — DONE: CI green on Linux (incl. ASan), macOS ARM64 and Windows
 
 The Makefile, CMake, CI and `scripts/run-tests.sh` were updated but never run.
 
@@ -19,7 +19,7 @@ The Makefile, CMake, CI and `scripts/run-tests.sh` were updated but never run.
 
 Done when: CI is green on all three platforms.
 
-## Phase 2 — Language behaviour gaps (small–medium)
+## Phase 2 — Language behaviour gaps (small–medium) — DONE (see AUDIT_AND_FIX_PLAN.md)
 
 1. **Integer typing:** integers between 2^47 and 2^53 report `type() == "float"`. Track "integral"
    separately (e.g. keep them as big integers or tag exact doubles) so `type()` says `int`.
