@@ -1,0 +1,4 @@
+# Stand-in for a package that `gdu install greeter` would place here.
+func greet(name):
+    return "Hello, " + name + "!"
+end

@@ -105,6 +105,7 @@ static void closedir(DIR *dir) {
 #define unlink _unlink
 #else
 #include <sys/time.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -1744,18 +1745,15 @@ static Value crypto_hmac_sha256(int argc, Value *args) {
     return value_string_copy(out);
 }
 
+/* crypto.blake3(text): the 256-bit BLAKE3 hash as 64 hex digits. (This used
+   to be a 64-bit FNV-style hash under the BLAKE3 name.) */
+extern void glow_blake3(const void *input, size_t len, uint8_t *out, size_t out_len);
 static Value native_crypto_blake_fast(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
-    const char *str = AS_STRING(args[0]);
-    size_t len = strlen(str);
-    uint64_t h = 0xCBF29CE484222325ULL;
-    for (size_t i = 0; i < len; i++) {
-        h ^= (uint8_t)str[i];
-        h *= 0x100000001B3ULL;
-        h = (h << 13) | (h >> 51);
-    }
-    char out[32];
-    sprintf(out, "%016llx", (unsigned long long)h);
+    uint8_t digest[32];
+    glow_blake3(AS_STRING(args[0]), rope_length(args[0]), digest, sizeof(digest));
+    char out[65];
+    for (int i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", digest[i]);
     return value_string_copy(out);
 }
 
@@ -1766,9 +1764,11 @@ static Value native_tensor_dequant_int4(int argc, Value *args) {
     PackedArray *pa = packed_array_new(PACKED_FLOAT64, sz);
     if (pa->data && sz > 0 && src->data) {
         double *out = (double*)pa->data;
-        uint8_t *in = (uint8_t*)src->data;
+        /* Each element holds one byte (0-255) packing two 4-bit weights; the
+           tensor stores doubles or int64s, not raw bytes. */
         for (int i = 0; i < src->size; i++) {
-            uint8_t b = in[i];
+            uint8_t b = src->type == PACKED_FLOAT64 ? (uint8_t)(int64_t)((double*)src->data)[i]
+                                                     : (uint8_t)((int64_t*)src->data)[i];
             out[i * 2] = (double)(b & 0x0F) - 8.0;
             out[i * 2 + 1] = (double)((b >> 4) & 0x0F) - 8.0;
         }
@@ -1804,8 +1804,24 @@ static Value native_fast_json_scan(int argc, Value *args) {
     return value_dict(d);
 }
 
+/* net_fast.poll_fast(socket, timeout_ms): true when the socket has data (or
+   a connection) waiting, waiting up to timeout_ms (default 0). It used to
+   return true without looking at anything. */
 static Value native_net_poll_fast(int argc, Value *args) {
-    return value_bool(1);
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) < 0) return value_bool(0);
+    int fd = (int)AS_INT(args[0]);
+    double ms = argc >= 2 ? val_to_double(args[1]) : 0;
+    if (!(ms > 0)) ms = 0;
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(fd, &readable);
+    struct timeval tv;
+    tv.tv_sec = (long)(ms / 1000);
+    tv.tv_usec = (long)((ms - (double)tv.tv_sec * 1000) * 1000);
+    glow_gil_release();
+    int r = select(fd + 1, &readable, NULL, NULL, &tv);
+    glow_gil_acquire();
+    return value_bool(r > 0 && FD_ISSET(fd, &readable));
 }
 
 static Value native_media_png_dims(int argc, Value *args) {
@@ -2489,10 +2505,16 @@ static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
     int fd = AS_INT(args[0]);
     const char *resp = AS_STRING(args[1]);
+    size_t total = rope_length(args[1]), sent = 0;
     glow_gil_release();
-    int res = write(fd, resp, strlen(resp));
+    /* A socket write may take only part of the data; keep going. */
+    while (sent < total) {
+        int res = write(fd, resp + sent, (int)(total - sent));
+        if (res <= 0) break;
+        sent += (size_t)res;
+    }
     glow_gil_acquire();
-    if (res < 0) return value_int(-1);
+    if (sent < total) return value_int(-1);
     return value_none();
 }
 
@@ -3675,6 +3697,12 @@ static Value native_threads_active(int argc, Value *args) {
 }
 
 void std_init(void) {
+#ifdef _WIN32
+    /* Sockets (http, net, ssl, redis) need Winsock started once per process;
+       without it every socket() call failed and http.listen returned -1. */
+    static int winsock_started = 0;
+    if (!winsock_started) { WSADATA wsa; winsock_started = WSAStartup(MAKEWORD(2, 2), &wsa) == 0; }
+#endif
     var_set("assert", native_func_new("assert", native_assert));
     var_set("dict", native_func_new("dict", native_dict));
     var_set("len", native_func_new("len", native_len));

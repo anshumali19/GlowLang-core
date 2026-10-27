@@ -70,6 +70,7 @@ set(GLOW_SOURCES
     src/bigint.c
     src/regex.c
     src/corelib.c
+    src/blake3.c
 )
 
 if(CUDAToolkit_FOUND)
