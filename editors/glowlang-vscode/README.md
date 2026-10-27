@@ -84,4 +84,4 @@ code .
 
 ## License
 
-Part of the GlowLang project — released under the GlowLang Sovereign License (GSL) v1.0.
+Part of the GlowLang project — licensed under the Apache License 2.0 with the Commons Clause (see the repository's LICENSE).
