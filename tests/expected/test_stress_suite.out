@@ -1,0 +1,63 @@
+=== GlowLang Stress Test Suite ===
+Starting comprehensive runtime verification...
+
+--- [1/11] Parser Stress Tests ---
+  Deep nesting: OK (5 levels)
+  Complex expr: OK (got 16)
+  String escape: OK
+
+--- [2/11] VM Dispatch Tests ---
+  Arithmetic ops: OK
+  Comparisons: OK
+  Unary ops: OK
+
+--- [3/11] GC Pressure Tests ---
+  GC list pressure (1000 lists): OK
+  GC dict pressure (500 dicts): OK
+  GC string pressure (500 concats): OK
+
+--- [4/11] JIT Hot-Loop Tests ---
+  JIT hot loop (10K iters): OK
+  JIT nested loop (100x100): OK
+
+--- [5/11] Closure Tests ---
+  Closure capture: OK
+  Nested closure: OK
+  Closure in loop: OK (created 5 closures)
+
+--- [6/11] Iterator Tests ---
+  List iteration: OK
+  Dict iteration: OK
+  Range iteration (1-10): OK
+  Large collection (10K): OK
+
+--- [7/11] Async/Concurrency Tests ---
+  Spawn basic: OK
+  Spawn multiple: OK (counter= 3 )
+
+--- [8/11] Tensor Engine Tests ---
+  Tensor create/set/get: OK
+  Tensor add: OK
+  Tensor dot product: OK (1*4+2*5+3*6=32)
+  Tensor large (100K add): OK
+
+--- [9/11] String Engine Tests ---
+  String concat (100x): OK
+  String length: OK
+
+--- [10/11] SQLite/ORM Tests ---
+  SQLite bulk insert (100 rows): OK
+  SQLite transactions: OK
+
+--- [11/11] Recursion Tests ---
+  Fibonacci(20): OK (6765)
+  Factorial(12): OK
+
+==============================
+STRESS TEST RESULTS
+==============================
+Total:   30
+Passed:  30
+Failed:  0
+
+ALL STRESS TESTS PASSED ✅

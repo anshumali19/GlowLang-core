@@ -1,0 +1,25 @@
+# Regular expressions (the Windows build used to return false/none always).
+show re_native.match("^[A-Z][a-z]+$", "Alice")
+show re_native.match("^[A-Z][a-z]+$", "alice")
+show re_native.search("[0-9]+", "Age is 42 years")
+show re_native.search("[0-9]+", "no digits")
+show re_native.search("\d{3}-\d{4}", "call 555-1234 now")
+show re_native.search("(cat|dog)s?", "hotdogs and cats")
+show re_native.match("^a.c$", "abc")
+show re_native.match("^colou?r$", "color")
+show re_native.match("^colou?r$", "colour")
+show re_native.match("^(ab)+$", "ababab")
+show re_native.match("^(ab)+$", "ababa")
+show re_native.search("[[:upper:]][[:lower:]]+", "say Hello")
+show re_native.search("\bword\b", "a word here")
+show re_native.search("x*", "yyy")
+show re_native.search("a.*?b", "aXbYb")
+show re_native.match("^[^0-9]+$", "letters")
+show re_native.match("^[^0-9]+$", "l3tters")
+# Pathological pattern stays fast (no exponential backtracking).
+show re_native.match("^(a+)+$", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab")
+
+use "re.glow"
+let r = compile("hello[0-9]")
+show r.match("hello5")
+show r.search("say hello7!")

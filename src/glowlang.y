@@ -55,12 +55,15 @@ static int get_self_exe_path(char *path, size_t max_len) {
 
 %left OR_OP
 %left AND_OP
-%left EQ NEQ IS IS_NOT
+%left EQ NEQ IS IS_NOT IN_KW
 %left LT GT LTE GTE
 %left PLUS MINUS
 %left MUL DIV MOD
 %right POW
 %nonassoc NOT_OP
+
+/* Brackets left open by an earlier, failed parse must not swallow newlines. */
+%initial-action { extern int lexer_bracket_depth; lexer_bracket_depth = 0; }
 
 %%
 
@@ -74,12 +77,14 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
+    | FOR EACH ID COMMA ID IN_KW expr COLON NEWLINE lines END { $$ = newPairLoopNode($3, $5, $7, $10); }
+    | FOR ID COMMA ID IN_KW expr COLON NEWLINE lines END { $$ = newPairLoopNode($2, $4, $6, $9); }
     | FOR ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $2; $$->left = $4; $$->right = $7; }
     | FOR ID FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $4; $$->right = $6; $$->third = $9; }
     | FOR ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $5; $$->right = $7; $$->third = $10; }
     | FOR EACH ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $3; $$->left = $6; $$->right = $8; $$->third = $11; }
-    | FUNC ID '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, $8); }
-    | FUNC ID '(' ')' COLON NEWLINE lines END { $$ = newFuncNode($2, 0, NULL, $7); }
+    | FUNC member_name '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, $8); }
+    | FUNC member_name '(' ')' COLON NEWLINE lines END { $$ = newFuncNode($2, 0, NULL, $7); }
     | CLASS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->left = $5; }
     | CLASS ID EXTENDS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->parent_name = $4; $$->left = $7; }
     | TRAIT ID COLON NEWLINE lines END { $$ = node_new(NODE_TRAIT); $$->name = $2; $$->left = $5; }
@@ -109,10 +114,10 @@ condition: expr;
 eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = newSeqNode($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
-expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); };
+expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr IN_KW expr { $$ = newBinOp(NODE_IN, $1, $3); } | expr NOT_OP IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); };
 term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
 unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); };
-power: postfix | postfix POW power { $$ = newBinOp(NODE_POW, $1, $3); };
+power: postfix | postfix POW unary { $$ = newBinOp(NODE_POW, $1, $3); };
 postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
        | postfix '[' expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }
        | postfix '[' expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; }
@@ -121,6 +126,8 @@ postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left
 member_name: ID { $$ = $1; }
            | WRITE { $$ = intern_string("write"); }
            | SHOW { $$ = intern_string("show"); }
+           | STOP { $$ = intern_string("stop"); }
+           | SKIP { $$ = intern_string("skip"); }
            ;
 primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); } | STRING { $$ = newStringNode($1); } | FSTRING { $$ = node_new(NODE_FSTRING); $$->name = $1; } | FLOAT_LIT { $$ = newFloatNode($1); } | TRUE_KW { $$ = newBoolNode(1); } | FALSE_KW { $$ = newBoolNode(0); } | '(' expr ')' { $$ = $2; } | '[' expr FOR EACH ID IN_KW expr ']' {
     $$ = node_new(NODE_LIST_COMP);
@@ -171,6 +178,9 @@ int main(int argc, char **argv) {
 #else
 int glow_main(int argc, char **argv) {
 #endif
+    /* The main thread owns the GIL for its whole life except while parked in a
+       blocking native or yielding to a spawned thread. */
+    glow_gil_acquire();
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
     next_free_reg = 0;
 
@@ -210,12 +220,14 @@ int glow_main(int argc, char **argv) {
                                 if (root) {
                                     Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
                                     main_fe.body = main_bc; compile(root);
-                                    main_bc->local_count = next_free_reg;
+                                    main_bc->local_count = compiler_reg_peak();
                                     bc_emit(main_bc, OP_RETURN, 0, 0);
                                     optimize_bytecode(main_bc);
                                     run_bytecode(main_bc, NULL, NULL, 0);
                                     if (has_exception) print_error_trace(pending_exception);
+                                    if (runtime_error_thrown) { fflush(stdout); return 1; }
                                 }
+                                glow_threads_join_all();
                                 std_cleanup(); return 0;
                             } else {
                                 if (script) free(script);
@@ -339,7 +351,7 @@ int glow_main(int argc, char **argv) {
                     Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
                     main_fe.body = main_bc;
                     compile(root);
-                    main_bc->local_count = next_free_reg;
+                    main_bc->local_count = compiler_reg_peak();
                     bc_emit(main_bc, OP_RETURN, 0, 0);
                     optimize_bytecode(main_bc);
 
@@ -355,13 +367,14 @@ int glow_main(int argc, char **argv) {
                     }
 
                     if (!check_only) {
-                        pthread_mutex_lock(&glow_gil);
                         run_bytecode(main_bc, NULL, NULL, 0);
-                        pthread_mutex_unlock(&glow_gil);
                         if (runtime_error_thrown) {
-                            std_cleanup();
+                            /* Spawned threads may still be parked on the GIL, so
+                               leave the heap alone and just exit. */
+                            fflush(stdout);
                             return 1;
                         }
+                        glow_threads_join_all();
                     } else {
                         printf("Syntax Check: OK\n");
                     }
@@ -398,16 +411,15 @@ int glow_main(int argc, char **argv) {
                 Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc; next_free_reg = 0;
                 main_fe.body = main_bc;
                 compile(root);
-                main_bc->local_count = next_free_reg;
+                main_bc->local_count = compiler_reg_peak();
                 bc_emit(main_bc, OP_RETURN, 0, 0);
                 optimize_bytecode(main_bc);
-                pthread_mutex_lock(&glow_gil);
                 run_bytecode(main_bc, NULL, NULL, 0);
-                pthread_mutex_unlock(&glow_gil);
                 if (runtime_error_thrown) {
-                    std_cleanup();
+                    fflush(stdout);
                     return 1;
                 }
+                glow_threads_join_all();
             }
             if (yyin) fclose(yyin);
         } else {
@@ -436,18 +448,17 @@ l_REPL:
             int old_count = main_bc->count;
             compile(root);
             if (main_bc->count > old_count) {
-                main_bc->local_count = next_free_reg;
+                main_bc->local_count = compiler_reg_peak();
                 int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
                 Instruction *start_pc = &main_bc->code[old_count];
-                pthread_mutex_lock(&glow_gil);
                 Value res = run_bytecode(main_bc, start_pc, NULL, 0);
-                pthread_mutex_unlock(&glow_gil);
                 if (has_exception) { print_error_trace(pending_exception); has_exception = 0; }
                 else if (res != 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
                 main_bc->count = ret_idx;
             }
         }
     }
+    glow_threads_join_all();
     std_cleanup();
     return 0;
 }

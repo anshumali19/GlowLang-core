@@ -1,9 +1,14 @@
-if not fs.exists("test_dir"):
-    fs.mkdir("test_dir")
-    show "Created test_dir"
+if not fs.exists("__test_fs_dir"):
+    fs.mkdir("__test_fs_dir")
+    show "Created __test_fs_dir"
 end
-files = fs.list(".")
-show "Files in current dir:"
-show files
-fs.remove("test_dir")
-show "Removed test_dir"
+fs.write("__test_fs_dir/a.txt", "a")
+fs.write("__test_fs_dir/b.txt", "bb")
+files = fs.list("__test_fs_dir")
+show "Entries:", len(files)
+show "has a.txt:", "a.txt" is in files
+show "has b.txt:", "b.txt" is in files
+fs.remove("__test_fs_dir/a.txt")
+fs.remove("__test_fs_dir/b.txt")
+fs.remove("__test_fs_dir")
+show "Removed __test_fs_dir:", not fs.exists("__test_fs_dir")

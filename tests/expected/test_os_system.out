@@ -1,0 +1,3 @@
+os.system exit: 0
+os.system failing exit: 3
+os.system test passed

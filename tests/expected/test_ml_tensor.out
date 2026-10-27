@@ -1,0 +1,8 @@
+GlowLang AI/ML Runtime Test
+Tensor A:  [0, 1, 2, 3, 4]
+Tensor B:  [0, 2, 4, 6, 8]
+A + B:  [0, 3, 6, 9, 12]
+A * B:  [0, 2, 8, 18, 32]
+A . B (Dot Product):  60
+1M-element add shape:  [1000000]
+ones(1003) . ones(1003):  1003

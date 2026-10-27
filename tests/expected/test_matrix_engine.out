@@ -1,0 +1,5 @@
+GlowLang Matrix Engine Test
+Matrix A (2x3):  [1, 2, 3, 4, 5, 6]
+Matrix B (3x2):  [7, 8, 9, 10, 11, 12]
+A * B Result (2x2):  [58, 64, 139, 154]
+Transpose of A (3x2):  [1, 4, 2, 5, 3, 6]

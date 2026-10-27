@@ -21,8 +21,18 @@ spawn worker("B")
 ### Important: GIL Semantics
 - GlowLang uses a GIL (Global Interpreter Lock) for thread safety
 - Only one thread executes GlowLang bytecode at a time
-- The GIL is released during blocking I/O operations (HTTP, SQLite, sleep)
+- The GIL is released during `os.sleep`, `os.system` and HTTP/TLS socket calls (not during SQLite calls)
+- A running thread hands the GIL to a waiting one at loop back-edges and function calls
 - CPU-bound parallelism is NOT achieved — use spawn for I/O-bound concurrency
+
+### Waiting for threads
+```
+spawn worker("A")
+spawn worker("B")
+threads.join_all()          # returns when every spawned thread has finished
+show threads.active()       # number of spawned threads still running (0 here)
+```
+The program also waits for its spawned threads before exiting.
 
 ## Thread Communication
 
@@ -76,8 +86,10 @@ whenever sensor_value > 100:
 end
 ```
 
-Note: `whenever` is evaluated at parse-time as a conditional. For true reactive
-behavior, implement polling loops:
+`whenever` starts a background monitor thread that checks the condition every
+millisecond and runs the body each time the condition changes from false to true.
+The monitor is a daemon thread: it does not keep the program alive. For custom
+polling, write the loop yourself:
 
 ```
 func monitor(data, threshold):
@@ -118,7 +130,7 @@ spawn delayed_action(5000, "cleanup")
 ## Known Limitations
 
 - No built-in mutex/semaphore primitives (GIL provides basic safety)
-- No thread join mechanism (use shared flags + polling)
+- No per-thread join handle (`threads.join_all()` waits for all of them)
 - No thread cancellation (threads must check for stop flags)
 - CPU-bound parallelism limited by GIL
 - Thread-local storage not available

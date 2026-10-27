@@ -1,0 +1,21 @@
+list eq: true false
+dict eq: true true
+repeat: ababab -- [0, 0, 0] 
+mod: 2 -2 1 1.5
+in: true false true true true
+pow: 0.5 -4 4 512
+sci: 1000 0.0025 100
+types: int int int float
+none * 2: Cannot apply '*' to none and int
+text - 1: Cannot apply '-' to string and int
+negate list: Cannot negate list
+mod zero: Modulo by zero
+index: List index out of range (index 3, length 3)
+neg index: List index out of range (index -4, length 3)
+string index: String index out of range (index 5, length 3)
+float index: List index must be a whole number
+store: List index out of range (index 10, length 3)
+neg index ok: 3 c 2
+compiled sum: 4498500
+compiled index: List index out of range (index 3000, length 3000)
+missing key: none

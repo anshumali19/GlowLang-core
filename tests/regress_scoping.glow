@@ -1,0 +1,88 @@
+# Assignment inside a function creates a local unless the name is a declared
+# global. It used to always write a global, so recursion clobbered variables.
+let counter = 0
+func bump():
+    counter = counter + 1
+end
+bump()
+bump()
+show "global counter:", counter
+
+func fresh():
+    temp = 41
+    temp = temp + 1
+    return temp
+end
+show "fresh():", fresh()
+show "temp is not a global:", type(temp)
+
+# Recursion with plain assignments: each call has its own `mid`.
+func depth_sum(n):
+    if n == 0:
+        return 0
+    end
+    mid = n
+    rest = depth_sum(n - 1)
+    return mid + rest
+end
+show "depth_sum(10):", depth_sum(10)
+
+# A local declared inside a loop body must not land on the loop's own
+# registers.
+func squares(lst):
+    total = 0
+    for each v in lst:
+        sq = v * v
+        extra = sq + 1
+        more = extra - 1
+        total = total + more
+    end
+    return total
+end
+show "squares:", squares([1, 2, 3, 4, 5, 6, 7, 8])
+
+# Functions nested in a method are plain functions.
+blueprint Box:
+    can init():
+        self.items = []
+    end
+    can fill():
+        func make(x):
+            return x * 10
+        end
+        self.items.push(make(1))
+        self.items.push(make(2))
+    end
+end
+let b = Box()
+b.fill()
+show "box:", b.items
+
+# Every name a function assigns is local for the whole body, even where it
+# is read before its assignment: in a loop, an earlier statement sees the
+# previous iteration's value (it used to read a global, i.e. none).
+func echo(v):
+    return v
+end
+func carry():
+    let out = []
+    let i = 0
+    while i < 3:
+        if i > 0:
+            out.push(last)
+        end
+        echo(i + 100)
+        let last = i * 10
+        i = i + 1
+    end
+    return out
+end
+show "carry:", carry()
+
+func after_loop(items):
+    for each it in items:
+        let sq = it * it
+    end
+    return sq
+end
+show "after_loop:", after_loop([1, 2, 3])

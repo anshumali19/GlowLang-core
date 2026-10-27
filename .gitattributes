@@ -1,0 +1,4 @@
+# Files that Linux/macOS tools execute must keep LF line endings even when
+# committed from Windows (make and bash fail on CRLF).
+*.sh      text eol=lf
+Makefile  text eol=lf

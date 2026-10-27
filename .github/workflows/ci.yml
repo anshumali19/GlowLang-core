@@ -20,22 +20,31 @@ jobs:
       - name: Build GlowLang
         run: make clean && make
 
+      # Compares every test's stdout, stderr and exit code with tests/expected/.
       - name: Run test suite
-        run: ./run_all_tests.sh
+        run: make test
+
+      - name: Run test suite (interpreter only)
+        run: GLOW_NOJITEXEC=1 GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
+
+      - name: Run test suite (GC stress)
+        run: GLOWLANG_GC_STRESS=1 GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
 
       - name: Build with AddressSanitizer
         run: |
           flex -o src/lex.yy.c src/glowlang.l
           bison -Wnone -d -o src/glowlang.tab.c src/glowlang.y
           gcc src/lex.yy.c src/glowlang.tab.c src/lsp.c src/arena.c src/jit.c \
-              src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c src/bigint.c \
+              src/opt.c src/compiler.c src/vm.c src/gc.c src/stdlib.c src/bigint.c src/regex.c src/corelib.c \
               -o bin/glowlang_asan \
-              -O1 -g -lm -pthread -lssl -lcrypto -mavx2 -msse4.2 \
+              -O1 -g -lm -pthread -lssl -lcrypto \
               -fsanitize=address -fno-omit-frame-pointer \
               -lfl -lsqlite3 -lX11
 
       - name: Run tests under ASan
-        run: ASAN_OPTIONS=detect_leaks=0 GLOWLANG_BIN=./bin/glowlang_asan ./run_all_tests.sh
+        # The GC scans native stacks conservatively, so locals must stay on the real
+        # stack: turn off ASan's fake stack (use-after-return detection).
+        run: ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 TEST_TIMEOUT=300 GLOWLANG_BIN=./bin/glowlang_asan ./scripts/run-tests.sh
 
       - name: Run parser fuzzer
         run: make fuzz-parser
@@ -50,14 +59,16 @@ jobs:
       - name: Install dependencies
         run: |
           brew update
-          brew install sqlite openssl flex bison
+          brew install sqlite openssl flex bison coreutils
           # Link keg-only dependencies so CMake can find them
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix flex)/bin" >> $GITHUB_PATH
       - name: Configure CMake
-        run: cmake -B build -S . -DOPENSSL_ROOT_DIR=$(brew --prefix openssl)
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR=$(brew --prefix openssl)
       - name: Build GlowLang
         run: cmake --build build --config Release
+      - name: Run test suite
+        run: GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
 
   build-windows:
     runs-on: windows-latest
@@ -65,9 +76,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install dependencies (Flex/Bison)
         run: choco install winflexbison3
+      # Static libraries, matching the static C runtime (/MT) the build uses.
       - name: Install dependencies (vcpkg)
-        run: vcpkg install openssl sqlite3:x64-windows
+        run: vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static
       - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
       - name: Build GlowLang
         run: cmake --build build --config Release
+      - name: Run test suite
+        run: .\scripts\run-tests.ps1 -Binary bin\Release\glowlang.exe
