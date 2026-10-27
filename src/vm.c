@@ -20,6 +20,10 @@
 #include <math.h>
 #include <sqlite3.h>
 #include "jit.h"
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <limits.h>
+#endif
 #include "opt.h"
 
 THREAD_LOCAL Bytecode *g_dbg_bc = NULL;
@@ -1050,6 +1054,30 @@ static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
 
 
 /* Directory part of a path ("" when there is none), with a trailing slash. */
+int glow_self_exe_path(char *out, size_t outsz) {
+    if (!out || outsz < 2) return -1;
+    out[0] = '\0';
+#ifdef _WIN32
+    DWORD n = GetModuleFileNameA(NULL, out, (DWORD)outsz);
+    if (n == 0 || n >= outsz) { out[0] = '\0'; return -1; }
+    return (int)n;
+#elif defined(__APPLE__)
+    char raw[PATH_MAX], real[PATH_MAX];
+    uint32_t sz = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &sz) != 0) return -1;
+    const char *p = realpath(raw, real) ? real : raw;  /* resolve symlinks, like /proc/self/exe */
+    size_t n = strlen(p);
+    if (n >= outsz) return -1;
+    memcpy(out, p, n + 1);
+    return (int)n;
+#else
+    ssize_t n = readlink("/proc/self/exe", out, outsz - 1);
+    if (n <= 0) { out[0] = '\0'; return -1; }
+    out[n] = '\0';
+    return (int)n;
+#endif
+}
+
 static void path_dir(const char *path, char *out, size_t outsz) {
     out[0] = '\0';
     if (!path) return;
@@ -1083,12 +1111,7 @@ static FILE *glow_open_module_path(const char *path, const char *importer, const
     snprintf(cand, sizeof(cand), "lib/%s", path);
     if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
     char exe[768] = "";
-#ifdef _WIN32
-    GetModuleFileNameA(NULL, exe, sizeof(exe));
-#elif defined(__linux__)
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    exe[n > 0 ? n : 0] = '\0';
-#endif
+    glow_self_exe_path(exe, sizeof(exe));
     path_dir(exe, dir, sizeof(dir));
     if (dir[0]) {
         const char *rel = strncmp(path, "lib/", 4) == 0 ? path + 4 : path;
