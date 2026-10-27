@@ -322,6 +322,20 @@ otherwise:
 end
 ```
 
+### Conditional Expression
+`value when condition otherwise other` picks one of two values. Only the
+chosen side is evaluated. It binds more loosely than every other operator, and
+can be chained:
+
+```glow
+let kind = "even" when n % 2 == 0 otherwise "odd"
+let size = "big" when n > 100 otherwise "medium" when n > 10 otherwise "small"
+
+func absval(v):
+    return v when v >= 0 otherwise -v
+end
+```
+
 ### While Loop
 ```glow
 let count = 0

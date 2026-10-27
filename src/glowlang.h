@@ -537,7 +537,8 @@ typedef enum {
     NODE_SPAWN,
     NODE_PACKED_ADD,
     NODE_PACKED_SUB,
-    NODE_WHENEVER
+    NODE_WHENEVER,
+    NODE_COND          /* value when condition otherwise other */
 } NodeType;
 
 struct Node {
