@@ -1204,6 +1204,19 @@ static int compile_expr(Node *n, int target_reg) {
             compiling_bc->code[jf].arg = compiling_bc->count;
             break;
         }
+        case NODE_COND: {
+            int cond = compile_expr(n->left, -1);
+            int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+            compiling_bc->code[jf].r0 = cond;
+            int yes = compile_expr(n->right, reg);
+            if (yes != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, yes, 0);
+            int j = bc_emit(compiling_bc, OP_JUMP, 0, 0);
+            compiling_bc->code[jf].arg = compiling_bc->count;
+            int no = compile_expr(n->third, reg);
+            if (no != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, no, 0);
+            compiling_bc->code[j].arg = compiling_bc->count;
+            break;
+        }
         case NODE_OR: {
             int left = compile_expr(n->left, reg);
             if (left != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
