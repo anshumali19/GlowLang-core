@@ -1,10 +1,12 @@
 # Test fs module functions
 show "--- fs.exists ---"
-show fs.exists("Makefile")
+fs.write("__test_size_gl.txt", "0123456789")
+show fs.exists("__test_size_gl.txt")
 show fs.exists("nonexistent_file_xyz")
 
 show "--- fs.size ---"
-show fs.size("Makefile")
+show fs.size("__test_size_gl.txt")
+fs.remove("__test_size_gl.txt")
 
 show "--- fs.mkdir / fs.remove ---"
 fs.mkdir("__test_dir_gl")

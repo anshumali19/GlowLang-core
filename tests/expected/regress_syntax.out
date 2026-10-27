@@ -1,0 +1,12 @@
+multi-line: 2 77
+item 0 a
+item 1 b
+item 2 c
+entry ada 36
+char 0 h
+char 1 i
+pairs: [[0, 10], [1, 20]]
+stop method: stopped false
+input at EOF: none
+string(): 12!
+single quotes: {"status": "ok", "count": 2} 2 it's it's

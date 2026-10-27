@@ -1,0 +1,8 @@
+global counter: 2
+fresh(): 42
+temp is not a global: none
+depth_sum(10): 55
+squares: 204
+box: [10, 20]
+carry: [0, 10]
+after_loop: 9

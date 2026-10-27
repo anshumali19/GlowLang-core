@@ -1,0 +1,57 @@
+# Catching an exception used to overwrite register 0: `self` in methods and
+# the first local in functions.
+blueprint Counter:
+    can init():
+        self.n = 0
+    end
+    can risky():
+        try:
+            throw "boom"
+        catch e:
+            show "caught:", e
+        end
+        self.n = self.n + 1
+        return self.n
+    end
+end
+let c = Counter()
+show "after catch in method:", c.risky()
+show "again:", c.risky()
+
+func f(x):
+    let y = x * 2
+    try:
+        throw "oops"
+    catch err:
+        show "caught:", err
+    end
+    return y
+end
+show "local survived:", f(21)
+
+# The catch variable inside a function is local.
+func g():
+    try:
+        throw "inner"
+    catch problem:
+        return problem
+    end
+end
+show "returned:", g()
+show "problem is not a global:", type(problem)
+
+# Exceptions raised inside a hot (compiled) loop are still caught.
+func hot():
+    let i = 0
+    let caught = 0
+    while i < 3000:
+        try:
+            let z = 10 / (i - 2500)
+        catch e:
+            caught = caught + 1
+        end
+        i = i + 1
+    end
+    return caught
+end
+show "caught in hot loop:", hot()

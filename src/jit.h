@@ -11,6 +11,9 @@ void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature sig);
 void jit_compile_baseline(Bytecode *bc);
 void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature sig);
 
+// On-stack replacement: native entry points at loop headers
+void jit_compile_osr(Bytecode *bc);
+
 // Tier management
 void jit_maybe_tier_up(Bytecode *bc);
 void func_maybe_tier_up(FuncEntry *fe);

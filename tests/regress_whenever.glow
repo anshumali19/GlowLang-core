@@ -1,0 +1,22 @@
+# `whenever` runs its body each time its condition becomes true. Its monitor
+# thread used to sleep forever (os.sleep read the float 0.01 as a huge
+# integer), so the body never ran. The monitor must also not keep the
+# program alive at exit.
+let level = 0
+let alerts = [0]
+whenever level > 100:
+    alerts[0] = alerts[0] + 1
+end
+os.sleep(100)
+level = 150
+os.sleep(250)
+level = 10
+os.sleep(250)
+level = 200
+os.sleep(250)
+show "alerts:", alerts[0]
+
+# Fractional sleeps are milliseconds too.
+os.sleep(2.5)
+os.sleep(0)
+show "done"

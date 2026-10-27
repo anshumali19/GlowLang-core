@@ -2,6 +2,8 @@
 
 This document outlines the methodology, execution instructions, and analysis guidance for the GlowLang performance evaluation suite.
 
+For GlowLang vs CPython comparisons, run `benchmarks/run-benchmarks.ps1`; it writes [RESULTS.md](RESULTS.md).
+
 ## 1. Benchmark Suite Overview
 
 The suite consists of several targeted benchmarks:
@@ -23,9 +25,9 @@ The suite consists of several targeted benchmarks:
 
 ### Manual Execution Steps
 1. **Raw Performance**:
-   `./bin/glowlang benchmarks/prod_throughput.glow`
+   `./bin/glowlang run benchmarks/prod_throughput.glow`
 2. **JIT Analysis**:
-   `./bin/glowlang benchmarks/prod_jit_warmup.glow`
+   `./bin/glowlang run benchmarks/prod_jit_warmup.glow`
    *Note: Observe if "Batch time" decreases after the first few batches.*
 3. **Multicore Scaling**:
    Modify `run_parallel(4, 1000000)` in `benchmarks/prod_multicore.glow` to test with 1, 2, 4, 8, and 16 threads.
@@ -55,5 +57,5 @@ For rigorous results:
 
 - **High StdDev in Latency**: Indicates GC pauses or thread contention.
 - **Batches not getting faster**: Suggests the JIT is not optimizing the specific code path or is already at peak optimization.
-- **Sub-linear Multicore Scaling**: Due to thread scheduling overhead, context switching, or memory bus saturation (GIL has been abolished).
+- **No multicore scaling**: expected. Threads share a global interpreter lock, so CPU-bound GlowLang code runs on one core at a time.
 - **Rapid RSS Growth**: Check for memory leaks in the VM internals or inefficient object layout in the language.

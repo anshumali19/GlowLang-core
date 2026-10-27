@@ -1,0 +1,61 @@
+# Core library: global functions.
+show "abs:", abs(-5), abs(2.5)
+show "min/max:", min(3, 1, 2), max([4, 9, 2]), min("pear", "apple")
+show "sum:", sum([1, 2, 3]), sum([0.5, 0.25]), sum([])
+show "sorted:", sorted([3, 1, 2]), sorted(["b", "a", "c"]), sorted([3, 1, 2], none, true)
+show "sorted by key:", sorted(["ccc", "a", "bb"], lambda(s): len(s))
+show "reversed:", reversed([1, 2, 3]), reversed("abc")
+show "float/bool:", float("2.5"), float(3), bool(""), bool([1]), bool(0)
+
+# Ordering of strings and lists.
+show "compare:", "apple" < "banana", "b" > "a", [1, 2] < [1, 3], "a" <= "a"
+
+# String methods.
+let s = "  Hello, World  "
+show "trim:", "[" + s.trim() + "]", s.trim().upper(), s.trim().lower()
+show "replace:", "a-b-c".replace("-", "+"), "banana".count("a")
+show "starts/ends:", "glowlang".starts_with("glow"), "glowlang".ends_with("lang")
+show "join:", ", ".join(["x", "y", "z"]), [1, 2, 3].join("-")
+show "lines:", "a\nb\nc".lines()
+show "is_number:", "42".is_number(), "4x".is_number()
+
+# List methods.
+let l = [5, 3, 8]
+l.insert(1, 4)
+show "insert:", l
+show "remove:", l.remove(3), l.remove(99), l
+show "index/contains:", l.index(8), l.index(7), l.contains(5)
+l.sort()
+show "sort:", l
+show "reverse:", l.reverse()
+show "map:", [1, 2, 3].map(lambda(x): x * 10)
+show "filter:", [1, 2, 3, 4].filter(lambda(x): x % 2 == 0)
+show "reduce:", [1, 2, 3, 4].reduce(lambda(a, b): a + b)
+show "first/last:", l.first(), l.last(), [].is_empty()
+let copy = l.copy()
+copy.clear()
+show "copy/clear:", l, copy
+
+# Dict methods.
+let d = {"a": 1}
+show "get:", d.get("a"), d.get("zz", "default"), d.get("zz")
+show "items:", d.items()
+show "dict copy:", d.copy() == d
+
+# Math and modules.
+show "math:", math.exp(0), math.log(math.e), math.log(8, 2), math.pi > 3.14
+show "os.env type:", type(os.env("PATH"))
+
+# Errors.
+func attempt(label, f):
+    try:
+        f()
+        show label, "no error"
+    catch e:
+        show label, e
+    end
+end
+attempt("compare mixed:", lambda(): "a" < 1)
+attempt("min empty:", lambda(): min([]))
+attempt("float bad:", lambda(): float("abc"))
+attempt("sum bad:", lambda(): sum(["a"]))

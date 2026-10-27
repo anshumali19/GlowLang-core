@@ -1,0 +1,6 @@
+f( 1 )
+f( 0 )
+Base reached, count= 1
+f( 0 )
+Base reached, count= 2
+Final Count:  2

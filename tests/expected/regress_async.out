@@ -1,0 +1,5 @@
+channel: 5 [0, 1, 4, 9, 16]
+empty receive: none
+start_all: [9, 16]
+failed task: failed Cannot apply '+' to none and int
+timer + periodic runs: 4

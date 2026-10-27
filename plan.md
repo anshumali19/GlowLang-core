@@ -1,5 +1,7 @@
 # GlowLang Engineering Remediation Plan: Transitioning from Claims to Production Reality
 
+> Superseded by [AUDIT_AND_FIX_PLAN.md](AUDIT_AND_FIX_PLAN.md), which records what was actually fixed and verified.
+
 ## Overview
 
 This document defines the technical engineering remediation plan for the GlowLang programming language. Its purpose is to eliminate false, unverified, or marketing-inflated claims across the entire project and replace them with verified, production-grade C implementations, correct JIT code generation, real multi-threading synchronization, honest documentation, and strict mathematical assertions.

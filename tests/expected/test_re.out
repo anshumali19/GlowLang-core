@@ -1,0 +1,11 @@
+Testing regex match (^[A-Z][a-z]+$):
+  'Alice' ->  true
+  'alice' ->  false
+  'ALICE' ->  false
+
+Testing regex search ([0-9]+):
+  'Age is 42 years' ->  42
+  'No numbers here' ->  none
+
+Testing RegExp class:
+  compiled match 'hello5' ->  true
