@@ -84,7 +84,6 @@ if (-not $deps) {
 
 $sources = 'glowlang.tab.c', 'lex.yy.c', 'lsp.c', 'arena.c', 'jit.c', 'opt.c', 'compiler.c',
            'vm.c', 'gc.c', 'stdlib.c', 'bigint.c', 'regex.c', 'corelib.c', 'blake3.c' | ForEach-Object { "src\$_" }
-           'vm.c', 'gc.c', 'stdlib.c', 'bigint.c', 'regex.c', 'corelib.c' | ForEach-Object { "src\$_" }
 $libs = "$deps\lib\libssl.lib", "$deps\lib\libcrypto.lib", "$deps\lib\sqlite3.lib",
         'ws2_32.lib', 'crypt32.lib', 'advapi32.lib', 'user32.lib', 'shell32.lib', 'dbghelp.lib'
 $objDir = "build_win\obj-$Compiler" + $(if ($DebugBuild) { '-debug' } else { '' }) + $(if ($Asan) { '-asan' } else { '' })

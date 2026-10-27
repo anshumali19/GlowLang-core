@@ -1067,7 +1067,6 @@ static void path_dir(const char *path, char *out, size_t outsz) {
    under the lib/ folder beside the glowlang executable (so the standard
    libraries work from any directory). *found gets the path that opened. */
 static FILE *glow_open_module_path(const char *path, const char *importer, const char **found) {
-static FILE *glow_open_module(const char *path, const char *importer, const char **found) {
     char cand[1024], dir[768];
     int absolute = path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
     if (!absolute) {
