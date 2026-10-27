@@ -874,6 +874,9 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name);
 void glow_corelib_init(void);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 const char *intern_string(const char *s);
+/* Full path of the running glowlang executable, written to out
+   (NUL-terminated). Returns its length, or -1 when it is not known. */
+int glow_self_exe_path(char *out, size_t outsz);
 const char *intern_string_hash(const char *s, uint32_t *out_hash);
 const char *intern_string_find(const char *s, uint32_t *out_hash);
 void intern_table_init(void);

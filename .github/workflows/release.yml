@@ -148,7 +148,11 @@ jobs:
           printf 'GlowLang %s (%s)\n\nRun programs with: ./glowlang run app.glow\nInstall packages with: ./gdu install <name>\nThe lib/ folder holds the standard GlowLang libraries; keep it next to glowlang.\n' \
             "${GITHUB_REF_NAME}" "${{ matrix.target }}" > dist/glowlang/README.txt
           tar -czf glowlang-${{ matrix.target }}.tar.gz -C dist/glowlang .
-          ./dist/glowlang/glowlang run examples/hello.glow
+          # Run the packaged copy from outside the repository, so imports must
+          # come from the lib/ shipped beside it.
+          mkdir -p "$RUNNER_TEMP/smoke" && cp scripts/release-smoke.glow "$RUNNER_TEMP/smoke/app.glow"
+          (cd "$RUNNER_TEMP/smoke" && "$GITHUB_WORKSPACE/dist/glowlang/glowlang" run app.glow > out.txt)
+          diff scripts/release-smoke.out "$RUNNER_TEMP/smoke/out.txt"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -159,7 +163,17 @@ jobs:
           Copy-Item LICENSE, NOTICE dist\glowlang\
           "GlowLang $env:GITHUB_REF_NAME (${{ matrix.target }})`r`n`r`nRun programs with: glowlang run app.glow`r`nInstall packages with: gdu install <name>`r`nThe lib\ folder holds the standard GlowLang libraries; keep it next to glowlang.exe.`r`n" | Set-Content dist\glowlang\README.txt
           Compress-Archive -Path dist\glowlang\* -DestinationPath glowlang-${{ matrix.target }}.zip
-          & dist\glowlang\glowlang.exe run examples\hello.glow
+          # Run the packaged copy from outside the repository, so imports must
+          # come from the lib\ shipped beside it.
+          $smoke = Join-Path $env:RUNNER_TEMP smoke
+          New-Item -ItemType Directory -Force $smoke | Out-Null
+          Copy-Item scripts\release-smoke.glow "$smoke\app.glow"
+          Push-Location $smoke
+          $out = & "$env:GITHUB_WORKSPACE\dist\glowlang\glowlang.exe" run app.glow
+          Pop-Location
+          $out
+          $want = Get-Content scripts\release-smoke.out
+          if (($out -join "|") -ne ($want -join "|")) { throw "packaged glowlang gave unexpected output" }
 
       - uses: actions/upload-artifact@v4
         with:
