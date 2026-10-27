@@ -1,0 +1,15 @@
+# crypto.blake3 is real BLAKE3 (official test vectors), not a 64-bit hash.
+show "blake3 empty:", crypto.blake3("")
+show "blake3 abc:", crypto.blake3("abc")
+show "blake3 length:", len(crypto.blake3("x" * 5000))
+
+# INT4 dequantization reads each element as one byte holding two weights.
+let packed = tensor.zeros(2)
+tensor.set(packed, 0, 163)
+tensor.set(packed, 1, 127)
+show "int4:", tensor.dequantize_int4(packed)
+
+# poll_fast really checks a socket: an idle listener has nothing waiting.
+let server = http.listen(0)
+show "poll idle:", net_fast.poll_fast(server, 10)
+show "poll bad:", net_fast.poll_fast(-1)

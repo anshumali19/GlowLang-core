@@ -1066,7 +1066,7 @@ static void path_dir(const char *path, char *out, size_t outsz) {
    next to the importing file, from the current directory, under lib/, and
    under the lib/ folder beside the glowlang executable (so the standard
    libraries work from any directory). *found gets the path that opened. */
-static FILE *glow_open_module(const char *path, const char *importer, const char **found) {
+static FILE *glow_open_module_path(const char *path, const char *importer, const char **found) {
     char cand[1024], dir[768];
     int absolute = path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
     if (!absolute) {
@@ -1097,6 +1097,31 @@ static FILE *glow_open_module(const char *path, const char *importer, const char
         snprintf(cand, sizeof(cand), "%slib/%s", dir, rel);
         if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
     }
+    return NULL;
+}
+
+/* `use "name"` without the .glow extension looks for, in order:
+   name.glow next to the importing file or in the current directory; a
+   package that `gdu install name` placed in .glow_pkg/; then name.glow in
+   the standard library folders. So the program's own files come first and
+   an installed package wins over the copy bundled with GlowLang. */
+static FILE *glow_open_module(const char *path, const char *importer, const char **found) {
+    FILE *f = glow_open_module_path(path, importer, found);
+    if (f) return f;
+    size_t n = strlen(path);
+    if (n == 0 || n > 400 || (n > 5 && strcmp(path + n - 5, ".glow") == 0)) return NULL;
+    char cand[1024], dir[768];
+    path_dir(importer, dir, sizeof(dir));
+    if (dir[0]) {
+        snprintf(cand, sizeof(cand), "%s%s.glow", dir, path);
+        if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+    }
+    snprintf(cand, sizeof(cand), "%s.glow", path);
+    if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+    snprintf(cand, sizeof(cand), ".glow_pkg/%s.glow", path);
+    if ((f = glow_open_module_path(cand, importer, found))) { *found = intern_string(*found); return f; }
+    snprintf(cand, sizeof(cand), "%s.glow", path);
+    if ((f = glow_open_module_path(cand, importer, found))) { *found = intern_string(*found); return f; }
     return NULL;
 }
 
