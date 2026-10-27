@@ -1,0 +1,13 @@
+# Run by the Verify Release workflow on each downloaded release, from a folder
+# outside the repository, so `import "csv"` must come from the lib/ that ships
+# next to glowlang. Expected output is in release-smoke.out.
+import "csv"
+
+fs.write("smoke.csv", "a,b")
+print CSVReader("smoke.csv").read()
+
+func greet(name, greeting = "Hello"):
+    return greeting + ", " + name
+end
+print greet("GlowLang")
+print "ok" when json.parse("[1]")[0] == 1 otherwise "bad"

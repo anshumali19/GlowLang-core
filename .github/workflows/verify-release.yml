@@ -1,0 +1,134 @@
+name: Verify Release
+
+# Downloads a published release from GlowLang-packages on a clean machine for
+# each platform and checks it the way a user would get it: the checksum
+# matches, the archive unpacks, the Windows binaries carry a valid signature
+# (when the release was signed), and the downloaded glowlang passes the full
+# test suite and runs gdu.
+#
+# Runs after every published release, by hand for any tag, and (on the latest
+# release) when this workflow changes.
+
+on:
+  workflow_run:
+    workflows: ['GlowLang Release']
+    types: [completed]
+  push:
+    branches: ['**']
+    paths: ['.github/workflows/verify-release.yml', 'scripts/release-smoke.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to verify, e.g. v1.3.1'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Find tag
+    runs-on: ubuntu-latest
+    # After a release run, only when it published a release (a tag push).
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+    steps:
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          tag="${WANT:-$(gh release view --repo anshumali19/GlowLang-packages --json tagName --jq .tagName)}"
+          echo "Verifying $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify ${{ matrix.target }}
+    needs: tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64,   os: ubuntu-22.04,   file: glowlang-linux-x64.tar.gz }
+          - { target: macos-x64,   os: macos-15-intel, file: glowlang-macos-x64.tar.gz }
+          - { target: macos-arm64, os: macos-14,       file: glowlang-macos-arm64.tar.gz }
+          - { target: windows-x64, os: windows-latest, file: glowlang-windows-x64.zip }
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.tag.outputs.tag }}
+    steps:
+      # This workflow's smoke program, and (in released/) the tests at the
+      # released commit. The binaries come from the release, not a build.
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+          path: released
+
+      - name: Download
+        shell: bash
+        run: gh release download "$TAG" --repo anshumali19/GlowLang-packages -p '${{ matrix.file }}' -p SHA256SUMS -D dl
+
+      - name: Checksum
+        shell: bash
+        run: |
+          cd dl
+          grep ' ${{ matrix.file }}$' SHA256SUMS > want
+          if command -v sha256sum >/dev/null; then sha256sum -c want; else shasum -a 256 -c want; fi
+
+      - name: Unpack (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: mkdir rel && tar -xzf dl/${{ matrix.file }} -C rel && ls -la rel
+
+      - name: Unpack (Windows)
+        if: runner.os == 'Windows'
+        run: Expand-Archive dl\${{ matrix.file }} rel; Get-ChildItem rel
+
+      # An unsigned release passes with a warning; a signed one must be valid.
+      - name: Signature (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          foreach ($exe in 'rel\glowlang.exe', 'rel\gdu.exe') {
+            $sig = Get-AuthenticodeSignature $exe
+            if ($sig.Status -eq 'NotSigned') { Write-Output "::warning::$exe is not signed"; continue }
+            Write-Output "$exe : $($sig.Status) by $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "$exe signature is $($sig.Status)" }
+          }
+
+      - name: Test suite (Linux/macOS)
+        if: runner.os != 'Windows'
+        working-directory: released
+        run: GLOWLANG_BIN=../rel/glowlang ./scripts/run-tests.sh
+
+      - name: Test suite (Windows)
+        if: runner.os == 'Windows'
+        working-directory: released
+        run: .\scripts\run-tests.ps1 -Binary ..\rel\glowlang.exe
+
+      # Run from outside the repository, so the program uses the lib/ that
+      # ships in the archive.
+      - name: Run a program and gdu (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ../try && cp scripts/release-smoke.glow ../try/app.glow && cd ../try
+          "$GITHUB_WORKSPACE/rel/glowlang" run app.glow | tee out.txt
+          diff "$GITHUB_WORKSPACE/scripts/release-smoke.out" out.txt
+          "$GITHUB_WORKSPACE/rel/gdu" --version
+          "$GITHUB_WORKSPACE/rel/gdu" --help
+
+      - name: Run a program and gdu (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory ..\try | Out-Null
+          Copy-Item scripts\release-smoke.glow ..\try\app.glow
+          Set-Location ..\try
+          $out = & "$env:GITHUB_WORKSPACE\rel\glowlang.exe" run app.glow
+          $out
+          $want = Get-Content "$env:GITHUB_WORKSPACE\scripts\release-smoke.out"
+          if (($out -join "|") -ne ($want -join "|")) { throw "unexpected output" }
+          & "$env:GITHUB_WORKSPACE\rel\gdu.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "gdu --version failed" }
+          & "$env:GITHUB_WORKSPACE\rel\gdu.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "gdu --help failed" }
