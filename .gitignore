@@ -23,6 +23,8 @@ trace.log
 
 # Package cache
 .glow_pkg/.cache/
+# Packages that `gdu install` placed in the repository root
+/.glow_pkg/
 
 # Temp files and build outputs
 *.tmp
@@ -60,6 +62,7 @@ compile_test*.bat
 build_*.bat
 build2.bat
 test.glow
+!tests/test.glow
 1
 =
 add_debug*.py
@@ -77,6 +80,48 @@ dist/
 # Build tools
 node_modules/
 package-lock.json
+!editors/vscode/package-lock.json
 
 # Local Agent Customizations
 .agents/
+
+# Compiled benchmark programs and .NET build output (the benchmark scripts
+# rebuild them)
+benchmarks/**/*_c
+benchmarks/**/*_cpp
+benchmarks/**/*_go
+benchmarks/**/*_cs
+benchmarks/**/*_rust
+benchmarks/bench_c
+benchmarks/bench_cpp
+benchmarks/bench_go
+benchmarks/grey_stack_stress
+benchmarks/**/bin/
+benchmarks/**/obj/
+*.dll
+
+# Crash reports written by the fuzzer
+tests/stability/crashes/
+
+# Private and working documents (kept locally, not published)
+plan.md
+NEXT_STEPS_PLAN.md
+AUDIT_AND_FIX_PLAN.md
+PRODUCTION_GUIDE.md
+WINDOWS_JIT_PORT.md
+LINKEDIN_POST.md
+Makefile.git
+test_debug.c
+build_cstup_proposal_docx.py
+docs/UPCST_*
+*.docx
+
+# Signing keys, local backups and Windows packaging
+certs/
+backups/
+GlowLang-MSIX-Staging/
+*.msix
+*.pfx
+*.p12
+*.key
+*.pem
