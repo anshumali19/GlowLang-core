@@ -69,7 +69,8 @@ try {
     if ($manifest -match '@[A-Z_]+@') { throw "Unfilled manifest value: $($Matches[0])" }
     [IO.File]::WriteAllText((Join-Path $stage 'AppxManifest.xml'), $manifest, (New-Object Text.UTF8Encoding $false))
 
-    New-Item -ItemType Directory -Force (Split-Path -Parent $OutFile) | Out-Null
+    $outDir = Split-Path -Parent $OutFile
+    if ($outDir) { New-Item -ItemType Directory -Force $outDir | Out-Null }
     if (Test-Path $OutFile) { Remove-Item -Force $OutFile }
     # makeappx checks the manifest against the MSIX schema while packing.
     & $makeappx.FullName pack /d $stage /p $OutFile /o /h SHA256

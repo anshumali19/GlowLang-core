@@ -195,8 +195,11 @@ jobs:
           MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
           MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
           MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
         run: |
-          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME } else { '0.0.1' }
+          # The release's version (a tag push, or the tag given to a manual
+          # run); 0.0.1 only for check builds that publish nothing.
+          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { '0.0.1' }
           $id = @{}
           if ($env:MSIX_IDENTITY_NAME) { $id.IdentityName = $env:MSIX_IDENTITY_NAME }
           if ($env:MSIX_PUBLISHER) { $id.Publisher = $env:MSIX_PUBLISHER }
