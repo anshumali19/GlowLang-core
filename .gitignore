@@ -121,6 +121,7 @@ certs/
 backups/
 GlowLang-MSIX-Staging/
 *.msix
+/store-upload/
 *.pfx
 *.p12
 *.key
