@@ -1,0 +1,75 @@
+# lib/bridge.glow against real Python 3 and Node.js (both are installed on
+# the CI runners). User modules come from tests/modules (the cwd option).
+import "bridge"
+let opts = {"cwd": "tests/modules", "timeout": 60}
+
+let py = bridge.python(opts)
+show "python started:", py.version is not none
+show py.call("math.sqrt", [16]), py.get("math.pi") > 3.14
+show py.call("json.dumps", [{"b": [1, 2], "a": none}], {"sort_keys": true})
+show py.call("bridge_mod.greet", ["Ada"], {"punct": "?"})
+let c = py.call("bridge_mod.Counter", [10])
+show c.type_name, c.call("add", [5]), c.call("add"), c.get("n")
+py.exec("def square(x):\n    return x * x")
+show py.call("square", [12]), py.eval("[i * i for i in range(5)]")
+show py.eval("'tab\tquote\"' + chr(233)") == "tab\tquote\"" + "é"
+let s = py.eval("{3, 1, 2}")
+show "set:", s.type_name, py.call("sorted", [s])
+let counts = py.call("collections.Counter", ["hello"])
+show "counter:", counts.type_name, counts.call("most_common", [1])
+show "big int:", py.eval("2 ** 70")
+try:
+    py.call("math.sqrt", [-1])
+catch e:
+    show "caught:", e
+end
+show "traceback kept:", py.last_traceback.contains("Traceback")
+try:
+    py.call("no_such_module_xyz.f")
+catch e:
+    show "caught:", e
+end
+py.call("print", ["(print output goes to stderr)"])
+show "after print:", py.call("len", [[1, 2, 3]])
+c.release()
+try:
+    py.call("str", [c])
+catch e:
+    show "released:", e.contains("released")
+end
+py.close()
+try:
+    py.call("len", [[]])
+catch e:
+    show "closed:", e
+end
+
+let slow = bridge.python({"timeout": 0.5})
+slow.exec("import time")
+try:
+    slow.call("time.sleep", [10])
+catch e:
+    show "timeout:", e
+end
+show "alive after timeout:", slow.alive()
+
+let js = bridge.node(opts)
+show "node started:", js.version is not none
+show js.call("path.basename", ["/a/b/c.txt"]), js.call("Math.max", [1, 7, 3])
+show js.call("bridge_mod.double", [21]), js.call("bridge_mod.later", [41])
+let box = js.call("bridge_mod.Box", [{"k": "v"}])
+show box.type_name, box.call("get")
+show js.eval("[1, 2, 3].map(x => x * 10)"), js.eval("({a: 1, b: [true, null]})")
+js.exec("function tripled(x) { return x * 3 }")
+show js.call("tripled", [5])
+let m = js.eval("new Map([['a', 1]])")
+show m.type_name, m.value()
+try:
+    js.eval("null.x")
+catch e:
+    show "caught:", e.starts_with("javascript TypeError")
+end
+js.call("console.log", ["(console.log output goes to stderr)"])
+show "after log:", js.eval("1 + 1")
+js.close()
+show "done"

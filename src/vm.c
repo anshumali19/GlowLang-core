@@ -2649,6 +2649,9 @@ int jit_exception_pending(void) { return has_exception; }
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
                         if (has_self) vm_stack[callee_base] = bm->instance;
+                        /* Missing arguments are none (they used to keep values left in
+                           those registers, so a default parameter saw garbage). */
+                        CLEAR_MISSING_ARGS(callee_base, (has_self ? 1 : 0) + ac, bm->method->body->preserved_locals);
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     } else R(pc->r0) = value_none();
                 } else if (ot == OBJ_CLASS) {

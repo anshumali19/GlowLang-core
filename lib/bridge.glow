@@ -1,0 +1,305 @@
+# bridge.glow — call Python and JavaScript (Node.js) from GlowLang.
+#
+#   import "bridge"
+#   let py = bridge.python()
+#   show py.call("math.sqrt", [16])            # 4
+#   let js = bridge.node()
+#   show js.call("path.join", ["a", "b"])      # a/b (a\b on Windows)
+#
+# Each bridge runs one worker program (lib/bridge/python_worker.py or
+# node_worker.js) and talks to it with one JSON message per line. Numbers,
+# strings, bools, none, lists and dicts are copied across. Other values (a
+# NumPy array, a JS class instance, a module) stay in the worker and come
+# back as a ForeignRef, which you can call methods on, read fields of, pass
+# back as an argument, or convert with .value().
+#
+# Errors raised in Python or JavaScript become GlowLang errors you can catch:
+# "python ValueError: math domain error". The full traceback of the last
+# error is in bridge.last_traceback.
+#
+# A bridge handles one request at a time: give each GlowLang thread that
+# calls foreign code its own bridge.
+
+func _bridge_dir_of(p):
+    let parts = p.replace("\\", "/").split("/")
+    parts.pop()
+    return parts.join("/")
+end
+
+# The worker scripts ship in lib/bridge/, next to glowlang (or one folder up
+# from it in a source checkout).
+func _bridge_worker(file):
+    let dir = _bridge_dir_of(process.executable)
+    for each cand in [dir + "/lib/bridge/" + file, dir + "/../lib/bridge/" + file, "lib/bridge/" + file]:
+        when fs.exists(cand):
+            return cand
+        end
+    end
+    throw "bridge: cannot find " + file + " (it ships in the lib/bridge folder next to glowlang)"
+end
+
+# GlowLang value -> JSON data for the worker.
+func _bridge_encode(v):
+    let t = type(v)
+    when t == "list":
+        return [_bridge_encode(x) for each x in v]
+    end
+    when t == "dict":
+        let out = {}
+        for each k in v.keys():
+            out[k] = _bridge_encode(v[k])
+        end
+        return out
+    end
+    when t == "instance":
+        when v._bridge_ref_id is not none:
+            return {"$ref": v._bridge_ref_id}
+        end
+        throw "bridge: cannot send a GlowLang object; send its fields as a dict"
+    end
+    when t == "int" or t == "float" or t == "string" or t == "bool" or t == "none":
+        return v
+    end
+    throw "bridge: cannot send a " + t + " value"
+end
+
+# JSON data from the worker -> GlowLang values.
+func _bridge_decode(owner, v):
+    let t = type(v)
+    when t == "list":
+        return [_bridge_decode(owner, x) for each x in v]
+    end
+    when t == "dict":
+        when v.has("$ref"):
+            return ForeignRef(owner, v["$ref"], v.get("type"), v.get("repr"))
+        end
+        let out = {}
+        for each k in v.keys():
+            out[k] = _bridge_decode(owner, v[k])
+        end
+        return out
+    end
+    return v
+end
+
+# A value that lives in the worker.
+blueprint ForeignRef:
+    action init(owner, id, type_name, text):
+        self._bridge = owner
+        self._bridge_ref_id = id
+        self.type_name = type_name
+        self.text = text
+    end
+    # Call a method: arr.call("mean"). With no name, call the value itself.
+    action call(name = "", args = [], kwargs = {}):
+        return self._bridge._request({"op": "call", "ref": self._bridge_ref_id, "target": name, "args": _bridge_encode(args), "kwargs": _bridge_encode(kwargs)})
+    end
+    action invoke(args = [], kwargs = {}):
+        return self.call("", args, kwargs)
+    end
+    action get(name):
+        return self._bridge._request({"op": "get", "ref": self._bridge_ref_id, "target": name})
+    end
+    action set(name, value):
+        return self._bridge._request({"op": "set", "ref": self._bridge_ref_id, "target": name, "value": _bridge_encode(value)})
+    end
+    # Copy the whole value into GlowLang (arrays become lists, maps dicts).
+    action value():
+        return self._bridge._request({"op": "value", "ref": self._bridge_ref_id})
+    end
+    # Let the worker free it.
+    action release():
+        when self._bridge.proc is not none:
+            self._bridge._request({"op": "release", "refs": [self._bridge_ref_id]})
+        end
+    end
+end
+
+blueprint Bridge:
+    action init(language, command, opts):
+        self.language = language
+        self.proc = none
+        self.next_id = 0
+        self.version = none
+        self.last_traceback = none
+        # Seconds to wait for each reply; none waits as long as it takes.
+        self.timeout = opts.get("timeout")
+        let start_timeout = opts.get("start_timeout")
+        when start_timeout is none:
+            start_timeout = 60
+        end
+        let env = {}
+        when opts.get("env") is not none:
+            env = opts.get("env").copy()
+        end
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        let popts = {"env": env}
+        when opts.get("cwd") is not none:
+            popts["cwd"] = opts.get("cwd")
+        end
+        when opts.get("stderr") is not none:
+            popts["stderr"] = opts.get("stderr")
+        end
+        self.proc = process.start(command, popts)
+        let line = none
+        try:
+            line = process.read_line(self.proc, start_timeout)
+        catch e:
+            process.close(self.proc)
+            self.proc = none
+            throw "bridge: " + language + " did not start within " + str(start_timeout) + " seconds"
+        end
+        when line is none:
+            let code = process.wait(self.proc, 5)
+            process.close(self.proc)
+            self.proc = none
+            throw "bridge: the " + language + " worker exited before it started (exit code " + str(code) + "); its error is shown above"
+        end
+        let hello = json.parse(line)
+        when hello.get("ready") != true:
+            process.close(self.proc)
+            self.proc = none
+            throw "bridge: unexpected first line from the " + language + " worker: " + line
+        end
+        self.version = hello.get("version")
+    end
+
+    action _stop(reason):
+        when self.proc is not none:
+            process.close(self.proc)
+            self.proc = none
+        end
+        throw "bridge: " + reason
+    end
+
+    action _request(req):
+        when self.proc is none:
+            throw "bridge: the " + self.language + " bridge is closed"
+        end
+        self.next_id = self.next_id + 1
+        let id = self.next_id
+        req["id"] = id
+        let sent = process.send(self.proc, json.stringify(req) + "\n")
+        let line = none
+        when sent:
+            try:
+                line = process.read_line(self.proc, self.timeout)
+            catch e:
+                # A late reply would be read as the answer to the next
+                # request, so a worker that timed out cannot be reused.
+                self._stop("the " + self.language + " call timed out after " + str(self.timeout) + " seconds; the worker was stopped")
+            end
+        end
+        when line is none:
+            let code = process.wait(self.proc, 5)
+            self._stop("the " + self.language + " worker stopped (exit code " + str(code) + ")")
+        end
+        let resp = json.parse(line)
+        when resp.get("id") != id:
+            self._stop("the " + self.language + " worker sent a reply out of order")
+        end
+        when resp.has("error"):
+            let err = resp["error"]
+            self.last_traceback = err.get("traceback")
+            throw self.language + " " + str(err.get("type")) + ": " + str(err.get("message"))
+        end
+        return _bridge_decode(self, resp.get("ok"))
+    end
+
+    # Call a function by its dotted name: "math.sqrt", "json.dumps",
+    # "path.join", or a name defined with exec.
+    action call(target, args = [], kwargs = {}):
+        return self._request({"op": "call", "ref": none, "target": target, "args": _bridge_encode(args), "kwargs": _bridge_encode(kwargs)})
+    end
+    # Read a value by its dotted name: "math.pi", "sys.version".
+    action get(target):
+        return self._request({"op": "get", "ref": none, "target": target})
+    end
+    # Set a global (or an attribute, "config.debug") in the worker.
+    action set(target, value):
+        return self._request({"op": "set", "ref": none, "target": target, "value": _bridge_encode(value)})
+    end
+    # Evaluate an expression and return its value.
+    action eval(code):
+        return self._request({"op": "eval", "code": code})
+    end
+    # Run statements (define functions, classes, variables).
+    action exec(code):
+        return self._request({"op": "exec", "code": code})
+    end
+    # Load a module or package and return it as a ForeignRef: Python
+    # "numpy", Node "lodash" or "./my_module.js".
+    action load(name):
+        return self._request({"op": "load", "module": name})
+    end
+    action alive():
+        return self.proc is not none and process.alive(self.proc)
+    end
+    # Stop the worker. It also stops when GlowLang exits.
+    action close():
+        when self.proc is not none:
+            process.close_input(self.proc)
+            when process.wait(self.proc, 5) is none:
+                process.kill(self.proc)
+            end
+            process.close(self.proc)
+            self.proc = none
+        end
+    end
+end
+
+func _bridge_is_windows():
+    return process.executable is not none and process.executable.lower().ends_with(".exe")
+end
+
+func _bridge_command(opts, key, env_name, candidates, extra):
+    let exe = opts.get(key)
+    when exe is none:
+        exe = os.getenv(env_name)
+    end
+    when exe is not none:
+        when process.find(exe) is none:
+            throw "bridge: " + exe + " not found"
+        end
+        return [exe] + extra
+    end
+    for each cand in candidates:
+        let found = process.find(cand[0])
+        when found is not none:
+            return cand + extra
+        end
+    end
+    return none
+end
+
+# Start Python. Options: python (the interpreter, else $GLOW_PYTHON, else
+# python3 / python / py -3), timeout, start_timeout, cwd, env, stderr.
+func _bridge_python(opts = {}):
+    let candidates = [["python3"], ["python"]]
+    when _bridge_is_windows():
+        candidates = [["python"], ["py", "-3"], ["python3"]]
+    end
+    let cmd = _bridge_command(opts, "python", "GLOW_PYTHON", candidates, ["-u", _bridge_worker("python_worker.py")])
+    when cmd is none:
+        throw "bridge: Python not found; install Python 3, or pass {\"python\": \"path/to/python\"}"
+    end
+    return Bridge("python", cmd, opts)
+end
+
+# Start Node.js. Options: node (else $GLOW_NODE, else node), node_args (for
+# example ["--experimental-strip-types"] to load .ts files on Node 22),
+# timeout, start_timeout, cwd, env, stderr.
+func _bridge_node(opts = {}):
+    let args = opts.get("node_args")
+    when args is none:
+        args = []
+    end
+    let cmd = _bridge_command(opts, "node", "GLOW_NODE", [["node"]], args + [_bridge_worker("node_worker.js")])
+    when cmd is none:
+        throw "bridge: Node.js not found; install it from nodejs.org, or pass {\"node\": \"path/to/node\"}"
+    end
+    return Bridge("javascript", cmd, opts)
+end
+
+let bridge = {"python": _bridge_python, "node": _bridge_node}

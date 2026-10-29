@@ -1,0 +1,28 @@
+python started: true
+4 true
+{"a": null, "b": [1, 2]}
+hello Ada?
+bridge_mod.Counter 15 16 16
+144 [0, 1, 4, 9, 16]
+true
+set: builtins.set [1, 2, 3]
+counter: collections.Counter [[l, 2]]
+big int: 1180591620717411303424
+caught: python ValueError: math domain error
+traceback kept: true
+caught: python BridgeError: name not found: no_such_module_xyz.f
+after print: 3
+released: true
+closed: bridge: the python bridge is closed
+timeout: bridge: the python call timed out after 0.5 seconds; the worker was stopped
+alive after timeout: false
+node started: true
+c.txt 7
+42 42
+Box {"k": v}
+[10, 20, 30] {"a": 1, "b": [true, none]}
+15
+Map {"a": 1}
+caught: true
+after log: 2
+done

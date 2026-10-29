@@ -110,6 +110,10 @@ GlowLang threads run while they wait.
 
 ## Working with other languages
 
+For Python and JavaScript, the [`bridge` library](bridge_guide.md) does this
+for you: `bridge.python().call("math.sqrt", [16])`. The rest of this section
+is for other languages, or for writing your own protocol.
+
 Any language that can read and write lines can be a GlowLang worker. Sending
 one JSON object per line is a simple, reliable protocol.
 
