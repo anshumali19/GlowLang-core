@@ -8,7 +8,7 @@ true
 set: builtins.set [1, 2, 3]
 counter: collections.Counter [[l, 2]]
 big int: 1180591620717411303424
-caught: python ValueError: math domain error
+caught: python ValueError: bad input -1
 traceback kept: true
 caught: python BridgeError: name not found: no_such_module_xyz.f
 after print: 3

@@ -18,8 +18,12 @@ show "set:", s.type_name, py.call("sorted", [s])
 let counts = py.call("collections.Counter", ["hello"])
 show "counter:", counts.type_name, counts.call("most_common", [1])
 show "big int:", py.eval("2 ** 70")
+# A Python exception (raised by our own code: built-in messages vary by
+# Python version).
+py.exec("def boom(x):
+    raise ValueError('bad input ' + str(x))")
 try:
-    py.call("math.sqrt", [-1])
+    py.call("boom", [-1])
 catch e:
     show "caught:", e
 end

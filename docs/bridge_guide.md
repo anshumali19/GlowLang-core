@@ -127,7 +127,7 @@ An exception in Python or JavaScript becomes a GlowLang error:
 try:
     py.call("math.sqrt", [-1])
 catch e:
-    show e                     # python ValueError: math domain error
+    show e                     # python ValueError: math domain error (wording varies by Python version)
     show py.last_traceback     # the full Python traceback
 end
 ```
