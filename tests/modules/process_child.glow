@@ -1,0 +1,42 @@
+# Child program for tests/process_test.glow. CHILD_MODE picks what it does.
+let mode = os.getenv("CHILD_MODE")
+when mode == "echo":
+    # A line-based worker: answers each request line, stops at "quit".
+    let line = input()
+    while line is not none:
+        when line == "quit":
+            show "bye"
+            os.exit(0)
+        end
+        show "got " + line
+        line = input()
+    end
+    show "eof"
+end
+when mode == "upper":
+    let all = ""
+    let line = input()
+    while line is not none:
+        all = all + line.upper() + "\n"
+        line = input()
+    end
+    show f"{len(all)} chars"
+    show all.trim()
+end
+when mode == "code":
+    show "exiting"
+    os.exit(7)
+end
+when mode == "env":
+    let a = os.getenv("PROC_A")
+    let b = os.getenv("PROC_B")
+    show f"A={a} B={b}"
+end
+when mode == "sleep":
+    show "sleeping"
+    os.sleep(30000)
+end
+when mode == "fail":
+    show "before"
+    throw "child failed"
+end

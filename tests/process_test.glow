@@ -1,0 +1,125 @@
+# process.run / process.start, using glowlang itself as the child program so
+# the test is the same on every OS. The child is tests/modules/process_child.glow.
+let glow = process.executable
+let child = "tests/modules/process_child.glow"
+show "has executable:", glow is not none
+show "find glowlang:", process.find(glow) is not none
+show "find missing:", process.find("no-such-program-xyz")
+
+func run_child(mode, opts):
+    opts["env"] = {"CHILD_MODE": mode}
+    return process.run([glow, "run", child], opts)
+end
+
+# Output, exit code, ok.
+let r = run_child("code", {})
+show "code:", r["code"], "ok:", r["ok"], "stdout:", r["stdout"].trim()
+
+# Text on stdin, read to the end.
+r = run_child("upper", {"input": "hello\nworld\n"})
+show "upper:", r["stdout"].lines()
+show "upper ok:", r["ok"]
+
+# Large input and output do not deadlock.
+let big = ""
+let i = 0
+while i < 2000:
+    big = big + "line number " + str(i) + "\n"
+    i = i + 1
+end
+r = run_child("upper", {"input": big})
+show "big:", r["stdout"].lines()[0]
+
+# env merges over the current environment; none removes a variable.
+r = process.run([glow, "run", child], {"env": {"CHILD_MODE": "env", "PROC_A": "one", "PROC_B": none}})
+show "env:", r["stdout"].trim()
+
+# Errors go to stderr; stderr "stdout" merges them.
+r = run_child("fail", {})
+show "fail code:", r["code"], "stdout:", r["stdout"].trim()
+show "stderr mentions error:", r["stderr"].contains("child failed")
+r = run_child("fail", {"stderr": "stdout"})
+show "merged:", r["stdout"].contains("before") and r["stdout"].contains("child failed"), "stderr empty:", r["stderr"] == ""
+
+# Timeout kills the program.
+let t0 = os.time()
+r = run_child("sleep", {"timeout": 1})
+show "timed out:", r["timed_out"], "ok:", r["ok"], "fast:", os.time() - t0 < 10
+
+# An argument with spaces arrives as one argument (no shell).
+fs.mkdir("process test tmp")
+fs.write("process test tmp/say it.glow", "show \"spaces ok\"\n")
+r = process.run([glow, "run", "process test tmp/say it.glow"], {})
+show "spaces:", r["stdout"].trim()
+fs.remove("process test tmp/say it.glow")
+fs.remove("process test tmp")
+
+# cwd.
+r = process.run([glow, "run", "modules/process_child.glow"], {"cwd": "tests", "env": {"CHILD_MODE": "code"}})
+show "cwd:", r["code"]
+
+# Shell string form.
+r = process.run("echo shell-ok", {})
+show "shell:", r["stdout"].trim()
+
+# Bad input raises.
+try:
+    process.run(["no-such-program-xyz"], {})
+catch e:
+    show "missing program:", e
+end
+try:
+    process.run([], {})
+catch e:
+    show "empty:", e
+end
+try:
+    process.run([glow], {"stderr": "nowhere"})
+catch e:
+    show "bad mode:", e
+end
+try:
+    process.run([glow, "run", child], {"cwd": "no/such/folder"})
+catch e:
+    show "bad cwd:", e
+end
+
+# A long-running worker: request, response, one line at a time.
+let w = process.start([glow, "run", child], {"env": {"CHILD_MODE": "echo"}})
+show "alive:", process.alive(w), "pid > 0:", process.pid(w) > 0
+process.send(w, "ping\n")
+show "reply:", process.read_line(w, 10)
+process.send(w, "second\n")
+show "reply:", process.read_line(w, 10)
+process.send(w, "quit\n")
+show "reply:", process.read_line(w, 10)
+show "after quit:", process.read_line(w, 10)
+show "exit:", process.wait(w, 10)
+process.close(w)
+try:
+    process.send(w, "x\n")
+catch e:
+    show "closed:", e
+end
+
+# End of input ends the worker.
+w = process.start([glow, "run", child], {"env": {"CHILD_MODE": "echo"}})
+process.send(w, "a\nb\n")
+process.close_input(w)
+show "rest:", process.read_all(w, 10).lines()
+show "exit:", process.wait(w, 10)
+process.close(w)
+
+# read_line timeout, then kill.
+w = process.start([glow, "run", child], {"env": {"CHILD_MODE": "sleep"}})
+show "first:", process.read_line(w, 10)
+try:
+    process.read_line(w, 0.3)
+catch e:
+    show "read timeout:", e
+end
+show "wait timeout:", process.wait(w, 0.2)
+process.kill(w)
+show "killed:", process.wait(w, 10) is not none
+process.close(w)
+show "done"

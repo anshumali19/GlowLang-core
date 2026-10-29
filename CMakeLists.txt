@@ -70,6 +70,7 @@ set(GLOW_SOURCES
     src/bigint.c
     src/regex.c
     src/corelib.c
+    src/process.c
     src/blake3.c
 )
 
