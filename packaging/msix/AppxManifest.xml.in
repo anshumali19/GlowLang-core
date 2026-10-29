@@ -58,7 +58,9 @@
       </Extensions>
     </Application>
 
-    <!-- The package manager: only the `gdu` terminal command, no Start entry. -->
+    <!-- The package manager: adds the `gdu` command to every terminal. It also
+         gets a Start entry, because the Store rejects apps without one
+         (AppListEntry="none" needs a "HeadlessAppBypass" waiver). -->
     <Application Id="Gdu"
       Executable="gdu.exe"
       EntryPoint="Windows.FullTrustApplication"
@@ -66,11 +68,10 @@
       desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="gdu (GlowLang packages)"
-        Description="GlowLang package manager"
+        Description="GlowLang package manager: install packages with gdu install name."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
-        AppListEntry="none" />
+        Square44x44Logo="Assets\Square44x44Logo.png" />
       <Extensions>
         <uap5:Extension Category="windows.appExecutionAlias" Executable="gdu.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias desktop4:Subsystem="console">
