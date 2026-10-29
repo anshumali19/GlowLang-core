@@ -26,11 +26,13 @@ func _bridge_dir_of(p):
     return parts.join("/")
 end
 
-# The worker scripts ship in lib/bridge/, next to glowlang (or one folder up
-# from it in a source checkout).
+# The worker scripts ship in lib/bridge/, next to glowlang; in a source
+# checkout glowlang is in bin/ or bin/Release/. The path is absolute, since
+# the worker may run in another folder (the cwd option).
 func _bridge_worker(file):
     let dir = _bridge_dir_of(process.executable)
-    for each cand in [dir + "/lib/bridge/" + file, dir + "/../lib/bridge/" + file, "lib/bridge/" + file]:
+    let here = process.cwd()
+    for each cand in [dir + "/lib/bridge/" + file, dir + "/../lib/bridge/" + file, dir + "/../../lib/bridge/" + file, here + "/lib/bridge/" + file]:
         when fs.exists(cand):
             return cand
         end

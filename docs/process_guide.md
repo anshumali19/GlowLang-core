@@ -19,6 +19,7 @@ Linux and macOS. No `import` is needed.
 | `process.close(h)` | Stop it if it is still running and free the handle |
 | `process.find(name)` | Full path of a program on `PATH`, or `none` |
 | `process.executable` | Path of the running `glowlang` |
+| `process.cwd()` | The current folder, as an absolute path |
 
 ## The command
 
