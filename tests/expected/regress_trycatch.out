@@ -7,3 +7,5 @@ local survived: 42
 returned: inner
 problem is not a global: none
 caught in hot loop: 1
+last statement: Expected a function
+caught in func

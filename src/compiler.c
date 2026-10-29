@@ -1024,7 +1024,10 @@ static void compile_stmt(Node *n) {
             int end_pc = compiling_bc->count;
             int j = bc_emit(compiling_bc, OP_JUMP, 0, 0);
             int h = compiling_bc->count;
-            bc_add_handler(compiling_bc, start_pc, end_pc, h, exc_reg);
+            /* The range includes the jump over the handler: an error a native
+               call raises is noticed when the next instruction dispatches, so
+               a call that ends the try body would otherwise escape it. */
+            bc_add_handler(compiling_bc, start_pc, end_pc + 1, h, exc_reg);
             if (n->name) {
                 int var_reg = get_local_reg(n->name);
                 if (compiling_func && var_reg == -1 && !global_is_declared(n->name)) {
