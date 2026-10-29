@@ -54,3 +54,15 @@ while i < 25:
     i = i + 1
 end
 print s
+# Functions stored in a dict and called as d.f() used to keep stale values in
+# missing parameters from an earlier call.
+func g(a, b):
+    return b
+end
+let table = {"k": g}
+show table.k(1, "first"), table.k(1), table.k(1)
+func h(opts = {}):
+    return len(opts)
+end
+let hold = {"h": h}
+show hold.h(), hold.h({"x": 1}), hold.h(), hold.h()

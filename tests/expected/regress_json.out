@@ -1,0 +1,19 @@
+{"s": "q\"uote\nline\\x\ttab"}
+[1, 2.5, null, true, false, "x"]
+round trip: true
+café 😀 a"b /
+123456789012345678901234567891
+9007199254740993 1000 -0.5 0
+[[[]], {}] [1, 2]
+json.parse: expected a string key at line 1 column 2
+json.parse: expected ',' or ']' at line 1 column 6
+json.parse: expected ':' at line 1 column 6
+json.parse: unexpected character at line 1 column 4
+json.parse: unexpected character at line 1 column 1
+json.parse: unterminated string at line 1 column 3
+json.parse: unexpected text after the JSON value at line 1 column 3
+json.parse: unexpected end of input at line 1 column 1
+json.parse: unexpected text after the JSON value at line 1 column 2
+json.parse: unexpected character at line 1 column 6
+json.parse: bad escape in string at line 1 column 3
+json.stringify: nested too deeply (does a list or dict contain itself?)

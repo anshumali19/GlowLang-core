@@ -19,6 +19,7 @@ Linux and macOS. No `import` is needed.
 | `process.close(h)` | Stop it if it is still running and free the handle |
 | `process.find(name)` | Full path of a program on `PATH`, or `none` |
 | `process.executable` | Path of the running `glowlang` |
+| `process.cwd()` | The current folder, as an absolute path |
 
 ## The command
 
@@ -109,6 +110,10 @@ Blocking calls (`run`, `read_line`, `read_all`, `wait`, `send`) let other
 GlowLang threads run while they wait.
 
 ## Working with other languages
+
+For Python and JavaScript, the [`bridge` library](bridge_guide.md) does this
+for you: `bridge.python().call("math.sqrt", [16])`. The rest of this section
+is for other languages, or for writing your own protocol.
 
 Any language that can read and write lines can be a GlowLang worker. Sending
 one JSON object per line is a simple, reliable protocol.

@@ -1268,6 +1268,24 @@ static void procs_cleanup(void) {
     for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used) kill_proc(&procs[i]);
 }
 
+/* The current folder, as an absolute path. */
+static Value process_cwd(int argc, Value *args) {
+    (void)argc; (void)args;
+#ifdef _WIN32
+    DWORD n = GetCurrentDirectoryW(0, NULL);
+    wchar_t *w = n ? malloc(n * sizeof(wchar_t)) : NULL;
+    if (!w || !GetCurrentDirectoryW(n, w)) { free(w); return value_none(); }
+    char *s = to_utf8(w);
+    free(w);
+#else
+    char *s = getcwd(NULL, 0);
+#endif
+    if (!s) return value_none();
+    Value v = value_string_copy(s);
+    free(s);
+    return v;
+}
+
 static Value process_find(int argc, Value *args) {
     if (argc < 1 || !is_str(args[0])) return proc_error("process.find: expected a program name");
     const char *name = AS_STRING(args[0]);
@@ -1305,6 +1323,7 @@ void glow_process_init(void) {
     dict_set(p, "kill", native_func_new("kill", process_kill));
     dict_set(p, "close", native_func_new("close", process_close));
     dict_set(p, "find", native_func_new("find", process_find));
+    dict_set(p, "cwd", native_func_new("cwd", process_cwd));
     /* The running glowlang, for starting GlowLang programs as workers. */
     char self[4096];
     dict_set(p, "executable", glow_self_exe_path(self, sizeof(self)) > 0 ? value_string_copy(self) : value_none());
