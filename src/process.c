@@ -22,6 +22,9 @@
  * process tree is killed (a job object on Windows, a process group
  * elsewhere).
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE   /* pipe2 */
+#endif
 #include "glowlang.h"
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +49,7 @@ extern char **environ;
 
 /* ---- values and errors ---- */
 
-static Value raise(const char *fmt, ...) {
+static Value proc_error(const char *fmt, ...) {
     char msg[1024];
     va_list ap;
     va_start(ap, fmt);
@@ -154,7 +157,7 @@ static int parse_mode(Value v, int allow_stdout, int *mode, const char *fn, cons
     else if (!strcmp(s, "null")) *mode = IO_NULL;
     else if (allow_stdout && !strcmp(s, "stdout")) *mode = IO_STDOUT;
     else {
-        raise("%s: %s must be \"pipe\", %s\"inherit\" or \"null\"", fn, what, allow_stdout ? "\"stdout\", " : "");
+        proc_error("%s: %s must be \"pipe\", %s\"inherit\" or \"null\"", fn, what, allow_stdout ? "\"stdout\", " : "");
         return 0;
     }
     return 1;
@@ -166,56 +169,56 @@ static int parse_args(const char *fn, int argc, Value *args, int started, Opts *
     o->timeout = -1;
     o->out_mode = IO_PIPE;
     o->err_mode = started ? IO_INHERIT : IO_PIPE;
-    if (argc < 1) { raise("%s: expected a command (a list of strings or a string)", fn); return 0; }
+    if (argc < 1) { proc_error("%s: expected a command (a list of strings or a string)", fn); return 0; }
 
     Value cmd = args[0];
     if (is_str(cmd)) {
-        if (rope_length(cmd) == 0) { raise("%s: the command is empty", fn); return 0; }
+        if (rope_length(cmd) == 0) { proc_error("%s: the command is empty", fn); return 0; }
         o->shell = dup_str(cmd, NULL);
     } else if (GET_TYPE(cmd) == VAL_LIST) {
         List *l = AS_LIST(cmd);
-        if (l->size == 0) { raise("%s: the command list is empty", fn); return 0; }
+        if (l->size == 0) { proc_error("%s: the command list is empty", fn); return 0; }
         o->argv = calloc((size_t)l->size + 1, sizeof(char *));
         for (int i = 0; i < l->size; i++) {
-            if (!is_str(l->items[i])) { raise("%s: command item %d is not a string", fn, i); opts_free(o); return 0; }
+            if (!is_str(l->items[i])) { proc_error("%s: command item %d is not a string", fn, i); opts_free(o); return 0; }
             size_t n;
             o->argv[i] = dup_str(l->items[i], &n);
             o->argc = i + 1;
-            if (strlen(o->argv[i]) != n) { raise("%s: command item %d contains a NUL character", fn, i); opts_free(o); return 0; }
+            if (strlen(o->argv[i]) != n) { proc_error("%s: command item %d contains a NUL character", fn, i); opts_free(o); return 0; }
         }
-        if (o->argv[0][0] == '\0') { raise("%s: the program name is empty", fn); opts_free(o); return 0; }
+        if (o->argv[0][0] == '\0') { proc_error("%s: the program name is empty", fn); opts_free(o); return 0; }
     } else {
-        raise("%s: expected a command (a list of strings or a string)", fn);
+        proc_error("%s: expected a command (a list of strings or a string)", fn);
         return 0;
     }
 
     if (argc < 2 || GET_TYPE(args[1]) == VAL_NONE) return 1;
-    if (GET_TYPE(args[1]) != VAL_DICT) { raise("%s: options must be a dict", fn); opts_free(o); return 0; }
+    if (GET_TYPE(args[1]) != VAL_DICT) { proc_error("%s: options must be a dict", fn); opts_free(o); return 0; }
     Dict *d = AS_DICT(args[1]);
 
     Value v = dict_get(d, "cwd");
     if (is_str(v)) o->cwd = dup_str(v, NULL);
-    else if (GET_TYPE(v) != VAL_NONE) { raise("%s: cwd must be a string", fn); opts_free(o); return 0; }
+    else if (GET_TYPE(v) != VAL_NONE) { proc_error("%s: cwd must be a string", fn); opts_free(o); return 0; }
 
     v = dict_get(d, "input");
     if (is_str(v)) {
-        if (started) { raise("%s: input is for process.run; use process.send", fn); opts_free(o); return 0; }
+        if (started) { proc_error("%s: input is for process.run; use process.send", fn); opts_free(o); return 0; }
         o->input = dup_str(v, &o->input_len);
         o->has_input = 1;
-    } else if (GET_TYPE(v) != VAL_NONE) { raise("%s: input must be a string", fn); opts_free(o); return 0; }
+    } else if (GET_TYPE(v) != VAL_NONE) { proc_error("%s: input must be a string", fn); opts_free(o); return 0; }
 
     v = dict_get(d, "timeout");
     if (is_number(v)) {
-        if (started) { raise("%s: timeout is for process.run; pass it to read_line or wait", fn); opts_free(o); return 0; }
+        if (started) { proc_error("%s: timeout is for process.run; pass it to read_line or wait", fn); opts_free(o); return 0; }
         o->timeout = val_to_double(v);
         if (o->timeout < 0) o->timeout = 0;
-    } else if (GET_TYPE(v) != VAL_NONE) { raise("%s: timeout must be a number of seconds", fn); opts_free(o); return 0; }
+    } else if (GET_TYPE(v) != VAL_NONE) { proc_error("%s: timeout must be a number of seconds", fn); opts_free(o); return 0; }
 
     if (!started && !parse_mode(dict_get(d, "stdout"), 0, &o->out_mode, fn, "stdout")) { opts_free(o); return 0; }
     if (!parse_mode(dict_get(d, "stderr"), !started, &o->err_mode, fn, "stderr")) { opts_free(o); return 0; }
     if (started && o->err_mode == IO_PIPE) {
         /* An unread stderr pipe fills up and blocks the program. */
-        raise("%s: stderr must be \"inherit\" or \"null\" for started programs", fn);
+        proc_error("%s: stderr must be \"inherit\" or \"null\" for started programs", fn);
         opts_free(o); return 0;
     }
 
@@ -229,7 +232,7 @@ static int parse_args(const char *fn, int argc, Value *args, int started, Opts *
             if (GET_TYPE(e->keys[i]) == VAL_NONE) continue;
             const char *k = (const char *)(uintptr_t)(e->keys[i] & MASK_PAYLOAD);
             Value ev = e->values[i];
-            if (!k[0] || strchr(k, '=')) { raise("%s: bad environment variable name \"%s\"", fn, k); opts_free(o); return 0; }
+            if (!k[0] || strchr(k, '=')) { proc_error("%s: bad environment variable name \"%s\"", fn, k); opts_free(o); return 0; }
             char *val = NULL;
             if (is_str(ev)) val = dup_str(ev, NULL);
             else if (is_number(ev) || GET_TYPE(ev) == VAL_BOOL) {
@@ -238,12 +241,12 @@ static int parse_args(const char *fn, int argc, Value *args, int started, Opts *
                 else if (GET_TYPE(ev) == VAL_INT) snprintf(tmp, sizeof(tmp), "%lld", (long long)AS_INT(ev));
                 else snprintf(tmp, sizeof(tmp), "%.17g", val_to_double(ev));
                 val = strdup(tmp);
-            } else if (GET_TYPE(ev) != VAL_NONE) { raise("%s: env value for \"%s\" must be a string", fn, k); opts_free(o); return 0; }
+            } else if (GET_TYPE(ev) != VAL_NONE) { proc_error("%s: env value for \"%s\" must be a string", fn, k); opts_free(o); return 0; }
             o->env_keys[o->env_n] = strdup(k);
             o->env_vals[o->env_n] = val;
             o->env_n++;
         }
-    } else if (GET_TYPE(v) != VAL_NONE) { raise("%s: env must be a dict", fn); opts_free(o); return 0; }
+    } else if (GET_TYPE(v) != VAL_NONE) { proc_error("%s: env must be a dict", fn); opts_free(o); return 0; }
     return 1;
 }
 
@@ -635,7 +638,7 @@ static Value process_run(int argc, Value *args) {
     if (!parse_args("process.run", argc, args, 0, &o)) return value_none();
     char err[1200];
     Child c;
-    if (!start_child(&o, o.has_input, 0, &c, err, sizeof(err))) { opts_free(&o); return raise("process.run: %s", err); }
+    if (!start_child(&o, o.has_input, 0, &c, err, sizeof(err))) { opts_free(&o); return proc_error("process.run: %s", err); }
 
     fflush(stdout); fflush(stderr);
     glow_gil_release();
@@ -885,7 +888,7 @@ static Value process_run(int argc, Value *args) {
     if (!parse_args("process.run", argc, args, 0, &o)) return value_none();
     char err[1200];
     Child c;
-    if (!start_child(&o, o.has_input, 0, &c, err, sizeof(err))) { opts_free(&o); return raise("process.run: %s", err); }
+    if (!start_child(&o, o.has_input, 0, &c, err, sizeof(err))) { opts_free(&o); return proc_error("process.run: %s", err); }
 
     fflush(stdout); fflush(stderr);
     glow_gil_release();
@@ -993,11 +996,11 @@ static int procs_ready;
 static void procs_cleanup(void);
 
 static Proc *get_proc(int argc, Value *args, const char *fn) {
-    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT) { raise("%s: expected a process handle", fn); return NULL; }
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT) { proc_error("%s: expected a process handle", fn); return NULL; }
     int64_t h = AS_INT(args[0]);
     int idx = (int)(h & 0xFFFF) - 1, gen = (int)(h >> 16);
     if (idx < 0 || idx >= MAX_PROCS || !procs[idx].used || procs[idx].gen != gen) {
-        raise("%s: the process handle is closed or invalid", fn);
+        proc_error("%s: the process handle is closed or invalid", fn);
         return NULL;
     }
     return &procs[idx];
@@ -1013,14 +1016,14 @@ static Value process_start(int argc, Value *args) {
     if (!parse_args("process.start", argc, args, 1, &o)) return value_none();
     int idx = -1;
     for (int i = 0; i < MAX_PROCS; i++) if (!procs[i].used) { idx = i; break; }
-    if (idx < 0) { opts_free(&o); return raise("process.start: too many open processes (close some with process.close)"); }
+    if (idx < 0) { opts_free(&o); return proc_error("process.start: too many open processes (close some with process.close)"); }
     if (!procs_ready) { procs_ready = 1; atexit(procs_cleanup); }
     Proc *p = &procs[idx];
     int gen = p->gen + 1;
     memset(p, 0, sizeof(*p));
     p->gen = gen & 0x7FFFFFF;
     char err[1200];
-    if (!start_child(&o, 1, 1, &p->c, err, sizeof(err))) { opts_free(&o); return raise("process.start: %s", err); }
+    if (!start_child(&o, 1, 1, &p->c, err, sizeof(err))) { opts_free(&o); return proc_error("process.start: %s", err); }
     opts_free(&o);
 #ifdef _WIN32
     InitializeCriticalSection(&p->cs);
@@ -1035,7 +1038,7 @@ static Value process_start(int argc, Value *args) {
 static Value process_send(int argc, Value *args) {
     Proc *p = get_proc(argc, args, "process.send");
     if (!p) return value_none();
-    if (argc < 2 || !is_str(args[1])) return raise("process.send: expected text to write");
+    if (argc < 2 || !is_str(args[1])) return proc_error("process.send: expected text to write");
     size_t n;
     char *data = dup_str(args[1], &n);
     int ok = 1;
@@ -1134,7 +1137,7 @@ static Value read_common(int argc, Value *args, const char *fn, int all) {
     glow_gil_release();
     char *s = read_line_c(p, timeout, all, &n, &timed);
     glow_gil_acquire();
-    if (timed) return raise("%s: timed out after %g seconds", fn, timeout);
+    if (timed) return proc_error("%s: timed out after %g seconds", fn, timeout);
     if (!s) return all ? string_n("", 0) : value_none();
     Value v = string_n(s, n);
     free(s);
@@ -1266,7 +1269,7 @@ static void procs_cleanup(void) {
 }
 
 static Value process_find(int argc, Value *args) {
-    if (argc < 1 || !is_str(args[0])) return raise("process.find: expected a program name");
+    if (argc < 1 || !is_str(args[0])) return proc_error("process.find: expected a program name");
     const char *name = AS_STRING(args[0]);
     if (!name[0]) return value_none();
 #ifdef _WIN32
