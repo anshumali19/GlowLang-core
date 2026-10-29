@@ -2,6 +2,7 @@
 #define _GNU_SOURCE /* pthread_getattr_np, for the thread's stack bounds */
 #endif
 #include "glowlang.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1094,6 +1095,14 @@ static void path_dir(const char *path, char *out, size_t outsz) {
    next to the importing file, from the current directory, under lib/, and
    under the lib/ folder beside the glowlang executable (so the standard
    libraries work from any directory). *found gets the path that opened. */
+/* fopen for reading that refuses folders: on Linux and macOS fopen opens a
+   directory, so lib/bridge/ was taken for the module "bridge". */
+static FILE *open_module_file(const char *p) {
+    struct stat st;
+    if (stat(p, &st) != 0 || (st.st_mode & S_IFMT) == S_IFDIR) return NULL;
+    return fopen(p, "r");
+}
+
 static FILE *glow_open_module_path(const char *path, const char *importer, const char **found) {
     char cand[1024], dir[768];
     int absolute = path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
@@ -1101,24 +1110,24 @@ static FILE *glow_open_module_path(const char *path, const char *importer, const
         path_dir(importer, dir, sizeof(dir));
         if (dir[0]) {
             snprintf(cand, sizeof(cand), "%s%s", dir, path);
-            FILE *f = fopen(cand, "r");
+            FILE *f = open_module_file(cand);
             if (f) { *found = intern_string(cand); return f; }
         }
     }
-    FILE *f = fopen(path, "r");
+    FILE *f = open_module_file(path);
     if (f) { *found = path; return f; }
     if (absolute) return NULL;
     snprintf(cand, sizeof(cand), "lib/%s", path);
-    if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+    if ((f = open_module_file(cand))) { *found = intern_string(cand); return f; }
     char exe[768] = "";
     glow_self_exe_path(exe, sizeof(exe));
     path_dir(exe, dir, sizeof(dir));
     if (dir[0]) {
         const char *rel = strncmp(path, "lib/", 4) == 0 ? path + 4 : path;
         snprintf(cand, sizeof(cand), "%s../lib/%s", dir, rel);
-        if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+        if ((f = open_module_file(cand))) { *found = intern_string(cand); return f; }
         snprintf(cand, sizeof(cand), "%slib/%s", dir, rel);
-        if ((f = fopen(cand, "r"))) { *found = intern_string(cand); return f; }
+        if ((f = open_module_file(cand))) { *found = intern_string(cand); return f; }
     }
     return NULL;
 }
@@ -2649,6 +2658,9 @@ int jit_exception_pending(void) { return has_exception; }
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
                         if (has_self) vm_stack[callee_base] = bm->instance;
+                        /* Missing arguments are none (they used to keep values left in
+                           those registers, so a default parameter saw garbage). */
+                        CLEAR_MISSING_ARGS(callee_base, (has_self ? 1 : 0) + ac, bm->method->body->preserved_locals);
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     } else R(pc->r0) = value_none();
                 } else if (ot == OBJ_CLASS) {

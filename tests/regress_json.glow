@@ -1,0 +1,26 @@
+# json.stringify escapes strings; json.parse decodes escapes, keeps integers
+# exact and reports invalid input instead of guessing (or looping forever).
+show json.stringify({"s": "q\"uote\nline\x\ttab"})
+show json.stringify([1, 2.5, none, true, false, "x"])
+let back = json.parse(json.stringify("round \"trip\"\n\ok\t"))
+show "round trip:", back == "round \"trip\"\n\ok\t"
+let v = json.parse("{\"u\": \"caf\u00e9\", \"e\": \"\ud83d\ude00\", \"q\": \"a\\\"b\", \"sl\": \"\/\"}")
+show v["u"], v["e"], v["q"], v["sl"]
+show json.parse("123456789012345678901234567890") + 1
+show json.parse("9007199254740993"), json.parse("1e3"), json.parse("-0.5"), json.parse("0")
+show json.parse("[[[]], {}]"), json.parse(" {\"a\" : [ 1 , 2 ] } ")["a"]
+for each bad in ["{bad", "[1, 2", "{\"a\" 1}", "[1,]", "tru", "\"x", "1 2", "", "01", "{\"a\":}", "[\"\x\"]"]:
+    try:
+        json.parse(bad)
+        show "no error for", bad
+    catch e:
+        show e
+    end
+end
+let l = [1]
+l.append(l)
+try:
+    json.stringify(l)
+catch e:
+    show e
+end

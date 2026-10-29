@@ -1858,135 +1858,307 @@ static Value native_media_png_dims(int argc, Value *args) {
 
 
 
-static void json_append_str(const char *s, StringBuilder *sb) {
-    int len = strlen(s);
-    if (sb->size + len >= sb->capacity) {
-        sb->capacity = (sb->size + len + 1) * 2;
-        sb->buffer = realloc(sb->buffer, sb->capacity);
+/* ---- JSON (RFC 8259) ----
+   stringify escapes strings and writes non-finite numbers and values JSON
+   has no form for (functions, instances) as null. parse is strict: invalid
+   input raises an error naming the line and column. Integers stay exact
+   (big ones become big-ints); nesting deeper than JSON_MAX_DEPTH is refused,
+   which also stops stringify on a list that contains itself. */
+#define JSON_MAX_DEPTH 1000
+
+typedef struct { char *p; size_t n, cap; int failed; } JsonBuf;
+
+static void jb_add(JsonBuf *b, const char *s, size_t n) {
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : 256;
+        while (cap < b->n + n + 1) cap *= 2;
+        b->p = realloc(b->p, cap);
+        b->cap = cap;
     }
-    memcpy(sb->buffer + sb->size, s, len);
-    sb->size += len;
-    sb->buffer[sb->size] = '\0';
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+    b->p[b->n] = '\0';
+}
+static void jb_str(JsonBuf *b, const char *s) { jb_add(b, s, strlen(s)); }
+
+static void json_write_string(JsonBuf *b, const char *s, size_t n) {
+    jb_add(b, "\"", 1);
+    size_t run = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        const char *esc = NULL;
+        char u[8];
+        switch (c) {
+            case '"': esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\n': esc = "\\n"; break;
+            case '\r': esc = "\\r"; break;
+            case '\t': esc = "\\t"; break;
+            case '\b': esc = "\\b"; break;
+            case '\f': esc = "\\f"; break;
+            default:
+                if (c < 0x20) { snprintf(u, sizeof(u), "\\u%04x", c); esc = u; }
+        }
+        if (esc) {
+            if (run) jb_add(b, s + i - run, run);
+            run = 0;
+            jb_str(b, esc);
+        } else run++;
+    }
+    if (run) jb_add(b, s + n - run, run);
+    jb_add(b, "\"", 1);
 }
 
-static void json_stringify_helper(Value v, StringBuilder *sb) {
-    // For now, keep it simple but use the efficient append
+static void json_write(Value v, JsonBuf *b, int depth) {
+    if (depth > JSON_MAX_DEPTH) { b->failed = 1; return; }
     if ((v & MASK_NAN) != MASK_NAN) {
-        char tmp[64]; format_double(tmp, sizeof(tmp), AS_FLOAT(v)); json_append_str(tmp, sb); return;
+        double d = AS_FLOAT(v);
+        if (isnan(d) || isinf(d)) { jb_str(b, "null"); return; }
+        char tmp[64]; format_double(tmp, sizeof(tmp), d); jb_str(b, tmp); return;
     }
-    if (is_bigint(v)) { char *_s = bigint_to_new_string(AS_BIGINT(v)); json_append_str(_s, sb); free(_s); return; }
+    if (is_bigint(v)) { char *s = bigint_to_new_string(AS_BIGINT(v)); jb_str(b, s); free(s); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) {
-        char tmp[64]; snprintf(tmp, sizeof(tmp), "%lld", (long long)AS_INT(v)); json_append_str(tmp, sb);
+        char tmp[64]; snprintf(tmp, sizeof(tmp), "%lld", (long long)AS_INT(v)); jb_str(b, tmp);
     } else if (type == VAL_BOOL) {
-        json_append_str(AS_BOOL(v) ? "true" : "false", sb);
-    } else if (type == VAL_STRING) {
-        json_append_str("\"", sb); json_append_str(AS_STRING(v), sb); json_append_str("\"", sb);
+        jb_str(b, AS_BOOL(v) ? "true" : "false");
+    } else if (type == VAL_STRING && (v & MASK_PAYLOAD)) {
+        json_write_string(b, AS_STRING(v), rope_length(v));
     } else if (type == VAL_LIST) {
-        json_append_str("[", sb);
         List *l = AS_LIST(v);
-        for (int i = 0; i < l->size; i++) {
-            json_stringify_helper(l->items[i], sb);
-            if (i < l->size - 1) json_append_str(", ", sb);
+        jb_add(b, "[", 1);
+        for (int i = 0; i < l->size && !b->failed; i++) {
+            if (i) jb_add(b, ", ", 2);
+            json_write(l->items[i], b, depth + 1);
         }
-        json_append_str("]", sb);
+        jb_add(b, "]", 1);
     } else if (type == VAL_DICT) {
-        json_append_str("{", sb);
         Dict *d = AS_DICT(v);
         int printed = 0;
-        for (int i = 0; i < d->capacity; i++) {
-            if (GET_TYPE(d->keys[i]) != VAL_NONE) {
-                if (printed > 0) json_append_str(", ", sb);
-                json_append_str("\"", sb);
-                const char *key = (const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD);
-                json_append_str(key, sb);
-                json_append_str("\": ", sb);
-                json_stringify_helper(d->values[i], sb);
-                printed++;
-            }
+        jb_add(b, "{", 1);
+        for (int i = 0; i < d->capacity && !b->failed; i++) {
+            if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+            if (printed++) jb_add(b, ", ", 2);
+            const char *key = (const char *)(uintptr_t)(d->keys[i] & MASK_PAYLOAD);
+            json_write_string(b, key, strlen(key));
+            jb_add(b, ": ", 2);
+            json_write(d->values[i], b, depth + 1);
         }
-        json_append_str("}", sb);
+        jb_add(b, "}", 1);
     } else {
-        json_append_str("null", sb);
+        jb_str(b, "null");
     }
 }
 
-static Value json_parse_value(const char **src) {
-    while (**src && isspace(**src)) (*src)++;
-    if (**src == '{') {
-        (*src)++;
-        Dict *d = dict_new(8);
-        while (**src && **src != '}') {
-            while (**src && isspace(**src)) (*src)++;
-            if (**src == '"') {
-                (*src)++;
-                const char *start = *src;
-                while (**src && **src != '"') (*src)++;
-                int len = *src - start;
-                char *key = malloc(len + 1); memcpy(key, start, len); key[len] = 0;
-                const char *interned = intern_string(key); free(key);
-                (*src)++;
-                while (**src && isspace(**src)) (*src)++;
-                if (**src == ':') (*src)++;
-                dict_set(d, interned, json_parse_value(src));
-            }
-            while (**src && isspace(**src)) (*src)++;
-            if (**src == ',') (*src)++;
-        }
-        if (**src == '}') (*src)++;
-        return value_dict(d);
-    } else if (**src == '[') {
-        (*src)++;
-        List *l = list_new(8);
-        while (**src && **src != ']') {
-            list_push(l, json_parse_value(src));
-            while (**src && isspace(**src)) (*src)++;
-            if (**src == ',') (*src)++;
-        }
-        if (**src == ']') (*src)++;
-        return value_list(l);
-    } else if (**src == '"') {
-        (*src)++;
-        const char *start = *src;
-        while (**src && **src != '"') (*src)++;
-        int len = *src - start;
-        char *str = malloc(len + 1); memcpy(str, start, len); str[len] = 0;
-        Value res = value_string_copy(str);
-        free(str);
-        (*src)++;
-        return res;
-    } else if (isdigit(**src) || **src == '-') {
-        char *end;
-        double d = strtod(*src, &end);
-        *src = end;
-        return value_from_double(d);
-    } else if (strncmp(*src, "true", 4) == 0) { *src += 4; return value_bool(1); }
-    else if (strncmp(*src, "false", 5) == 0) { *src += 5; return value_bool(0); }
-    else if (strncmp(*src, "null", 4) == 0) { *src += 4; return value_none(); }
+typedef struct { const char *start, *p, *end; const char *err; int depth; } JsonIn;
 
-    // Invalid JSON, prevent infinite loops by advancing src
-    if (**src) (*src)++;
+static void json_ws(JsonIn *in) {
+    while (in->p < in->end && (*in->p == ' ' || *in->p == '\t' || *in->p == '\n' || *in->p == '\r')) in->p++;
+}
+
+static int json_hex4(const char *p, const char *end, unsigned *out) {
+    if (end - p < 4) return 0;
+    unsigned v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = p[i];
+        v <<= 4;
+        if (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+        else return 0;
+    }
+    *out = v;
+    return 1;
+}
+
+static void json_utf8(JsonBuf *b, unsigned cp) {
+    char u[4];
+    if (cp < 0x80) { u[0] = (char)cp; jb_add(b, u, 1); }
+    else if (cp < 0x800) { u[0] = (char)(0xC0 | (cp >> 6)); u[1] = (char)(0x80 | (cp & 0x3F)); jb_add(b, u, 2); }
+    else if (cp < 0x10000) { u[0] = (char)(0xE0 | (cp >> 12)); u[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); u[2] = (char)(0x80 | (cp & 0x3F)); jb_add(b, u, 3); }
+    else { u[0] = (char)(0xF0 | (cp >> 18)); u[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); u[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); u[3] = (char)(0x80 | (cp & 0x3F)); jb_add(b, u, 4); }
+}
+
+/* Read a string (in->p at the opening quote) into b. */
+static int json_read_string(JsonIn *in, JsonBuf *b) {
+    in->p++;
+    b->n = 0;
+    jb_add(b, "", 0);
+    for (;;) {
+        const char *s = in->p;
+        while (in->p < in->end && *in->p != '"' && *in->p != '\\') in->p++;
+        jb_add(b, s, (size_t)(in->p - s));
+        if (in->p >= in->end) { in->err = "unterminated string"; return 0; }
+        if (*in->p == '"') { in->p++; return 1; }
+        in->p++;
+        if (in->p >= in->end) { in->err = "unterminated string"; return 0; }
+        char c = *in->p++;
+        switch (c) {
+            case '"': jb_add(b, "\"", 1); break;
+            case '\\': jb_add(b, "\\", 1); break;
+            case '/': jb_add(b, "/", 1); break;
+            case 'b': jb_add(b, "\b", 1); break;
+            case 'f': jb_add(b, "\f", 1); break;
+            case 'n': jb_add(b, "\n", 1); break;
+            case 'r': jb_add(b, "\r", 1); break;
+            case 't': jb_add(b, "\t", 1); break;
+            case 'u': {
+                unsigned cp;
+                if (!json_hex4(in->p, in->end, &cp)) { in->p--; in->err = "bad \\u escape"; return 0; }
+                in->p += 4;
+                if (cp >= 0xD800 && cp <= 0xDBFF) {
+                    unsigned lo;
+                    if (in->end - in->p >= 6 && in->p[0] == '\\' && in->p[1] == 'u' && json_hex4(in->p + 2, in->end, &lo) && lo >= 0xDC00 && lo <= 0xDFFF) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        in->p += 6;
+                    } else cp = 0xFFFD;
+                } else if (cp >= 0xDC00 && cp <= 0xDFFF) cp = 0xFFFD;
+                json_utf8(b, cp);
+                break;
+            }
+            default: in->p -= 2; in->err = "bad escape in string"; return 0;
+        }
+    }
+}
+
+static Value json_read_value(JsonIn *in, JsonBuf *tmp);
+
+static Value json_read_number(JsonIn *in) {
+    const char *s = in->p;
+    int is_int = 1;
+    if (in->p < in->end && *in->p == '-') in->p++;
+    if (in->p >= in->end || !isdigit((unsigned char)*in->p)) { in->err = "bad number"; return value_none(); }
+    if (*in->p == '0') in->p++;
+    else while (in->p < in->end && isdigit((unsigned char)*in->p)) in->p++;
+    if (in->p < in->end && *in->p == '.') {
+        is_int = 0; in->p++;
+        if (in->p >= in->end || !isdigit((unsigned char)*in->p)) { in->err = "bad number"; return value_none(); }
+        while (in->p < in->end && isdigit((unsigned char)*in->p)) in->p++;
+    }
+    if (in->p < in->end && (*in->p == 'e' || *in->p == 'E')) {
+        is_int = 0; in->p++;
+        if (in->p < in->end && (*in->p == '+' || *in->p == '-')) in->p++;
+        if (in->p >= in->end || !isdigit((unsigned char)*in->p)) { in->err = "bad number"; return value_none(); }
+        while (in->p < in->end && isdigit((unsigned char)*in->p)) in->p++;
+    }
+    size_t n = (size_t)(in->p - s);
+    char buf[64], *num = n < sizeof(buf) ? buf : malloc(n + 1);
+    memcpy(num, s, n);
+    num[n] = '\0';
+    Value v;
+    if (is_int && n <= 18) {
+        int64_t i = strtoll(num, NULL, 10);
+        if (fits_int48(i)) v = value_int(i);
+        else if (i >= -INT53_MAX && i <= INT53_MAX) v = value_float((double)i);
+        else v = value_bigint(bigint_from_int64(i));
+    } else if (is_int) {
+        v = value_bigint(bigint_from_string(num));
+    } else {
+        v = value_from_double(strtod(num, NULL));
+    }
+    if (num != buf) free(num);
+    return v;
+}
+
+static Value json_read_value(JsonIn *in, JsonBuf *tmp) {
+    json_ws(in);
+    if (in->p >= in->end) { in->err = "unexpected end of input"; return value_none(); }
+    char c = *in->p;
+    if (c == '{' || c == '[') {
+        if (++in->depth > JSON_MAX_DEPTH) { in->err = "nested too deeply"; return value_none(); }
+        in->p++;
+        json_ws(in);
+        Value out;
+        if (c == '{') {
+            Dict *d = dict_new(8);
+            out = value_dict(d);
+            if (in->p < in->end && *in->p == '}') { in->p++; in->depth--; return out; }
+            for (;;) {
+                json_ws(in);
+                if (in->p >= in->end || *in->p != '"') { in->err = "expected a string key"; return value_none(); }
+                if (!json_read_string(in, tmp)) return value_none();
+                const char *key = intern_string(tmp->p);
+                json_ws(in);
+                if (in->p >= in->end || *in->p != ':') { in->err = "expected ':'"; return value_none(); }
+                in->p++;
+                Value item = json_read_value(in, tmp);
+                if (in->err) return value_none();
+                dict_set(d, key, item);
+                json_ws(in);
+                if (in->p < in->end && *in->p == ',') { in->p++; continue; }
+                if (in->p < in->end && *in->p == '}') { in->p++; break; }
+                in->err = "expected ',' or '}'";
+                return value_none();
+            }
+        } else {
+            List *l = list_new(8);
+            out = value_list(l);
+            if (in->p < in->end && *in->p == ']') { in->p++; in->depth--; return out; }
+            for (;;) {
+                Value item = json_read_value(in, tmp);
+                if (in->err) return value_none();
+                list_push(l, item);
+                json_ws(in);
+                if (in->p < in->end && *in->p == ',') { in->p++; continue; }
+                if (in->p < in->end && *in->p == ']') { in->p++; break; }
+                in->err = "expected ',' or ']'";
+                return value_none();
+            }
+        }
+        in->depth--;
+        return out;
+    }
+    if (c == '"') {
+        if (!json_read_string(in, tmp)) return value_none();
+        return value_string_copy_len(tmp->p, tmp->n);
+    }
+    if (c == '-' || isdigit((unsigned char)c)) return json_read_number(in);
+    if (in->end - in->p >= 4 && !memcmp(in->p, "true", 4)) { in->p += 4; return value_bool(1); }
+    if (in->end - in->p >= 5 && !memcmp(in->p, "false", 5)) { in->p += 5; return value_bool(0); }
+    if (in->end - in->p >= 4 && !memcmp(in->p, "null", 4)) { in->p += 4; return value_none(); }
+    in->err = "unexpected character";
+    return value_none();
+}
+
+static Value json_error(const char *msg) {
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
     return value_none();
 }
 
 static Value native_json_parse(int argc, Value *args) {
     if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
-    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
-    const char *src = AS_STRING(args[0]);
-    return json_parse_value(&src);
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING || !(args[0] & MASK_PAYLOAD)) return json_error("json.parse: expected a string");
+    JsonIn in;
+    in.start = in.p = AS_STRING(args[0]);
+    in.end = in.start + rope_length(args[0]);
+    in.err = NULL;
+    in.depth = 0;
+    /* Skip a UTF-8 byte-order mark. */
+    if (in.end - in.p >= 3 && (unsigned char)in.p[0] == 0xEF && (unsigned char)in.p[1] == 0xBB && (unsigned char)in.p[2] == 0xBF) in.p += 3;
+    JsonBuf tmp = { 0 };
+    Value v = json_read_value(&in, &tmp);
+    if (!in.err) { json_ws(&in); if (in.p < in.end) in.err = "unexpected text after the JSON value"; }
+    free(tmp.p);
+    if (in.err) {
+        int line = 1, col = 1;
+        for (const char *q = in.start; q < in.p; q++) { if (*q == '\n') { line++; col = 1; } else col++; }
+        char msg[160];
+        snprintf(msg, sizeof(msg), "json.parse: %s at line %d column %d", in.err, line, col);
+        return json_error(msg);
+    }
+    return v;
 }
 
 static Value native_json_stringify(int argc, Value *args) {
     if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
-    if (argc < 1) return value_none();
-    StringBuilder sb;
-    sb.capacity = 1024;
-    sb.size = 0;
-    sb.buffer = malloc(sb.capacity);
-    sb.buffer[0] = '\0';
-    json_stringify_helper(args[0], &sb);
-    Value res = value_string_copy(sb.buffer);
-    free(sb.buffer);
+    if (argc < 1) return json_error("json.stringify: expected a value");
+    JsonBuf b = { 0 };
+    jb_add(&b, "", 0);
+    json_write(args[0], &b, 0);
+    if (b.failed) { free(b.p); return json_error("json.stringify: nested too deeply (does a list or dict contain itself?)"); }
+    Value res = value_string_copy_len(b.p, b.n);
+    free(b.p);
     return res;
 }
 
