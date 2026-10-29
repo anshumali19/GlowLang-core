@@ -55,3 +55,20 @@ func hot():
     return caught
 end
 show "caught in hot loop:", hot()
+
+# An error raised by a built-in that is the last statement of a try body
+# used to escape the try (it was noticed one instruction too late).
+try:
+    [1, 2].map(5)
+catch e:
+    show "last statement:", e
+end
+func last_in_func():
+    try:
+        [1].map("x")
+    catch e:
+        return "caught in func"
+    end
+    return "missed"
+end
+show last_in_func()

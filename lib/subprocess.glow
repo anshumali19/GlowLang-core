@@ -1,12 +1,13 @@
 # subprocess.glow
-# Natural Language Subprocess Execution for GlowLang
+# Natural Language Subprocess Execution for GlowLang, built on the native
+# `process` module (process.run / process.start).
 
 class ProcessResult:
     func init(code, output):
         self.code = code
         self.output = output
     end
-    
+
     func display():
         show "--- Process Result ---"
         show "Exit Code: ", self.code
@@ -20,26 +21,21 @@ class SubprocessManager:
     func init():
     end
 
+    # command: a string (run by the system shell) or a list of program and
+    # arguments (run directly, no shell). With capture_output the program's
+    # stdout and stderr are returned in output; otherwise they go to the
+    # terminal.
     func run(command, capture_output):
         if capture_output == true:
-            # GlowLang native os.system returns status code.
-            # We gracefully capture output using a temporary file redirect.
-            let tmp_file = ".glow_subprocess_tmp.txt"
-            let full_cmd = command + " > " + tmp_file + " 2>&1"
-            let code = os.system(full_cmd)
-            let out = fs.read(tmp_file)
-            
-            # Cleanup
-            os.system("rm -f " + tmp_file)
-            
-            let r = ProcessResult()
-            r.init(code, out)
-            return r
+            let r = process.run(command, {"stderr": "stdout"})
+            let res = ProcessResult()
+            res.init(r["code"], r["stdout"])
+            return res
         else:
-            let code = os.system(command)
-            let r = ProcessResult()
-            r.init(code, "")
-            return r
+            let r = process.run(command, {"stdout": "inherit", "stderr": "inherit"})
+            let res = ProcessResult()
+            res.init(r["code"], "")
+            return res
         end
     end
 end

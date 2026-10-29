@@ -1,0 +1,33 @@
+has executable: true
+find glowlang: true
+find missing: none
+code: 7 ok: false stdout: exiting
+upper: [12 chars, HELLO, WORLD]
+upper ok: true
+big: 32890 chars
+env: A=one B=none
+fail code: 1 stdout: before
+stderr mentions error: true
+merged: true stderr empty: true
+timed out: true ok: false fast: true
+spaces: spaces ok
+cwd: 7
+shell: shell-ok
+missing program: process.run: program not found: no-such-program-xyz
+empty: process.run: the command list is empty
+bad mode: process.run: stderr must be "pipe", "stdout", "inherit" or "null"
+bad cwd: process.run: cwd is not a folder: no/such/folder
+alive: true pid > 0: true
+reply: got ping
+reply: got second
+reply: bye
+after quit: none
+exit: 0
+closed: process.send: the process handle is closed or invalid
+rest: [got a, got b, eof]
+exit: 0
+first: sleeping
+read timeout: process.read_line: timed out after 0.3 seconds
+wait timeout: none
+killed: true
+done

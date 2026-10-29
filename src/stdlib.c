@@ -3819,6 +3819,7 @@ void std_init(void) {
     dict_set(os, "verify_gc", native_func_new("verify_gc", native_verify_gc));
     dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
+    glow_process_init();
 #endif
 
     Dict *threads = dict_new(4);
