@@ -16,7 +16,9 @@ standard library (`lib/`), LICENSE and NOTICE. Once installed:
 
 - `glowlang` and `gdu` work in every terminal (Command Prompt, PowerShell,
   Windows Terminal), without editing PATH;
-- the Start menu gets a **GlowLang** entry that opens the interactive REPL.
+- the Start menu gets a **GlowLang** entry that opens the interactive REPL,
+  and a **gdu (GlowLang packages)** entry. The Store does not accept a
+  program without a Start entry unless Microsoft grants a waiver.
 
 ## One-time setup
 
