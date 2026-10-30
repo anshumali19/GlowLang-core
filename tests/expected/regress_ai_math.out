@@ -1,0 +1,8 @@
+veda weights match numpy: true
+veda output matches numpy: true
+transformer attention matches numpy: true
+softmax with wide inputs: true
+positional encoding matches numpy: true
+sigmoid extremes: 1 0 0.5
+tanh extremes: 1 -1 0
+binary cross-entropy matches numpy: true

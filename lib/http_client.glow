@@ -1,5 +1,5 @@
-# GlowHTTP — High-Performance HTTP Client Library
-# Provides GET, POST, PUT, DELETE with headers, timeouts, and JSON support
+# GlowHTTP — an HTTP client: GET, POST, PUT and DELETE over http:// and
+# https:// (OpenSSL), with headers, timeouts, redirects and JSON helpers.
 
 blueprint HttpClient:
     action init():

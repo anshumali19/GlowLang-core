@@ -1,0 +1,14 @@
+changes: 1
+id: 1
+O'Brien "quoted" 9007199254740993 2.5 1 none
+named -5
+int64 range: {"hi": 9223372036854775807, "lo": -9223372036854775808}
+blob: ABC
+step: named
+update changes: 1 1
+sqlite: query: no such table: nope
+sqlite: query: the statement has placeholders but no values were given
+sqlite: query: the statement has 2 placeholders but 1 value was given
+sqlite: query: no value for :a
+sqlite: query: a value cannot be stored (use numbers, strings, bools or none)
+sqlite: exec: UNIQUE constraint failed: t.id

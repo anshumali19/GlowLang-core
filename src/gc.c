@@ -405,7 +405,7 @@ GC_NO_SANITIZE static void gc_scan_words(const void *lo, const void *hi, void (*
     for (; a + sizeof(uintptr_t) <= end; a += sizeof(uintptr_t)) {
         uintptr_t w = *(const uintptr_t*)a;
         GCObject *o = gc_find_object(w);
-        if (!o && (w & MASK_NAN) == MASK_NAN) o = gc_find_object((uintptr_t)(w & MASK_PAYLOAD));
+        if (!o && !IS_FLOAT_BITS(w)) o = gc_find_object((uintptr_t)(w & MASK_PAYLOAD));
         if (o) mark_obj(o);
     }
 }

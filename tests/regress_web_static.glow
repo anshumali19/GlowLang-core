@@ -1,0 +1,33 @@
+# serve_static used to build base_dir + request path, so GET /../../secret
+# served any file on the machine.
+import "web"
+fs.mkdir("web_static_tmp")
+fs.mkdir("web_static_tmp/sub")
+fs.write("web_static_tmp/index.html", "<h1>hi</h1>")
+fs.write("web_static_tmp/sub/app.js", "let x = 1")
+fs.write("web_static_secret.txt", "SECRET")
+
+for each p in ["/index.html", "/sub/app.js", "/./index.html", "//sub//app.js"]:
+    show p, "->", static_file_path("web_static_tmp", p)
+end
+for each p in ["/../web_static_secret.txt", "/sub/../../web_static_secret.txt", "/..", "/%2e%2e/web_static_secret.txt", "/..%2fweb_static_secret.txt", "/C:/Windows/win.ini", "/sub\..\..\x", "", "/", "relative.txt"]:
+    show p, "->", static_file_path("web_static_tmp", p)
+end
+
+func fetch(path):
+    let req = Request("GET " + path + " HTTP/1.1\r\nHost: x\r\n\r\n")
+    let res = Response()
+    serve_static("web_static_tmp", req, res)
+    return str(res.status_code) + " " + str(res.body)
+end
+show fetch("/index.html")
+show fetch("/sub/app.js")
+show fetch("/../web_static_secret.txt")
+show fetch("/sub")
+show fetch("/missing.html")
+
+fs.remove("web_static_tmp/sub/app.js")
+fs.remove("web_static_tmp/sub")
+fs.remove("web_static_tmp/index.html")
+fs.remove("web_static_tmp")
+fs.remove("web_static_secret.txt")

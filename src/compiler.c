@@ -109,7 +109,7 @@ void visualize_stack(int base_reg, int local_count) {
         Value v = vm_stack[base_reg + i];
         if (i > 0) printf(", ");
         if (v == 0) printf("nil");
-        else if (((v) & MASK_NAN) != MASK_NAN) printf("%g", AS_FLOAT(v));
+        else if (IS_FLOAT_BITS(v)) printf("%g", AS_FLOAT(v));
         else {
             uint64_t type = ((v) & MASK_TYPE) >> 48;
             if (type == VAL_INT) printf("%lld", (long long)AS_INT(v));
