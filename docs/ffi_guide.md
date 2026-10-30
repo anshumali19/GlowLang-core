@@ -99,12 +99,20 @@ pointers. These helpers work with C memory:
 
 ```glow
 # strtol reports where parsing stopped through a char ** out-parameter.
-let strtol = libc.function("strtol", ["string", "pointer", "int"], "long")
+let strtol = libc.function("strtol", ["pointer", "pointer", "int"], "long")
+let input = ffi.from_string("42abc")
 let endp = ffi.alloc(ffi.sizeof("pointer"))
-show strtol("42abc", endp, 10)                   # 42
+show strtol(input, endp, 10)                     # 42
 show ffi.string(ffi.load(endp, "pointer"))       # abc
 ffi.free(endp)
+ffi.free(input)
 ```
+
+**Pointers into a `string` argument don't outlive the call.** A `string`
+argument is a temporary copy, freed when the call returns. Here `strtol`'s
+end pointer points into its input, so the input is C memory from
+`ffi.from_string`, which lives until `ffi.free`. Pass a `string` when C only
+reads the text during the call, which is the common case.
 
 Structs are memory too. Read and write their fields at their byte offsets:
 

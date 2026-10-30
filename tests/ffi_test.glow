@@ -17,12 +17,17 @@ show "math:", sqrt(2.0), sqrt(16), floor(-2.5)
 let getenv = libc.function("getenv", ["string"], "string")
 show "getenv:", getenv("PATH") is not none, getenv("GLOW_NO_SUCH_VARIABLE")
 
-# An out-parameter: strtol writes where parsing stopped.
+# An out-parameter: strtol writes where parsing stopped. That pointer points
+# into the input, so the input must outlive the call: C memory from
+# ffi.from_string, not a "string" argument (a copy freed after the call).
 let strtol = libc.function("strtol", ["string", "pointer", "int"], "long")
+let strtol_p = libc.function("strtol", ["pointer", "pointer", "int"], "long")
+let input = ffi.from_string("  42abc")
 let endp = ffi.alloc(ffi.sizeof("pointer"))
-show "strtol:", strtol("  42abc", endp, 10), ffi.string(ffi.load(endp, "pointer"))
+show "strtol:", strtol_p(input, endp, 10), ffi.string(ffi.load(endp, "pointer"))
 show "hex:", strtol("ff", none, 16)
 ffi.free(endp)
+ffi.free(input)
 
 # errno from the C library.
 strtol("99999999999999999999999", none, 10)

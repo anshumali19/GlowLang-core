@@ -118,7 +118,13 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
     if ($problems.Count -eq 0) { $pass++ }
     else {
         $fail++
-        $tail = if ($err) { ($err -split "`n" | Select-Object -Last 3) -join ' | ' } else { '' }
+        # The first line (the error message) and the last three (where).
+        $tail = ''
+        if ($err) {
+            $lines = $err -split "`n"
+            $first = ($lines | Where-Object { $_.Trim() } | Select-Object -First 1) -replace "$([char]27)\[[0-9;]*m", ''
+            $tail = (@($first) + @($lines | Select-Object -Last 3)) -join ' | '
+        }
         $failures += "FAIL $($t.Name): $($problems -join '; ')$(if ($tail) { "  [stderr: $tail]" })"
     }
 }
