@@ -1,21 +1,54 @@
-# Glow Crypto Library
-# Provides object-oriented wrappers for hashing, cryptography, and UUID generation.
+# crypto.glow — hashing, message authentication, secure random values and
+# UUIDs, as methods on `hash` (the same functions are also built in as
+# crypto.sha256, crypto.hmac, crypto.random_hex, crypto.equal, crypto.uuid4).
+#
+#   import "crypto"
+#   show hash.sha256("hello")
+#   let token = hash.random_hex(16)
+#   show hash.uuid4()
+#
+# For signing and verifying messages, see kavach.glow. For passwords, do not
+# store a plain hash: use a slow password hash (not provided yet).
 
 blueprint Hash:
     action init():
         pass
     end
 
-    # Compute SHA-256 hash of a string
+    # SHA-256 as 64 hex digits.
     action sha256(data):
         return crypto.sha256(data)
     end
 
-    # Compute BLAKE3 fast hash of a string
+    # BLAKE3 (fast, 256-bit) as 64 hex digits.
     action blake3(data):
         return crypto.blake3(data)
     end
-end
 
+    # HMAC-SHA256 of data with a secret key, as 64 hex digits.
+    action hmac(key, data):
+        return crypto.hmac(key, data)
+    end
+
+    # n secure random bytes as 2n hex digits: tokens, keys, nonces.
+    action random_hex(n):
+        return crypto.random_hex(n)
+    end
+
+    # n secure random bytes, raw.
+    action random_bytes(n):
+        return crypto.random_bytes(n)
+    end
+
+    # Compare two secrets without leaking where they differ.
+    action equal(a, b):
+        return crypto.equal(a, b)
+    end
+
+    # A random version-4 UUID.
+    action uuid4():
+        return crypto.uuid4()
+    end
+end
 
 let hash = Hash()

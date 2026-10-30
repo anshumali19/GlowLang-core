@@ -1,0 +1,45 @@
+# veda, transformer and ai against NumPy reference values (computed once and
+# written here). These libraries used to approximate exp, log, sin and cos with
+# short series (exp(-30) came out huge and negative, so softmax was garbage),
+# normalized attention with min-max instead of softmax, scaled by a fixed
+# 1/sqrt(2), and overflowed sigmoid/tanh into nan for large inputs.
+import "veda"
+import "transformer"
+import "ai"
+
+func close_to(got, want):
+    when len(got) != len(want):
+        return false
+    end
+    let i = 0
+    while i < len(want):
+        when math.abs(got[i] - want[i]) > 0.000001:
+            show "  mismatch at", i, got[i], want[i]
+            return false
+        end
+        i = i + 1
+    end
+    return true
+end
+func as_list(t, n):
+    return [t[i] for each i in range(n)]
+end
+
+let q = tensor_from_list([1.0, 0.5, -1.0, 2.0, 0.0, 1.0, 3.0, -2.0, 2.5, -0.5, 0.5, 1.0])
+let k = tensor_from_list([0.5, 1.0, 0.0, -1.0, 1.5, -2.0, 1.0, 0.5, -1.0, 0.0, 2.0, 3.0])
+let v = tensor_from_list([1.0, 2.0, 3.0, 4.0, 0.0, -1.0, 0.5, 2.0, 5.0, 0.0, -2.0, 1.0])
+let attn = VedaAttention(3, 4)
+show "veda weights match numpy:", close_to(as_list(attn.weights(q, k), 9), [0.095183, 0.201503, 0.703314, 0.691438, 0.154281, 0.154281, 0.042581, 0.855271, 0.102148])
+show "veda output matches numpy:", close_to(as_list(attn.attend_step(q, k, v), 12), [3.611753, -0.011136, -1.020327, 1.487052, 1.462842, 1.228596, 1.842894, 3.228596, 0.553319, -0.770108, 0.351085, 1.983015])
+show "transformer attention matches numpy:", close_to(as_list(scaled_dot_product_attention(q, k, v, 3, 4), 12), [3.611753, -0.011136, -1.020327, 1.487052, 1.462842, 1.228596, 1.842894, 3.228596, 0.553319, -0.770108, 0.351085, 1.983015])
+
+let wide = tensor_from_list([-1000.0, -30.0, 0.0, 5.0])
+show "softmax with wide inputs:", close_to(as_list(softmax(wide, 4), 4), [0.0, 0.0, 0.006692851, 0.993307149])
+show "positional encoding matches numpy:", close_to(as_list(positional_encoding(3, 6), 18), [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.841471, 0.540302, 0.046399, 0.998923, 0.002154, 0.999998, 0.909297, -0.416147, 0.092699, 0.995694, 0.004309, 0.999991])
+
+show "sigmoid extremes:", sigmoid(1000), sigmoid(-1000), sigmoid(0)
+show "tanh extremes:", tanh_act(1000), tanh_act(-1000), tanh_act(0)
+let bce = LossFunction("cross_entropy")
+let p = tensor_from_list([0.9, 0.2, 0.6])
+let t = tensor_from_list([1.0, 0.0, 1.0])
+show "binary cross-entropy matches numpy:", close_to([bce.compute(p, t, 3)], [0.279776564])

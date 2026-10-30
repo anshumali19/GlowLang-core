@@ -1,0 +1,56 @@
+# orm.glow and sqlite: values are bound, never parsed as SQL; names must be
+# identifiers; failed batches and migrations roll back. (Values used to be
+# joined into the SQL text, so a name containing a quote broke or rewrote it.)
+import "orm"
+let orm = ORM(":memory:")
+let s = Schema("users")
+s.string("name", {"required": true})
+s.integer("age", {"default": 0})
+s.string("note", {"default": "it's fine"})
+s.enable_timestamps()
+orm.register(s)
+orm.migrate()
+let evil = "Robert'); DROP TABLE users; --"
+let id1 = orm.insert("users", {"name": evil, "age": 30})
+let id2 = orm.insert("users", {"name": "Ana", "age": 25})
+show "ids:", id1, id2, "count:", orm.count("users")
+let r = orm.exec_query(orm.find("users").where_eq("name", evil))
+show "found evil name intact:", r[0]["name"] == evil, "note:", r[0]["note"]
+show "timestamp is a real time:", r[0]["created_at"].starts_with("20")
+show "injection in where_eq:", len(orm.exec_query(orm.find("users").where_eq("name", "x' OR '1'='1")))
+show "where_in:", [row["name"] for each row in orm.exec_query(orm.find("users").where_in("name", ["Ana", evil]).order_by("age", "asc"))]
+show "like:", len(orm.exec_query(orm.find("users").where_like("name", "A%")))
+show "limit/offset:", [row["name"] for each row in orm.exec_query(orm.find("users").order_by("id").limit(1).offset(1))]
+show "update:", orm.update("users", {"age": 31}, "name = ?", [evil])
+show "count_where:", orm.count_where("users", ["age > ?"], [30])
+try:
+    orm.find("users; DROP TABLE users")
+catch e:
+    show e
+end
+try:
+    orm.find("users").order_by("age; DROP TABLE users", "ASC")
+catch e:
+    show e
+end
+try:
+    orm.insert("users", {"name) VALUES ('x'); --": 1})
+catch e:
+    show e
+end
+try:
+    orm.batch_insert("users", [{"name": "ok1"}, {"name": none}])
+catch e:
+    show "batch rolled back:", e.contains("rolled back"), "count still:", orm.count("users")
+end
+show "transaction:", orm.transaction(lambda(o): o.insert("users", {"name": none})), orm.last_error is not none
+show "table still there:", orm.count("users")
+let m = Migration(1, "add posts; it's v1")
+m.up("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)")
+m.down("DROP TABLE posts")
+orm.add_migration(m)
+show "migrations applied:", orm.run_migrations(), orm.run_migrations()
+show "rolled back:", orm.rollback(0)
+orm.exec_sql("CREATE TABLE a (x); CREATE TABLE b (y)")
+show "multi-statement exec_sql ok"
+orm.close()

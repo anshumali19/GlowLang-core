@@ -6,7 +6,7 @@ GlowLang supports multiple deployment strategies for production applications:
 - **Standalone binary** — Direct execution on any Linux x86_64 system
 - **Docker** — Containerized deployment with multi-stage builds
 - **Docker Compose** — Multi-service deployments (app + worker)
-- **WASM** — Browser-based execution
+- **WASM** — experimental: `make wasm` exists but is not built or tested by CI (see wasm_deployment.md)
 - **ARM64** — Cross-compiled for ARM64 servers (AWS Graviton, etc.)
 
 ## Quick Start

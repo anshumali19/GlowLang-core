@@ -157,6 +157,12 @@ typedef struct {
 } StringBuilder;
 
 #define MASK_NAN      ((uint64_t)0x7FF8000000000000)
+/* Tags never set the sign bit, so a pattern with it set is always a double.
+   NaN doubles are stored as CANON_NAN (x86's default NaN): a NaN with the
+   sign clear would look like a tagged value (it used to read as the int 0). */
+#define MASK_SIGN     ((uint64_t)0x8000000000000000)
+#define CANON_NAN     ((uint64_t)0xFFF8000000000000)
+#define IS_FLOAT_BITS(v) ((((uint64_t)(v)) & (MASK_NAN | MASK_SIGN)) != MASK_NAN)
 #define MASK_TYPE     ((uint64_t)0x0007000000000000)
 #define MASK_PAYLOAD  ((uint64_t)0x0000FFFFFFFFFFFF)
 
@@ -177,7 +183,7 @@ static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MA
 /* Extract bits to type */
 #define IS_INT(v) (((v) & 0xFFFF000000000000ULL) == 0x7FF8000000000000ULL)
 static inline ValueType GET_TYPE(Value v) {
-    return (((v) & MASK_NAN) != MASK_NAN) ? VAL_FLOAT : (ValueType)(((v) & MASK_TYPE) >> 48);
+    return IS_FLOAT_BITS(v) ? VAL_FLOAT : (ValueType)(((v) & MASK_TYPE) >> 48);
 }
 #define GET_OBJ_TYPE(v) (((GCObject*)(uintptr_t)((v) & MASK_PAYLOAD))->type)
 
@@ -222,7 +228,7 @@ static inline Value make_value(uint64_t type, uint64_t payload) {
 }
 
 static inline Value value_int(int64_t v) { return make_value(VAL_INT, (uint64_t)v); }
-static inline Value value_float(double v) { Value val; memcpy(&val, &v, sizeof(v)); return val; }
+static inline Value value_float(double v) { Value val; if (v != v) return CANON_NAN; memcpy(&val, &v, sizeof(v)); return val; }
 static inline Value value_bool(int v) { return make_value(VAL_BOOL, v ? 1 : 0); }
 static inline Value value_list(List *l) { return make_value(VAL_LIST, (uint64_t)(uintptr_t)l); }
 static inline Value value_packed(PackedArray *pa) { return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)pa); }
@@ -894,6 +900,8 @@ void glow_process_init(void);
 void glow_ffi_init(void);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
 Value native_func_new_data(const char *name, NativeFuncPtr ptr, void *data, void (*finalize)(void *data));
+/* The current row of a SQLite statement as a dict (stdlib.c). */
+Value glow_sqlite_row(void *stmt);
 const char *intern_string(const char *s);
 /* Full path of the running glowlang executable, written to out
    (NUL-terminated). Returns its length, or -1 when it is not known. */

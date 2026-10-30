@@ -1,0 +1,16 @@
+sha256 abc: true
+hmac rfc4231 #2: true
+sha256 with a zero byte differs from truncated: true
+key length: 64 keys differ: true
+random_bytes length: 16 hex length: 16
+uuid shape: 36 4 true
+uuids differ: true
+equal: true false false true
+seal shape: true 71
+verify: true false false
+other key rejects: false
+same key, new shield accepts: true
+old names: true
+random key works: true
+kavach: the secret key must be a string from kavach_new_key(), not a int (a number is guessable)
+kavach: the secret key must be at least 32 characters; use kavach_new_key()

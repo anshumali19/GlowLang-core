@@ -13,18 +13,10 @@
 
 # ---------- Math Helpers ----------------------------------------------------
 
-# Taylor-series approximation of exp(x), 20-term expansion.
-# Sufficient precision for softmax / activation use.
+# exp(x). This was a 20-term Taylor series, which is badly wrong for the large
+# negative inputs softmax produces (exp(-30) came out huge, even negative).
 func glow_exp(x):
-    let result = 1.0
-    let term = 1.0
-    let i = 1
-    while i < 20:
-        term = term * x / i
-        result = result + term
-        i = i + 1
-    end
-    return result
+    return math.exp(x)
 end
 
 # ---------- Tensor Utility Functions ----------------------------------------
@@ -390,44 +382,19 @@ end
 # ---------- Sinusoidal Positional Encoding ----------------------------------
 # PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
 # PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
-# Approximated using Taylor series for sin/cos.
 
+# sin, cos and pow. These were Taylor series (inaccurate away from 0) and a
+# loop that ignored fractional exponents.
 func glow_sin(x):
-    # Normalize x to [-pi, pi] range approximately
-    let result = 0.0
-    let term = x
-    let i = 1
-    while i < 15:
-        result = result + term
-        term = term * (0.0 - x * x) / ((2 * i) * (2 * i + 1))
-        i = i + 1
-    end
-    return result
+    return math.sin(x)
 end
 
 func glow_cos(x):
-    let result = 1.0
-    let term = 1.0
-    let i = 1
-    while i < 15:
-        term = term * (0.0 - x * x) / ((2 * i - 1) * (2 * i))
-        result = result + term
-        i = i + 1
-    end
-    return result
+    return math.cos(x)
 end
 
 func glow_pow(base, exp_val):
-    # Approximate base^exp via exp(exp_val * ln(base))
-    # ln(base) approximated via series for base close to 1, or
-    # for 10000^(2i/d) we precompute iteratively
-    let result = 1.0
-    let i = 0
-    while i < exp_val:
-        result = result * base
-        i = i + 1
-    end
-    return result
+    return math.pow(base, exp_val)
 end
 
 # Returns flat tensor of (seq_len * d_model) positional encodings
@@ -437,12 +404,9 @@ func positional_encoding(seq_len, d_model):
     while pos < seq_len:
         let i = 0
         while i < d_model:
-            # div_term = 1.0 / (10000 ^ (i / d_model))
-            # Approximate: use iterative scaling
-            let exponent = (i / 2) * 2.0 / d_model
-            # 10000^exponent via exp(exponent * ln(10000))
-            # ln(10000) ~ 9.21034
-            let div_term = glow_exp(0.0 - exponent * 9.21034)
+            # div_term = 1 / 10000^(2k / d_model), for the pair k = i // 2
+            let exponent = math.floor(i / 2) * 2.0 / d_model
+            let div_term = math.exp(0.0 - exponent * math.log(10000))
             let angle = pos * div_term
             if i % 2 == 0:
                 pe[pos * d_model + i] = glow_sin(angle)

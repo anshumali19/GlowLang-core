@@ -1,7 +1,6 @@
 rows: [{"x": 7}]
 close: 0
 close again: 0
-SQLite Error: database is closed
-exec after close: 21
-query after close: none
+exec after close: sqlite: exec: the database is closed
+query after close: sqlite: query: the database is closed
 done

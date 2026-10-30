@@ -1,0 +1,31 @@
+# crypto: known-answer tests, whole-string hashing (strlen used to truncate at a
+# zero byte), secure random values, constant-time equal, UUIDs. kavach: real
+# HMAC seals with a secret key (it used to derive the key from a number).
+import "kavach"
+import "crypto"
+# Known-answer tests (RFC 4231 test case 2, FIPS 180-2).
+show "sha256 abc:", crypto.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+show "hmac rfc4231 #2:", crypto.hmac("Jefe", "what do ya want for nothing?") == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+show "sha256 with a zero byte differs from truncated:", crypto.sha256("a\0b") != crypto.sha256("a")
+let k = kavach_new_key()
+show "key length:", len(k), "keys differ:", k != kavach_new_key()
+show "random_bytes length:", len(crypto.random_bytes(16)), "hex length:", len(hash.random_hex(8))
+let u = crypto.uuid4()
+show "uuid shape:", len(u), u[14], u.split("-").len() == 5
+show "uuids differ:", crypto.uuid4() != crypto.uuid4()
+show "equal:", crypto.equal("abc", "abc"), crypto.equal("abc", "abd"), crypto.equal("abc", "abcd"), crypto.equal("", "")
+let shield = KavachShield(k)
+let seal = shield.sign("order=42&total=99")
+show "seal shape:", seal.starts_with("KAVACH-"), len(seal)
+show "verify:", shield.verify("order=42&total=99", seal), shield.verify("order=42&total=1", seal), shield.verify("order=42&total=99", seal + "0")
+show "other key rejects:", KavachShield(kavach_new_key()).verify("order=42&total=99", seal)
+show "same key, new shield accepts:", KavachShield(k).verify("order=42&total=99", seal)
+show "old names:", shield.verify_seal("x", shield.forge_seal("x"))
+show "random key works:", KavachShield().verify("m", KavachShield().sign("m")) == false
+for each bad in [42, "short"]:
+    try:
+        KavachShield(bad)
+    catch e:
+        show e
+    end
+end
