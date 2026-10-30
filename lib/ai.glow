@@ -1,7 +1,8 @@
-# GlowAI — Production AI & Neural Network Library
-# Provides: Layer, SimpleNet, NeuralNet, Optimizer, LossFunction, TrainingLoop
-# Data preprocessing: normalize, one_hot_encode
-# Model persistence: save_model, load_model
+# GlowAI — a small neural-network library in pure GlowLang (CPU), for learning
+# how networks train and for small models: Layer, SimpleNet, NeuralNet,
+# Optimizer, LossFunction, TrainingLoop, normalize, one_hot_encode,
+# save_model / load_model. For large models or GPUs, call PyTorch or NumPy
+# through the Python bridge (docs/bridge_guide.md).
 
 # ============================================================
 # Math Helpers (using only verified working functions)
@@ -15,8 +16,7 @@ func ai_abs(x):
 end
 
 func ai_exp(x):
-    # e^x using math.pow with e ≈ 2.718281828
-    return math.pow(2.718281828, x)
+    return math.exp(x)
 end
 
 func ai_max(a, b):
@@ -57,13 +57,18 @@ func relu(x):
     return 0.0
 end
 
+# Stable for large |x|: exp of a large positive number overflows to inf.
 func sigmoid(x):
-    return 1.0 / (1.0 + ai_exp(0 - x))
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(0 - x))
+    end
+    let ex = math.exp(x)
+    return ex / (1.0 + ex)
 end
 
+# (exp(2x) - 1) / (exp(2x) + 1) gave nan once exp(2x) overflowed.
 func tanh_act(x):
-    let e2x = ai_exp(2.0 * x)
-    return (e2x - 1.0) / (e2x + 1.0)
+    return math.tanh(x)
 end
 
 func relu_deriv(x):
@@ -234,36 +239,17 @@ blueprint LossFunction:
             # Clamp prediction
             p = ai_max(eps, ai_min(1.0 - eps, p))
             # -[t*log(p) + (1-t)*log(1-p)]
-            # Approximate log using math: log(x) ≈ series or use ln via math
-            let log_p = self.approx_log(p)
-            let log_1p = self.approx_log(1.0 - p)
+            let log_p = math.log(p)
+            let log_1p = math.log(1.0 - p)
             total = total + (0 - (t * log_p + (1.0 - t) * log_1p))
         end
         return total / size
     end
 
+    # The natural log. (This was a series approximation whose rescaling was
+    # wrong, so cross-entropy losses were wrong.)
     action approx_log(x):
-        # Natural log approximation using repeated sqrt and identity:
-        # ln(x) = 2 * (y-1)/(y+1) + 2/3 * ((y-1)/(y+1))^3 where y = sqrt(x)
-        # Simpler: use the relation ln(x) = (x-1) - (x-1)^2/2 + (x-1)^3/3 for x near 1
-        # For better range, scale x to be near 1
-        let result = 0.0
-        let scale = 0
-        let v = x
-        while v > 2.0:
-            v = math.sqrt(v)
-            scale = scale + 1
-        end
-        while v < 0.5:
-            v = v * 2.718281828
-            scale = scale - 1
-        end
-        # Taylor series around 1: ln(v) ≈ (v-1) - (v-1)^2/2 + (v-1)^3/3 - ...
-        let d = v - 1.0
-        result = d - d * d / 2.0 + d * d * d / 3.0 - d * d * d * d / 4.0
-        # Undo scaling: each sqrt doubles, each exp adds 1
-        result = result * math.pow(2, scale)
-        return result
+        return math.log(x)
     end
 
     action gradient(predicted, target, size):
@@ -586,5 +572,4 @@ end
 #          TransformerClassifier, positional_encoding, softmax
 import "lib/transformer.glow"
 
-show "[GlowAI] Library loaded (NeuralNet + Transformers)"
 

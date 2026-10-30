@@ -407,16 +407,17 @@ static inline BigInt* value_to_bigint(Value v);
 static inline int value_cmp(Value a, Value b);
 
 int val_eq(Value a, Value b) {
-    if (a == b) return 1;
-    if (((a) & MASK_NAN) != MASK_NAN && ((b) & MASK_NAN) != MASK_NAN) return AS_FLOAT(a) == AS_FLOAT(b);
+    /* Every NaN is CANON_NAN, and a NaN equals nothing, not even itself. */
+    if (a == b) return a != CANON_NAN;
+    if (IS_FLOAT_BITS(a) && IS_FLOAT_BITS(b)) return AS_FLOAT(a) == AS_FLOAT(b);
     if (is_bigint(a) || is_bigint(b)) {
         int64_t ia, ib;
         if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) return ia == ib;
         if (is_bigint(a) && is_bigint(b)) return bigint_cmp(AS_BIGINT(a), AS_BIGINT(b)) == 0;
         return 0;
     }
-    uint64_t ta = ((a) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((a) & MASK_TYPE) >> 48;
-    uint64_t tb = ((b) & MASK_NAN) != MASK_NAN ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
+    uint64_t ta = IS_FLOAT_BITS(a) ? VAL_FLOAT : ((a) & MASK_TYPE) >> 48;
+    uint64_t tb = IS_FLOAT_BITS(b) ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
     if (ta == VAL_INT && tb == VAL_FLOAT) return (double)AS_INT(a) == AS_FLOAT(b);
     if (ta == VAL_FLOAT && tb == VAL_INT) return AS_FLOAT(a) == (double)AS_INT(b);
     if (ta == VAL_STRING && tb == VAL_STRING) {
@@ -457,7 +458,7 @@ int val_eq(Value a, Value b) {
 
 
 int value_truthy(Value v) {
-    if ((v & MASK_NAN) != MASK_NAN) return AS_FLOAT(v) != 0.0;
+    if (IS_FLOAT_BITS(v)) return AS_FLOAT(v) != 0.0;
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) return AS_INT(v) != 0;
     if (type == VAL_BOOL) return AS_BOOL(v);
@@ -546,6 +547,9 @@ static inline int value_cmp(Value a, Value b) {
     double da = val_to_double(a), db = val_to_double(b);
     return (da > db) ? 1 : (da < db) ? -1 : 0;
 }
+/* <= and >= are false when either side is NaN (value_cmp says "equal" for
+   values it cannot order). */
+static inline int either_nan(Value a, Value b) { return a == CANON_NAN || b == CANON_NAN; }
 /* Ordering used by sorted(), min() and max(). */
 int glow_value_cmp(Value a, Value b) { return value_cmp(a, b); }
 
@@ -714,15 +718,15 @@ Value jit_int_mul(Value a, Value b) {
 }
 Value jit_int_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
 Value jit_int_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
-Value jit_int_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) <= 0); }
-Value jit_int_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) >= 0); }
+Value jit_int_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
+Value jit_int_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
 /* Generic value comparison helpers for JIT (non-specialized paths). */
 Value jit_val_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
 Value jit_val_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
-Value jit_val_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) <= 0); }
-Value jit_val_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) >= 0); }
+Value jit_val_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
+Value jit_val_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
 Value jit_val_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 Value jit_val_neq(Value a, Value b) { return value_bool(!val_eq(a, b)); }
 
@@ -898,7 +902,7 @@ void print_error_line(const char *file, int line) {
 void print_error_trace(Value exception) {
     fprintf(stderr, "\033[31mRuntimeError:\033[0m ");
     if (exception == 0) { fprintf(stderr, "none"); }
-    else if (((exception) & MASK_NAN) != MASK_NAN) { char _b[64]; format_double(_b, sizeof(_b), AS_FLOAT(exception)); fprintf(stderr, "%s", _b); }
+    else if (IS_FLOAT_BITS(exception)) { char _b[64]; format_double(_b, sizeof(_b), AS_FLOAT(exception)); fprintf(stderr, "%s", _b); }
     else {
         uint64_t type = ((exception) & MASK_TYPE) >> 48;
         if (type == VAL_INT) fprintf(stderr, "%lld", (long long)AS_INT(exception));
@@ -1841,7 +1845,7 @@ int jit_exception_pending(void) { return has_exception; }
             R(pc->r0) = value_bool(AS_INT(a) <= AS_INT(b));
         } else {
             if (!values_comparable(a, b)) { compare_type_error("<=", a, b); goto l_OP_THROW; }
-            R(pc->r0) = value_bool(value_cmp(a, b) <= 0);
+            R(pc->r0) = value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0);
         }
         pc++;
         goto l_DISPATCH;
@@ -1853,7 +1857,7 @@ int jit_exception_pending(void) { return has_exception; }
             R(pc->r0) = value_bool(AS_INT(a) >= AS_INT(b));
         } else {
             if (!values_comparable(a, b)) { compare_type_error(">=", a, b); goto l_OP_THROW; }
-            R(pc->r0) = value_bool(value_cmp(a, b) >= 0);
+            R(pc->r0) = value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0);
         }
         pc++;
         goto l_DISPATCH;
@@ -3255,19 +3259,7 @@ int jit_exception_pending(void) { return has_exception; }
             if (!it->done) {
                 int rc = sqlite3_step(it->stmt);
                 if (rc == SQLITE_ROW) {
-                    int cols = sqlite3_column_count(it->stmt);
-                    Dict *row = dict_new(cols);
-                    for (int i = 0; i < cols; i++) {
-                        const char *name = sqlite3_column_name(it->stmt, i);
-                        int type = sqlite3_column_type(it->stmt, i);
-                        Value v;
-                        if (type == SQLITE_INTEGER) v = value_int(sqlite3_column_int64(it->stmt, i));
-                        else if (type == SQLITE_FLOAT) v = value_float(sqlite3_column_double(it->stmt, i));
-                        else if (type == SQLITE_TEXT) v = value_string_copy((const char*)sqlite3_column_text(it->stmt, i));
-                        else v = value_none();
-                        dict_set(row, name, v);
-                    }
-                    R(pc->r0) = value_dict(row);
+                    R(pc->r0) = glow_sqlite_row(it->stmt);
                     pc++; goto l_DISPATCH;
                 } else {
                     it->done = 1;

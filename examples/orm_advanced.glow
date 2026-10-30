@@ -64,7 +64,7 @@ show "Transaction started:", tx.is_active()
 orm.insert("orders", {"product_id": 1, "quantity": 2, "total": 1999.98, "status": "confirmed"})
 
 # Update stock
-orm.update_where("products", {"stock": 48}, ["name = 'Laptop'"])
+orm.update_where("products", {"stock": 48}, ["name = ?"], ["Laptop"])
 
 tx.commit()
 show "Transaction committed:", not tx.is_active()
@@ -87,10 +87,10 @@ let furniture_count = orm.count_where("products", ["category = 'furniture'"])
 show "Furniture count:", furniture_count
 
 # Exists check
-let has_laptop = orm.exists("products", ["name = 'Laptop'"])
+let has_laptop = orm.exists("products", ["name = ?"], ["Laptop"])
 show "Laptop exists:", has_laptop
 
-let has_tablet = orm.exists("products", ["name = 'Tablet'"])
+let has_tablet = orm.exists("products", ["name = ?"], ["Tablet"])
 show "Tablet exists:", has_tablet
 
 # ─── 5. Update by Condition ───

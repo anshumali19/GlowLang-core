@@ -198,11 +198,17 @@ func tensor_relu(t, size):
     return result
 end
 
+# Written so large |v| cannot overflow exp() into inf and give nan.
 func tensor_sigmoid(t, size):
     let result = tensor.create(size)
     for i from 0 to size - 1:
         let v = tensor.get(t, i)
-        tensor.set(result, i, 1.0 / (1.0 + exp(0.0 - v)))
+        if v >= 0:
+            tensor.set(result, i, 1.0 / (1.0 + math.exp(0.0 - v)))
+        else:
+            let ev = math.exp(v)
+            tensor.set(result, i, ev / (1.0 + ev))
+        end
     end
     return result
 end
@@ -210,9 +216,7 @@ end
 func tensor_tanh(t, size):
     let result = tensor.create(size)
     for i from 0 to size - 1:
-        let v = tensor.get(t, i)
-        let ev = exp(2.0 * v)
-        tensor.set(result, i, (ev - 1.0) / (ev + 1.0))
+        tensor.set(result, i, math.tanh(tensor.get(t, i)))
     end
     return result
 end
@@ -222,7 +226,7 @@ func tensor_softmax(t, size):
     let result = tensor.create(size)
     let sum_exp = 0.0
     for i from 0 to size - 1:
-        let v = exp(tensor.get(t, i) - max_val)
+        let v = math.exp(tensor.get(t, i) - max_val)
         tensor.set(result, i, v)
         sum_exp = sum_exp + v
     end

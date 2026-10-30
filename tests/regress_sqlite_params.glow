@@ -1,0 +1,29 @@
+# sqlite.exec / query bind values to ? (list) or :name (dict) placeholders;
+# errors raise; 64-bit integers and BLOBs come back intact.
+let db = sqlite.open(":memory:")
+sqlite.exec(db, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, big INTEGER, score REAL, flag INTEGER, empty TEXT)")
+show "changes:", sqlite.exec(db, "INSERT INTO t (name, big, score, flag, empty) VALUES (?, ?, ?, ?, ?)", ["O'Brien \"quoted\"", 9007199254740993, 2.5, true, none])
+show "id:", sqlite.last_insert_id(db)
+sqlite.exec(db, "INSERT INTO t (name, big) VALUES (:n, :b)", {"n": "named", "b": -5})
+let rows = sqlite.query(db, "SELECT * FROM t WHERE id >= ? ORDER BY id", [1])
+show rows[0]["name"], rows[0]["big"], rows[0]["score"], rows[0]["flag"], rows[0]["empty"]
+show rows[1]["name"], rows[1]["big"]
+show "int64 range:", sqlite.query(db, "SELECT 9223372036854775807 AS hi, -9223372036854775807 - 1 AS lo")[0]
+show "blob:", sqlite.query(db, "SELECT x'414243' AS b")[0]["b"]
+for each row in sqlite.step_query(db, "SELECT name FROM t WHERE big < ?", [0]):
+    show "step:", row["name"]
+end
+show "update changes:", sqlite.exec(db, "UPDATE t SET score = ? WHERE id = ?", [9.75, 1]), sqlite.changes(db)
+for each bad in [["SELECT * FROM nope", none], ["SELECT ?", none], ["SELECT ?, ?", [1]], ["SELECT :a", {"b": 1}], ["SELECT ?", [[1]]]]:
+    try:
+        sqlite.query(db, bad[0], bad[1])
+    catch e:
+        show e
+    end
+end
+try:
+    sqlite.exec(db, "INSERT INTO t (id) VALUES (1)")
+catch e:
+    show e
+end
+sqlite.close(db)

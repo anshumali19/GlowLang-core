@@ -1,5 +1,7 @@
 # GlowLang ORM-backed CRUD System
-# Demonstrates: SQLite, blueprints, CRUD operations, query building
+# Demonstrates: SQLite, blueprints, CRUD operations, query building.
+# Values always go in as ? placeholders with a list of params, never joined
+# into the SQL text, so a product name like "x'; DROP TABLE products" is safe.
 
 show "=== GlowLang CRUD Application ==="
 
@@ -17,8 +19,7 @@ blueprint ProductModel:
     end
 
     action create(name, category, price, stock):
-        let sql = "INSERT INTO products (name, category, price, stock) VALUES ('" + name + "', '" + category + "', " + price + ", " + stock + ")"
-        sqlite.exec(self.db, sql)
+        sqlite.exec(self.db, "INSERT INTO products (name, category, price, stock) VALUES (?, ?, ?, ?)", [name, category, price, stock])
         show "[CREATE] Product: " + name + " ($" + price + ")"
     end
 
@@ -27,11 +28,11 @@ blueprint ProductModel:
     end
 
     action find_by_category(cat):
-        return sqlite.query(self.db, "SELECT * FROM products WHERE category = '" + cat + "' AND active = 1")
+        return sqlite.query(self.db, "SELECT * FROM products WHERE category = ? AND active = 1", [cat])
     end
 
     action find_by_id(pid):
-        let rows = sqlite.query(self.db, "SELECT * FROM products WHERE id = " + pid)
+        let rows = sqlite.query(self.db, "SELECT * FROM products WHERE id = ?", [pid])
         when len(rows) > 0:
             return rows[0]
         end
@@ -39,17 +40,17 @@ blueprint ProductModel:
     end
 
     action update_price(pid, new_price):
-        sqlite.exec(self.db, "UPDATE products SET price = " + new_price + " WHERE id = " + pid)
+        sqlite.exec(self.db, "UPDATE products SET price = ? WHERE id = ?", [new_price, pid])
         show "[UPDATE] Product #" + pid + " price -> $" + new_price
     end
 
     action update_stock(pid, qty):
-        sqlite.exec(self.db, "UPDATE products SET stock = stock + " + qty + " WHERE id = " + pid)
+        sqlite.exec(self.db, "UPDATE products SET stock = stock + ? WHERE id = ?", [qty, pid])
         show "[UPDATE] Product #" + pid + " stock +" + qty
     end
 
     action soft_delete(pid):
-        sqlite.exec(self.db, "UPDATE products SET active = 0 WHERE id = " + pid)
+        sqlite.exec(self.db, "UPDATE products SET active = 0 WHERE id = ?", [pid])
         show "[DELETE] Product #" + pid + " (soft deleted)"
     end
 
@@ -62,7 +63,7 @@ blueprint ProductModel:
     end
 
     action count_by_category(cat):
-        let rows = sqlite.query(self.db, "SELECT COUNT(*) as cnt FROM products WHERE category = '" + cat + "' AND active = 1")
+        let rows = sqlite.query(self.db, "SELECT COUNT(*) as cnt FROM products WHERE category = ? AND active = 1", [cat])
         when len(rows) > 0:
             return rows[0]["cnt"]
         end

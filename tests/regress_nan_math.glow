@@ -1,0 +1,28 @@
+# NaN used to come back as the int 0 (math.sqrt(-1) == 0): a NaN double has
+# the same bits as a tagged value. NaNs are now stored in a form tags never
+# use. Also new math functions, and floor/ceil/round of large values (casting
+# them to int64 was undefined behaviour).
+show "sqrt(-1):", math.sqrt(-1), type(math.sqrt(-1))
+show "nan:", math.nan, type(math.nan), math.isnan(math.nan), math.isnan(1.0), math.isnan(0)
+show "nan compares false:", math.nan == math.nan, math.nan != math.nan, math.nan > 1, math.nan < 1, math.nan <= 1, math.nan >= 1, 1 <= math.nan
+let n = math.nan
+show "nan in a variable:", n == n, n <= n, [1, 2].contains(n)
+show "inf:", math.inf, 0 - math.inf, math.isinf(math.inf), math.isnan(math.inf - math.inf)
+let total = 0.0
+let i = 0
+while i < 100:
+    total = total + math.sqrt(i - 50)
+    i = i + 1
+end
+show "nan propagates in a hot loop:", math.isnan(total)
+show "in a list and json:", [math.nan], json.stringify([math.nan, math.inf, 1.5])
+show "exp/log:", math.exp(1) == math.e, math.log(math.e), math.log(8, 2), math.log2(1024), math.log10(1000)
+try:
+    math.log(-1)
+catch e:
+    show "log(-1):", e
+end
+show "trig:", math.tan(0), math.atan2(1, 1) * 4 == math.pi, math.tanh(0), math.tanh(50), math.sinh(0), math.cosh(0), math.hypot(3, 4)
+show "abs:", math.abs(-5), math.abs(-2.5), math.abs(3)
+show "rounding:", math.floor(1e20), math.ceil(-2.5), math.round(2.5), math.round(-2.5), math.floor(7), math.trunc(-2.7)
+show "tau:", math.tau == 2 * math.pi

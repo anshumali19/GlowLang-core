@@ -1,5 +1,10 @@
 # GlowLang WASM Deployment Guide
 
+> **Experimental.** CI does not build or test the WebAssembly target, so it
+> may not compile or may lack features (the native runtime links OpenSSL and
+> SQLite, which must also be compiled for WebAssembly). Use the native
+> releases for anything that matters.
+
 ## Building the WASM Target
 
 GlowLang compiles to WebAssembly using Emscripten:

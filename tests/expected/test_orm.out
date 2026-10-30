@@ -1,7 +1,4 @@
 === Testing ORM Model ===
-[DB create_table] SQL: CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, age INTEGER, name TEXT)
-[DB insert] SQL: INSERT INTO users (age, name) VALUES (28, 'Charlie')
-[DB insert] SQL: INSERT INTO users (age, name) VALUES (35, 'Diana')
 ORM Rows count: 2
 User row - Name: Charlie Age: 28
 User row - Name: Diana Age: 35

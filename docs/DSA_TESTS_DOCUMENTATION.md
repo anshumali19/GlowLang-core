@@ -257,5 +257,5 @@ As of the high-performance architectural redesign, all 20 complex DSA problems h
 | Merge Sort | ✅ PASS | Memory stable with bump-pointer allocation. |
 | Bellman-Ford | ✅ PASS | Linear DP paths optimized by SSA pass. |
 
-**Conclusion:** GlowLang provides an industrial-grade runtime capable of executing the most demanding Data Structures and Algorithms with minimal latency and high memory efficiency.
+**Conclusion:** all 20 programs give correct results. These are small inputs that finish in milliseconds; for comparisons with other languages on larger workloads, see `benchmarks/RESULTS.md`.
 

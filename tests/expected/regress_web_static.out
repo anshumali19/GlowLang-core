@@ -1,0 +1,19 @@
+/index.html -> web_static_tmp/index.html
+/sub/app.js -> web_static_tmp/sub/app.js
+/./index.html -> web_static_tmp/index.html
+//sub//app.js -> web_static_tmp/sub/app.js
+/../web_static_secret.txt -> none
+/sub/../../web_static_secret.txt -> none
+/.. -> none
+/%2e%2e/web_static_secret.txt -> none
+/..%2fweb_static_secret.txt -> none
+/C:/Windows/win.ini -> none
+/sub\..\..\x -> none
+ -> none
+/ -> none
+relative.txt -> none
+200 <h1>hi</h1>
+200 let x = 1
+404 File not found
+404 File not found
+404 File not found
