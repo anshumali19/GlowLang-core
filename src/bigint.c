@@ -23,8 +23,11 @@ static void bigint_normalize(BigInt *b) {
 
 BigInt* bigint_from_int64(int64_t v) {
     if (v == 0) { BigInt *b = bigint_alloc(1, 0); b->limbs[0] = 0; return b; }
-    uint64_t u = (uint64_t)v;          /* two's-complement magnitude, safe for INT64_MIN */
     int neg = v < 0;
+    /* The magnitude, computed in unsigned arithmetic so INT64_MIN is safe.
+       (It used to take the two's-complement bits as the magnitude, so every
+       negative big integer built from an int64 was wrong.) */
+    uint64_t u = neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
     uint32_t limbs[2];
     limbs[0] = (uint32_t)(u & 0xFFFFFFFFu);
     limbs[1] = (uint32_t)(u >> 32);
@@ -102,19 +105,37 @@ static BigInt* bi_usub(const BigInt *a, const BigInt *b, int neg) {
     return r;
 }
 
+/* Compare magnitudes |a| and |b|. */
+static int bi_ucmp(const BigInt *a, const BigInt *b) {
+    int n = a->nlimbs > b->nlimbs ? a->nlimbs : b->nlimbs;
+    for (int i = n - 1; i >= 0; i--) {
+        uint32_t av = i < a->nlimbs ? a->limbs[i] : 0;
+        uint32_t bv = i < b->nlimbs ? b->limbs[i] : 0;
+        if (av != bv) return av > bv ? 1 : -1;
+    }
+    return 0;
+}
+
+/* With opposite signs (add) or equal signs (sub) the result is the larger
+   magnitude minus the smaller, which needs a magnitude comparison: a signed
+   one got e.g. (-5) - (-3) and 5 + (-7) wrong. */
 BigInt* bigint_add(BigInt *a, BigInt *b) {
     if (a->neg == b->neg) return bi_uadd(a, b, a->neg);
-    /* opposite signs: a + (-|b|) = a - |b| */
-    int c = bigint_cmp(a, b); /* |a| vs |b| */
-    if (c >= 0) return bi_usub(a, b, a->neg);
-    return bi_usub(b, a, !a->neg);
+    if (bi_ucmp(a, b) >= 0) return bi_usub(a, b, a->neg);
+    return bi_usub(b, a, b->neg);
 }
 
 BigInt* bigint_sub(BigInt *a, BigInt *b) {
     if (a->neg != b->neg) return bi_uadd(a, b, a->neg);
-    int c = bigint_cmp(a, b);
-    if (c >= 0) return bi_usub(a, b, a->neg);
+    if (bi_ucmp(a, b) >= 0) return bi_usub(a, b, a->neg);
     return bi_usub(b, a, !a->neg);
+}
+
+BigInt* bigint_negate(BigInt *a) {
+    BigInt *r = bigint_alloc(a->nlimbs, !a->neg);
+    for (int i = 0; i < a->nlimbs; i++) r->limbs[i] = a->limbs[i];
+    bigint_normalize(r);
+    return r;
 }
 
 BigInt* bigint_mul(BigInt *a, BigInt *b) {

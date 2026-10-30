@@ -244,6 +244,7 @@ char* bigint_to_new_string(BigInt *b);
 int bigint_cmp(BigInt *a, BigInt *b);          /* -1, 0, 1 */
 BigInt* bigint_add(BigInt *a, BigInt *b);
 BigInt* bigint_sub(BigInt *a, BigInt *b);
+BigInt* bigint_negate(BigInt *a);
 BigInt* bigint_mul(BigInt *a, BigInt *b);
 double bigint_to_double(BigInt *b);
 int bigint_fits_int64(BigInt *b, int64_t *out);
@@ -570,7 +571,22 @@ struct NativeFunc {
     GCObject obj;
     const char *name;
     NativeFuncPtr func;
+    /* Per-function state (an FFI function's C signature), read through
+       glow_current_native; finalize frees it when the GC frees the object. */
+    void *data;
+    void (*finalize)(void *data);
 };
+
+/* The native function being called on this thread: every call goes through
+   glow_call_native, so a native can find its own data. */
+extern THREAD_LOCAL NativeFunc *glow_current_native;
+static inline Value glow_call_native(NativeFunc *nf, int argc, Value *args) {
+    NativeFunc *saved = glow_current_native;
+    glow_current_native = nf;
+    Value r = nf->func(argc, args);
+    glow_current_native = saved;
+    return r;
+}
 
 typedef struct FuncEntry FuncEntry;
 
@@ -874,7 +890,10 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name);
 void glow_corelib_init(void);
 /* process module (process.c): run and talk to other programs. */
 void glow_process_init(void);
+/* ffi module (ffi.c): call functions in C libraries. */
+void glow_ffi_init(void);
 Value native_func_new(const char *name, NativeFuncPtr ptr);
+Value native_func_new_data(const char *name, NativeFuncPtr ptr, void *data, void (*finalize)(void *data));
 const char *intern_string(const char *s);
 /* Full path of the running glowlang executable, written to out
    (NUL-terminated). Returns its length, or -1 when it is not known. */

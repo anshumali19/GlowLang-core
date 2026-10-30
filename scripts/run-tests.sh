@@ -128,7 +128,9 @@ for t in tests/$filter.glow; do
         pass=$((pass + 1))
     else
         fail=$((fail + 1))
-        tail_err="$(printf '%s\n' "$err" | tail -n 3 | paste -sd'|' -)"
+        # The first line (the error message) and the last three (where).
+        first_err="$(printf '%s\n' "$err" | sed 's/\x1b\[[0-9;]*m//g' | grep -m1 -v '^[[:space:]]*$')"
+        tail_err="$( { printf '%s\n' "$first_err"; printf '%s\n' "$err" | tail -n 3; } | paste -sd'|' -)"
         msg="FAIL $name: $(printf '%s; ' "${problems[@]}")"
         [ -n "$tail_err" ] && msg+="  [stderr: $tail_err]"
         failures+=("$msg")

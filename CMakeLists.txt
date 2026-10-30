@@ -71,6 +71,7 @@ set(GLOW_SOURCES
     src/regex.c
     src/corelib.c
     src/process.c
+    src/ffi.c
     src/blake3.c
 )
 
@@ -94,6 +95,7 @@ target_link_libraries(glowlang PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     SQLite::SQLite3
+    ${CMAKE_DL_LIBS}
 )
 
 if(CUDAToolkit_FOUND)
@@ -111,6 +113,13 @@ endif()
 if(UNIX AND NOT APPLE AND X11_FOUND)
     target_link_libraries(glowlang PRIVATE X11::X11)
 endif()
+
+# A small C library tests/ffi_abi_test.glow calls through the FFI, built next
+# to glowlang (ffi_testlib.dll / libffi_testlib.so / libffi_testlib.dylib).
+add_library(ffi_testlib SHARED tests/ffi/testlib.c)
+set_target_properties(ffi_testlib PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
 # Target: gdu (from tools/gdu)
 add_executable(gdu tools/gdu/gdu.c)

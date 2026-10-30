@@ -145,5 +145,6 @@ or the bridge is used after `close()`.
 - **Speed:** each call crosses a process boundary. Batch work into one call
   rather than calling in a tight loop. For example, pass the whole list to
   one Python function instead of calling it once per item.
+- **C libraries:** call them directly with [`ffi`](ffi_guide.md).
 - **Other languages:** for languages without a bridge, run them with the
   [`process` module](process_guide.md).

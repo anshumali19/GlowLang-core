@@ -83,7 +83,7 @@ if (-not $deps) {
 }
 
 $sources = 'glowlang.tab.c', 'lex.yy.c', 'lsp.c', 'arena.c', 'jit.c', 'opt.c', 'compiler.c',
-           'vm.c', 'gc.c', 'stdlib.c', 'bigint.c', 'regex.c', 'corelib.c', 'process.c', 'blake3.c' | ForEach-Object { "src\$_" }
+           'vm.c', 'gc.c', 'stdlib.c', 'bigint.c', 'regex.c', 'corelib.c', 'process.c', 'ffi.c', 'blake3.c' | ForEach-Object { "src\$_" }
 $libs = "$deps\lib\libssl.lib", "$deps\lib\libcrypto.lib", "$deps\lib\sqlite3.lib",
         'ws2_32.lib', 'crypt32.lib', 'advapi32.lib', 'user32.lib', 'shell32.lib', 'dbghelp.lib'
 $objDir = "build_win\obj-$Compiler" + $(if ($DebugBuild) { '-debug' } else { '' }) + $(if ($Asan) { '-asan' } else { '' })
@@ -111,6 +111,12 @@ Write-Host "Compiling with $cc"
 if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)" }
 Write-Host "Built $Output"
 
+# A small C library tests\ffi_abi_test.glow calls through the FFI.
+$testlib = Join-Path (Split-Path -Parent $Output) 'ffi_testlib.dll'
+& $cc /nologo /LD /O1 /w "/Fo$objDir\" "/Fe$testlib" tests\ffi\testlib.c | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Building $testlib failed ($LASTEXITCODE)" }
+
 if (-not $NoSign) {
     & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path $Output
+    & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path $testlib
 }
