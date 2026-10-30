@@ -6,8 +6,16 @@ sqlite.exec(db, "INSERT INTO t VALUES (7)")
 show "rows:", sqlite.query(db, "SELECT x FROM t")
 show "close:", sqlite.close(db)
 show "close again:", sqlite.close(db)
-show "exec after close:", sqlite.exec(db, "SELECT 1")
-show "query after close:", sqlite.query(db, "SELECT 1")
+try:
+    sqlite.exec(db, "SELECT 1")
+catch e:
+    show "exec after close:", e
+end
+try:
+    sqlite.query(db, "SELECT 1")
+catch e:
+    show "query after close:", e
+end
 
 # A connection that is never closed is closed by the collector.
 func open_and_forget():

@@ -1,56 +1,81 @@
-# GlowORM — Simple Database Toolkit
+# db.glow — a small SQLite helper: create a table from a dict of columns,
+# insert dicts, read all rows. Values are always passed to SQLite as bound
+# parameters, and table and column names must be plain identifiers, so data
+# can never change the SQL. For queries, migrations and transactions, use
+# orm.glow.
+
+func _db_is_ident(name):
+    when type(name) != "string" or len(name) == 0:
+        return false
+    end
+    let first = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    let rest = first + "0123456789"
+    when not first.contains(name[0]):
+        return false
+    end
+    let i = 1
+    while i < len(name):
+        when not rest.contains(name[i]):
+            return false
+        end
+        i = i + 1
+    end
+    return true
+end
+
+# A table or column name, quoted for SQL; anything else is refused.
+func _db_ident(name):
+    when not _db_is_ident(name):
+        throw "db: invalid table or column name: " + str(name)
+    end
+    return "\"" + name + "\""
+end
 
 blueprint Model:
     action init(db_path):
         self.db = sqlite.open(db_path)
+        when self.db is none:
+            throw "db: cannot open " + str(db_path)
+        end
     end
 
+    # schema: {"name": "TEXT", "age": "INTEGER"}; an id primary key is added.
     action create_table(table_name, schema):
-        # schema: { "name": "TEXT", "age": "INTEGER" }
-        let query = "CREATE TABLE IF NOT EXISTS " + table_name + " (id INTEGER PRIMARY KEY AUTOINCREMENT"
+        let sql = "CREATE TABLE IF NOT EXISTS " + _db_ident(table_name) + " (id INTEGER PRIMARY KEY AUTOINCREMENT"
         when type(schema) == "dict":
-            let s_keys = schema.keys()
-            for each k in s_keys:
-                let t = schema[k]
-                query = query + ", " + k + " " + t
+            for each k in schema.keys():
+                let col_type = schema[k]
+                when not _db_is_ident(col_type):
+                    throw "db: invalid column type for " + k + ": " + str(col_type)
+                end
+                sql = sql + ", " + _db_ident(k) + " " + col_type
             end
         end
-        query = query + ")"
-        show "[DB create_table] SQL:", query
-        sqlite.exec(self.db, query)
+        sqlite.exec(self.db, sql + ")")
     end
 
+    # Insert a dict of column values; returns the new row's id.
     action insert(table_name, data):
-        # Realistic SQL Builder using dynamic dictionary introspection
-        let keys = ""
-        let vals = ""
-        let first = true
-        
-        when type(data) == "dict":
-            let d_keys = data.keys()
-            for each k in d_keys:
-                let v = data[k]
-                when not first:
-                    keys = keys + ", "
-                    vals = vals + ", "
-                end
-                first = false
-                keys = keys + k
-                when type(v) == "string":
-                    vals = vals + "'" + v + "'"
-                otherwise:
-                    vals = vals + v
-                end
-            end
+        when type(data) != "dict" or len(data) == 0:
+            throw "db: insert needs a dict of column values"
         end
-        
-        let query = "INSERT INTO " + table_name + " (" + keys + ") VALUES (" + vals + ")"
-        show "[DB insert] SQL:", query
-        sqlite.exec(self.db, query)
+        let cols = []
+        let marks = []
+        let values = []
+        for each k in data.keys():
+            cols.append(_db_ident(k))
+            marks.append("?")
+            values.append(data[k])
+        end
+        sqlite.exec(self.db, "INSERT INTO " + _db_ident(table_name) + " (" + cols.join(", ") + ") VALUES (" + marks.join(", ") + ")", values)
+        return sqlite.last_insert_id(self.db)
     end
 
     action find_all(table_name):
-        let query = "SELECT * FROM " + table_name
-        return sqlite.query(self.db, query)
+        return sqlite.query(self.db, "SELECT * FROM " + _db_ident(table_name) + " ORDER BY id")
+    end
+
+    action close():
+        sqlite.close(self.db)
     end
 end

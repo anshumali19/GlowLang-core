@@ -769,7 +769,7 @@ void simd_add_helper(Value v_a, Value v_b, Value v_target) {
 }
 
  double val_to_double(Value v) {
-     if (((v) & MASK_NAN) != MASK_NAN) return AS_FLOAT(v);
+     if (IS_FLOAT_BITS(v)) return AS_FLOAT(v);
      uint64_t type = ((v) & MASK_TYPE) >> 48;
      if (type == VAL_INT) return (double)AS_INT(v);
      if (type == VAL_BOOL) return (double)AS_BOOL(v);
@@ -1504,7 +1504,7 @@ static void ds_value(DStr *d, Value v, int depth) {
     if (depth > 64) { ds_puts(d, "..."); return; }
     /* All-zero bits are the float +0.0 (none has its own tag); printing them
        as "none" made `show 0.0` and tensor.dot of zeros print none. */
-    if ((v & MASK_NAN) != MASK_NAN) { format_double(nb, sizeof(nb), AS_FLOAT(v)); ds_puts(d, nb); return; }
+    if (IS_FLOAT_BITS(v)) { format_double(nb, sizeof(nb), AS_FLOAT(v)); ds_puts(d, nb); return; }
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) { snprintf(nb, sizeof(nb), "%lld", (long long)AS_INT(v)); ds_puts(d, nb); }
     else if (type == VAL_BOOL) ds_puts(d, AS_BOOL(v) ? "true" : "false");
@@ -1700,14 +1700,30 @@ static Value os_system(int argc, Value *args) {
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>
 
 static Value math_sin(int argc, Value *args) { return argc > 0 ? value_from_double(sin(val_to_double(args[0]))) : value_none(); }
 static Value math_cos(int argc, Value *args) { return argc > 0 ? value_from_double(cos(val_to_double(args[0]))) : value_none(); }
 static Value math_sqrt(int argc, Value *args) { return argc > 0 ? value_from_double(sqrt(val_to_double(args[0]))) : value_none(); }
 static Value math_pow(int argc, Value *args) { return argc > 1 ? value_from_double(pow(val_to_double(args[0]), val_to_double(args[1]))) : value_none(); }
-static Value math_floor(int argc, Value *args) { return argc > 0 ? value_int((int64_t)floor(val_to_double(args[0]))) : value_none(); }
-static Value math_ceil(int argc, Value *args)  { return argc > 0 ? value_int((int64_t)ceil(val_to_double(args[0])))  : value_none(); }
-static Value math_round(int argc, Value *args) { return argc > 0 ? value_int((int64_t)llround(val_to_double(args[0]))) : value_none(); }
+/* floor/ceil/round go through value_from_double: casting a large result to
+   int64 (math.floor(1e20)) was undefined behaviour. */
+static Value math_floor(int argc, Value *args) { return argc > 0 ? value_from_double(floor(val_to_double(args[0]))) : value_none(); }
+static Value math_ceil(int argc, Value *args)  { return argc > 0 ? value_from_double(ceil(val_to_double(args[0])))  : value_none(); }
+static Value math_round(int argc, Value *args) { return argc > 0 ? value_from_double(round(val_to_double(args[0]))) : value_none(); }
+
+/* More of math (corelib.c adds exp, log, the trigonometry and pi, e, inf). */
+#define MATH_FN1(name, expr) static Value math_##name(int argc, Value *args) { \
+    if (argc < 1) return value_none(); double x = val_to_double(args[0]); return value_from_double(expr); }
+MATH_FN1(log2, log2(x))
+MATH_FN1(sinh, sinh(x))
+MATH_FN1(cosh, cosh(x))
+MATH_FN1(tanh, tanh(x))
+MATH_FN1(trunc, trunc(x))
+#undef MATH_FN1
+static Value math_isnan(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_FLOAT && isnan(AS_FLOAT(args[0]))); }
+static Value math_isinf(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_FLOAT && isinf(AS_FLOAT(args[0]))); }
 static Value native_int(int argc, Value *args) {
     if (argc < 1) return value_none();
     Value v = args[0];
@@ -1715,39 +1731,119 @@ static Value native_int(int argc, Value *args) {
     return value_int((int64_t)val_to_double(v));
 }
 
+static void hex_encode(const unsigned char *in, size_t n, char *out) {
+    static const char hex_chars[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) {
+        out[i * 2]     = hex_chars[in[i] >> 4];
+        out[i * 2 + 1] = hex_chars[in[i] & 0x0F];
+    }
+    out[n * 2] = '\0';
+}
+
+/* crypto.sha256(data): the hash as 64 hex digits. The whole string is hashed,
+   including any zero bytes (strlen used to stop at the first one). */
 static Value crypto_sha256(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return value_none();
-    const char *str = AS_STRING(args[0]);
     unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256((const unsigned char*)str, strlen(str), hash);
-    static const char hex_chars[] = "0123456789abcdef";
+    SHA256((const unsigned char*)AS_STRING(args[0]), rope_length(args[0]), hash);
     char out[SHA256_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        out[i * 2]     = hex_chars[hash[i] >> 4];
-        out[i * 2 + 1] = hex_chars[hash[i] & 0x0F];
-    }
-    out[SHA256_DIGEST_LENGTH * 2] = '\0';
+    hex_encode(hash, SHA256_DIGEST_LENGTH, out);
     return value_string_copy(out);
 }
 
+/* crypto.hmac(key, data): HMAC-SHA256 as 64 hex digits. */
 static Value crypto_hmac_sha256(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_none();
-    const char *key = AS_STRING(args[0]);
-    const char *data = AS_STRING(args[1]);
     unsigned char md[EVP_MAX_MD_SIZE];
     unsigned int md_len = 0;
-
-    if (!HMAC(EVP_sha256(), key, (int)strlen(key), (const unsigned char*)data, strlen(data), md, &md_len)) {
+    if (!HMAC(EVP_sha256(), AS_STRING(args[0]), (int)rope_length(args[0]),
+              (const unsigned char*)AS_STRING(args[1]), rope_length(args[1]), md, &md_len)) {
         return value_none();
     }
-
-    static const char hex_chars[] = "0123456789abcdef";
     char out[EVP_MAX_MD_SIZE * 2 + 1];
-    for (unsigned int i = 0; i < md_len; i++) {
-        out[i * 2]     = hex_chars[md[i] >> 4];
-        out[i * 2 + 1] = hex_chars[md[i] & 0x0F];
+    hex_encode(md, md_len, out);
+    return value_string_copy(out);
+}
+
+static int random_count_arg(int argc, Value *args, const char *fn, int64_t *n) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) < 1 || AS_INT(args[0]) > 1048576) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%s: expected a number of bytes from 1 to 1048576", fn);
+        pending_exception = value_string_copy(msg);
+        has_exception = 1;
+        return 0;
     }
-    out[md_len * 2] = '\0';
+    *n = AS_INT(args[0]);
+    return 1;
+}
+
+/* crypto.random_bytes(n): n bytes from the operating system's secure random
+   source (through OpenSSL), as a string of raw bytes. */
+static Value crypto_random_bytes(int argc, Value *args) {
+    int64_t n;
+    if (!random_count_arg(argc, args, "crypto.random_bytes", &n)) return value_none();
+    unsigned char *buf = malloc((size_t)n);
+    if (!buf || RAND_bytes(buf, (int)n) != 1) {
+        free(buf);
+        pending_exception = value_string_copy("crypto.random_bytes: the secure random source failed");
+        has_exception = 1;
+        return value_none();
+    }
+    Value v = value_string_copy_len((const char*)buf, (size_t)n);
+    OPENSSL_cleanse(buf, (size_t)n);
+    free(buf);
+    return v;
+}
+
+/* crypto.random_hex(n): n secure random bytes as 2n hex digits (keys, tokens). */
+static Value crypto_random_hex(int argc, Value *args) {
+    int64_t n;
+    if (!random_count_arg(argc, args, "crypto.random_hex", &n)) return value_none();
+    unsigned char *buf = malloc((size_t)n);
+    char *out = malloc((size_t)n * 2 + 1);
+    if (!buf || !out || RAND_bytes(buf, (int)n) != 1) {
+        free(buf); free(out);
+        pending_exception = value_string_copy("crypto.random_hex: the secure random source failed");
+        has_exception = 1;
+        return value_none();
+    }
+    hex_encode(buf, (size_t)n, out);
+    Value v = value_string_copy(out);
+    OPENSSL_cleanse(buf, (size_t)n);
+    OPENSSL_cleanse(out, (size_t)n * 2);
+    free(buf); free(out);
+    return v;
+}
+
+/* crypto.equal(a, b): whether two strings are equal, taking the same time
+   wherever they differ, so comparing a secret (a signature, a token) does not
+   leak how much of it matched. */
+static Value crypto_equal(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_bool(0);
+    size_t la = rope_length(args[0]), lb = rope_length(args[1]);
+    const char *a = AS_STRING(args[0]), *b = AS_STRING(args[1]);
+    if (la != lb) {
+        /* Still do the work of a comparison, against a itself. */
+        CRYPTO_memcmp(a, a, la);
+        return value_bool(0);
+    }
+    return value_bool(la == 0 || CRYPTO_memcmp(a, b, la) == 0);
+}
+
+/* crypto.uuid4(): a random (version 4) UUID. */
+static Value crypto_uuid4(int argc, Value *args) {
+    (void)argc; (void)args;
+    unsigned char b[16];
+    if (RAND_bytes(b, 16) != 1) {
+        pending_exception = value_string_copy("crypto.uuid4: the secure random source failed");
+        has_exception = 1;
+        return value_none();
+    }
+    b[6] = (unsigned char)((b[6] & 0x0F) | 0x40);
+    b[8] = (unsigned char)((b[8] & 0x3F) | 0x80);
+    char out[37];
+    snprintf(out, sizeof(out), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
     return value_string_copy(out);
 }
 
@@ -1917,7 +2013,7 @@ static void json_write_string(JsonBuf *b, const char *s, size_t n) {
 
 static void json_write(Value v, JsonBuf *b, int depth) {
     if (depth > JSON_MAX_DEPTH) { b->failed = 1; return; }
-    if ((v & MASK_NAN) != MASK_NAN) {
+    if (IS_FLOAT_BITS(v)) {
         double d = AS_FLOAT(v);
         if (isnan(d) || isinf(d)) { jb_str(b, "null"); return; }
         char tmp[64]; format_double(tmp, sizeof(tmp), d); jb_str(b, tmp); return;
@@ -2883,84 +2979,186 @@ static Value native_sqlite_open(int argc, Value *args) {
     return make_value(VAL_OBJECT, (uintptr_t)h);
 }
 
-static Value native_sqlite_exec(int argc, Value *args) {
-    if (argc >= 3 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
-    if (argc < 2) return value_int(-1);
-    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) {
-        printf("Error: sqlite.exec requires a SQLite handle. Raw: 0x%lx (Type: %d, ObjType: %d)\n",
-               (unsigned long)args[0], (int)GET_TYPE(args[0]), (args[0] & MASK_PAYLOAD) ? (int)GET_OBJ_TYPE(args[0]) : -1);
-        return value_int(-2);
-    }
-    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
-    sqlite3 *db = (sqlite3*)h->db;
-    if (!db) { printf("SQLite Error: database is closed\n"); return value_int(SQLITE_MISUSE); }
-    const char *sql = AS_STRING(args[1]);
-    char *err_msg = 0;
-    int rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
-    if (rc != SQLITE_OK) {
-        if (err_msg) { printf("SQLite Error: %s\n", err_msg); sqlite3_free(err_msg); }
-        return value_int(rc);
-    }
-    return value_int(0);
+/* ---- SQLite ----
+   exec(db, sql, params) and query(db, sql, params) bind params to the
+   statement's ? (a list) or :name (a dict) placeholders, so values are never
+   parsed as SQL. Errors raise "sqlite: <message>" instead of being printed. */
+
+static Value sqlite_error(const char *what, const char *msg) {
+    char buf[600];
+    snprintf(buf, sizeof(buf), "sqlite: %s%s%s", what, msg ? ": " : "", msg ? msg : "");
+    pending_exception = value_string_copy(buf);
+    has_exception = 1;
+    return value_none();
 }
 
-static Value native_sqlite_step_query(int argc, Value *args) {
-    if (argc >= 3 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
-    if (argc < 2) return value_none();
-    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
+/* The open connection behind args[0], or NULL with an error set. */
+static sqlite3 *sqlite_db_arg(int argc, Value *args, const char *fn) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD) || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) {
+        sqlite_error(fn, "expected a database from sqlite.open");
+        return NULL;
+    }
     SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
-    sqlite3 *db = (sqlite3*)h->db;
-    if (!db) return value_none();
-    const char *sql = AS_STRING(args[1]);
-    sqlite3_stmt *res;
-    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
+    if (!h->db) { sqlite_error(fn, "the database is closed"); return NULL; }
+    return (sqlite3*)h->db;
+}
 
+static int sqlite_bind_value(sqlite3_stmt *st, int idx, Value v) {
+    int64_t i;
+    if (GET_TYPE(v) == VAL_NONE) return sqlite3_bind_null(st, idx);
+    if (GET_TYPE(v) == VAL_BOOL) return sqlite3_bind_int64(st, idx, AS_BOOL(v) ? 1 : 0);
+    if (GET_TYPE(v) == VAL_INT) return sqlite3_bind_int64(st, idx, AS_INT(v));
+    if (is_bigint(v)) {
+        if (bigint_fits_int64(AS_BIGINT(v), &i)) return sqlite3_bind_int64(st, idx, i);
+        char *txt = bigint_to_new_string(AS_BIGINT(v));
+        int rc = sqlite3_bind_text(st, idx, txt, -1, SQLITE_TRANSIENT);
+        free(txt);
+        return rc;
+    }
+    if (GET_TYPE(v) == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        if (d == floor(d) && fabs(d) <= 9007199254740992.0) return sqlite3_bind_int64(st, idx, (int64_t)d);
+        return sqlite3_bind_double(st, idx, d);
+    }
+    if (GET_TYPE(v) == VAL_STRING) return sqlite3_bind_text(st, idx, AS_STRING(v), (int)rope_length(v), SQLITE_TRANSIENT);
+    return SQLITE_MISMATCH;
+}
+
+/* Bind a list (positional) or dict (named) of parameters. */
+static int sqlite_bind_params(sqlite3_stmt *st, Value params, const char *fn) {
+    int want = sqlite3_bind_parameter_count(st);
+    if (GET_TYPE(params) == VAL_NONE) {
+        if (want) { sqlite_error(fn, "the statement has placeholders but no values were given"); return 0; }
+        return 1;
+    }
+    if (GET_TYPE(params) == VAL_LIST) {
+        List *l = AS_LIST(params);
+        if (l->size != want) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "the statement has %d placeholder%s but %d value%s given", want, want == 1 ? "" : "s", l->size, l->size == 1 ? " was" : "s were");
+            sqlite_error(fn, msg);
+            return 0;
+        }
+        for (int i = 0; i < l->size; i++)
+            if (sqlite_bind_value(st, i + 1, l->items[i]) != SQLITE_OK) { sqlite_error(fn, "a value cannot be stored (use numbers, strings, bools or none)"); return 0; }
+        return 1;
+    }
+    if (GET_TYPE(params) == VAL_DICT) {
+        Dict *d = AS_DICT(params);
+        for (int i = 1; i <= want; i++) {
+            const char *name = sqlite3_bind_parameter_name(st, i);
+            if (!name) { sqlite_error(fn, "use :name placeholders with a dict of values"); return 0; }
+            int at = dict_get_idx(d, name + 1);
+            if (at < 0) { char msg[200]; snprintf(msg, sizeof(msg), "no value for %s", name); sqlite_error(fn, msg); return 0; }
+            if (sqlite_bind_value(st, i, d->values[at]) != SQLITE_OK) { sqlite_error(fn, "a value cannot be stored (use numbers, strings, bools or none)"); return 0; }
+        }
+        return 1;
+    }
+    sqlite_error(fn, "parameters must be a list (for ?) or a dict (for :name)");
+    return 0;
+}
+
+static Value sqlite_int_value(int64_t v) {
+    if (fits_int48(v)) return value_int(v);
+    if (v >= -INT53_MAX && v <= INT53_MAX) return value_float((double)v);
+    return value_bigint(bigint_from_int64(v));
+}
+
+/* The current row of a statement as a dict. 64-bit integers stay exact (they
+   used to be cut to 48 bits) and BLOBs come back as bytes. */
+Value glow_sqlite_row(void *stmt) {
+    sqlite3_stmt *st = (sqlite3_stmt*)stmt;
+    int cols = sqlite3_column_count(st);
+    Dict *row = dict_new(cols > 0 ? cols : 1);
+    Value rv = value_dict(row);
+    for (int i = 0; i < cols; i++) {
+        const char *interned = intern_string(sqlite3_column_name(st, i));
+        Value val = value_none();
+        switch (sqlite3_column_type(st, i)) {
+            case SQLITE_INTEGER: val = sqlite_int_value(sqlite3_column_int64(st, i)); break;
+            case SQLITE_FLOAT: val = value_float(sqlite3_column_double(st, i)); break;
+            case SQLITE_TEXT: val = value_string_copy_len((const char*)sqlite3_column_text(st, i), (size_t)sqlite3_column_bytes(st, i)); break;
+            case SQLITE_BLOB: val = value_string_copy_len((const char*)sqlite3_column_blob(st, i), (size_t)sqlite3_column_bytes(st, i)); break;
+            default: break;
+        }
+        dict_set(row, interned, val);
+    }
+    return rv;
+}
+
+static Value native_sqlite_exec(int argc, Value *args) {
+    if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT && GET_TYPE(args[1]) == VAL_OBJECT) { argc--; args++; }
+    sqlite3 *db = sqlite_db_arg(argc, args, "exec");
+    if (!db) return value_none();
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return sqlite_error("exec", "expected SQL text");
+    const char *sql = AS_STRING(args[1]);
+    Value params = argc >= 3 ? args[2] : value_none();
+    if (GET_TYPE(params) == VAL_NONE) {
+        /* No values: may run several statements separated by ';'. */
+        char *err_msg = NULL;
+        if (sqlite3_exec(db, sql, 0, 0, &err_msg) != SQLITE_OK) {
+            Value e = sqlite_error("exec", err_msg ? err_msg : sqlite3_errmsg(db));
+            sqlite3_free(err_msg);
+            return e;
+        }
+        return value_int(sqlite3_changes(db));
+    }
+    sqlite3_stmt *st;
+    if (sqlite3_prepare_v2(db, sql, -1, &st, 0) != SQLITE_OK) return sqlite_error("exec", sqlite3_errmsg(db));
+    if (!sqlite_bind_params(st, params, "exec")) { sqlite3_finalize(st); return value_none(); }
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {}
+    if (rc != SQLITE_DONE) { Value e = sqlite_error("exec", sqlite3_errmsg(db)); sqlite3_finalize(st); return e; }
+    sqlite3_finalize(st);
+    return value_int(sqlite3_changes(db));
+}
+
+/* step_query(db, sql, params): rows one at a time, for `for each row in ...`. */
+static Value native_sqlite_step_query(int argc, Value *args) {
+    if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT && GET_TYPE(args[1]) == VAL_OBJECT) { argc--; args++; }
+    sqlite3 *db = sqlite_db_arg(argc, args, "step_query");
+    if (!db) return value_none();
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return sqlite_error("step_query", "expected SQL text");
+    sqlite3_stmt *res;
+    if (sqlite3_prepare_v2(db, AS_STRING(args[1]), -1, &res, 0) != SQLITE_OK) return sqlite_error("step_query", sqlite3_errmsg(db));
+    if (!sqlite_bind_params(res, argc >= 3 ? args[2] : value_none(), "step_query")) { sqlite3_finalize(res); return value_none(); }
     SQLiteIter *it = gc_alloc(sizeof(SQLiteIter), OBJ_SQLITE_ITER);
     it->stmt = res;
     it->done = 0;
     return make_value(VAL_OBJECT, (uintptr_t)it);
 }
 
+/* query(db, sql, params): all rows as a list of dicts. */
 static Value native_sqlite_query(int argc, Value *args) {
-    if (argc >= 3 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
-    if (argc < 2) return value_none();
-    if (GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_SQLITE_HANDLE) return value_none();
-    SQLiteHandle *h = (SQLiteHandle*)(uintptr_t)(args[0] & MASK_PAYLOAD);
-    sqlite3 *db = (sqlite3*)h->db;
+    if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT && GET_TYPE(args[1]) == VAL_OBJECT) { argc--; args++; }
+    sqlite3 *db = sqlite_db_arg(argc, args, "query");
     if (!db) return value_none();
-    const char *sql = AS_STRING(args[1]);
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return sqlite_error("query", "expected SQL text");
     sqlite3_stmt *res;
-    if (sqlite3_prepare_v2(db, sql, -1, &res, 0) != SQLITE_OK) return value_none();
-
+    if (sqlite3_prepare_v2(db, AS_STRING(args[1]), -1, &res, 0) != SQLITE_OK) return sqlite_error("query", sqlite3_errmsg(db));
+    if (!sqlite_bind_params(res, argc >= 3 ? args[2] : value_none(), "query")) { sqlite3_finalize(res); return value_none(); }
     List *rows = list_new(8);
-    int cols = sqlite3_column_count(res);
-
-    vm_stack[vm_stack_top++] = value_list(rows);
-
-    while (sqlite3_step(res) == SQLITE_ROW) {
-        Dict *row = dict_new(cols);
-        vm_stack[vm_stack_top++] = value_dict(row);
-        for (int i = 0; i < cols; i++) {
-            const char *col_name = sqlite3_column_name(res, i);
-            const char *interned = intern_string(col_name);
-            Value val = value_none();
-            int type = sqlite3_column_type(res, i);
-            if (type == SQLITE_INTEGER) val = value_int(sqlite3_column_int64(res, i));
-            else if (type == SQLITE_FLOAT) val = value_float(sqlite3_column_double(res, i));
-            else if (type == SQLITE_TEXT) {
-                Value s_val = value_string_copy((const char*)sqlite3_column_text(res, i));
-                vm_stack[vm_stack_top++] = s_val;
-                val = s_val;
-                vm_stack_top--;
-            }
-            dict_set(row, interned, val);
-        }
-        list_push(rows, value_dict(row));
-        vm_stack_top--;
-    }
-    sqlite3_finalize(res);
+    Value rows_v = value_list(rows);
+    vm_stack[vm_stack_top++] = rows_v;   /* keep the list alive while rows are built */
+    int rc;
+    while ((rc = sqlite3_step(res)) == SQLITE_ROW) list_push(rows, glow_sqlite_row(res));
     vm_stack_top--;
-    return value_list(rows);
+    if (rc != SQLITE_DONE) { Value e = sqlite_error("query", sqlite3_errmsg(db)); sqlite3_finalize(res); return e; }
+    sqlite3_finalize(res);
+    return rows_v;
+}
+
+/* last_insert_id(db) and changes(db): from the most recent statement. */
+static Value native_sqlite_last_insert_id(int argc, Value *args) {
+    if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
+    sqlite3 *db = sqlite_db_arg(argc, args, "last_insert_id");
+    return db ? sqlite_int_value(sqlite3_last_insert_rowid(db)) : value_none();
+}
+
+static Value native_sqlite_changes(int argc, Value *args) {
+    if (argc >= 2 && GET_TYPE(args[0]) == VAL_DICT) { argc--; args++; }
+    sqlite3 *db = sqlite_db_arg(argc, args, "changes");
+    return db ? value_int(sqlite3_changes(db)) : value_none();
 }
 
 static Value native_redis_connect(int argc, Value *args) {
@@ -3838,7 +4036,7 @@ static Value native_dump_stack(int argc, Value *args) {
         if (idx >= vm_stack_size) break;
         Value v = vm_stack[idx];
         printf("  [%d]: ", idx);
-        if (((v) & MASK_NAN) != MASK_NAN) printf("float(%g)\n", AS_FLOAT(v));
+        if (IS_FLOAT_BITS(v)) printf("float(%g)\n", AS_FLOAT(v));
         else {
             uint64_t t = GET_TYPE(v);
             if (t == VAL_INT) printf("int(%lld)\n", (long long)AS_INT(v));
@@ -3934,6 +4132,15 @@ void std_init(void) {
     dict_set(math, "round", native_func_new("round", math_round));
     dict_set(math, "vec2_add", native_func_new("vec2_add", math_vec2_add));
     dict_set(math, "vec2_dist", native_func_new("vec2_dist", math_vec2_dist));
+    dict_set(math, "log2", native_func_new("log2", math_log2));
+    dict_set(math, "sinh", native_func_new("sinh", math_sinh));
+    dict_set(math, "cosh", native_func_new("cosh", math_cosh));
+    dict_set(math, "tanh", native_func_new("tanh", math_tanh));
+    dict_set(math, "trunc", native_func_new("trunc", math_trunc));
+    dict_set(math, "isnan", native_func_new("isnan", math_isnan));
+    dict_set(math, "isinf", native_func_new("isinf", math_isinf));
+    dict_set(math, "tau", value_float(6.28318530717958647692));
+    dict_set(math, "nan", value_float(NAN));
     var_set("math", value_dict(math));
 
     Dict *collision = dict_new(4);
@@ -3945,6 +4152,10 @@ void std_init(void) {
     dict_set(crypto, "hmac", native_func_new("hmac", crypto_hmac_sha256));
     dict_set(crypto, "hmac_sha256", native_func_new("hmac_sha256", crypto_hmac_sha256));
     dict_set(crypto, "blake3", native_func_new("blake3", native_crypto_blake_fast));
+    dict_set(crypto, "random_bytes", native_func_new("random_bytes", crypto_random_bytes));
+    dict_set(crypto, "random_hex", native_func_new("random_hex", crypto_random_hex));
+    dict_set(crypto, "equal", native_func_new("equal", crypto_equal));
+    dict_set(crypto, "uuid4", native_func_new("uuid4", crypto_uuid4));
     var_set("crypto", value_dict(crypto));
 
     Dict *tensor = dict_new(4);
@@ -3972,6 +4183,8 @@ void std_init(void) {
     dict_set(sqlite, "query", native_func_new("query", native_sqlite_query));
     dict_set(sqlite, "step_query", native_func_new("step_query", native_sqlite_step_query));
     dict_set(sqlite, "close", native_func_new("close", native_sqlite_close));
+    dict_set(sqlite, "last_insert_id", native_func_new("last_insert_id", native_sqlite_last_insert_id));
+    dict_set(sqlite, "changes", native_func_new("changes", native_sqlite_changes));
     var_set("sqlite", value_dict(sqlite));
 
     Dict *redis = dict_new(4);

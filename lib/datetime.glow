@@ -1,5 +1,7 @@
-# datetime.glow
-# Core library for GlowLang time manipulation
+# datetime.glow — format Unix timestamps (seconds since 1970, from os.time())
+# in local time with strftime codes: DateTime(os.time()).to_string(),
+# .format("%Y-%m-%d"), .get_year() and the other getters. Parsing dates and
+# time zones are not supported yet.
 
 class DateTime:
     func init(timestamp):

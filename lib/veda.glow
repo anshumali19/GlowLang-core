@@ -1,5 +1,15 @@
-# Veda: Scaled Dot-Product Attention Layer
-# Basic neural attention computation layer using tensor operations
+# Veda: scaled dot-product attention,
+#   Attention(Q, K, V) = softmax(Q K^T / sqrt(d)) V
+# (Vaswani et al., 2017), for one head, on flat row-major tensors:
+# query and key are seq_len x dim, value is seq_len x dim.
+#
+#   import "veda"
+#   let attn = VedaAttention(seq_len, dim)
+#   let out = attn.attend_step(q, k, v)           # seq_len x dim
+#   let w = attn.weights(q, k)                     # seq_len x seq_len, rows sum to 1
+#
+# For multi-head attention, layer norm and feed-forward blocks, see
+# transformer.glow.
 
 use "tensor_utils.glow"
 
@@ -9,14 +19,26 @@ blueprint VedaAttention:
         self.dim = embed_dim
     end
 
-    action attend_step(query, key, value):
-        # Attention(Q, K, V) = Normalize(Q * K^T / sqrt(d)) * V
-        let qk = mat_multiply(query, mat_transpose(key, self.seq_len, self.dim), self.seq_len, self.dim, self.seq_len)
-        let scaled = tensor_scale(qk, self.seq_len * self.seq_len, 0.7071) # 1/sqrt(2)
-        
-        # Robust min-max attention weighting to prevent exponential underflow
-        let attn_weights = tensor_min_max_normalize(scaled, self.seq_len * self.seq_len)
-        let out = mat_multiply(attn_weights, value, self.seq_len, self.seq_len, self.dim)
+    # The attention weights: each row is a softmax over the keys.
+    action weights(query, key):
+        let n = self.seq_len
+        let scores = mat_multiply(query, mat_transpose(key, n, self.dim), n, self.dim, n)
+        let scale = 1.0 / math.sqrt(self.dim)
+        let out = tensor.zeros(n * n)
+        for r from 0 to n - 1:
+            let row = tensor.zeros(n)
+            for c from 0 to n - 1:
+                row[c] = tensor.get(scores, r * n + c) * scale
+            end
+            let sm = tensor_softmax(row, n)
+            for c from 0 to n - 1:
+                out[r * n + c] = sm[c]
+            end
+        end
         return out
+    end
+
+    action attend_step(query, key, value):
+        return mat_multiply(self.weights(query, key), value, self.seq_len, self.seq_len, self.dim)
     end
 end

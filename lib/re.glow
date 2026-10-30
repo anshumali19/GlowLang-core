@@ -1,5 +1,10 @@
-# re.glow
-# Regular Expression Core Library for GlowLang
+# re.glow — regular expressions on the built-in engine (src/regex.c):
+# literals, ., [sets] with ranges and [:classes:], ^ $, groups, |,
+# greedy and lazy * + ? {m,n}, \d \w \s \b and their negations. Matching
+# is linear in the worst case. match(text) is true when the pattern occurs
+# anywhere in text; search(text) returns the first matching text or none.
+# Not supported yet: capture-group contents, match positions, replace,
+# split and findall.
 
 class RegExp:
     func init(pattern):

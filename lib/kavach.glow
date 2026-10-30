@@ -1,22 +1,65 @@
-# Kavach: GlowLang Production Cryptographic Shield & Integrity Package
-# Built on top of native OpenSSL SHA-256 and HMAC cryptographic primitives
+# Kavach: sign messages and check them later (HMAC-SHA256 through OpenSSL).
+#
+#   let key = kavach_new_key()          # keep it secret, e.g. in an env var
+#   let shield = KavachShield(key)
+#   let seal = shield.sign("order=42&total=99")
+#   show shield.verify("order=42&total=99", seal)   # true
+#   show shield.verify("order=42&total=1", seal)    # false: changed
+#
+# A seal proves the message was signed by someone holding the key and has not
+# changed since. It does not encrypt the message. Verification compares in
+# constant time, so it does not reveal how much of a forged seal was right.
+
+# A new secret key: 32 bytes from the operating system's secure random source,
+# as 64 hex digits.
+func kavach_new_key():
+    return crypto.random_hex(32)
+end
 
 blueprint KavachShield:
-    action init(seed_num):
-        self.secret_key = "kavach_key_" + seed_num
+    # secret_key: a string of at least 32 characters (kavach_new_key() makes
+    # one). With none, a random key is made; seals then only verify within
+    # this shield.
+    action init(secret_key = none):
+        when secret_key is none:
+            secret_key = kavach_new_key()
+        end
+        when type(secret_key) != "string":
+            throw "kavach: the secret key must be a string from kavach_new_key(), not a " + type(secret_key) + " (a number is guessable)"
+        end
+        when len(secret_key) < 32:
+            throw "kavach: the secret key must be at least 32 characters; use kavach_new_key()"
+        end
+        self.secret_key = secret_key
     end
 
-    action compute_digest(message_str):
-        return crypto.sha256(message_str)
+    # SHA-256 of a message, as 64 hex digits (no key involved).
+    action compute_digest(message):
+        return crypto.sha256(message)
     end
 
-    action forge_seal(data_str):
-        let sig = crypto.hmac(self.secret_key, data_str)
-        return "KAVACH-" + sig
+    # The seal for data: "KAVACH-" followed by its HMAC-SHA256.
+    action sign(data):
+        when type(data) != "string":
+            throw "kavach: can only sign strings (use json.stringify for other values)"
+        end
+        return "KAVACH-" + crypto.hmac(self.secret_key, data)
     end
 
-    action verify_seal(data_str, seal_token):
-        let expected = self.forge_seal(data_str)
-        return expected == seal_token
+    # true when seal is this shield's seal for exactly this data.
+    action verify(data, seal):
+        when type(data) != "string" or type(seal) != "string":
+            return false
+        end
+        return crypto.equal(self.sign(data), seal)
+    end
+
+    # Earlier names for sign and verify.
+    action forge_seal(data):
+        return self.sign(data)
+    end
+
+    action verify_seal(data, seal):
+        return self.verify(data, seal)
     end
 end

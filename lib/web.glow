@@ -1,5 +1,8 @@
-# GlowWeb — Production Web Framework for GlowLang
-# Router, Middleware, Request/Response, JSON API, Static files
+# GlowWeb — a small web framework: router, middleware, request/response
+# objects, JSON helpers and static files (with path traversal blocked).
+# Each connection gets a thread, and threads take turns under the GIL. It
+# speaks plain HTTP: in production put it behind a reverse proxy (nginx,
+# Caddy) for TLS, compression and load balancing.
 # String methods: .split() .contains() .find() .slice()
 
 # ─── String Helpers ───
@@ -313,9 +316,42 @@ blueprint MiddlewareChain:
 end
 
 # ─── Static File Server Helper ───
+# The file under base_dir that a request path names, or none if the path
+# could reach outside base_dir: "..", backslashes, drive letters and colons,
+# NUL bytes and percent-encoded dots or slashes are all refused.
+func static_file_path(base_dir, request_path):
+    when request_path is none or not request_path.starts_with("/"):
+        return none
+    end
+    let lowered = request_path.lower()
+    when request_path.contains("\\") or request_path.contains(":") or request_path.contains("\0"):
+        return none
+    end
+    when lowered.contains("%2e") or lowered.contains("%2f") or lowered.contains("%5c") or lowered.contains("%00"):
+        return none
+    end
+    let kept = []
+    for each seg in request_path.split("/"):
+        when seg == "..":
+            return none
+        end
+        when seg != "" and seg != ".":
+            kept.append(seg)
+        end
+    end
+    when len(kept) == 0:
+        return none
+    end
+    return base_dir + "/" + kept.join("/")
+end
+
 func serve_static(base_dir, req, res):
-    let file_path = base_dir + req.path
-    when fs.exists(file_path):
+    let file_path = static_file_path(base_dir, req.path)
+    let info = none
+    when file_path is not none:
+        info = fs.stat(file_path)
+    end
+    when info is not none and not info["is_dir"]:
         let content = fs.read(file_path)
         # Determine content type from extension
         let ctype = "application/octet-stream"

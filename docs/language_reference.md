@@ -805,9 +805,11 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 | `dict()` | Empty dictionary |
 
 ### Math (`math.`)
-`sqrt`, `pow`, `exp`, `log(x, base)`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
-`atan2`, `hypot`, `abs`, `min`, `max`, `floor`, `ceil`, `round`, `vec2_add`, `vec2_dist`, and the
-constants `pi`, `e`, `inf`.
+`sqrt`, `pow`, `exp`, `log(x, base)` (an error for x <= 0), `log2`, `log10`, `sin`, `cos`, `tan`,
+`asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `abs`, `min`, `max`, `floor`,
+`ceil`, `round` (halves away from zero), `trunc`, `isnan`, `isinf`, `vec2_add`, `vec2_dist`, and
+the constants `pi`, `e`, `tau`, `inf`, `nan`. NaN follows IEEE 754: `math.nan == math.nan` is
+false, and every ordering comparison with NaN is false.
 
 ### Tensors (`tensor.`)
 | Function | Description |
@@ -824,7 +826,16 @@ constants `pi`, `e`, `inf`.
 `request(method, url, ...)`.
 
 ### SQLite (`sqlite.`)
-`open(path)`, `exec(db, sql)`, `query(db, sql)` (list of row dicts), `step_query(db, sql)`, `close(db)`.
+`open(path)`, `exec(db, sql, params)` (returns the number of rows changed), `query(db, sql, params)`
+(a list of row dicts), `step_query(db, sql, params)` (rows one at a time for `for each`),
+`last_insert_id(db)`, `changes(db)`, `close(db)`.
+
+Put values in SQL as placeholders and pass them in `params`: a list for `?`
+(`sqlite.query(db, "SELECT * FROM users WHERE name = ?", [name])`) or a dict for `:name`.
+They are bound, never parsed as SQL, so they cannot inject SQL. Never build SQL by joining
+strings with values. Errors raise `sqlite: <message>`. 64-bit integers come back exact,
+and BLOBs come back as byte strings. `exec` without `params` may run several statements
+separated by `;`.
 
 ### Redis (`redis.`)
 `connect(host, port)`, `get(conn, key)`, `set(conn, key, value)`.
@@ -841,7 +852,10 @@ constants `pi`, `e`, `inf`.
 `readdir(dir)`, `size(path)`, `stat(path)`.
 
 ### Crypto (`crypto.`)
-`sha256(text)`, `hmac(key, text)` / `hmac_sha256`, `blake3(text)`.
+`sha256(data)`, `hmac(key, data)` / `hmac_sha256` (HMAC-SHA256), `blake3(data)`: hex digests
+of the whole string, including any zero bytes. `random_bytes(n)` and `random_hex(n)`: n bytes
+from the operating system's secure random source, for keys and tokens. `equal(a, b)`: compare
+secrets in constant time. `uuid4()`: a random UUID. For signing messages, see `lib/kavach.glow`.
 
 ### Threads (`threads.`)
 `join_all()`, `active()`. See also `lib/async.glow` and `lib/sync.glow`.

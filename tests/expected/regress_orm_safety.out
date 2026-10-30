@@ -1,0 +1,18 @@
+ids: 1 2 count: 2
+found evil name intact: true note: it's fine
+timestamp is a real time: true
+injection in where_eq: 0
+where_in: [Ana, Robert'); DROP TABLE users; --]
+like: 1
+limit/offset: [Ana]
+update: 1
+count_where: 1
+orm: invalid table or column name: users; DROP TABLE users
+orm: invalid table or column name: age; DROP TABLE users
+orm: invalid table or column name: name) VALUES ('x'); --
+batch rolled back: true count still: 2
+transaction: false true
+table still there: 2
+migrations applied: 1 0
+rolled back: 1
+multi-statement exec_sql ok
