@@ -97,6 +97,25 @@ jobs:
             if ($sig.Status -ne 'Valid') { throw "$exe signature is $($sig.Status)" }
           }
 
+      # tests/ffi_abi_test.glow calls a small C library that builds put next
+      # to glowlang; releases do not ship it, so build it beside the download.
+      - name: FFI test library (Linux/macOS)
+        if: runner.os != 'Windows'
+        working-directory: released
+        shell: bash
+        run: |
+          if [ ! -f tests/ffi/testlib.c ]; then echo "no FFI test library in this release"; exit 0; fi
+          if [ "$RUNNER_OS" = macOS ]; then cc -dynamiclib -O1 tests/ffi/testlib.c -o ../rel/libffi_testlib.dylib
+          else cc -shared -fPIC -O1 tests/ffi/testlib.c -o ../rel/libffi_testlib.so; fi
+
+      - name: FFI test library (Windows)
+        if: runner.os == 'Windows'
+        working-directory: released
+        run: |
+          if (-not (Test-Path tests\ffi\testlib.c)) { Write-Output "no FFI test library in this release"; exit 0 }
+          clang -shared -O1 tests\ffi\testlib.c -o ..\rel\ffi_testlib.dll
+          if ($LASTEXITCODE -ne 0) { throw "building the FFI test library failed" }
+
       - name: Test suite (Linux/macOS)
         if: runner.os != 'Windows'
         working-directory: released

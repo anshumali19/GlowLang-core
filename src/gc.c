@@ -376,6 +376,7 @@ static void gc_free_object_payload(GCObject *unmarked) {
     else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
     else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
     else if (unmarked->type == OBJ_STRING_BUILDER) free(((StringBuilder*)unmarked)->buffer);
+    else if (unmarked->type == OBJ_NATIVE_FUNC) { NativeFunc *nf = (NativeFunc*)unmarked; if (nf->finalize) nf->finalize(nf->data); }
     else if (unmarked->type == OBJ_CLOSURE) {
         Closure *c = (Closure*)unmarked;
         if (c->captured_names) free(c->captured_names);

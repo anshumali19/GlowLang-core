@@ -1,0 +1,18 @@
+# Negative big integers: building one from a 64-bit value, signed add and
+# subtract, and unary minus were all wrong (two's-complement bits taken as
+# the magnitude, signed instead of magnitude comparison, negation through a
+# double).
+let big = 9223372036854775807
+show -big, type(-big)
+show -9223372036854775807
+show 0 - 9223372036854775807
+show -9007199254740993
+let c = 9007199254740993
+show -c, 0 - c, c - 0
+let m = -c
+show m - 1, m + 1, m - m, m + c
+show (0 - big) - (0 - 5), (0 - 5) - (0 - big)
+show big + (0 - big - 2), (0 - big - 2) + big
+show 18446744073709551616 - 18446744073709551617
+show -(-c) == c, - -9007199254740993
+show 123456789012345678901234567890 - 123456789012345678901234567891

@@ -1,0 +1,65 @@
+# Calling-convention shapes through the FFI, against tests/ffi/testlib.c (built
+# next to glowlang): every integer width, floats, ints and floats mixed in
+# every position, arguments past the registers, pointers and strings.
+func dir_of(p):
+    let parts = p.replace("\\", "/").split("/")
+    parts.pop()
+    return parts.join("/")
+end
+let lib = ffi.open(dir_of(process.executable) + "/" + ffi.lib_name("ffi_testlib"))
+
+show "i8:", lib.function("t_i8", ["int8"], "int8")(-128 + 1), lib.function("t_i8", ["int8"], "int8")(0)
+show "u8:", lib.function("t_u8", ["uint8"], "uint8")(254), lib.function("t_u8", ["uint8"], "uint8")(255)
+show "i16:", lib.function("t_i16", ["int16"], "int16")(-32767)
+show "u16:", lib.function("t_u16", ["uint16"], "uint16")(65535)
+show "i32:", lib.function("t_i32", ["int32"], "int32")(-2147483647)
+show "u32:", lib.function("t_u32", ["uint32"], "uint32")(4294967294)
+show "i64:", lib.function("t_i64", ["int64"], "int64")(-9223372036854775807)
+show "u64:", lib.function("t_u64", ["uint64"], "uint64")(18446744073709551614)
+show "i64 min:", lib.function("t_i64_min", [], "int64")()
+show "u64 max:", lib.function("t_u64_max", [], "uint64")()
+show "bool:", lib.function("t_not", ["bool"], "bool")(true), lib.function("t_not", ["bool"], "bool")(false)
+
+show "addf:", lib.function("t_addf", ["float"], "float") is not none
+show "addf:", lib.function("t_addf", ["float", "float"], "float")(1.5, 2.25)
+show "f2d:", lib.function("t_f2d", ["float", "double"], "double")(0.5, 10)
+show "id:", lib.function("t_id", ["int", "double"], "double")(2, 0.5)
+show "di:", lib.function("t_di", ["double", "int"], "double")(2.5, 1)
+show "idid:", lib.function("t_idid", ["int", "double", "int", "double"], "double")(1, 2, 3, 4)
+show "didi:", lib.function("t_didi", ["double", "int", "double", "int"], "double")(1, 2, 3, 4)
+show "fifi:", lib.function("t_fifi", ["float", "int", "float", "int"], "float")(1, 2, 3, 4)
+
+let sum10 = lib.function("t_sum10", ["int64", "int64", "int64", "int64", "int64", "int64", "int64", "int64", "int64", "int64"], "int64")
+show "sum10:", sum10(1, 1, 1, 1, 1, 1, 1, 1, 1, 1), sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+let mix12 = lib.function("t_mix12", ["int", "double", "int", "double", "int", "double", "int", "double", "int", "double", "int", "float"], "double")
+show "mix12:", mix12(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), mix12(1, 0.5, 2, 0.25, 3, 2, 4, 1, 5, 0.5, 6, 0.5)
+let sum8d = lib.function("t_sum8d", ["double", "double", "double", "double", "double", "double", "double", "double"], "double")
+show "sum8d:", sum8d(1, 1, 1, 1, 1, 1, 1, 1)
+let narrow9 = lib.function("t_narrow9", ["int8", "uint8", "int16", "uint16", "int32", "uint32", "int8", "int16", "int32"], "int32")
+show "narrow9:", narrow9(-1, 255, -1, 65535, -1, 1, -128, -32768, 100)
+
+let p = ffi.alloc(64)
+show "ptr round trip:", lib.function("t_ptr", ["pointer"], "pointer")(p) == p
+show "null:", lib.function("t_ptr", ["pointer"], "pointer")(none), lib.function("t_is_null", ["pointer"], "bool")(none), lib.function("t_is_null", ["pointer"], "bool")(p)
+lib.function("t_fill", ["pointer", "int32"], "void")(p, 5)
+show "fill:", [ffi.load(p, "int32", i * 4) for each i in [0, 1, 2, 3, 4]]
+ffi.free(p)
+show "string return:", lib.function("t_hello", [], "string")(), lib.function("t_null_string", [], "string")()
+show "string arg:", lib.function("t_len", ["string"], "size_t")("four"), lib.function("t_len", ["string"], "size_t")(none)
+let s = ffi.from_string("mixed Case")
+lib.function("t_upper", ["pointer"], "void")(s)
+show "in-place:", ffi.string(s)
+ffi.free(s)
+
+let counter = lib.symbol("t_counter")
+show "symbol:", ffi.load(counter, "int32")
+lib.function("t_bump", [], "void")()
+show "after bump:", ffi.load(counter, "int32")
+ffi.store(counter, "int32", 100)
+lib.function("t_bump", [], "void")()
+show "stored:", ffi.load(counter, "int32")
+try:
+    lib.symbol("t_no_such_symbol")
+catch e:
+    show "missing symbol:", e.contains("t_no_such_symbol")
+end
