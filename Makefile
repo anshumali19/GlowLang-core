@@ -20,14 +20,27 @@ GDU_BIN = $(BIN_DIR)/gdu
 
 # Hand-written runtime sources (the lexer and parser are generated).
 RUNTIME_SRC = $(SRC_DIR)/lsp.c $(SRC_DIR)/arena.c $(SRC_DIR)/jit.c $(SRC_DIR)/opt.c $(SRC_DIR)/compiler.c \
-              $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c $(SRC_DIR)/regex.c $(SRC_DIR)/corelib.c $(SRC_DIR)/process.c $(SRC_DIR)/blake3.c
+              $(SRC_DIR)/vm.c $(SRC_DIR)/gc.c $(SRC_DIR)/stdlib.c $(SRC_DIR)/bigint.c $(SRC_DIR)/regex.c $(SRC_DIR)/corelib.c $(SRC_DIR)/process.c $(SRC_DIR)/ffi.c $(SRC_DIR)/blake3.c
 GENERATED_SRC = $(SRC_DIR)/lex.yy.c $(SRC_DIR)/glowlang.tab.c
 ALL_SRC = $(GENERATED_SRC) $(RUNTIME_SRC)
 DEPS = $(SRC_DIR)/glowlang.l $(SRC_DIR)/glowlang.y $(RUNTIME_SRC) $(wildcard $(SRC_DIR)/*.h)
 
-all: $(GLOWLANG_BIN) $(GDU_BIN)
+# A small C library tests/ffi_abi_test.glow calls through the FFI.
+ifeq ($(shell uname),Darwin)
+FFI_TESTLIB = $(BIN_DIR)/libffi_testlib.dylib
+FFI_SHARED = -dynamiclib
+else
+FFI_TESTLIB = $(BIN_DIR)/libffi_testlib.so
+FFI_SHARED = -shared -fPIC
+endif
 
-LDFLAGS = -lsqlite3 -lX11
+all: $(GLOWLANG_BIN) $(GDU_BIN) $(FFI_TESTLIB)
+
+$(FFI_TESTLIB): tests/ffi/testlib.c
+	mkdir -p $(BIN_DIR)
+	$(CC) $(FFI_SHARED) -O1 tests/ffi/testlib.c -o $(FFI_TESTLIB)
+
+LDFLAGS = -lsqlite3 -lX11 -ldl
 CUDA_OBJ =
 
 ifdef NVCC
@@ -56,10 +69,10 @@ $(GLOWLANG_BIN): $(DEPS) $(CUDA_OBJ)
 	$(clean-generated)
 
 # The test runner compares each test's output with tests/expected/.
-test: $(GLOWLANG_BIN)
+test: $(GLOWLANG_BIN) $(FFI_TESTLIB)
 	GLOWLANG_BIN=./$(GLOWLANG_BIN) ./scripts/run-tests.sh
 
-test-sanitized: $(DEPS)
+test-sanitized: $(DEPS) $(FFI_TESTLIB)
 	mkdir -p $(BIN_DIR)
 	@echo "Building with AddressSanitizer..."
 	$(generate)

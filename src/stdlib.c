@@ -431,7 +431,7 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
             if (pc && pc->is_method) {
                 args++;
             }
-            return AS_NATIVE_FUNC(callee)->func(argc, args);
+            return glow_call_native(AS_NATIVE_FUNC(callee), argc, args);
         }
     }
     return VAL_DEOPT_SENTINEL;
@@ -666,7 +666,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         NativeFunc *nf = AS_NATIVE_FUNC(fallback_callee);
         Value *fargs = args;
         if (pc && pc->is_method) fargs++;
-        final_res = nf->func(argc, fargs);
+        final_res = glow_call_native(nf, argc, fargs);
     }
 
     vm_stack_top = old_top;
@@ -1459,7 +1459,13 @@ Trait* trait_new(const char *name) {
 }
 Value bound_method_new(Value inst, FuncEntry *m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = m; bm->native_method = NULL; return value_bound_method(bm); }
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m) { BoundMethod *bm = gc_alloc(sizeof(BoundMethod), OBJ_BOUND_METHOD); bm->instance = inst; bm->method = NULL; bm->native_method = native_m; return value_bound_method(bm); }
-Value native_func_new(const char *name, NativeFuncPtr ptr) { NativeFunc *nf = gc_alloc(sizeof(NativeFunc), OBJ_NATIVE_FUNC); nf->name = name; nf->func = ptr; return value_native_func(nf); }
+THREAD_LOCAL NativeFunc *glow_current_native = NULL;
+Value native_func_new(const char *name, NativeFuncPtr ptr) { return native_func_new_data(name, ptr, NULL, NULL); }
+Value native_func_new_data(const char *name, NativeFuncPtr ptr, void *data, void (*finalize)(void *data)) {
+    NativeFunc *nf = gc_alloc(sizeof(NativeFunc), OBJ_NATIVE_FUNC);
+    nf->name = name; nf->func = ptr; nf->data = data; nf->finalize = finalize;
+    return value_native_func(nf);
+}
 
 
 /* Render an integer-valued double without exponent/decimal so integers that
@@ -3992,6 +3998,7 @@ void std_init(void) {
     dict_set(os, "system", native_func_new("system", os_system));
     var_set("os", value_dict(os));
     glow_process_init();
+    glow_ffi_init();
 #endif
 
     Dict *threads = dict_new(4);

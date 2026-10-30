@@ -1,0 +1,28 @@
+opened: true
+abs: 5 7 2147483647
+llabs: 9000000000000
+strlen: 5 0 6
+atof: 3.25 -0.5
+math: 1.4142135623730951 4 -3
+getenv: true none
+strtol: 42 abc
+hex: 255
+errno is ERANGE: true
+memset returns its pointer: true
+bytes: AAAAA AAA 0
+load: -7 4294967289 1.5 -1
+memcmp: true 0
+from_string: copied 6
+sizes: 1 4 8 8 8
+from a dict: 3 4
+passed around: 11
+hot loop: 1999000
+abs: expected 1 argument, got 2
+abs: argument 1 is out of range for int32
+abs: argument 1 must be a whole number for int32
+strlen: argument 1 must be a string or none (declare it "pointer" to pass C memory)
+missing function: true
+abs: unknown type "struct" for argument 1 (structs by value and callbacks are not supported; use "pointer")
+missing library: true
+ffi.load: the pointer is null
+ffi.store: the pointer is null

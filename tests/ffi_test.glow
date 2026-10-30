@@ -1,0 +1,116 @@
+# The FFI against the system C library (ucrtbase, glibc, libSystem).
+let libc = ffi.open(ffi.libc())
+let libm = ffi.open(ffi.libm())
+show "opened:", libc.path == ffi.libc()
+
+let c_abs = libc.function("abs", ["int"], "int")
+show "abs:", c_abs(-5), c_abs(7), c_abs(-2147483647)
+let llabs = libc.function("llabs", ["int64"], "int64")
+show "llabs:", llabs(-9000000000000)
+let strlen = libc.function("strlen", ["string"], "size_t")
+show "strlen:", strlen("hello"), strlen(""), strlen("héllo")
+let atof = libc.function("atof", ["string"], "double")
+show "atof:", atof("3.25"), atof("-0.5")
+let sqrt = libm.function("sqrt", ["double"], "double")
+let floor = libm.function("floor", ["double"], "double")
+show "math:", sqrt(2.0), sqrt(16), floor(-2.5)
+let getenv = libc.function("getenv", ["string"], "string")
+show "getenv:", getenv("PATH") is not none, getenv("GLOW_NO_SUCH_VARIABLE")
+
+# An out-parameter: strtol writes where parsing stopped. That pointer points
+# into the input, so the input must outlive the call: C memory from
+# ffi.from_string, not a "string" argument (a copy freed after the call).
+let strtol = libc.function("strtol", ["string", "pointer", "int"], "long")
+let strtol_p = libc.function("strtol", ["pointer", "pointer", "int"], "long")
+let input = ffi.from_string("  42abc")
+let endp = ffi.alloc(ffi.sizeof("pointer"))
+show "strtol:", strtol_p(input, endp, 10), ffi.string(ffi.load(endp, "pointer"))
+show "hex:", strtol("ff", none, 16)
+ffi.free(endp)
+ffi.free(input)
+
+# errno from the C library.
+strtol("99999999999999999999999", none, 10)
+show "errno is ERANGE:", ffi.errno() == 34
+
+# Memory.
+let buf = ffi.alloc(32)
+let memset = libc.function("memset", ["pointer", "int", "size_t"], "pointer")
+let memcmp = libc.function("memcmp", ["pointer", "pointer", "size_t"], "int")
+show "memset returns its pointer:", memset(buf, 65, 5) == buf
+show "bytes:", ffi.string(buf), ffi.string(buf, 3), ffi.load(buf, "uint8", 5)
+ffi.store(buf, "int32", -7, 8)
+ffi.store(buf, "double", 1.5, 16)
+ffi.store(buf, "uint16", 65535, 24)
+show "load:", ffi.load(buf, "int32", 8), ffi.load(buf, "uint32", 8), ffi.load(buf, "double", 16), ffi.load(buf, "int16", 24)
+let other = ffi.alloc(32)
+show "memcmp:", memcmp(buf, other, 32) != 0, memcmp(other, other, 32)
+ffi.free(other)
+ffi.free(buf)
+let text = ffi.from_string("copied")
+let strlen_p = libc.function("strlen", ["pointer"], "size_t")
+show "from_string:", ffi.string(text), strlen_p(text)
+ffi.free(text)
+show "sizes:", ffi.sizeof("int8"), ffi.sizeof("int"), ffi.sizeof("int64"), ffi.sizeof("double"), ffi.sizeof("pointer")
+
+# C functions are ordinary values.
+let table = {"abs": c_abs}
+show "from a dict:", table.abs(-3), table["abs"](-4)
+func apply(f, x):
+    return f(x)
+end
+show "passed around:", apply(c_abs, -11)
+let total = 0
+let i = 0
+while i < 2000:
+    total = total + c_abs(0 - i)
+    i = i + 1
+end
+show "hot loop:", total
+
+# Errors.
+try:
+    c_abs(1, 2)
+catch e:
+    show e
+end
+try:
+    c_abs(5000000000)
+catch e:
+    show e
+end
+try:
+    c_abs("x")
+catch e:
+    show e
+end
+try:
+    strlen(5)
+catch e:
+    show e
+end
+try:
+    libc.function("glow_no_such_function", [], "void")
+catch e:
+    show "missing function:", e.starts_with("function: glow_no_such_function not found in")
+end
+try:
+    libc.function("abs", ["struct"], "int")
+catch e:
+    show e
+end
+try:
+    ffi.open("glow_no_such_library_xyz")
+catch e:
+    show "missing library:", e.starts_with("ffi.open: cannot load glow_no_such_library_xyz")
+end
+try:
+    ffi.load(0, "int")
+catch e:
+    show e
+end
+try:
+    ffi.store(ffi.null, "int", 1)
+catch e:
+    show e
+end

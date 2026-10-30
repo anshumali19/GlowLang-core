@@ -1,0 +1,33 @@
+i8: -128 -1
+u8: 255 0
+i16: -32768
+u16: 0
+i32: -2147483648
+u32: 4294967295
+i64: -9223372036854775808
+u64: 18446744073709551615
+i64 min: -9223372036854775808
+u64 max: 18446744073709551615
+bool: false true
+addf: true
+addf: 3.75
+f2d: 5
+id: 2.5
+di: 1.5
+idid: 1234
+didi: 1234
+fifi: 4321
+sum10: 55 385
+mix12: 78 194
+sum8d: 36
+narrow9: 32992
+ptr round trip: true
+null: none true false
+fill: [0, 1, 4, 9, 16]
+string return: hello from C none
+string arg: 4 0
+in-place: MIXED CASE
+symbol: 41
+after bump: 42
+stored: 101
+missing symbol: true

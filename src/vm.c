@@ -806,7 +806,7 @@ static void* thread_wrapper(void *arg) {
     if (GET_TYPE(td->callee) == VAL_OBJECT && (td->callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(td->callee);
         if (ot == OBJ_NATIVE_FUNC) {
-            AS_NATIVE_FUNC(td->callee)->func(td->argc, td->args);
+            glow_call_native(AS_NATIVE_FUNC(td->callee), td->argc, td->args);
         } else if (ot == OBJ_BOUND_METHOD) {
             BoundMethod *bm = AS_BOUND_METHOD(td->callee);
             if (GET_TYPE(bm->instance) != VAL_NONE) {
@@ -2077,7 +2077,7 @@ int jit_exception_pending(void) { return has_exception; }
                     if (pc->is_method) {
                         args++;
                     }
-                    R(pc->r0) = AS_NATIVE_FUNC(v)->func(argc, args);
+                    R(pc->r0) = glow_call_native(AS_NATIVE_FUNC(v), argc, args);
                 }
                 else R(pc->r0) = value_none();
             } else {
@@ -2165,7 +2165,7 @@ int jit_exception_pending(void) { return has_exception; }
                     if (pc->is_method) {
                         args++;
                     }
-                    R(pc->r0) = AS_NATIVE_FUNC(callee)->func(argc, args);
+                    R(pc->r0) = glow_call_native(AS_NATIVE_FUNC(callee), argc, args);
                     goto l_OP_RETURN;
                 }
                 else if (ot == OBJ_CLASS) {
@@ -2522,7 +2522,7 @@ int jit_exception_pending(void) { return has_exception; }
                 if (pc->is_method) {
                     args++;
                 }
-                R(pc->r0) = AS_NATIVE_FUNC(callee)->func(argc, args);
+                R(pc->r0) = glow_call_native(AS_NATIVE_FUNC(callee), argc, args);
             } else {
                 pending_exception = value_string_copy("Object is not callable");
                 has_exception = 1;
@@ -2629,7 +2629,7 @@ int jit_exception_pending(void) { return has_exception; }
                     NativeFunc *nf = (NativeFunc*)(fallback_callee & MASK_PAYLOAD);
                     Value *args = &R(pc->r2);
                     if (pc->is_method) args++;
-                    R(pc->r0) = nf->func(ac, args);
+                    R(pc->r0) = glow_call_native(nf, ac, args);
                 } else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(fallback_callee);
                     if (c->body) {
@@ -2863,7 +2863,7 @@ int jit_exception_pending(void) { return has_exception; }
             snprintf(msg, sizeof(msg), "Cannot negate %s", AS_STRING(t));
             pending_exception = value_string_copy(msg); has_exception = 1; goto l_OP_THROW;
         }
-        if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); if (x == INT48_MIN) R(pc->r0) = value_float(-(double)x); else R(pc->r0) = value_int(-x); } else R(pc->r0) = num_from_double(-val_to_double(v)); pc++; goto l_DISPATCH; }
+        if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); if (x == INT48_MIN) R(pc->r0) = value_float(-(double)x); else R(pc->r0) = value_int(-x); } else if (is_bigint(v)) R(pc->r0) = value_bigint(bigint_negate(AS_BIGINT(v)));  /* exact, not through a double */ else R(pc->r0) = num_from_double(-val_to_double(v)); pc++; goto l_DISPATCH; }
     l_OP_STOP: {
         if (pc->arg > 0) {
             if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("STOP out of bounds"); has_exception = 1; goto l_OP_THROW; }
