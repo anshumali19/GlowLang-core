@@ -266,6 +266,10 @@ f\"([^"\\]|\\.)*\" {
 
 \n                     { line_num++; if (lexer_bracket_depth == 0) return NEWLINE; }
 [ \t\r]+               ;
+ /* The UTF-8 byte order mark that Notepad and PowerShell 5 put at the start
+    of files: skip it like whitespace (outside strings) wherever it appears,
+    so files from every entry point (run, import, eval) read the same. */
+"\xEF\xBB\xBF"         ;
 
 "//"[^\n]*             ;
 "#"[^\n]*              ;
@@ -275,7 +279,7 @@ f\"([^"\\]|\\.)*\" {
 <COMMENT>\n            { line_num++; }
 <COMMENT>.             ;
 
-.                      { printf("Warning: unknown char '%c' (0x%02x) at line %d\n", *yytext, *yytext, line_num); }
+.                      { printf("Warning: unknown char '%c' (0x%02x) at line %d\n", *yytext, (unsigned char)*yytext, line_num); }
 
 %%
 
