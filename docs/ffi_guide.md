@@ -161,7 +161,6 @@ These are refused with an error, never guessed at:
 - **Callbacks** (C calling a GlowLang function), such as `qsort`'s comparator.
 - **More than 16 arguments**, or more than 8 `float`/`double` arguments
   (Linux and macOS).
-- **On Apple Silicon Macs, more than 8 integer or pointer arguments.**
 
 ## Example: SQLite's version through its C API (when SQLite is installed as a shared library)
 

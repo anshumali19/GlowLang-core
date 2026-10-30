@@ -383,9 +383,6 @@ static Value lib_func(int argc, Value *args) {
 #ifndef _WIN32
     if (nfloat > 8) return ffi_error("%s: at most 8 float or double arguments are supported", name);
 #endif
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-    if (nint > 8) return ffi_error("%s: at most 8 integer or pointer arguments are supported on this Mac", name);
-#endif
     (void)nint;
     if (argc >= 4 && GET_TYPE(args[3]) == VAL_DICT) {
         Value rg = dict_get(AS_DICT(args[3]), "release_gil");
@@ -493,7 +490,9 @@ static void call_c(const FfiFn *f, const I *slots, I *ri, D *rd) {
    order in the first, float arguments in order in the second. Integer
    arguments past the registers (6 on x86-64, 8 on AArch64) go on the stack in
    order, as the callee expects while its float arguments fit in the 8 float
-   registers (enforced when the function is declared). */
+   registers (enforced when the function is declared). Apple's AArch64 ABI
+   instead packs stack arguments at their natural size and alignment, so
+   there the stack bytes are laid out by hand (see call_c). */
 #define IARGS I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I
 #define DARGS D, D, D, D, D, D, D, D
 #define IVALS ii[0], ii[1], ii[2], ii[3], ii[4], ii[5], ii[6], ii[7], ii[8], ii[9], ii[10], ii[11], ii[12], ii[13], ii[14], ii[15]
@@ -502,13 +501,35 @@ static void call_c(const FfiFn *f, const I *slots, I *ri, D *rd) {
 static void call_c(const FfiFn *f, const I *slots, I *ri, D *rd) {
     I ii[16];
     D dd[8];
+    FfiType itypes[16];
     int ni = 0, nd = 0;
     memset(ii, 0, sizeof(ii));
     memset(dd, 0, sizeof(dd));
     for (int i = 0; i < f->nargs; i++) {
         if (is_float_class(f->args[i])) dd[nd++] = bits_to_double(slots[i]);
-        else ii[ni++] = slots[i];
+        else { itypes[ni] = f->args[i]; ii[ni++] = slots[i]; }
     }
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    /* Integer arguments past the 8 registers: each at its own size and
+       alignment (an int32 takes 4 bytes, not an 8-byte slot). The packed bytes
+       are then passed as the prototype's 8-byte stack slots, which the caller
+       stores in order, giving exactly Apple's layout. At most 8 such
+       arguments, so they fit in the 64 bytes of ii[8..15]. */
+    if (ni > 8) {
+        unsigned char stack[64];
+        size_t off = 0;
+        memset(stack, 0, sizeof(stack));
+        for (int k = 8; k < ni; k++) {
+            size_t sz = (size_t)type_size(itypes[k]);
+            off = (off + sz - 1) & ~(sz - 1);
+            memcpy(stack + off, &ii[k], sz);   /* little-endian: the low bytes */
+            off += sz;
+        }
+        memcpy(&ii[8], stack, sizeof(stack));
+    }
+#else
+    (void)itypes;
+#endif
     void *fn = f->fn;
     errno = 0;
     if (f->ret == T_DOUBLE) *rd = ((D (*)(IARGS, DARGS))fn)(IVALS, DVALS);
