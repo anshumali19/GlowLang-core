@@ -672,14 +672,25 @@ struct List {
     Value *items;
 };
 
+/* Insertion-ordered: keys/values are the entries in the order they were
+   added (capacity slots, the first `used` of them taken; a removed entry's
+   key becomes none). Walking 0..capacity and skipping none keys visits the
+   entries in insertion order. `index` is the hash table over them: each
+   slot holds an entry number, DICT_EMPTY or DICT_REMOVED. */
 struct Dict {
     GCObject obj;
     int refcount;
-    int size;
-    int capacity;
+    int size;               /* live entries */
+    int capacity;           /* entry slots */
     Value *keys;
     Value *values;
+    int used;               /* entry slots taken, live or removed */
+    int index_cap;          /* power of two, at least 2 * capacity */
+    int32_t *index;
 };
+#define DICT_EMPTY   (-1)
+#define DICT_REMOVED (-2)
+void dict_init(Dict *d, int sz);
 
 struct Closure {
     GCObject obj;
@@ -851,6 +862,7 @@ Dict* dict_new(int sz);
 void dict_set(Dict *d, const char *key, Value val);
 Value dict_get(Dict *d, const char *key);
 int dict_get_idx(Dict *d, const char *key);
+int dict_remove(Dict *d, const char *key, Value *out);
 List* list_new(int sz);
 void list_push(List *l, Value val);
 PackedArray* packed_array_new(PackedType type, int capacity);

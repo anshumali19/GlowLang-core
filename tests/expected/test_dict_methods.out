@@ -2,12 +2,12 @@
 has name: true
 has gender: false
 === Testing keys and values ===
-keys: [age, name]
-values: [30, Alice]
+keys: [name, age]
+values: [Alice, 30]
 === Testing remove ===
 removed value: 30
 after remove keys: [name]
 === Testing merge ===
-after merge keys: [gender, city, name]
-after merge values: [female, NYC, Alice]
+after merge keys: [name, gender, city]
+after merge values: [Alice, female, NYC]
 original d has gender: true

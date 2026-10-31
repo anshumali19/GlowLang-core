@@ -1,0 +1,13 @@
+keys: [zebra, apple, mango, kiwi]
+values: [1, 2, 3, 4]
+  zebra 1
+  apple 2
+  mango 3
+  kiwi 4
+json: {"zebra": 1, "apple": 2, "mango": 3, "kiwi": 4}
+updated: {"zebra": 1, "apple": 20, "mango": 3, "kiwi": 4}
+re-added: {"apple": 20, "mango": 3, "kiwi": 4, "zebra": 100}
+round trip: {"id": 7, "name": "x", "tags": [1, 2], "ok": true}
+big: 1333 1333 k1 k2 k1999
+lookups: 1999 false none gone
+in order: true
