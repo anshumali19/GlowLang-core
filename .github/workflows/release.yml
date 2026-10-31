@@ -58,7 +58,7 @@ jobs:
         shell: bash
         run: |
           want="${GITHUB_REF_NAME#v}"
-          have=$(sed -n 's/^#define GLOWLANG_VERSION "\(.*\)"/\1/p' src/version.h)
+          have=$(tr -d '\r' < src/version.h | sed -n 's/^#define GLOWLANG_VERSION "\(.*\)"/\1/p')
           if [ "$have" != "$want" ]; then
             echo "::error::src/version.h says $have but the tag is $GITHUB_REF_NAME; bump GLOWLANG_VERSION to $want first"
             exit 1
