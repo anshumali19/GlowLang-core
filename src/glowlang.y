@@ -312,6 +312,7 @@ int glow_main(int argc, char **argv) {
         printf("  repl              Launch the interactive development shell\n");
         printf("  check <file.glow> Perform syntax and static analysis only\n");
         printf("  trace <file.glow> Execute with frame-by-frame VM tracing\n");
+        printf("  profile <file.glow> Execute, then list the lines that ran most often\n");
         printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
@@ -370,9 +371,10 @@ int glow_main(int argc, char **argv) {
 
     if (strcmp(subcommand, "repl") == 0) {
         goto l_REPL;
-    } else if (strcmp(subcommand, "check") == 0 || strcmp(subcommand, "run") == 0 || strcmp(subcommand, "trace") == 0 || strcmp(subcommand, "debug") == 0 || strcmp(subcommand, "--dump-bc") == 0) {
+    } else if (strcmp(subcommand, "check") == 0 || strcmp(subcommand, "run") == 0 || strcmp(subcommand, "trace") == 0 || strcmp(subcommand, "debug") == 0 || strcmp(subcommand, "profile") == 0 || strcmp(subcommand, "--dump-bc") == 0) {
         int dump_bc = 0;
         int check_only = (strcmp(subcommand, "check") == 0);
+        int profile_mode = (strcmp(subcommand, "profile") == 0);
         if (strcmp(subcommand, "trace") == 0) trace_mode = 1;
         if (strcmp(subcommand, "debug") == 0) debug_mode = 1;
         const char *filename = NULL;
@@ -426,7 +428,9 @@ int glow_main(int argc, char **argv) {
                     }
 
                     if (!check_only) {
+                        if (profile_mode) glow_profile_begin();
                         run_bytecode(main_bc, NULL, NULL, 0);
+                        if (profile_mode) { fflush(stdout); glow_profile_report(); }
                         if (runtime_error_thrown) {
                             /* Spawned threads may still be parked on the GIL, so
                                leave the heap alone and just exit. */

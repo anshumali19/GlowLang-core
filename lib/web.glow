@@ -485,7 +485,27 @@ blueprint Server:
             let matched = self.router.find_route(req.method, req.path)
             when matched is not none:
                 try:
-                    matched.handler(req, res)
+                    # A handler may fill in res, or return the response:
+                    # a dict or list (sent as JSON) or text (HTML when it
+                    # starts with <, JSON when it starts with { or [).
+                    let out = matched.handler(req, res)
+                    when not res.sent and out is not none:
+                        when type(out) == "dict" or type(out) == "list":
+                            res.send_json(out)
+                        otherwise:
+                            let text = str(out)
+                            let head = text.trim()
+                            when head.starts_with("<"):
+                                res.html(text)
+                            eif head.starts_with("{") or head.starts_with("["):
+                                res.headers["Content-Type"] = "application/json"
+                                res.body = text
+                                res.sent = true
+                            otherwise:
+                                res.text(text)
+                            end
+                        end
+                    end
                 catch err:
                     show "[GlowWeb] Error: " + err
                     res.status(500).send_json({"error": "Internal Server Error"})

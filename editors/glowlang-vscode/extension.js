@@ -30,11 +30,8 @@ function activate(context) {
         vscode.commands.registerCommand('glowlang.runWithArgs', () => runWithArguments()),
         vscode.commands.registerCommand('glowlang.debug', () => runCurrentFile(true)),
         vscode.commands.registerCommand('glowlang.profile', () => profileCurrentFile()),
-        vscode.commands.registerCommand('glowlang.openProfiler', () => openHtmlTool('profiler', 'GlowLang Profiler')),
-        vscode.commands.registerCommand('glowlang.openStackVisualizer', () => openHtmlTool('stack_visualizer', 'GlowLang Stack Visualizer')),
-        vscode.commands.registerCommand('glowlang.openPlayground', () => openHtmlTool('playground', 'GlowLang Playground')),
-        vscode.commands.registerCommand('glowlang.packageInit', () => runGlowCommand('--init')),
-        vscode.commands.registerCommand('glowlang.packageInstall', () => runGlowCommand('--install')),
+        vscode.commands.registerCommand('glowlang.packageInit', () => runGduCommand('init')),
+        vscode.commands.registerCommand('glowlang.packageInstall', () => runGduCommand('install')),
         vscode.commands.registerCommand('glowlang.restartLsp', () => restartLsp(context))
     );
 
@@ -147,68 +144,37 @@ function profileCurrentFile() {
         const glowPath = getGlowPath();
         
         const terminal = vscode.window.createTerminal({ name: 'GlowLang Profiler' });
-        terminal.sendText(`${glowPath} --profile "${filePath}"`);
+        // Runs the program, then prints how often each line ran.
+        terminal.sendText(`${glowPath} profile "${filePath}"`);
         terminal.show();
-        
-        vscode.window.showInformationMessage(
-            'Profiling complete. Open profiler UI?', 'Open Profiler'
-        ).then(choice => {
-            if (choice === 'Open Profiler') {
-                vscode.commands.executeCommand('glowlang.openProfiler');
-            }
-        });
     });
 }
 
-function openHtmlTool(toolName, title) {
-    const ws = vscode.workspace.workspaceFolders;
-    if (!ws || ws.length === 0) {
-        vscode.window.showErrorMessage('No workspace folder open');
-        return;
-    }
-
-    const toolsDir = path.join(ws[0].uri.fsPath, 'tools');
-    let htmlFile;
-    
-    if (toolName === 'profiler') {
-        htmlFile = path.join(toolsDir, 'profiler', 'profiler.html');
-    } else if (toolName === 'playground') {
-        htmlFile = path.join(toolsDir, 'playground', 'playground.html');
-    } else {
-        htmlFile = path.join(toolsDir, 'stack_visualizer', 'visualizer.html');
-    }
-
-    const fs = require('fs');
-    if (!fs.existsSync(htmlFile)) {
-        vscode.window.showErrorMessage(`Tool not found: ${htmlFile}`);
-        return;
-    }
-
-    const panel = vscode.window.createWebviewPanel(
-        `glowlang.${toolName}`,
-        title,
-        vscode.ViewColumn.One,
-        {
-            enableScripts: true,
-            retainContextWhenHidden: true
+// gdu, the package manager, sits next to glowlang (or on PATH).
+function getGduPath() {
+    const glowPath = getGlowPath();
+    const dir = path.dirname(glowPath);
+    if (dir && dir !== '.') {
+        const fs = require('fs');
+        for (const name of ['gdu', 'gdu.exe']) {
+            const candidate = path.join(dir, name);
+            if (fs.existsSync(candidate)) return candidate;
         }
-    );
-
-    panel.webview.html = fs.readFileSync(htmlFile, 'utf-8');
+    }
+    return 'gdu';
 }
 
-function runGlowCommand(command) {
+function runGduCommand(command) {
     const ws = vscode.workspace.workspaceFolders;
     if (!ws || ws.length === 0) {
         vscode.window.showErrorMessage('No workspace folder open');
         return;
     }
-
-    const glowPath = getGlowPath();
-    const terminal = vscode.window.createTerminal({ name: 'GlowLang Package Manager' });
-    terminal.sendText(`cd "${ws[0].uri.fsPath}" && ${glowPath} ${command}`);
+    const terminal = vscode.window.createTerminal({ name: 'GlowLang Package Manager', cwd: ws[0].uri.fsPath });
+    terminal.sendText(`"${getGduPath()}" ${command}`);
     terminal.show();
 }
+
 
 async function restartLsp(context) {
     if (client) {

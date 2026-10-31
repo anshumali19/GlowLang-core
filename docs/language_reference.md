@@ -838,6 +838,7 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 | `append(list, x)` | Add to a list |
 | `pairs(x)` | `[index, item]` / `[key, value]` pairs |
 | `abs`, `min`, `max`, `sum`, `round`, `floor`, `ceil` | Numbers (`min`/`max` take values or one list) |
+| `random()`, `random_int(lo, hi)`, `random_seed(n)` | A float in [0, 1); a whole number from lo to hi inclusive; restart the sequence for repeatable runs (xoshiro256\*\*; for secrets use `crypto.random_bytes`) |
 | `sorted(list, key, descending)`, `reversed(x)` | New ordered list (or reversed string) |
 | `input(prompt)` / `ask(prompt)` | Read a line from standard input (`none` at end of input) |
 | `assert(condition, message)` | Raise when the condition is false |
@@ -861,8 +862,21 @@ false, and every ordering comparison with NaN is false.
 | `to_device(t, "cpu" / "cuda")` | Device placement (CUDA only in builds with nvcc) |
 
 ### HTTP (`http.`)
-`listen(port)`, `accept(server)`, `read(client)`, `send(client, data)`, `close(handle)`,
-`request(method, url, ...)`.
+Server: `listen(port)`, `accept(server)`, `read(client)`, `send(client, data)`, `close(handle)`.
+
+Client: `request(method, url, options)` returns `{"status", "body", "headers", "url"}`
+(`url` is where redirects ended). Options: `headers` (dict), `body`, `timeout`
+(seconds, default 30), `follow_redirects` (default true), `max_redirects`
+(default 10), `verify` (default true). HTTPS checks the server's certificate
+and host name against the system's trusted roots; `"verify": false` turns
+that off for test servers. Chunked responses are decoded. A failure raises an
+error that says what went wrong (cannot resolve host, timed out, certificate
+not trusted, ...). `lib/http_client.glow` builds on this.
+
+```glow
+let r = http.request("GET", "https://example.com/", {"timeout": 10})
+show r["status"], len(r["body"])
+```
 
 ### SQLite (`sqlite.`)
 `open(path)`, `exec(db, sql, params)` (returns the number of rows changed), `query(db, sql, params)`

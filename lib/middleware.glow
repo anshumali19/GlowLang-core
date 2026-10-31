@@ -167,7 +167,19 @@ blueprint CORS:
     end
 
     action handle(req, res, next):
-        res.set_header("Access-Control-Allow-Origin", self.allowed_origins)
+        # The header holds one origin: "*" when any is allowed, else the
+        # request's own origin if it is in the list (and nothing if not).
+        let origin = req.headers["Origin"]
+        let allowed = self.allowed_origins
+        when type(allowed) == "string":
+            allowed = [allowed]
+        end
+        when allowed.contains("*"):
+            res.set_header("Access-Control-Allow-Origin", "*")
+        eif origin != none and allowed.contains(origin):
+            res.set_header("Access-Control-Allow-Origin", origin)
+            res.set_header("Vary", "Origin")
+        end
         res.set_header("Access-Control-Allow-Methods", self.allowed_methods)
         res.set_header("Access-Control-Allow-Headers", self.allowed_headers)
 

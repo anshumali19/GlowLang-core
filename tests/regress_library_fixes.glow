@@ -1,0 +1,78 @@
+# Library behaviour that was documented but not true. Each line names
+# what used to happen.
+use "glowguard"
+use "json_utils"
+use "dataset"
+use "ml_pipeline"
+use "middleware"
+use "http_client"
+use "dataframe"
+use "tensor_utils"
+
+# random(), random_int() and random_seed() did not exist, so
+# Dataset.shuffle, sample, train_test_split and tensor_rand all crashed.
+random_seed(7)
+let first = [random(), random_int(1, 6)]
+random_seed(7)
+show "random repeatable:", first == [random(), random_int(1, 6)], random() < 1, type(math.random())
+
+# GlowGuard's bool() accepted anything; str() and num() did not check types.
+let g = GlowGuard()
+let schema = g.object({"name": g.str().min(2), "age": g.num(), "admin": g.bool()})
+show "guard:", schema.validate({"name": 42, "age": "old", "admin": "yes"}, "user")["errors"]
+show "guard ok:", schema.validate({"name": "Ana", "age": 30, "admin": false}, "user")["valid"]
+
+# JsonValidator rejected 1 as a "number" (type() says int, not integer).
+let v = JsonValidator()
+show "json types:", v.validate({"n": 1, "f": 2.5, "b": true, "l": [1], "d": {}}, {"type": "object", "properties": {"n": {"type": "integer"}, "f": {"type": "number"}, "b": {"type": "boolean"}, "l": {"type": "array"}, "d": {"type": "object"}}}), v.get_errors()
+show "json type error:", v.validate({"n": "x"}, {"type": "object", "properties": {"n": {"type": "number"}}}), v.get_errors()
+
+# Dataset.head(2) gave 3 rows; tail and splits read past the end.
+let rows = []
+let i = 0
+while i < 10:
+    rows.push({"x": i, "y": 2 * i + 1})
+    i = i + 1
+end
+let ds = Dataset()
+ds.from_list(rows, "y")
+show "head/tail:", len(ds.head(2)), len(ds.tail(3)), ds.tail(1)[0]["x"]
+let parts = train_test_split(ds, 0.7)
+show "split sizes:", parts["train"].size + parts["test"].size if type(parts) == "dict" otherwise "?"
+
+# StandardScaler called sqrt(), which does not exist (math.sqrt does).
+let sc = StandardScaler()
+sc.fit([{"x": 0}, {"x": 10}], ["x"])
+show "scaler:", sc.transform([{"x": 0}, {"x": 10}], ["x"])
+
+# The ML pipeline graded a regression model by classification accuracy.
+let rd = Dataset()
+rd.from_list(rows, "y")
+let res = regression_pipeline(rd)
+show "regression metric:", res["metrics"]["type"] if type(res) == "dict" and res.has("metrics") otherwise "see output"
+
+# CORS sent the whole list of origins as one header value.
+for each setup in [["*"], ["https://a.com"]]:
+    for each origin in ["https://a.com", "https://evil.com"]:
+        let p = MiddlewarePipeline()
+        p.add(CORS(setup))
+        show "cors:", setup, origin, p.run(Request("GET", "/", {"Origin": origin}, "")).headers["Access-Control-Allow-Origin"]
+    end
+end
+
+# URLBuilder dropped every query parameter.
+show "url:", URLBuilder("https://x.com").path("api").param("q", "a b&c").param("lang", "héllo").build()
+
+# Table.where only knew is/is_not/contains; ">" matched nothing.
+fs.write("tmp_where.csv", "name,age\nAna,30\nBob,25\nCy,40\n")
+let tb = read_table("tmp_where.csv")
+show "where:", len(tb.where("age", ">", 26).rows), len(tb.where("age", "<=", 25).rows), len(tb.where("name", "contains", "y").rows)
+try:
+    tb.where("age", "~", 1)
+catch e:
+    show "where bad op:", e
+end
+fs.remove("tmp_where.csv")
+
+# tensor_std called sqrt() too.
+show "tensor std:", tensor_std(tensor_from_list([1.0, 2.0, 3.0, 4.0]), 4)

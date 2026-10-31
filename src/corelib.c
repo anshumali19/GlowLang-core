@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <time.h>
 
 extern int glow_value_cmp(Value a, Value b);
 
@@ -185,6 +187,65 @@ static Value core_reversed(int argc, Value *args) {
     Value v = value_list(l);
     for (int i = src->size - 1; i >= 0; i--) list_push(l, src->items[i]);
     return v;
+}
+
+/* ---- random numbers: xoshiro256** (Blackman and Vigna), seeded from the
+   clock and the process unless random_seed(n) asks for a repeatable
+   sequence. Not for secrets: use crypto.random_bytes for those. ---- */
+static uint64_t rng_s[4];
+static int rng_ready = 0;
+
+static uint64_t splitmix64(uint64_t *x) {
+    uint64_t z = (*x += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static void rng_seed(uint64_t seed) {
+    for (int i = 0; i < 4; i++) rng_s[i] = splitmix64(&seed);
+    rng_ready = 1;
+}
+
+static uint64_t rng_next(void) {
+    if (!rng_ready) {
+        struct timespec ts;
+        timespec_get(&ts, TIME_UTC);
+        rng_seed((uint64_t)ts.tv_sec * 1000000007ULL ^ (uint64_t)ts.tv_nsec ^ (uint64_t)(uintptr_t)&ts);
+    }
+    uint64_t *s = rng_s;
+    uint64_t r = s[1] * 5;
+    r = ((r << 7) | (r >> 57)) * 9;
+    uint64_t t = s[1] << 17;
+    s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3];
+    s[2] ^= t;
+    s[3] = (s[3] << 45) | (s[3] >> 19);
+    return r;
+}
+
+/* random(): a float in [0, 1). */
+static Value core_random(int argc, Value *args) {
+    (void)argc; (void)args;
+    return value_float((double)(rng_next() >> 11) * (1.0 / 9007199254740992.0));
+}
+
+/* random_int(lo, hi): a whole number from lo to hi, both included. */
+static Value core_random_int(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_INT || GET_TYPE(args[1]) != VAL_INT) return raise("random_int(lo, hi) needs two whole numbers");
+    int64_t lo = AS_INT(args[0]), hi = AS_INT(args[1]);
+    if (hi < lo) return raise("random_int(lo, hi): hi is smaller than lo");
+    uint64_t span = (uint64_t)(hi - lo) + 1;
+    /* Rejection sampling, so every value is equally likely. */
+    uint64_t limit = UINT64_MAX - UINT64_MAX % span, x;
+    do x = rng_next(); while (x >= limit);
+    return value_int(lo + (int64_t)(x % span));
+}
+
+/* random_seed(n): restart the sequence, so a program can repeat its run. */
+static Value core_random_seed(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT) return raise("random_seed(n) needs a whole number");
+    rng_seed((uint64_t)AS_INT(args[0]));
+    return value_none();
 }
 
 /* chr(code): the character with that Unicode code point, as UTF-8 text
@@ -585,6 +646,9 @@ void glow_corelib_init(void) {
     var_set("reversed", native_func_new("reversed", core_reversed));
     var_set("float", native_func_new("float", core_float));
     var_set("chr", native_func_new("chr", core_chr));
+    var_set("random", native_func_new("random", core_random));
+    var_set("random_int", native_func_new("random_int", core_random_int));
+    var_set("random_seed", native_func_new("random_seed", core_random_seed));
     var_set("ord", native_func_new("ord", core_ord));
     var_set("bool", native_func_new("bool", core_bool));
 
@@ -600,6 +664,7 @@ void glow_corelib_init(void) {
         dict_set(m, "atan", native_func_new("atan", m_atan));
         dict_set(m, "atan2", native_func_new("atan2", m_atan2));
         dict_set(m, "hypot", native_func_new("hypot", m_hypot));
+        dict_set(m, "random", native_func_new("random", core_random));
         dict_set(m, "abs", native_func_new("abs", core_abs));
         dict_set(m, "min", native_func_new("min", core_min));
         dict_set(m, "max", native_func_new("max", core_max));

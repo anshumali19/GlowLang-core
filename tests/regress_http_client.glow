@@ -1,0 +1,80 @@
+# http.request against a local server (no internet needed). It used to
+# fail on Windows (the receive timeout was read as 5 milliseconds), never
+# decoded chunked bodies, ignored redirects and timeouts, and returned
+# none instead of saying what went wrong.
+let port = 18000 + os.pid() % 1000
+let server_src = "let server = http.listen(" + str(port) + ")
+let served = 0
+while served < 10:
+    let c = http.accept(server)
+    let req = http.read(c)
+    let line = req.split(\"\\r\\n\")[0]
+    let path = line.split(\" \")[1]
+    if path == \"/\":
+        http.send(c, \"HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\nX-Demo: yes\\r\\n\\r\\nhello\")
+    eif path == \"/chunked\":
+        http.send(c, \"HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n4\\r\\nWiki\\r\\n6\\r\\npedia \\r\\nE\\r\\nin \\r\\n\\r\\nchunks.\\r\\n0\\r\\n\\r\\n\")
+    eif path == \"/redirect\":
+        http.send(c, \"HTTP/1.1 302 Found\\r\\nLocation: /final\\r\\nContent-Length: 0\\r\\n\\r\\n\")
+    eif path == \"/relative\":
+        http.send(c, \"HTTP/1.1 301 Moved\\r\\nLocation: final\\r\\nContent-Length: 0\\r\\n\\r\\n\")
+    eif path == \"/final\":
+        http.send(c, \"HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\n\\r\\nfinal\")
+    eif path == \"/echo\":
+        let body = req.split(\"\\r\\n\\r\\n\")[1]
+        let reply = line.split(\" \")[0] + \" \" + body
+        http.send(c, \"HTTP/1.1 201 Created\\r\\nContent-Length: \" + str(len(reply)) + \"\\r\\n\\r\\n\" + reply)
+    eif path == \"/slow\":
+        os.sleep(3000)
+        http.send(c, \"HTTP/1.1 200 OK\\r\\nContent-Length: 4\\r\\n\\r\\nlate\")
+    else:
+        http.send(c, \"HTTP/1.1 404 Not Found\\r\\nContent-Length: 0\\r\\n\\r\\n\")
+    end
+    http.close(c)
+    served = served + 1
+end
+"
+let script = fs.join(os.temp_dir(), "glow_http_server_" + str(port) + ".glow")
+fs.write(script, server_src)
+let srv = process.start([process.executable, "run", script], {"stdout": "null"})
+os.sleep(1000)
+let base = "http://127.0.0.1:" + str(port)
+
+func get(path, opts):
+    try:
+        let r = http.request("GET", base + path, opts)
+        return str(r["status"]) + " " + r["body"]
+    catch e:
+        return "error: " + e.replace(str(port), "PORT")
+    end
+end
+
+let r = http.request("GET", base + "/", {})
+show "plain:", r["status"], r["body"], r["headers"]["X-Demo"], r["url"].ends_with("/")
+show "chunked:", get("/chunked", {}).replace("\r\n", "<CRLF>")
+show "redirect:", get("/redirect", {})
+show "relative redirect:", get("/relative", {})
+show "no follow:", get("/redirect", {"follow_redirects": false}).trim()
+let p = http.request("POST", base + "/echo", {"body": "a=1&b=2", "headers": {"Content-Type": "text/plain"}})
+show "post:", p["status"], p["body"]
+show "404:", get("/missing", {}).trim()
+show "timeout:", get("/slow", {"timeout": 1})
+show "header injection:", get("/", {"headers": {"X": "a\r\nEvil: 1"}})
+try:
+    http.request("GET", "ftp://example.com/", {})
+catch e:
+    show "bad scheme:", e
+end
+try:
+    http.request("GET", "http://127.0.0.1:1/", {"timeout": 3})
+catch e:
+    show "refused:", e.starts_with("http.request: cannot connect to 127.0.0.1:1")
+end
+try:
+    http.request("GET", "http://no-such-host.invalid/", {})
+catch e:
+    show "unknown host:", e
+end
+process.wait(srv, 10)
+process.close(srv)
+fs.remove(script)

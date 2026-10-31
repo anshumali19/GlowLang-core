@@ -1,0 +1,12 @@
+plain: 200 hello yes true
+chunked: 200 Wikipedia in <CRLF><CRLF>chunks.
+redirect: 200 final
+relative redirect: 200 final
+no follow: 302
+post: 201 POST a=1&b=2
+404: 404
+timeout: error: http.request: 127.0.0.1 did not answer within the 1-second timeout
+header injection: error: http.request: a header name or value contains a line break
+bad scheme: http.request: the URL must start with http:// or https://
+refused: true
+unknown host: http.request: cannot resolve host no-such-host.invalid

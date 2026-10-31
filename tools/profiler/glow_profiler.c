@@ -1,3 +1,7 @@
+/* NOT CONNECTED YET: this tool reads [TRACE] CALL/ALLOC/EXEC lines, and the
+ * GlowLang runtime does not print them (`glowlang trace` prints
+ * "DEBUG <pc>: <op> ..." lines instead), so today it finds nothing.
+ * For line counts use `glowlang profile program.glow`. */
 /*
  * GlowLang Profiler Report Tool
  * Reads trace output from `glowlang --trace` and generates
