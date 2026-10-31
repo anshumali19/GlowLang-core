@@ -2455,7 +2455,15 @@ int jit_exception_pending(void) { return has_exception; }
 
     l_OP_CLASS_DEF: {
         const char *n = (const char*)pc->ptr; Class *p = NULL;
-        if (pc->arg == 1) { Value pv = R(pc->r1); if (GET_TYPE(pv) == VAL_OBJECT && (pv & MASK_PAYLOAD)) p = AS_CLASS(pv); }
+        if (pc->arg == 1) {
+            Value pv = R(pc->r1);
+            if (!(GET_TYPE(pv) == VAL_OBJECT && (pv & MASK_PAYLOAD) && GET_OBJ_TYPE(pv) == OBJ_CLASS)) {
+                char msg[256];
+                snprintf(msg, sizeof msg, "class %s can only extend a class (got %s)", n, glow_type_name(pv));
+                pending_exception = value_string_copy(msg); has_exception = 1; goto l_OP_THROW;
+            }
+            p = AS_CLASS(pv);
+        }
         Value c = value_class(class_new(n, p)); var_set(n, c); vm_last_class = AS_CLASS(c); pc++; goto l_DISPATCH;
     }
     l_OP_METHOD_DEF: {

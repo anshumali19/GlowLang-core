@@ -588,6 +588,30 @@ show c.count          # Direct property access
 show c.value()        # Method access
 ```
 
+### Inheritance
+`extends` makes a class inherit another's methods, `init` included. A
+method defined in the child replaces the parent's, and chains of any depth
+work:
+```glow
+blueprint Animal:
+    action init(name):
+        self.name = name
+    end
+    action speak():
+        return self.name + " makes a sound"
+    end
+end
+
+blueprint Dog extends Animal:
+    action speak():
+        return self.name + " barks"
+    end
+end
+
+show Dog("Rex").speak()    # Rex barks (init comes from Animal)
+```
+Extending something that is not a class raises an error.
+
 ---
 
 ## 12. Traits
