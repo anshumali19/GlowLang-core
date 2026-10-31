@@ -51,6 +51,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # `glowlang --version` must match the release: tag v1.6.0 needs
+      # GLOWLANG_VERSION "1.6.0" in src/version.h.
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n 's/^#define GLOWLANG_VERSION "\(.*\)"/\1/p' src/version.h)
+          if [ "$have" != "$want" ]; then
+            echo "::error::src/version.h says $have but the tag is $GITHUB_REF_NAME; bump GLOWLANG_VERSION to $want first"
+            exit 1
+          fi
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |

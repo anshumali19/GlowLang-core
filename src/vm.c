@@ -1095,6 +1095,85 @@ static void path_dir(const char *path, char *out, size_t outsz) {
     out[n] = '\0';
 }
 
+/* o.n for the interpreter and the JIT alike. Sets *missing when o has no
+   such property, which the caller reports as an error (it used to read as
+   none, so a typo such as s.length silently gave none). A dict's missing key
+   is not an error: dicts double as option bags, read as opts.timeout. */
+Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing) {
+    *missing = 0;
+    if (GET_TYPE(o) == VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o) == OBJ_INSTANCE) {
+        Instance *inst = AS_INSTANCE(o);
+        Dict *d = inst->properties;
+        intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
+        Value v;
+        if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+            v = d->values[idx];
+        } else {
+            int new_idx = dict_get_idx(d, n);
+            if (new_idx != -1) {
+                if (pc) {
+                    pc->cache[0].val = new_idx + 1;
+                    pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
+                }
+                v = d->values[new_idx];
+            } else {
+                v = class_get_method(inst->klass, n);
+                if (GET_TYPE(v) == VAL_NONE) { *missing = 1; return v; }
+            }
+        }
+        if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
+            v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
+        }
+        return v;
+    }
+    if (GET_TYPE(o) == VAL_DICT) {
+        Value v = dict_get(AS_DICT(o), n);
+        if (GET_TYPE(v) != VAL_NONE) return v;
+        NativeFuncPtr bfn = glow_builtin_method(o, n);
+        if (bfn) return bound_native_method_new(o, bfn);
+        if (strcmp(n, "has") == 0) return bound_native_method_new(o, native_dict_has);
+        if (strcmp(n, "keys") == 0) return bound_native_method_new(o, native_dict_keys);
+        if (strcmp(n, "values") == 0) return bound_native_method_new(o, native_dict_values);
+        if (strcmp(n, "remove") == 0) return bound_native_method_new(o, native_dict_remove);
+        if (strcmp(n, "merge") == 0) return bound_native_method_new(o, native_dict_merge);
+        return v;
+    }
+    if (GET_TYPE(o) == VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o) == OBJ_PACKED_ARRAY && strcmp(n, "shape") == 0) {
+        return native_tensor_shape(1, &o); /* t.shape, as tensor.shape(t) */
+    }
+    if (GET_TYPE(o) == VAL_LIST) {
+        NativeFuncPtr bfn = glow_builtin_method(o, n);
+        if (bfn) return bound_native_method_new(o, bfn);
+    } else if (GET_TYPE(o) == VAL_STRING) {
+        NativeFuncPtr bfn = glow_builtin_method(o, n);
+        if (bfn) return bound_native_method_new(o, bfn);
+        if (strcmp(n, "contains") == 0) return bound_native_method_new(o, native_str_contains);
+        if (strcmp(n, "find") == 0) return bound_native_method_new(o, native_str_find);
+        if (strcmp(n, "slice") == 0) return bound_native_method_new(o, native_str_slice);
+        if (strcmp(n, "split") == 0) return bound_native_method_new(o, native_str_split);
+    }
+    *missing = 1;
+    return value_none();
+}
+
+/* The error for reading a property o does not have. */
+Value glow_property_error(Value o, const char *n) {
+    char msg[320];
+    const char *t = glow_type_name(o);
+    if (GET_TYPE(o) == VAL_NONE) {
+        snprintf(msg, sizeof(msg), "cannot read property '%.100s' of none", n);
+    } else if (GET_TYPE(o) == VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o) == OBJ_INSTANCE) {
+        const char *cn = AS_INSTANCE(o)->klass && AS_INSTANCE(o)->klass->name ? AS_INSTANCE(o)->klass->name : "instance";
+        snprintf(msg, sizeof(msg), "%.100s has no property or method '%.100s'", cn, n);
+    } else if ((GET_TYPE(o) == VAL_STRING || GET_TYPE(o) == VAL_LIST) &&
+               (strcmp(n, "length") == 0 || strcmp(n, "size") == 0 || strcmp(n, "len") == 0)) {
+        snprintf(msg, sizeof(msg), "%s has no property '%.100s' (use len(x) for its length)", t, n);
+    } else {
+        snprintf(msg, sizeof(msg), "%s has no property '%.100s'", t, n);
+    }
+    return value_string_copy(msg);
+}
+
 /* Find a module for `use`/`import`. A relative path is tried, in order:
    next to the importing file, from the current directory, under lib/, and
    under the lib/ folder beside the glowlang executable (so the standard
@@ -1691,11 +1770,18 @@ int jit_exception_pending(void) { return has_exception; }
             Value v = global_table.values[slot];
             if (GET_TYPE(v) == VAL_NONE) {
                 const char *var_name = global_table.names[slot];
-                if (var_name) {
-                    FuncEntry *fe = func_get(var_name);
-                    if (fe) {
-                        v = bound_method_new(value_none(), fe);
-                    }
+                FuncEntry *fe = var_name ? func_get(var_name) : NULL;
+                if (fe) {
+                    v = bound_method_new(value_none(), fe);
+                } else if (!global_slot_declared(slot)) {
+                    /* Nothing anywhere declares this name (a typo, or a
+                       variable that does not exist); it used to read as
+                       none. A declared global that holds none is fine. */
+                    char msg[200];
+                    snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
+                    pending_exception = value_string_copy(msg);
+                    has_exception = 1;
+                    goto l_OP_THROW;
                 }
             }
             R(pc->r0) = v;
@@ -1722,6 +1808,7 @@ int jit_exception_pending(void) { return has_exception; }
 
         if (!found_in_closure) {
             global_table.values[slot] = R(pc->r0);
+            if (!global_slot_declared(slot)) global_mark_declared(slot); /* assigned, so defined */
         }
         pc++; goto l_DISPATCH;
     }
@@ -2283,6 +2370,7 @@ int jit_exception_pending(void) { return has_exception; }
         int slot = pc->arg;
         if (slot < 0 || slot >= global_table.count) { pending_exception = value_string_copy("STORE_LET slot out of bounds"); has_exception = 1; goto l_OP_THROW; }
         global_table.values[slot] = R(pc->r0);
+        if (!global_slot_declared(slot)) global_mark_declared(slot);
         pc++; goto l_DISPATCH;
     }
     l_OP_TRY_START: pc++; goto l_DISPATCH;
@@ -2360,69 +2448,15 @@ int jit_exception_pending(void) { return has_exception; }
     }
     l_OP_GET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r1);
-        if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD)) {
-            ObjType ot = GET_OBJ_TYPE(o);
-            if(ot==OBJ_INSTANCE) {
-                Instance *inst = AS_INSTANCE(o);
-                Dict *d = inst->properties;
-                intptr_t idx = pc->cache[0].val - 1;
-                Value v;
-                if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
-                    v = d->values[idx];
-                } else {
-                    int new_idx = dict_get_idx(d, n);
-                    if (new_idx != -1) {
-                        pc->cache[0].val = new_idx + 1;
-                        pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
-                        v = d->values[new_idx];
-                    } else {
-                        v = class_get_method(inst->klass, n);
-                    }
-                }
-                if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
-                    v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
-                }
-                R(pc->r0) = v;
-            } else R(pc->r0) = value_none();
-        } else if(GET_TYPE(o)==VAL_LIST) {
-            NativeFuncPtr bfn = glow_builtin_method(o, n);
-            R(pc->r0) = bfn ? bound_native_method_new(o, bfn) : value_none();
-        } else if(GET_TYPE(o)==VAL_DICT) {
-            Value v = dict_get(AS_DICT(o), n);
-            NativeFuncPtr bfn;
-            if (GET_TYPE(v) == VAL_NONE && (bfn = glow_builtin_method(o, n)) != NULL) {
-                v = bound_native_method_new(o, bfn);
-            } else if (GET_TYPE(v) == VAL_NONE) {
-                if (strcmp(n, "has") == 0) {
-                    v = bound_native_method_new(o, native_dict_has);
-                } else if (strcmp(n, "keys") == 0) {
-                    v = bound_native_method_new(o, native_dict_keys);
-                } else if (strcmp(n, "values") == 0) {
-                    v = bound_native_method_new(o, native_dict_values);
-                } else if (strcmp(n, "remove") == 0) {
-                    v = bound_native_method_new(o, native_dict_remove);
-                } else if (strcmp(n, "merge") == 0) {
-                    v = bound_native_method_new(o, native_dict_merge);
-                }
-            }
-            R(pc->r0) = v;
-        } else if(GET_TYPE(o)==VAL_STRING) {
-            Value v = value_none();
-            NativeFuncPtr bfn = glow_builtin_method(o, n);
-            if (bfn) {
-                v = bound_native_method_new(o, bfn);
-            } else if (strcmp(n, "contains") == 0) {
-                v = bound_native_method_new(o, native_str_contains);
-            } else if (strcmp(n, "find") == 0) {
-                v = bound_native_method_new(o, native_str_find);
-            } else if (strcmp(n, "slice") == 0) {
-                v = bound_native_method_new(o, native_str_slice);
-            } else if (strcmp(n, "split") == 0) {
-                v = bound_native_method_new(o, native_str_split);
-            }
-            R(pc->r0) = v;
+        int missing = 0;
+        Value v = glow_get_property(o, n, pc, &missing);
+        if (missing) {
+            pending_exception = glow_property_error(o, n);
+            has_exception = 1;
+            goto l_OP_THROW;
         }
-        else R(pc->r0) = value_none(); pc++; goto l_DISPATCH;
+        R(pc->r0) = v;
+        pc++; goto l_DISPATCH;
     }
     l_OP_SET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r0); Value v = R(pc->r1);

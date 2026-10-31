@@ -5,7 +5,7 @@ again: 2
 caught: oops
 local survived: 42
 returned: inner
-problem is not a global: none
+problem is not a global: name 'problem' is not defined
 caught in hot loop: 1
 last statement: Expected a function
 caught in func

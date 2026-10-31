@@ -14,7 +14,12 @@ func fresh():
     return temp
 end
 show "fresh():", fresh()
-show "temp is not a global:", type(temp)
+# Reading a name nothing declares is an error (it used to read as none).
+try:
+    show type(temp)
+catch e:
+    show "temp is not a global:", e
+end
 
 # Recursion with plain assignments: each call has its own `mid`.
 func depth_sum(n):

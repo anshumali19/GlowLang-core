@@ -1,0 +1,86 @@
+# Reading a name nothing declares, or a property a value does not have, is
+# an error. Both used to read as none, so typos ran on with wrong values.
+func try_show(label, f):
+    try:
+        show label, f()
+    catch e:
+        show label, "error:", e
+    end
+end
+
+try_show("undefined name:", lambda(): undefined_thing)
+try_show("string .length:", lambda(): "glow".length)
+try_show("list .size:", lambda(): [1, 2].size)
+try_show("int property:", lambda(): (5).value)
+try_show("property of none:", lambda(): none.name)
+
+blueprint Point:
+    action init(x):
+        self.x = x
+        self.label = none
+    end
+    action norm():
+        return self.x
+    end
+end
+let p = Point(3)
+try_show("missing field:", lambda(): p.y)
+try_show("field holding none:", lambda(): p.label)
+try_show("method value:", lambda(): type(p.norm))
+
+# Dicts stay lenient: a missing key reads as none (option bags).
+let opts = {"timeout": 5}
+show "dict key:", opts.timeout, "missing key:", opts.retries
+
+# none and pass are predefined; a declared global holding none is fine.
+let empty = none
+func read_empty():
+    pass
+    return empty
+end
+show "declared none:", read_empty()
+
+# A global declared further down the file is known by the time it runs.
+func read_later():
+    return defined_later
+end
+let defined_later = "here"
+show "declared later:", read_later()
+
+# The same errors from compiled (JIT) code: these loops run hot first.
+func sum_x(pt, n):
+    let total = 0
+    let i = 0
+    while i < n:
+        total = total + pt.x
+        i = i + 1
+    end
+    return total
+end
+show "hot property:", sum_x(p, 5000)
+func hot_typo(n):
+    let i = 0
+    let total = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    end
+    return total + p.z
+end
+try_show("hot missing property:", lambda(): hot_typo(5000))
+func hot_name(n):
+    let i = 0
+    while i < n:
+        i = i + 1
+    end
+    return i + not_declared_anywhere
+end
+try_show("hot undefined name:", lambda(): hot_name(5000))
+
+# Native tensors have a real .shape (glowtorch relies on it).
+let t = tensor.zeros(6)
+show "tensor shape:", t.shape, tensor.shape(t)
+
+# glowlang --version prints the version.
+let v = process.run([process.executable, "--version"])
+show "--version:", v.code, v.stdout.starts_with("GlowLang ")
