@@ -1,0 +1,54 @@
+# A few seconds of work for CI to time with and without the JIT (the
+# macOS job reports Apple silicon numbers). Prints checksums only.
+func fib(n):
+    if n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+func float_loop(n):
+    let s = 0.0
+    let i = 0
+    while i < n:
+        let x = i * 0.5
+        s = s + (x * x + 1.0) / (x + 1.0)
+        i = i + 1
+    end
+    return floor(s)
+end
+
+func int_loop(n):
+    let s = 0
+    let i = 0
+    while i < n:
+        s = s + (i * 3 + 1) % 7
+        i = i + 1
+    end
+    return s
+end
+
+blueprint Counter:
+    action init():
+        self.n = 0
+    end
+    action bump(k):
+        self.n = self.n + k
+        return self.n
+    end
+end
+
+func calls(n):
+    let c = Counter()
+    let i = 0
+    while i < n:
+        c.bump(1)
+        i = i + 1
+    end
+    return c.n
+end
+
+show "fib:", fib(27)
+show "float:", float_loop(2000000)
+show "int:", int_loop(3000000)
+show "calls:", calls(1000000)

@@ -8,10 +8,10 @@ A tutorial for building AI and machine learning applications in GlowLang — cov
 
 GlowLang provides native tensor operations backed by SIMD hardware acceleration:
 
-- **AVX2/SSE** on x86-64 for 256-bit parallel computation
-- **NEON** on ARM64 for mobile/edge AI
+- **AVX2 + FMA** on x86-64 for 256-bit parallel computation, when the CPU has them (checked at run time)
+- Plain scalar code on ARM64 (no NEON kernels yet) and with `GLOW_NO_SIMD=1`
 - **Zero-copy tensors** allocated outside the GC for predictable performance
-- **Auto-vectorization** by the JIT — numeric loops are compiled to SIMD instructions
+- **Compiled numeric loops**: the JIT (x86-64 and ARM64) runs integer and float arithmetic inline; it does not vectorize loops itself, the tensor kernels do
 
 ---
 

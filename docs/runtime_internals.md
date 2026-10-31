@@ -230,7 +230,7 @@ raised exception also leaves compiled code this way.
 |--------|--------|-------|
 | x86-64 (System V) | ✅ Full | Linux / macOS AMD64 ABI; SSE/AVX2 SIMD support |
 | x86-64 (Microsoft x64) | ✅ Full | Windows x64 ABI; 32-byte shadow space; 16-byte stack alignment |
-| ARM64 | ❌ None | Interpreter only |
+| ARM64 (AArch64) | ✅ Full | AAPCS64; Linux and macOS (MAP_JIT memory on Apple silicon); same opcodes and inline int/float paths as x86-64; Windows on ARM compiles but is untested |
 | WASM | ❓ Unverified | `make wasm` (Emscripten), interpreter only |
 
 ---

@@ -52,6 +52,15 @@ extern FuncEntry* func_get(const char *name);
 
 typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64)
+/* GLOW_JIT_DEBUG=1: report every function compiled, on stderr. */
+static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, size_t bytes) {
+    if (!glow_jit_debug) return;
+    if (!fe) fe = bc->owner;
+    fprintf(stderr, "[jit] %s: %s (%zu bytes)\n", tier, (fe && fe->name) ? fe->name : "<script>", bytes);
+}
+#endif
+
 static void jit_emit_byte(JITBuffer *buf, uint8_t b) {
     if (buf->size < buf->capacity) buf->code[buf->size++] = b;
 }
@@ -1074,6 +1083,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     }
     mprotect(code, size, PROT_READ | PROT_EXEC);
     bc->jit_code = code; bc->jit_size = size;
+    jit_debug_compiled(bc, fe, "optimizing", buf.size);
     free(offsets); free(jumps);
 }
 
@@ -1456,8 +1466,10 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         free(offsets);
         bc->osr_code = code; bc->osr_code_size = size;
         bc->osr_entries = entries;
+        jit_debug_compiled(bc, fe, "osr", buf.size);
     } else {
         bc->baseline_jit_code = code; bc->baseline_jit_size = size; bc->baseline_jit_offsets = offsets; bc->jit_tier = JIT_TIER_BASELINE;
+        jit_debug_compiled(bc, fe, "baseline", buf.size);
     }
     free(jumps);
 }
@@ -1517,15 +1529,674 @@ void jit_compile_specialized(FuncEntry *fe, TypeSignature sig) {
 }
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
-void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) { if (bc) bc->jit_failed = 1; }
-void jit_compile(Bytecode *bc) { if (bc) bc->jit_failed = 1; }
-void jit_compile_specialized(FuncEntry *fe, TypeSignature sig) { if (fe) func_add_specialization(fe, sig, (void*)1, 0); }
+/* ================================================================
+ * ARM64 (AArch64) backend
+ *
+ * The same compiled-code protocol as the x86-64 backend above: compiled code
+ * is `Value fn(Value *R, int *pc_idx)`. x19 holds R (the register file) and
+ * x20 holds pc_idx for the whole function. Every live value stays in R, so
+ * leaving compiled code anywhere (a "side exit") is: store the instruction
+ * index through x20 and return VAL_DEOPT_SENTINEL; the interpreter resumes
+ * at that instruction. Anything beyond moves, integer/float arithmetic,
+ * comparisons and jumps calls the same C helpers as the x86 backend.
+ *
+ * Registers: x0-x7 arguments/scratch, x9-x11 scratch, x16 holds call
+ * targets, x17 large offsets, d0-d2 floats. x18 is never touched (Apple and
+ * Windows reserve it). The frame saves x29/x30 and x19/x20 (32 bytes, so sp
+ * stays 16-byte aligned for calls).
+ *
+ * Code memory: Linux maps RW, then RX with the instruction cache flushed.
+ * macOS needs MAP_JIT memory, writable only while the thread has turned
+ * off write protection (pthread_jit_write_protect_np).
+ * ================================================================ */
+#include "jit_a64.h"
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <libkern/OSCacheControl.h>
+#endif
 
-void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) { if (bc) bc->jit_failed = 1; }
-void jit_compile_baseline(Bytecode *bc) { if (bc) bc->jit_failed = 1; }
-void jit_compile_osr(Bytecode *bc) { if (bc) bc->osr_failed = 1; }
-void jit_maybe_tier_up(Bytecode *bc) { (void)bc; }
-void func_maybe_tier_up(FuncEntry *fe) { (void)fe; }
+extern Value jit_div_helper(Value a, Value b);
+extern Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc);
+extern int jit_exception_pending(void);
+
+#define A64_REGS 19   /* x19: Value *R */
+#define A64_PCIDX 20  /* x20: int *pc_idx */
+
+static uint8_t *a64_code_alloc(size_t size) {
+#if defined(__APPLE__)
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    pthread_jit_write_protect_np(0);
+    return p;
+#else
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+#endif
+}
+
+static void a64_code_finish(uint8_t *code, size_t size) {
+#if defined(__APPLE__)
+    pthread_jit_write_protect_np(1);
+    sys_icache_invalidate(code, size);
+#elif defined(_WIN32)
+    mprotect(code, size, PROT_READ | PROT_EXEC);   /* also flushes the icache */
+#else
+    mprotect(code, size, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char*)code, (char*)code + size);
+#endif
+}
+
+static void a64_code_discard(uint8_t *code, size_t size) {
+#if defined(__APPLE__)
+    pthread_jit_write_protect_np(1);
+#endif
+    munmap(code, size);
+}
+
+/* Per-compile state: the buffer and whether a branch failed to reach. */
+typedef struct { JITBuffer buf; int broken; } A64;
+
+static void a64_emit(A64 *a, uint32_t ins) { jit_emit_u32(&a->buf, ins); }
+static uint32_t a64_here(A64 *a) { return (uint32_t)a->buf.size; }
+
+/* Point the branch emitted at `at` to `target` (both byte offsets). */
+static void a64_link(A64 *a, uint32_t at, uint32_t target) {
+    if (at + 4 > a->buf.size) { a->broken = 1; return; }
+    if (!a64_patch_branch((uint32_t*)(a->buf.code + at), at, target)) a->broken = 1;
+}
+static void a64_link_here(A64 *a, uint32_t at) { a64_link(a, at, a64_here(a)); }
+
+typedef struct { uint32_t at[8]; int n; } A64Jumps;
+static void a64_jumps_add(A64Jumps *j, uint32_t at) { if (j->n < 8) j->at[j->n++] = at; }
+static void a64_jumps_link_here(A64 *a, A64Jumps *j) { for (int k = 0; k < j->n; k++) a64_link_here(a, j->at[k]); }
+
+/* Branch placeholders, patched later with a64_link. */
+static uint32_t a64_b_fwd(A64 *a) { uint32_t at = a64_here(a); a64_emit(a, a64_b(0)); return at; }
+static uint32_t a64_bcond_fwd(A64 *a, int cond) { uint32_t at = a64_here(a); a64_emit(a, a64_b_cond(cond, 0)); return at; }
+
+static void a64_mov_imm(A64 *a, int rd, uint64_t v) {
+    int first = 1;
+    for (int hw = 0; hw < 4; hw++) {
+        uint16_t part = (uint16_t)(v >> (hw * 16));
+        if (part == 0 && !(first && hw == 3)) continue;
+        a64_emit(a, first ? a64_movz(rd, part, hw) : a64_movk(rd, part, hw));
+        first = 0;
+    }
+    if (first) a64_emit(a, a64_movz(rd, 0, 0));
+}
+
+/* rd = R[reg] / R[reg] = rt / rd = &R[reg] */
+static void a64_load_reg(A64 *a, int rd, int reg) {
+    uint32_t off = (uint32_t)reg * 8;
+    if (off < 32768) a64_emit(a, a64_ldr(rd, A64_REGS, off));
+    else { a64_mov_imm(a, 17, off); a64_emit(a, a64_ldr_reg(rd, A64_REGS, 17)); }
+}
+static void a64_store_reg(A64 *a, int rt, int reg) {
+    uint32_t off = (uint32_t)reg * 8;
+    if (off < 32768) a64_emit(a, a64_str(rt, A64_REGS, off));
+    else { a64_mov_imm(a, 17, off); a64_emit(a, a64_str_reg(rt, A64_REGS, 17)); }
+}
+static void a64_addr_reg(A64 *a, int rd, int reg) {
+    uint32_t off = (uint32_t)reg * 8;
+    if (off < 4096) a64_emit(a, a64_add_imm(rd, A64_REGS, off));
+    else { a64_mov_imm(a, 17, off); a64_emit(a, a64_add(rd, A64_REGS, 17)); }
+}
+
+static void a64_call(A64 *a, const void *fn) {
+    a64_mov_imm(a, 16, (uintptr_t)fn);
+    a64_emit(a, a64_blr(16));
+}
+
+static void a64_prologue(A64 *a) {
+    a64_emit(a, a64_stp_pre(29, 30, A64_SP, -32));
+    a64_emit(a, a64_mov_from_sp(29));
+    a64_emit(a, a64_stp(19, 20, A64_SP, 16));
+    a64_emit(a, a64_mov_reg(A64_REGS, 0));
+    a64_emit(a, a64_mov_reg(A64_PCIDX, 1));
+}
+/* Restores the caller's registers; x0-x16 are left as they are. */
+static void a64_pop_frame(A64 *a) {
+    a64_emit(a, a64_ldp(19, 20, A64_SP, 16));
+    a64_emit(a, a64_ldp_post(29, 30, A64_SP, 32));
+}
+static void a64_epilogue(A64 *a) { a64_pop_frame(a); a64_emit(a, a64_ret()); }
+
+static void a64_side_exit(A64 *a, int i) {
+    a64_mov_imm(a, 9, (uint32_t)i);
+    a64_emit(a, a64_str_w(9, A64_PCIDX, 0));
+    a64_mov_imm(a, 0, VAL_DEOPT_SENTINEL);
+    a64_epilogue(a);
+}
+
+/* Leave for the interpreter at instruction i when x0 == bits. */
+static void a64_deopt_if_x0_eq(A64 *a, uint64_t bits, int i) {
+    a64_mov_imm(a, 9, bits);
+    a64_emit(a, a64_cmp(0, 9));
+    uint32_t skip = a64_bcond_fwd(a, A64_NE);
+    a64_side_exit(a, i);
+    a64_link_here(a, skip);
+}
+static void a64_deopt_check(A64 *a, int i) { a64_deopt_if_x0_eq(a, VAL_DEOPT_SENTINEL, i); }
+
+static void a64_exception_check(A64 *a, int i) {
+    a64_call(a, (const void*)jit_exception_pending);
+    uint32_t skip = a64_here(a);
+    a64_emit(a, a64_cbz_w(0, 0));
+    a64_side_exit(a, i);
+    a64_link_here(a, skip);
+}
+
+/* At loop back-edges: hand the GIL to a waiting thread, if any. */
+static void a64_gil_poll(A64 *a) {
+    a64_mov_imm(a, 9, (uintptr_t)&glow_gil_waiters);
+    a64_emit(a, a64_ldr_w(9, 9, 0));
+    uint32_t skip = a64_here(a);
+    a64_emit(a, a64_cbz_w(9, 0));
+    a64_call(a, (const void*)glow_gil_yield);
+    a64_link_here(a, skip);
+}
+
+static void a64_zero_locals(A64 *a, Bytecode *bc, FuncEntry *fe) {
+    int start = (fe && fe->param_count > 0) ? fe->param_count : 0;
+    if (fe && fe->name && strchr(fe->name, ':')) start++;
+    if (start >= bc->local_count) return;
+    a64_mov_imm(a, 0, value_none());
+    for (int r = start; r < bc->local_count; r++) a64_store_reg(a, 0, r);
+}
+
+/* x0 = R[r1], x1 = R[r2], both checked to be inline ints and sign-extended
+   to 64 bits; other values branch to a jump in `fail`. */
+static void a64_load_ints(A64 *a, int r1, int r2, A64Jumps *fail) {
+    a64_load_reg(a, 0, r1);
+    a64_load_reg(a, 1, r2);
+    a64_emit(a, a64_movz_w(10, 0x7FF8));
+    a64_emit(a, a64_lsr_imm(9, 0, 48));
+    a64_emit(a, a64_cmp(9, 10));
+    a64_jumps_add(fail, a64_bcond_fwd(a, A64_NE));
+    a64_emit(a, a64_lsr_imm(9, 1, 48));
+    a64_emit(a, a64_cmp(9, 10));
+    a64_jumps_add(fail, a64_bcond_fwd(a, A64_NE));
+    a64_emit(a, a64_sbfx(0, 0, 0, 48));
+    a64_emit(a, a64_sbfx(1, 1, 0, 48));
+}
+
+/* x0 (a 64-bit integer known to fit 48 bits) -> inline int value. */
+static void a64_box_int(A64 *a) {
+    a64_emit(a, a64_ubfx(0, 0, 0, 48));
+    a64_emit(a, a64_movz(9, 0x7FF8, 3));
+    a64_emit(a, a64_orr(0, 0, 9));
+}
+
+/* Call a two-argument helper on R[r1], R[r2]; result in x0. */
+static void a64_call_binop(A64 *a, int r1, int r2, const void *fn) {
+    a64_load_reg(a, 0, r1);
+    a64_load_reg(a, 1, r2);
+    a64_call(a, fn);
+}
+
+/* Load R[r] into d<x> as a double; non-numbers jump to fail. With
+   check_frac, x11 |= 1 when the double is not exactly an int64 (it has a
+   fraction, or is NaN, infinite or too big). */
+static void a64_load_number(A64 *a, int r, int x, int check_frac, A64Jumps *fail) {
+    a64_load_reg(a, 0, r);
+    a64_emit(a, a64_lsr_imm(9, 0, 48));
+    a64_emit(a, a64_movz_w(10, 0x7FF8));
+    a64_emit(a, a64_cmp(9, 10));
+    uint32_t not_int = a64_bcond_fwd(a, A64_NE);
+    a64_emit(a, a64_sbfx(0, 0, 0, 48));
+    a64_emit(a, a64_scvtf(x, 0));
+    uint32_t next = a64_b_fwd(a);
+    a64_link_here(a, not_int);
+    /* A boxed non-double has its top 13 bits equal to 0x7FF8's (IS_FLOAT_BITS). */
+    a64_emit(a, a64_lsr_imm(9, 0, 51));
+    a64_emit(a, a64_cmp_imm(9, 0xFFF));
+    a64_jumps_add(fail, a64_bcond_fwd(a, A64_EQ));
+    a64_emit(a, a64_fmov_d_x(x, 0));
+    if (check_frac) {
+        /* fcvtzs saturates and turns NaN into 0, so a value survives the
+           round trip only if it is exactly an int64. */
+        a64_emit(a, a64_fcvtzs(9, x));
+        a64_emit(a, a64_scvtf(2, 9));
+        a64_emit(a, a64_fcmp(x, 2));
+        a64_emit(a, a64_cset(9, A64_NE));
+        a64_emit(a, a64_orr(11, 11, 9));
+    }
+    a64_link_here(a, next);
+}
+
+/* R[r1] op R[r2] in doubles, boxed into x0 as num_from_double does; jumps
+   to fail when the helper has to decide (see emit_float_binop above for
+   the rules, which are the interpreter's). */
+static void a64_float_binop(A64 *a, int op, int r1, int r2, A64Jumps *fail) {
+    int is_div = (op == OP_DIV);
+    if (!is_div) a64_emit(a, a64_movz(11, 0, 0));
+    a64_load_number(a, r1, 0, !is_div, fail);
+    a64_load_number(a, r2, 1, !is_div, fail);
+    if (is_div) {
+        a64_emit(a, a64_fcmp_zero(1));
+        a64_jumps_add(fail, a64_bcond_fwd(a, A64_EQ));   /* division by zero */
+    } else {
+        uint32_t at = a64_here(a);
+        a64_emit(a, a64_cbz(11, 0));                      /* no inexact operand */
+        a64_jumps_add(fail, at);
+    }
+    a64_emit(a, op == OP_ADD ? a64_fadd(0, 0, 1) : op == OP_SUB ? a64_fsub(0, 0, 1) :
+                op == OP_MUL ? a64_fmul(0, 0, 1) : a64_fdiv(0, 0, 1));
+    a64_emit(a, a64_fcmp(0, 0));
+    uint32_t nan = a64_bcond_fwd(a, A64_VS);
+    a64_emit(a, a64_fcvtzs(0, 0));
+    a64_emit(a, a64_sbfx(9, 0, 0, 48));
+    a64_emit(a, a64_cmp(9, 0));
+    uint32_t as_float1 = a64_bcond_fwd(a, A64_NE);         /* outside 48 bits */
+    a64_emit(a, a64_scvtf(2, 0));
+    a64_emit(a, a64_fcmp(0, 2));
+    uint32_t as_float2 = a64_bcond_fwd(a, A64_NE);         /* has a fraction */
+    a64_box_int(a);
+    uint32_t end1 = a64_b_fwd(a);
+    a64_link_here(a, as_float1);
+    a64_link_here(a, as_float2);
+    a64_emit(a, a64_fmov_x_d(0, 0));
+    uint32_t end2 = a64_b_fwd(a);
+    a64_link_here(a, nan);
+    a64_mov_imm(a, 0, CANON_NAN);
+    a64_link_here(a, end1);
+    a64_link_here(a, end2);
+}
+
+/* + and - : inline int (promoting to a double past 48 bits, as the x86
+   backend does), then inline float, then the helper. */
+static void a64_int_arith(A64 *a, int is_sub, int r0, int r1, int r2, const void *slow_fn, int i) {
+    A64Jumps not_ints = {0}, helper = {0};
+    a64_load_ints(a, r1, r2, &not_ints);
+    a64_emit(a, is_sub ? a64_sub(0, 0, 1) : a64_add(0, 0, 1));
+    a64_emit(a, a64_sbfx(9, 0, 0, 48));
+    a64_emit(a, a64_cmp(9, 0));
+    uint32_t promote = a64_bcond_fwd(a, A64_NE);
+    a64_box_int(a);
+    uint32_t done1 = a64_b_fwd(a);
+    a64_link_here(a, promote);
+    a64_emit(a, a64_scvtf(0, 0));
+    a64_emit(a, a64_fmov_x_d(0, 0));
+    uint32_t done2 = a64_b_fwd(a);
+    a64_jumps_link_here(a, &not_ints);
+    a64_float_binop(a, is_sub ? OP_SUB : OP_ADD, r1, r2, &helper);
+    uint32_t done3 = a64_b_fwd(a);
+    a64_jumps_link_here(a, &helper);
+    a64_call_binop(a, r1, r2, slow_fn);
+    a64_deopt_check(a, i);   /* the interpreter raises type errors */
+    a64_link_here(a, done1); a64_link_here(a, done2); a64_link_here(a, done3);
+    a64_store_reg(a, 0, r0);
+}
+
+/* * : inline int with exact overflow detection; overflow goes to the
+   helper, which promotes exactly like the interpreter. */
+static void a64_int_mul(A64 *a, int r0, int r1, int r2, int i) {
+    A64Jumps not_ints = {0}, helper = {0};
+    a64_load_ints(a, r1, r2, &not_ints);
+    a64_emit(a, a64_mul(9, 0, 1));
+    a64_emit(a, a64_smulh(10, 0, 1));
+    a64_emit(a, a64_asr_imm(11, 9, 63));
+    a64_emit(a, a64_cmp(10, 11));
+    a64_jumps_add(&helper, a64_bcond_fwd(a, A64_NE));      /* 64-bit overflow */
+    a64_emit(a, a64_sbfx(11, 9, 0, 48));
+    a64_emit(a, a64_cmp(11, 9));
+    a64_jumps_add(&helper, a64_bcond_fwd(a, A64_NE));      /* past 48 bits */
+    a64_emit(a, a64_mov_reg(0, 9));
+    a64_box_int(a);
+    uint32_t done1 = a64_b_fwd(a);
+    a64_jumps_link_here(a, &not_ints);
+    a64_float_binop(a, OP_MUL, r1, r2, &helper);
+    uint32_t done2 = a64_b_fwd(a);
+    a64_jumps_link_here(a, &helper);
+    a64_call_binop(a, r1, r2, (const void*)jit_int_mul);
+    a64_deopt_check(a, i);
+    a64_link_here(a, done1); a64_link_here(a, done2);
+    a64_store_reg(a, 0, r0);
+}
+
+static void a64_div(A64 *a, int r0, int r1, int r2, int i) {
+    A64Jumps helper = {0};
+    a64_float_binop(a, OP_DIV, r1, r2, &helper);
+    uint32_t done = a64_b_fwd(a);
+    a64_jumps_link_here(a, &helper);
+    a64_call_binop(a, r1, r2, (const void*)jit_div_helper);
+    a64_deopt_check(a, i);   /* declined: division by zero */
+    a64_link_here(a, done);
+    a64_store_reg(a, 0, r0);
+}
+
+/* Ordered comparison of two ints into a bool; otherwise the helper. */
+static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i) {
+    A64Jumps slow = {0};
+    a64_load_ints(a, r1, r2, &slow);
+    a64_emit(a, a64_cmp(0, 1));
+    int cond = op == OP_LT_INT ? A64_LT : op == OP_GT_INT ? A64_GT :
+               op == OP_LTE_INT ? A64_LE : op == OP_GTE_INT ? A64_GE : A64_EQ;
+    a64_emit(a, a64_cset(2, cond));
+    a64_mov_imm(a, 0, value_bool(0));
+    a64_emit(a, a64_orr(0, 0, 2));
+    uint32_t done = a64_b_fwd(a);
+    a64_jumps_link_here(a, &slow);
+    a64_call_binop(a, r1, r2, slow_fn);
+    a64_deopt_check(a, i);   /* incomparable operands: the interpreter raises */
+    a64_link_here(a, done);
+    a64_store_reg(a, 0, r0);
+}
+
+static int a64_supported(OpCode op) {
+    switch (op) {
+        case OP_CONST_INT: case OP_CONST_FLOAT: case OP_CONST_BOOL:
+        case OP_LOAD_VAR: case OP_STORE_VAR: case OP_STORE_LET:
+        case OP_MOVE: case OP_NOP:
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+        case OP_GET_PROPERTY: case OP_SET_PROPERTY: case OP_JUMP:
+        case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE: case OP_RETURN:
+        case OP_CALL: case OP_CALL_VALUE: case OP_CALL_SELF_FAST: case OP_CALL_METHOD:
+        case OP_INDEX: case OP_STORE_INDEX:
+        case OP_SIMD_ADD: case OP_TAIL_CALL:
+        case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
+        case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
+        case OP_LOAD_LOCAL: case OP_STORE_LOCAL:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+enum { A64_BASELINE, A64_OPTIMIZING, A64_OSR };
+
+/* Compile bc. The tiers produce the same code here (as on x86, where the
+   optimizing tier's emitters do not use the type information either); the
+   mode only decides which fields receive it. OSR compiles the whole body
+   with entry stubs at loop headers, and turns what it cannot translate
+   into side exits instead of failing. */
+static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
+    if (!fe) fe = bc->owner;
+    int osr = (mode == A64_OSR);
+    if (osr) { if (bc->osr_entries || bc->osr_failed) return; }
+    else if (mode == A64_BASELINE) { if (bc->baseline_jit_code || bc->jit_failed) return; }
+    else { if (bc->jit_code || bc->jit_failed) return; }
+
+    if (!osr) {
+        int has_self = 0, has_complex = 0;
+        for (int i = 0; i < bc->count; i++) {
+            OpCode op = bc->code[i].op;
+            if (!a64_supported(op)) { bc->jit_failed = 1; return; }
+            if (op == OP_CALL_SELF_FAST) has_self = 1;
+            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
+        }
+        /* Same rule as x86: the self-call fast path is only for pure
+           scalar recursion. */
+        if (has_self && has_complex) { bc->jit_failed = 1; return; }
+    }
+
+    size_t size = ((size_t)bc->count * 640 + 16384 + 65535) & ~(size_t)65535;
+    uint8_t *code = a64_code_alloc(size);
+    if (!code) { if (osr) bc->osr_failed = 1; else bc->jit_failed = 1; return; }
+    A64 a = { {code, 0, size}, 0 };
+    A64 *A = &a;
+
+    a64_prologue(A);
+    if (!osr) a64_zero_locals(A, bc, fe);
+    uint32_t body_start = a64_here(A);
+
+    uint32_t *offsets = calloc((size_t)bc->count + 1, sizeof(uint32_t));
+    struct { int target; uint32_t at; } *jumps = calloc((size_t)bc->count + 1, sizeof(*jumps));
+    int njumps = 0;
+
+    for (int i = 0; i < bc->count; i++) {
+        offsets[i] = a64_here(A);
+        Instruction *pc = &bc->code[i];
+        Instruction *orig_pc = (fe && fe->body) ? &fe->body->code[i] : pc;
+        switch (pc->op) {
+            case OP_CONST_INT: a64_mov_imm(A, 0, value_int(pc->arg)); a64_store_reg(A, 0, pc->r0); break;
+            case OP_CONST_FLOAT: a64_mov_imm(A, 0, *(uint64_t*)pc->ptr); a64_store_reg(A, 0, pc->r0); break;
+            case OP_CONST_BOOL: a64_mov_imm(A, 0, value_bool(pc->arg)); a64_store_reg(A, 0, pc->r0); break;
+            case OP_LOAD_VAR: {
+                a64_mov_imm(A, 9, (uintptr_t)&global_table.values);
+                a64_emit(A, a64_ldr(9, 9, 0));
+                a64_mov_imm(A, 10, (uint64_t)pc->arg * 8);
+                a64_emit(A, a64_ldr_reg(0, 9, 10));
+                /* An undeclared global reads as none; the interpreter raises
+                   "name is not defined" for it (see the x86 backend). */
+                if (!global_slot_declared(pc->arg)) a64_deopt_if_x0_eq(A, value_none(), i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            }
+            case OP_STORE_VAR: case OP_STORE_LET: {
+                a64_load_reg(A, 0, pc->r0);
+                a64_mov_imm(A, 9, (uintptr_t)&global_table.values);
+                a64_emit(A, a64_ldr(9, 9, 0));
+                a64_mov_imm(A, 10, (uint64_t)pc->arg * 8);
+                a64_emit(A, a64_str_reg(0, 9, 10));
+                break;
+            }
+            case OP_MOVE: a64_load_reg(A, 0, pc->r1); a64_store_reg(A, 0, pc->r0); break;
+            case OP_NOP: break;
+            case OP_LOAD_LOCAL: a64_load_reg(A, 0, pc->arg); a64_store_reg(A, 0, pc->r0); break;
+            case OP_STORE_LOCAL: a64_load_reg(A, 0, pc->r0); a64_store_reg(A, 0, pc->arg); break;
+            case OP_ADD: case OP_ADD_INT:
+                a64_int_arith(A, 0, pc->r0, pc->r1, pc->r2, (const void*)jit_int_add, i); break;
+            case OP_SUB: case OP_SUB_INT:
+                a64_int_arith(A, 1, pc->r0, pc->r1, pc->r2, (const void*)jit_int_sub, i); break;
+            case OP_MUL: case OP_MUL_INT:
+                a64_int_mul(A, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_DIV:
+                a64_div(A, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: {
+                const void *fn = pc->op == OP_LT ? (const void*)jit_val_lt : pc->op == OP_GT ? (const void*)jit_val_gt :
+                                 pc->op == OP_LTE ? (const void*)jit_val_lte : pc->op == OP_GTE ? (const void*)jit_val_gte :
+                                 (const void*)jit_val_eq;
+                int int_op = pc->op == OP_LT ? OP_LT_INT : pc->op == OP_GT ? OP_GT_INT :
+                             pc->op == OP_LTE ? OP_LTE_INT : pc->op == OP_GTE ? OP_GTE_INT : OP_EQ_INT;
+                a64_int_cmp(A, int_op, pc->r0, pc->r1, pc->r2, fn, i);
+                break;
+            }
+            case OP_NEQ:
+                a64_call_binop(A, pc->r1, pc->r2, (const void*)jit_val_neq);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT: {
+                const void *fn = pc->op == OP_LT_INT ? (const void*)jit_int_lt : pc->op == OP_GT_INT ? (const void*)jit_int_gt :
+                                 pc->op == OP_LTE_INT ? (const void*)jit_int_lte : pc->op == OP_GTE_INT ? (const void*)jit_int_gte :
+                                 (const void*)jit_int_eq;
+                a64_int_cmp(A, pc->op, pc->r0, pc->r1, pc->r2, fn, i);
+                break;
+            }
+            case OP_JUMP:
+                if (pc->arg <= i) a64_gil_poll(A);
+                jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++;
+                break;
+            case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE:
+                /* As on x86: the low bit of the value decides. Skip the jump
+                   when the condition does not hold. */
+                if (pc->arg <= i) a64_gil_poll(A);
+                a64_load_reg(A, 0, pc->r0);
+                a64_emit(A, pc->op == OP_JUMP_IF_FALSE ? a64_tbnz(0, 0, 8) : a64_tbz(0, 0, 8));
+                jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++;
+                break;
+            case OP_GET_PROPERTY:
+                a64_load_reg(A, 0, pc->r1);
+                a64_mov_imm(A, 1, (uintptr_t)pc->ptr);
+                a64_mov_imm(A, 2, (uintptr_t)orig_pc);
+                a64_call(A, (const void*)jit_get_property_helper);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_SET_PROPERTY:
+                a64_load_reg(A, 0, pc->r0);
+                a64_mov_imm(A, 1, (uintptr_t)pc->ptr);
+                a64_load_reg(A, 2, pc->r1);
+                a64_mov_imm(A, 3, (uintptr_t)orig_pc);
+                a64_call(A, (const void*)jit_set_property_helper);
+                break;
+            case OP_CALL_SELF_FAST:
+                if (fe && !osr) {
+                    a64_mov_imm(A, 0, (uintptr_t)fe);
+                    a64_addr_reg(A, 1, pc->r2);
+                    a64_call(A, (const void*)jit_self_call_direct);
+                    a64_deopt_check(A, i);
+                    a64_store_reg(A, 0, pc->r0);
+                } else {
+                    a64_side_exit(A, i);
+                }
+                break;
+            case OP_CALL: case OP_CALL_VALUE: {
+                /* Always through the runtime helpers (see the x86 backend). */
+                FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
+                a64_addr_reg(A, 2, pc->r2);
+                a64_mov_imm(A, 3, (uintptr_t)orig_pc);
+                a64_mov_imm(A, 1, (uint64_t)pc->arg);
+                if (target_fe) { a64_mov_imm(A, 0, (uintptr_t)target_fe); a64_call(A, (const void*)jit_call_helper); }
+                else if (pc->op == OP_CALL) { a64_mov_imm(A, 0, (uintptr_t)pc->ptr); a64_call(A, (const void*)jit_call_helper_name); }
+                else { a64_load_reg(A, 0, pc->r1); a64_call(A, (const void*)jit_call_helper_val); }
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                a64_exception_check(A, i);
+                break;
+            }
+            case OP_CALL_METHOD:
+                a64_load_reg(A, 0, pc->r1);
+                a64_mov_imm(A, 1, (uintptr_t)pc->ptr);
+                a64_mov_imm(A, 2, (uint64_t)pc->arg);
+                a64_addr_reg(A, 3, pc->r2);
+                a64_mov_imm(A, 4, (uintptr_t)orig_pc);
+                a64_call(A, (const void*)jit_call_method_helper);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                a64_exception_check(A, i);
+                break;
+            case OP_TAIL_CALL: {
+                if (osr) { a64_side_exit(A, i); break; }
+                FuncEntry *target_fe = pc->ptr ? func_get((const char*)pc->ptr) : NULL;
+                if (target_fe && target_fe == fe) {
+                    for (int k = 0; k < pc->arg && k < fe->param_count; k++) {
+                        a64_load_reg(A, 0, pc->r2 + k);
+                        a64_store_reg(A, 0, k);
+                    }
+                    jumps[njumps].target = -1; jumps[njumps].at = a64_b_fwd(A); njumps++;
+                } else {
+                    a64_addr_reg(A, 2, pc->r2);
+                    a64_mov_imm(A, 3, (uintptr_t)orig_pc);
+                    a64_mov_imm(A, 1, (uint64_t)pc->arg);
+                    if (target_fe) { a64_mov_imm(A, 0, (uintptr_t)target_fe); a64_mov_imm(A, 16, (uintptr_t)jit_call_helper); }
+                    else { a64_load_reg(A, 0, pc->r1); a64_mov_imm(A, 16, (uintptr_t)jit_call_helper_val); }
+                    a64_pop_frame(A);
+                    a64_emit(A, a64_br(16));
+                }
+                break;
+            }
+            case OP_INDEX:
+                a64_call_binop(A, pc->r1, pc->r2, (const void*)glow_index_jit);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_STORE_INDEX:
+                a64_load_reg(A, 0, pc->r0);
+                a64_load_reg(A, 1, pc->r1);
+                a64_load_reg(A, 2, pc->r2);
+                a64_call(A, (const void*)glow_store_index_jit);
+                a64_deopt_check(A, i);
+                break;
+            case OP_SIMD_ADD:
+                a64_load_reg(A, 0, pc->r1);
+                a64_load_reg(A, 1, pc->r2);
+                a64_load_reg(A, 2, pc->r0);
+                a64_call(A, (const void*)simd_add_helper);
+                break;
+            case OP_RETURN:
+                a64_load_reg(A, 0, pc->r0);
+                a64_epilogue(A);
+                break;
+            default:
+                if (osr) { a64_side_exit(A, i); break; }
+                bc->jit_failed = 1;
+                a64_code_discard(code, size); free(offsets); free(jumps);
+                return;
+        }
+    }
+    offsets[bc->count] = a64_here(A);
+
+    uint32_t *osr_offsets = NULL;
+    if (osr) {
+        osr_offsets = calloc((size_t)bc->count, sizeof(uint32_t));
+        for (int i = 0; i < bc->count; i++) {
+            Instruction *pc = &bc->code[i];
+            if ((pc->op == OP_JUMP || pc->op == OP_JUMP_IF_FALSE || pc->op == OP_JUMP_IF_TRUE) &&
+                pc->arg >= 0 && pc->arg <= i && !osr_offsets[pc->arg]) {
+                osr_offsets[pc->arg] = a64_here(A);
+                a64_prologue(A);
+                a64_link(A, a64_b_fwd(A), offsets[pc->arg]);
+            }
+        }
+    }
+
+    for (int k = 0; k < njumps; k++)
+        a64_link(A, jumps[k].at, jumps[k].target == -1 ? body_start : offsets[jumps[k].target]);
+
+    if (a.broken || a.buf.size + 64 >= a.buf.capacity) {
+        /* A branch did not reach, or the buffer filled up (the emitter drops
+           words once full): the code cannot be trusted. */
+        if (osr) bc->osr_failed = 1; else bc->jit_failed = 1;
+        a64_code_discard(code, size); free(offsets); free(jumps); free(osr_offsets);
+        return;
+    }
+    a64_code_finish(code, size);
+    jit_debug_compiled(bc, fe, osr ? "osr" : mode == A64_BASELINE ? "baseline" : "optimizing", a.buf.size);
+    free(jumps);
+    if (osr) {
+        void **entries = calloc((size_t)bc->count, sizeof(void*));
+        for (int i = 0; i < bc->count; i++) if (osr_offsets[i]) entries[i] = code + osr_offsets[i];
+        free(osr_offsets); free(offsets);
+        bc->osr_code = code; bc->osr_code_size = size; bc->osr_entries = entries;
+    } else if (mode == A64_BASELINE) {
+        bc->baseline_jit_code = code; bc->baseline_jit_size = size; bc->baseline_jit_offsets = offsets;
+        bc->jit_tier = JIT_TIER_BASELINE;
+    } else {
+        bc->jit_code = code; bc->jit_size = size;
+        free(offsets);
+    }
+}
+
+void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) { (void)current_sig; a64_compile(bc, fe, A64_OPTIMIZING); }
+void jit_compile(Bytecode *bc) { jit_compile_ext(bc, NULL, 0); }
+void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) { (void)current_sig; a64_compile(bc, fe, A64_BASELINE); }
+void jit_compile_baseline(Bytecode *bc) { jit_compile_baseline_ext(bc, NULL, 0); }
+void jit_compile_osr(Bytecode *bc) { a64_compile(bc, NULL, A64_OSR); }
+
+void jit_compile_specialized(FuncEntry *fe, TypeSignature sig) {
+    if (!fe || !fe->body) return;
+    Bytecode *sbc = calloc(1, sizeof(Bytecode));
+    sbc->count = fe->body->count;
+    sbc->code = malloc(sizeof(Instruction) * sbc->count);
+    memcpy(sbc->code, fe->body->code, sizeof(Instruction) * sbc->count);
+    for (int i = 0; i < sbc->count; i++) sbc->code[i].trace = NULL;
+    sbc->local_count = fe->body->local_count;
+    jit_compile_ext(sbc, fe, sig);
+    if (sbc->jit_code) func_add_specialization(fe, sig, sbc->jit_code, sbc->jit_size);
+    else func_add_specialization(fe, sig, (void*)1, 0);
+    free(sbc->code); free(sbc);
+}
+
+void func_maybe_tier_up(FuncEntry *fe) {
+    if (!fe || !fe->body) return;
+    fe->exec_count++;
+    if (fe->body->jit_tier == JIT_TIER_INTERP && !fe->body->baseline_jit_code && !fe->body->jit_failed && fe->exec_count > 10)
+        jit_compile_baseline(fe->body);
+    if (fe->body->jit_tier == JIT_TIER_BASELINE && !fe->body->jit_code && !fe->body->jit_failed && fe->exec_count > 50)
+        jit_compile(fe->body);
+}
+
+void jit_maybe_tier_up(Bytecode *bc) {
+    if (!bc || bc->jit_tier >= JIT_TIER_OPTIMIZING || bc->jit_failed) return;
+    bc->exec_count++;
+    if (bc->jit_tier == JIT_TIER_INTERP && !bc->baseline_jit_code) {
+        if (bc->exec_count > 10) jit_compile_baseline(bc);
+    } else if (bc->jit_tier == JIT_TIER_BASELINE && !bc->jit_code) {
+        if (bc->exec_count > 50) jit_compile(bc);
+    }
+}
 #else
 void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) { if (bc) bc->jit_failed = 1; }
 void jit_compile(Bytecode *bc) { if (bc) bc->jit_failed = 1; }

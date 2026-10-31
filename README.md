@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">🔥 GlowLang</h1>
-  <p align="center"><strong>A programming language with natural-language syntax, a register bytecode VM with an x86-64 JIT, SIMD tensors, built-in HTTP and SQLite, and a growing standard library and tooling.</strong></p>
+  <p align="center"><strong>A programming language with natural-language syntax, a register bytecode VM with x86-64 and ARM64 JITs, SIMD tensors, built-in HTTP and SQLite, and a growing standard library and tooling.</strong></p>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 | Category | What exists today |
 |----------|-------------------|
 | **Natural syntax** | `show`, `when`/`eif`/`otherwise`, `whenever`, `every`, `for each key, value in`, `is in`, `blueprint`, `action`/`can`, `use`/`import`, `ask` |
-| **Runtime** | Register-based bytecode VM; x86-64 template JIT (Windows x64 and System V ABIs) with on-stack replacement for hot loops (on Apple silicon and other ARM64 machines the interpreter runs everything); non-moving mark-and-sweep GC |
+| **Runtime** | Register-based bytecode VM; template JIT for x86-64 (Windows x64 and System V ABIs) and ARM64 (Apple silicon, ARM Linux) with on-stack replacement for hot loops; non-moving mark-and-sweep GC |
 | **Numbers** | Integers of any size (never overflow), floats, exact integer `**`, floor `%`; arithmetic on non-numbers raises a clear error |
 | **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()`; `lib/async.glow` channels, tasks and timers |
 | **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and an HTTP/HTTPS client (`http.request`: certificate verification, redirects, chunked bodies, timeouts) |
@@ -187,7 +187,7 @@ GlowLang/
 │   ├── compiler.c          # Bytecode compiler
 │   ├── opt.c               # Bytecode optimizer
 │   ├── vm.c                # Virtual machine, threads, GIL
-│   ├── jit.c               # x86-64 JIT compiler
+│   ├── jit.c               # JIT compiler (x86-64 and ARM64 backends)
 │   ├── gc.c                # Garbage collector
 │   ├── stdlib.c            # Native standard library
 │   ├── regex.c             # Regular expression engine
@@ -219,7 +219,7 @@ make fuzz-all                               # fuzz harnesses
 .\scripts\run-tests.ps1 -ExtraEnv @{GLOWLANG_GC_STRESS='1'}
 ```
 
-The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), without the baseline JIT (`GLOW_NOBASEEXEC=1`), GC stress (`GLOWLANG_GC_STRESS=1`) and scalar math (`GLOW_NO_SIMD=1`). CI runs the default mode on every platform, plus the interpreter-only, GC-stress and AddressSanitizer runs on Linux.
+The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), without the baseline JIT (`GLOW_NOBASEEXEC=1`), GC stress (`GLOWLANG_GC_STRESS=1`) and scalar math (`GLOW_NO_SIMD=1`). CI runs the default mode on every platform, plus the interpreter-only, GC-stress and AddressSanitizer runs on Linux. `GLOW_JIT_DEBUG=1` prints each function the JIT compiles on stderr; CI uses it to check that compiled code really runs on Linux x64 and Apple silicon.
 
 ## 📖 Documentation
 
