@@ -708,8 +708,12 @@ void simd_add_helper(Value v_a, Value v_b, Value v_target) {
      return 0.0;
  }
 
+/* A number result from C: a whole number that fits an inline (48-bit) int
+   becomes one, anything else stays a double. It used to box any whole
+   double as an inline int, so math.floor(1e15) wrapped to -125899906842624,
+   and converted NaN to an int64 (undefined behaviour). */
 Value value_from_double(double d) {
-    if (d == (int64_t)d) return value_int((int64_t)d);
+    if (d >= (double)INT48_MIN && d <= (double)INT48_MAX && d == (double)(int64_t)d) return value_int((int64_t)d);
     return value_float(d);
 }
 

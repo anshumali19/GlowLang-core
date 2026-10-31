@@ -543,9 +543,117 @@ static void emit_call_binop_helper(JITBuffer *buf, int r1, int r2, uintptr_t fn)
     emit_call_rax(buf);
 }
 
+/* ---- Inline float arithmetic ----
+   Compiled + - * / on floats, matching the interpreter's numeric tower
+   (num_add & co. in vm.c) exactly:
+   - an operand is an inline int or a double; anything else (big ints,
+     strings, ...) goes to the helper;
+   - + - * use doubles only when an operand is a fractional double (a
+     float holding a whole number takes the exact integer path), so they go
+     to the helper when neither is; NaN, infinity and doubles too big for an
+     int64 also go to the helper, which knows how to treat them;
+   - / always divides doubles, except by zero, which the helper declines so
+     the interpreter raises the error;
+   - the result is boxed as num_from_double does: a whole number that fits
+     in 48 bits becomes an int, NaN becomes CANON_NAN, the rest stay doubles.
+   Uses rax, rdx, r10, r11 and xmm0-xmm2. */
+
+typedef struct { uint32_t at[8]; int n; } JumpList;
+
+static void jump_list_add(JumpList *l, uint32_t pos) { if (l->n < 8) l->at[l->n++] = pos; }
+
+static void jump_list_patch(JITBuffer *buf, JumpList *l, uint32_t target) {
+    for (int k = 0; k < l->n; k++)
+        *(uint32_t*)(buf->code + l->at[k] + 2) = (uint32_t)(target - (l->at[k] + 6));
+}
+
+/* jcc rel32 (0F cc), recorded in l for patching. */
+static void emit_jcc_to(JITBuffer *buf, unsigned char cc, JumpList *l) {
+    jump_list_add(l, buf->size);
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, cc); jit_emit_u32(buf, 0);
+}
+
+/* Load R[r] into xmm<x> as a double. Non-numbers jump to fail. With
+   check_frac, a double that does not convert to int64 (NaN, infinity,
+   |d| >= 2^63) also jumps to fail, and r11 gets 1 if it has a fraction. */
+static void emit_load_number_xmm(JITBuffer *buf, int r, int x, int check_frac, JumpList *fail) {
+    emit_mov_rax_reg(buf, r);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8 (inline int)
+    uint32_t jne_not_int = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x10); // sar rax, 16
+    jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, (unsigned char)(0xc0 | (x << 3))); // cvtsi2sd xmmX, rax
+    uint32_t jmp_next = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t not_int = buf->size;
+    /* A boxed non-double has its top 13 bits equal to 0x7FF8's (IS_FLOAT_BITS). */
+    jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xe2); jit_emit_u32(buf, 0xfff8); // and edx, 0xFFF8
+    jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_u32(buf, 0x7ff8); // cmp edx, 0x7FF8
+    emit_jcc_to(buf, 0x84, fail); // je fail
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x6e); jit_emit_byte(buf, (unsigned char)(0xc0 | (x << 3))); // movq xmmX, rax
+    if (check_frac) {
+        jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2c); jit_emit_byte(buf, (unsigned char)(0xd0 | x)); // cvttsd2si rdx, xmmX
+        emit_mov_r10_imm64(buf, 0x8000000000000000ULL); // "integer indefinite": NaN, inf or out of range
+        jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd2); // cmp rdx, r10
+        emit_jcc_to(buf, 0x84, fail); // je fail
+        jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, 0xd2); // cvtsi2sd xmm2, rdx
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, (unsigned char)(0xc2 | (x << 3))); // ucomisd xmmX, xmm2
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x95); jit_emit_byte(buf, 0xc2); // setne dl
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xd2); // movzx edx, dl
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd3); // or r11, rdx
+    }
+    uint32_t next = buf->size;
+    *(uint32_t*)(buf->code + jne_not_int + 2) = (uint32_t)(not_int - (jne_not_int + 6));
+    *(uint32_t*)(buf->code + jmp_next + 1) = (uint32_t)(next - (jmp_next + 5));
+}
+
+/* R[r1] op R[r2] in doubles, boxed into rax; jumps to fail when the
+   helper has to decide. Falls through with the result in rax. */
+static void emit_float_binop(JITBuffer *buf, int op, int r1, int r2, JumpList *fail) {
+    int is_div = (op == OP_DIV);
+    if (!is_div) { jit_emit_byte(buf, 0x45); jit_emit_byte(buf, 0x31); jit_emit_byte(buf, 0xdb); } // xor r11d, r11d
+    emit_load_number_xmm(buf, r1, 0, !is_div, fail);
+    emit_load_number_xmm(buf, r2, 1, !is_div, fail);
+    if (is_div) {
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x57); jit_emit_byte(buf, 0xd2); // xorpd xmm2, xmm2
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xca); // ucomisd xmm1, xmm2
+        emit_jcc_to(buf, 0x84, fail); // je fail: zero (or NaN) divisor
+    } else {
+        jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xdb); // test r11, r11
+        emit_jcc_to(buf, 0x84, fail); // jz fail: no fractional operand, exact integer rules apply
+    }
+    unsigned char opc = op == OP_ADD ? 0x58 : op == OP_SUB ? 0x5c : op == OP_MUL ? 0x59 : 0x5e;
+    jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, opc); jit_emit_byte(buf, 0xc1); // addsd/subsd/mulsd/divsd xmm0, xmm1
+
+    JumpList as_float = {0}, is_nan = {0};
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc0); // ucomisd xmm0, xmm0
+    emit_jcc_to(buf, 0x8a, &is_nan); // jp nan
+    jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2c); jit_emit_byte(buf, 0xc0); // cvttsd2si rax, xmm0
+    emit_mov_rdx_imm64(buf, INT48_MAX);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
+    emit_jcc_to(buf, 0x8f, &as_float); // jg
+    emit_mov_rdx_imm64(buf, INT48_MIN);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
+    emit_jcc_to(buf, 0x8c, &as_float); // jl
+    jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, 0xd0); // cvtsi2sd xmm2, rax
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc2); // ucomisd xmm0, xmm2
+    emit_jcc_to(buf, 0x85, &as_float); // jne: has a fraction
+    emit_box_int_rax(buf);
+    uint32_t jmp_end1 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &as_float, buf->size);
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x7e); jit_emit_byte(buf, 0xc0); // movq rax, xmm0
+    uint32_t jmp_end2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &is_nan, buf->size);
+    emit_mov_rax_imm64(buf, CANON_NAN);
+    uint32_t end = buf->size;
+    *(uint32_t*)(buf->code + jmp_end1 + 1) = (uint32_t)(end - (jmp_end1 + 5));
+    *(uint32_t*)(buf->code + jmp_end2 + 1) = (uint32_t)(end - (jmp_end2 + 5));
+}
+
 // Inline integer add/sub; promotes to a double (exact for the whole 48-bit
-// range) when the result leaves the signed 48-bit range. Mixed types fall
-// back to slow_fn (a jit_int_* helper).
+// range) when the result leaves the signed 48-bit range. Other operands try
+// inline float arithmetic, then fall back to slow_fn (a jit_int_* helper).
 static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
     uint32_t jne_a, jne_b;
     emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
@@ -567,15 +675,11 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x7e); jit_emit_byte(buf, 0xc0); // movq rax, xmm0
     uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
-#ifdef GLOW_JIT_WIN64
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
-#else
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
-#endif
-    emit_mov_rax_imm64(buf, slow_fn);
-    emit_call_rax(buf);
+    JumpList helper = {0};
+    emit_float_binop(buf, is_sub ? OP_SUB : OP_ADD, r1, r2, &helper);
+    uint32_t jmp_done3 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &helper, buf->size);
+    emit_call_binop_helper(buf, r1, r2, slow_fn);
     emit_deopt_check(buf, i); /* the interpreter raises type errors */
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
@@ -585,6 +689,7 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
     *(uint32_t*)(buf->code + jl_under + 2) = (uint32_t)(promote_pos - (jl_under + 6));
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
     *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(done_pos - (jmp_done2 + 5));
+    *(uint32_t*)(buf->code + jmp_done3 + 1) = (uint32_t)(done_pos - (jmp_done3 + 5));
 }
 
 /* Inline 48-bit integer multiply with overflow detection. Overflow and
@@ -603,13 +708,19 @@ static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
     uint32_t jl = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0); // jl slow
     emit_box_int_rax(buf);
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t float_pos = buf->size;
+    JumpList helper = {0};
+    emit_float_binop(buf, OP_MUL, r1, r2, &helper);
+    uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
+    jump_list_patch(buf, &helper, slow_pos);
     emit_call_binop_helper(buf, r1, r2, (uintptr_t)jit_int_mul);
     emit_deopt_check(buf, i);
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
-    *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
-    *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
+    *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(done_pos - (jmp_done2 + 5));
+    *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(float_pos - (jne_a + 6));
+    *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(float_pos - (jne_b + 6));
     *(uint32_t*)(buf->code + jo + 2) = (uint32_t)(slow_pos - (jo + 6));
     *(uint32_t*)(buf->code + jg + 2) = (uint32_t)(slow_pos - (jg + 6));
     *(uint32_t*)(buf->code + jl + 2) = (uint32_t)(slow_pos - (jl + 6));
@@ -617,6 +728,19 @@ static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
 }
 
 extern Value jit_div_helper(Value a, Value b);
+
+/* Inline double division; the helper handles big ints and declines
+   division by zero so the interpreter raises the error. */
+static void emit_jit_div(JITBuffer *buf, int r0, int r1, int r2, int i) {
+    JumpList helper = {0};
+    emit_float_binop(buf, OP_DIV, r1, r2, &helper);
+    uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &helper, buf->size);
+    emit_call_binop_helper(buf, r1, r2, (uintptr_t)jit_div_helper);
+    emit_deopt_check(buf, i);
+    *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(buf->size - (jmp_done + 5));
+    emit_mov_reg_rax(buf, r0);
+}
 
 // Inline integer ordered comparisons; produces a bool value. Mixed types fall
 // back to slow_fn (a jit_int_* helper).
@@ -753,9 +877,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 } else {
                     /* The helper declines division by zero so the interpreter
                        raises the error. */
-                    emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_div_helper);
-                    emit_deopt_check(&buf, i);
-                    emit_mov_reg_rax(&buf, pc->r0);
+                    emit_jit_div(&buf, pc->r0, pc->r1, pc->r2, i);
                 }
                 break;
             }
@@ -1103,9 +1225,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 } else {
                     /* The helper declines division by zero so the interpreter
                        raises the error. */
-                    emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_div_helper);
-                    emit_deopt_check(&buf, i);
-                    emit_mov_reg_rax(&buf, pc->r0);
+                    emit_jit_div(&buf, pc->r0, pc->r1, pc->r2, i);
                 }
                 break;
             }
