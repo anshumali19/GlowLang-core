@@ -1,0 +1,85 @@
+# Objects are one allocation (their fields live inside the instance until
+# they outgrow it), each class remembers its init method, and `self` is
+# swapped around constructor calls. These cases exercise all three.
+
+blueprint Point:
+    action init(x, y):
+        self.x = x
+        self.y = y
+    end
+    action sum():
+        return self.x + self.y
+    end
+end
+
+# More fields than fit inline, some added after construction.
+blueprint Wide:
+    action init(n):
+        self.a = n
+        self.b = n + 1
+        self.c = n + 2
+        self.d = n + 3
+        self.e = n + 4
+        self.f = n + 5
+        self.g = n + 6
+        self.h = n + 7
+        self.i = n + 8
+    end
+end
+let w = Wide(10)
+w.extra = "late"
+w.another = [1, 2]
+show "wide:", w.a, w.e, w.i, w.extra, w.another
+let w2 = Wide(20)
+show "wide again:", w2.i, w2.a
+
+# A class without init.
+blueprint Bare:
+    action hello():
+        return "hi"
+    end
+end
+let bare = Bare()
+show "bare:", bare.hello()
+
+# Constructors that construct: self must be restored after each inner one.
+blueprint Pair:
+    action init(a, b):
+        self.left = Point(a, a)
+        self.right = Point(b, b)
+        self.total = self.left.sum() + self.right.sum()
+    end
+end
+let pr = Pair(1, 2)
+show "nested:", pr.total, pr.left.x, pr.right.y
+
+# A class defined after others have been constructed many times.
+let pts = []
+let i = 0
+while i < 1000:
+    pts.push(Point(i, -i))
+    i = i + 1
+end
+blueprint Late:
+    action init():
+        self.made = true
+    end
+end
+show "late:", Late().made, len(pts), pts[999].x
+
+# Many objects alive across collections.
+let nodes = []
+i = 0
+while i < 40000:
+    nodes.push(Point(i, i * 2))
+    i = i + 1
+end
+let bad = 0
+i = 0
+while i < 40000:
+    if nodes[i].sum() != i * 3:
+        bad = bad + 1
+    end
+    i = i + 777
+end
+show "kept:", len(nodes), "bad:", bad

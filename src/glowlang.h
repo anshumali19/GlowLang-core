@@ -665,6 +665,8 @@ struct Class {
     Shape *stable_shape;
     int instances_created;
     int field_hint;     /* most fields an instance has had: new ones start that big */
+    Value init_method;  /* class_init_method's cache, valid while init_epoch == glow_method_epoch */
+    unsigned init_epoch;
 };
 
 struct Instance {
@@ -699,6 +701,18 @@ struct Dict {
 };
 #define DICT_EMPTY   (-1)
 #define DICT_REMOVED (-2)
+
+/* An instance's fields are a dict embedded in the instance (properties
+   points at `fields`), and the dict's first slots follow the instance in
+   the same allocation, so creating an object is one GC allocation. The
+   embedded dict is not a GC object of its own: the instance traces and
+   frees it. Nothing hands `properties` out as a value. */
+struct Instance {
+    GCObject obj;
+    struct Class *klass;
+    Dict *properties;
+    struct Dict fields;     /* must stay last: its inline slots follow it */
+};
 void dict_init(Dict *d, int sz);
 Dict* dict_alloc(int sz, int stack);
 void dict_free_storage(Dict *d);
@@ -918,6 +932,10 @@ Value glow_string_concat(Value a, Value b);
 const char* rope_flatten(Value v);
 Class* class_new(const char *name, Class *parent);
 Value class_get_method(Class *c, const char *name);
+/* Bumped whenever a class or trait gains a method, which invalidates every
+   class's cached init method. */
+extern unsigned glow_method_epoch;
+Value class_init_method(Class *k);
 Instance* instance_new(Class *c);
 Value instance_get(Instance *inst, const char *name);
 void instance_set(Instance *inst, const char *name, Value val);

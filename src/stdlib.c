@@ -1120,6 +1120,16 @@ void dict_free_storage(Dict *d) {
     d->keys = NULL; d->values = NULL; d->index = NULL;
 }
 
+}
+
+static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
+
+/* Free a dict's storage block unless it lives inside the Dict. */
+void dict_free_storage(Dict *d) {
+    if (d->keys && !dict_is_inline(d)) free(d->keys);
+    d->keys = NULL; d->values = NULL; d->index = NULL;
+}
+
 /* Fill a freshly allocated Dict with room for about sz entries. */
 void dict_init(Dict *d, int sz) {
     int cap = 8; while (cap < sz) cap *= 2;
@@ -1487,9 +1497,14 @@ Class* class_new(const char *name, Class *parent) {
     return c;
 }
 Instance* instance_new(Class *k) {
-    Instance *i = gc_alloc(sizeof(Instance), OBJ_INSTANCE);
+    int cap = DICT_INLINE_CAP;
+    while (cap < k->field_hint) cap *= 2;
+    Instance *i = gc_alloc(sizeof(Instance) + DICT_BLOCK_SIZE(cap), OBJ_INSTANCE);
     i->klass = k;
-    i->properties = NULL;
+    i->properties = &i->fields;
+    i->fields.obj.type = OBJ_DICT;
+    i->fields.size = 0; i->fields.used = 0;
+    dict_set_block(&i->fields, &i->fields + 1, cap);
     k->instances_created++;
 
     vm_stack[vm_stack_top++] = value_instance(i);
@@ -1505,6 +1520,20 @@ Value class_get_method(Class *k, const char *n) {
         k=k->parent;
     }
     return value_none();
+}
+
+unsigned glow_method_epoch = 1;
+
+/* The class's init method (or none), looked up once per class instead of on
+   every construction. Methods are only added while classes and traits are
+   defined, and each addition bumps glow_method_epoch. The cached value is
+   also stored in the class's methods dict, so the GC keeps it alive. */
+Value class_init_method(Class *k) {
+    if (k->init_epoch != glow_method_epoch) {
+        k->init_method = class_get_method(k, "init");
+        k->init_epoch = glow_method_epoch;
+    }
+    return k->init_method;
 }
 
 Value instance_get(Instance *inst, const char *name) {

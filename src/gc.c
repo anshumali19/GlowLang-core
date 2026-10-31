@@ -330,7 +330,8 @@ static void gc_trace_object(GCObject *obj, void (*mark_value)(Value), void (*mar
         case OBJ_INSTANCE: {
             Instance *ins = (Instance*)obj;
             mark_obj((GCObject*)ins->klass);
-            mark_obj((GCObject*)ins->properties);
+            Dict *d = &ins->fields;
+            for (int i = 0; i < d->used; i++) if (GET_TYPE(d->keys[i]) != VAL_NONE) mark_value(d->values[i]);
             break;
         }
         case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; mark_value(bm->instance); break; }
@@ -372,7 +373,7 @@ static void gc_free_object_payload(GCObject *unmarked) {
     else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
     /* close_v2: the handle and its query iterators may be swept in any order. */
     else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close_v2(((SQLiteHandle*)unmarked)->db); }
-    else if (unmarked->type == OBJ_INSTANCE) { /* No fields array to free, Dict is handled as OBJ_DICT */ }
+    else if (unmarked->type == OBJ_INSTANCE) dict_free_storage(&((Instance*)unmarked)->fields);
     else if (unmarked->type == OBJ_CLASS) free((char*)((Class*)unmarked)->name);
     else if (unmarked->type == OBJ_TRAIT) free((char*)((Trait*)unmarked)->name);
     else if (unmarked->type == OBJ_PACKED_ARRAY) { if (!((PackedArray*)unmarked)->is_view) tensor_free(((PackedArray*)unmarked)->data, ((PackedArray*)unmarked)->capacity * (((PackedArray*)unmarked)->type == PACKED_FLOAT64 ? sizeof(double) : sizeof(int64_t)), ((PackedArray*)unmarked)->device); }
@@ -475,6 +476,8 @@ GC_NOINLINE static void gc_full_collect_impl(void) {
         } else {
             /* Keys of surviving dicts stay interned; intern_sweep frees
                the dict keys nothing uses any more. */
+            if (obj->type == OBJ_DICT || obj->type == OBJ_INSTANCE) {
+                Dict *d = obj->type == OBJ_DICT ? (Dict*)obj : &((Instance*)obj)->fields;
             if (obj->type == OBJ_DICT) {
                 Dict *d = (Dict*)obj;
                 for (int i = 0; i < d->used; i++)
