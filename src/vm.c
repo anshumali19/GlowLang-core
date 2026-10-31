@@ -1857,8 +1857,10 @@ int jit_exception_pending(void) { return has_exception; }
         if (IS_INT(a) && IS_INT(b)) {
             pc->op = OP_MUL_INT;
             int64_t ia = AS_INT(a), ib = AS_INT(b);
-            int64_t res = ia * ib;
-            if (__builtin_expect((ib == 0 || res / ib == ia) && (res >= -140737488355328LL && res <= 140737488355327LL), 1)) {
+            int64_t res;
+            /* Not `res = ia * ib; res / ib == ia`: the overflow is undefined
+               behaviour, and clang drops that check ((-2^47)^2 gave 0). */
+            if (__builtin_expect(!__builtin_mul_overflow(ia, ib, &res) && res >= -140737488355328LL && res <= 140737488355327LL, 1)) {
                 R(pc->r0) = value_int(res);
                 pc++;
                 goto l_DISPATCH;
@@ -3326,8 +3328,10 @@ int jit_exception_pending(void) { return has_exception; }
         Value a = R(pc->r1), b = R(pc->r2);
         if (__builtin_expect(IS_INT(a) && IS_INT(b), 1)) {
             int64_t ia = AS_INT(a), ib = AS_INT(b);
-            int64_t res = ia * ib;
-            if (__builtin_expect((ib == 0 || res / ib == ia) && (res >= -140737488355328LL && res <= 140737488355327LL), 1)) {
+            int64_t res;
+            /* Not `res = ia * ib; res / ib == ia`: the overflow is undefined
+               behaviour, and clang drops that check ((-2^47)^2 gave 0). */
+            if (__builtin_expect(!__builtin_mul_overflow(ia, ib, &res) && res >= -140737488355328LL && res <= 140737488355327LL, 1)) {
                 R(pc->r0) = value_int(res);
                 pc++;
                 goto l_DISPATCH;

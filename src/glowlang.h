@@ -31,6 +31,14 @@
 #define GLOW_COMPUTED_GOTO 1
 #endif
 
+/* Keeps a rarely taken path out of its caller, so the caller's common path
+   does not pay for the registers the rare one needs. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GLOW_NOINLINE __attribute__((noinline))
+#else
+#define GLOW_NOINLINE __declspec(noinline)
+#endif
+
 /* ================================================================
  *  VALUE TYPES
  * ================================================================ */

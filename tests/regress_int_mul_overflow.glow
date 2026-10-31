@@ -1,0 +1,18 @@
+# Multiplying two inline (48-bit) integers whose product leaves 64 bits must
+# become an exact big integer. The interpreter used to check overflow after
+# the fact (res / b == a), which is undefined behaviour that clang removes:
+# (-2^47) * (-2^47) gave 0 in clang-cl builds.
+func m(a, b):
+    return a * b
+end
+let lo = -140737488355328
+let hi = 140737488355327
+show lo * lo, hi * hi, lo * hi, lo * 3, hi * -1
+show m(lo, lo), m(hi, hi), m(lo, hi)
+let s = 0
+let i = 0
+while i < 5000:
+    s = s + lo * lo - hi * hi
+    i = i + 1
+end
+show s

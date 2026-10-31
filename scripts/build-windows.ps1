@@ -6,22 +6,23 @@
   1. Loads the MSVC build environment (headers, CRT, Windows SDK libs).
   2. Regenerates the lexer/parser with win_flex / win_bison when the .l/.y
      sources are newer than the generated C files.
-  3. Compiles with MSVC (cl.exe) by default. -Compiler clang uses clang-cl,
-     which supports computed goto, so the VM dispatches with threaded code
-     instead of a switch. MSVC is the default because it is the build the
-     tests and benchmarks were run on, and because Windows Smart App Control
-     (when enabled) has blocked clang-cl builds of this project. OpenSSL and
-     SQLite are linked statically from vcpkg (x64-windows-static), so the
-     executable needs no DLLs. A .pdb is written next to the executable so
-     crash reports can name functions.
+  3. Compiles with clang-cl when it is installed (LLVM), otherwise with MSVC
+     (cl.exe); -Compiler clang or -Compiler msvc picks one. clang-cl supports
+     computed goto, so the VM dispatches with threaded code instead of a
+     switch, and its build is 5-16% faster on most benchmarks; the release
+     and CI builds use it too (CMake -T ClangCL). If Windows Smart App
+     Control blocks a fresh unsigned clang-cl build from running, use
+     -Compiler msvc. OpenSSL and SQLite are linked statically from vcpkg
+     (x64-windows-static), so the executable needs no DLLs. A .pdb is written
+     next to the executable so crash reports can name functions.
   4. Signs the result with scripts\sign-windows.ps1 (skip with -NoSign).
 
 .EXAMPLE
   .\scripts\build-windows.ps1
-  .\scripts\build-windows.ps1 -Compiler clang -NoSign
+  .\scripts\build-windows.ps1 -Compiler msvc -NoSign
 #>
 param(
-    [ValidateSet('clang', 'msvc')] [string] $Compiler = 'msvc',
+    [ValidateSet('auto', 'clang', 'msvc')] [string] $Compiler = 'auto',
     [string] $Output = 'bin\glowlang.exe',
     # Default: the first of $env:VCPKG_ROOT, ..\vcpkg next to the repo, or
     # %USERPROFILE%\Desktop\vcpkg that has the static libraries installed.
@@ -64,6 +65,10 @@ function Update-Generated([string]$src, [string]$out, [scriptblock]$gen) {
 
 Import-VsEnvironment
 
+$clangCl = (Get-Command clang-cl.exe -ErrorAction SilentlyContinue).Source
+if (-not $clangCl) { $clangCl = Join-Path $env:ProgramFiles 'LLVM\bin\clang-cl.exe' }
+if ($Compiler -eq 'auto') { $Compiler = if (Test-Path $clangCl) { 'clang' } else { 'msvc' } }
+
 $flex = (Get-Command win_flex, flex -ErrorAction SilentlyContinue | Select-Object -First 1)
 $bison = (Get-Command win_bison, bison -ErrorAction SilentlyContinue | Select-Object -First 1)
 if ($flex) { Update-Generated 'src\glowlang.l' 'src\lex.yy.c' { & $flex.Source --nounistd -o src\lex.yy.c src\glowlang.l } }
@@ -96,10 +101,13 @@ $common = @('/nologo', '/MT', '/D_CRT_SECURE_NO_WARNINGS', '/DWIN32_LEAN_AND_MEA
 $opt = if ($DebugBuild) { @('/Od', '/Zi') } else { @('/O2', '/DNDEBUG', '/Zi') }
 $linkOpt = @('/DEBUG', '/OPT:REF', '/OPT:ICF')
 if ($Compiler -eq 'clang') {
-    $cc = (Get-Command clang-cl.exe -ErrorAction SilentlyContinue).Source
-    if (-not $cc) { $cc = Join-Path $env:ProgramFiles 'LLVM\bin\clang-cl.exe' }
+    $cc = $clangCl
     if (-not (Test-Path $cc)) { throw 'clang-cl not found (install LLVM, or use -Compiler msvc).' }
-    $flags = $common + $opt + @('/w', '-fno-strict-aliasing')
+    # -fno-ms-tls-guards: clang-cl otherwise guards every access to an extern
+    # thread-local with an on-demand initialisation check (for C++ dynamic
+    # thread_local init, which C does not have); the VM touches thread-locals
+    # on every call, so the checks cost about 17% on recursive code.
+    $flags = $common + $opt + @('/w', '-fno-strict-aliasing', '-Xclang', '-fno-ms-tls-guards')
     if ($Asan) { $flags += '-fsanitize=address' }
 } else {
     $cc = 'cl.exe'

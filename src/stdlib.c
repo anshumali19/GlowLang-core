@@ -336,6 +336,11 @@ return value_none();
    out of machine or VM stack raises the usual recursion error. It returns the
    deopt sentinel only when an exception is pending; the caller then leaves
    compiled code at the call and the interpreter unwinds it. */
+static GLOW_NOINLINE void *self_call_specialization(FuncEntry *fe, Value *args) {
+    void *spec = func_get_specialization(fe, compute_signature(args, fe->param_count));
+    return spec != (void*)1 ? spec : NULL;
+}
+
 Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     typedef Value (*JITFunc)(Value *R, int *pc_idx);
     Bytecode *body = fe->body;
@@ -350,10 +355,7 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     vm_stack_top = needed;
 
     void *code = body->jit_code ? body->jit_code : body->baseline_jit_code;
-    if (!code && fe->spec_count > 0) {
-        void *spec = func_get_specialization(fe, compute_signature(&vm_stack[new_base], fe->param_count));
-        if (spec != (void*)1) code = spec;
-    }
+    if (!code && fe->spec_count > 0) code = self_call_specialization(fe, &vm_stack[new_base]);
     Value res;
     if (code && !glow_nojitexec) {
         int deopt_pc = 0;
@@ -1032,6 +1034,12 @@ FuncEntry* func_get(const char *name) {
 
 TypeSignature compute_signature(Value *regs, int count) {
     TypeSignature sig = 0;
+    /* Runs on every compiled call. Vectorised (as clang would), it makes each
+       caller save and restore the SSE registers, which costs more than the
+       loop over a few arguments. */
+#if defined(__clang__)
+#pragma clang loop vectorize(disable) interleave(disable)
+#endif
     for (int i = 0; i < count && i < 16; i++) {
         uint64_t t = GET_TYPE(regs[i]);
         uint64_t jt = 0;
