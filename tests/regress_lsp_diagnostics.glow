@@ -1,0 +1,34 @@
+# The language server (glowlang --lsp) reports syntax errors. It used to
+# send an empty list for every file: the parser printed errors but never
+# recorded them. It also warned that `import` should be `use`, though both
+# are valid.
+func frame(obj):
+    let body = json.stringify(obj)
+    return "Content-Length: " + str(len(body)) + "\r\n\r\n" + body
+end
+
+func diagnostics_for(text):
+    let msgs = frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
+    msgs = msgs + frame({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": "file:///t.glow", "languageId": "glowlang", "version": 1, "text": text}}})
+    msgs = msgs + frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown"})
+    msgs = msgs + frame({"jsonrpc": "2.0", "method": "exit"})
+    let r = process.run([process.executable, "--lsp"], {"input": msgs, "timeout": 30})
+    for each part in r.stdout.split("Content-Length:"):
+        let at = part.find("{")
+        if at >= 0:
+            let msg = json.parse(part.slice(at, len(part)).trim())
+            if msg.has("method") and msg["method"] == "textDocument/publishDiagnostics":
+                let out = []
+                for each d in msg["params"]["diagnostics"]:
+                    out.push([d["range"]["start"]["line"] + 1, d["severity"], d["message"]])
+                end
+                return out
+            end
+        end
+    end
+    return "no diagnostics message"
+end
+
+show "broken:", diagnostics_for("let x = 1\nshow (1 +\nshow 2\n")
+show "valid with import:", diagnostics_for("import \"re\"\nlet x = 1\nshow x\n")
+show "require hint:", diagnostics_for("require \"re\"\n")

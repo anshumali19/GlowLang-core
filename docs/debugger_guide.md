@@ -33,19 +33,23 @@ show "Next collection at: " + str(stats["threshold"]) + " bytes"
 `lib/debugger.glow` (also available as `debug_heap_stats()` and so on); the
 others are built in.
 
-## Standalone Debugger (tools/debugger/glow_debugger.c)
+## Interactive Debugger
 
-A GDB-style debugger for inspecting running GlowLang processes:
+`glowlang debug program.glow` stops before each instruction and waits for a
+command at the `(glowdb)` prompt.
+
+## Trace Replay (tools/debugger/glow_debugger.c)
+
+A standalone tool that replays a trace recorded with `glowlang trace`; it does
+not attach to running processes.
 
 ```bash
 # Build
 gcc tools/debugger/glow_debugger.c -o bin/glow_debugger
 
-# Attach to a running process
-./bin/glow_debugger --pid <PID>
-
-# Debug a program
-./bin/glow_debugger program.glow
+# Record, then replay
+glowlang trace program.glow > trace.log
+./bin/glow_debugger --trace trace.log --interactive
 ```
 
 ### Commands
@@ -55,9 +59,9 @@ gcc tools/debugger/glow_debugger.c -o bin/glow_debugger
 | `break <line>` | Set breakpoint at line |
 | `continue` | Continue execution |
 | `step` | Step one instruction |
-| `print <var>` | Print variable value |
+| `print <reg>` | Print a register's value from the trace |
 | `backtrace` | Show call stack |
 | `locals` | Show local variables |
 | `heap` | Show heap stats |
-| `watch <var>` | Watch variable for changes |
+| `watch <reg>` | Stop when a register changes |
 | `quit` | Exit debugger |

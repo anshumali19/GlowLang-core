@@ -6,7 +6,7 @@
  *
  * Build:  gcc -o glow_debugger glow_debugger.c
  * Usage:  ./glow_debugger --trace trace.log [--interactive]
- *         ./glow_debugger --attach <pid>
+ *         (record the trace with: glowlang trace program.glow > trace.log)
  */
 
 #include <stdio.h>
@@ -569,19 +569,12 @@ static void run_repl(void) {
  * ================================================================ */
 
 static void cmd_attach(pid_t pid) {
-#ifdef _WIN32
-    printf(CLR_RED "Attach via signal is not supported on Windows.\n" CLR_RESET);
+    /* This used to send SIGUSR1, which the GlowLang runtime does not handle,
+       so it terminated the process instead of attaching to it. */
     (void)pid;
-#else
-    printf(CLR_CYAN "Sending SIGUSR1 to GlowLang process %d...\n" CLR_RESET, pid);
-    if (kill(pid, SIGUSR1) != 0) {
-        perror(CLR_RED "Failed to send signal" CLR_RESET);
-        return;
-    }
-    printf(CLR_GREEN "Signal sent. Check process output for debug dump.\n" CLR_RESET);
-    printf(CLR_DIM "Note: The GlowLang runtime must have a SIGUSR1 handler installed.\n" CLR_RESET);
-    printf(CLR_DIM "Use --trace mode for full interactive debugging.\n" CLR_RESET);
-#endif
+    printf(CLR_RED "Attaching to a running GlowLang process is not supported.\n" CLR_RESET);
+    printf("Record a trace instead:  glowlang trace program.glow > trace.log\n");
+    printf("and replay it:           glow_debugger --trace trace.log --interactive\n");
 }
 
 /* ================================================================
@@ -593,13 +586,11 @@ static void print_usage(const char *prog) {
     printf("\nUsage:\n");
     printf("  %s --trace <file>    Load trace log for interactive debugging\n", prog);
     printf("  %s --input <file>    Same as --trace\n", prog);
-    printf("  %s --attach <pid>    Send debug signal to running process\n", prog);
     printf("\nOptions:\n");
     printf("  --interactive        Start interactive REPL (default with --trace)\n");
     printf("  --help, -h           Show this help\n");
     printf("\nExamples:\n");
     printf("  %s --trace trace.log\n", prog);
-    printf("  %s --attach 12345\n", prog);
     printf("\n");
 }
 

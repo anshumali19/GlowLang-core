@@ -142,6 +142,26 @@ func http_post_json(url, data):
 end
 
 # URL Builder
+# text percent-encoded for a URL query (RFC 3986): letters, digits and
+# - _ . ~ stay; every other byte (UTF-8 included) becomes %XX.
+func url_encode(text):
+    let hex = "0123456789ABCDEF"
+    let keep = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    let out = ""
+    let i = 0
+    while i < len(text):
+        let c = text[i]
+        when keep.contains(c):
+            out = out + c
+        otherwise:
+            let b = ord(c)
+            out = out + "%" + hex[floor(b / 16)] + hex[b % 16]
+        end
+        i = i + 1
+    end
+    return out
+end
+
 blueprint URLBuilder:
     action init(base):
         self.base = base
@@ -164,11 +184,10 @@ blueprint URLBuilder:
         for each part in self.path_parts:
             url = url + "/" + part
         end
-        let first = true
-        # Build query string from params
-        # Note: dict iteration depends on runtime support
-        when len(self.query_params) > 0:
-            url = url + "?"
+        let sep = "?"
+        for each key, value in self.query_params:
+            url = url + sep + url_encode(str(key)) + "=" + url_encode(str(value))
+            sep = "&"
         end
         return url
     end

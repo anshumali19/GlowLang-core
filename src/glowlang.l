@@ -209,7 +209,9 @@ int lexer_bracket_depth = 0;
 }
 
 \"\"\"[^\"]*\"\"\" {
-    /* Simple triple-quoted string */
+    /* Simple triple-quoted string. Count its newlines, so errors further
+       down the file report the right line. */
+    for (int i = 0; i < yyleng; i++) if (yytext[i] == '\n') line_num++;
     int len = yyleng - 6;
     char *out = malloc(len + 1);
     strncpy(out, yytext + 3, len);

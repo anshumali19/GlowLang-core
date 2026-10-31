@@ -140,7 +140,7 @@ func tensor_variance(t, size):
 end
 
 func tensor_std(t, size):
-    return sqrt(tensor_variance(t, size))
+    return math.sqrt(tensor_variance(t, size))
 end
 
 # Element-wise Operations

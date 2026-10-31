@@ -514,26 +514,14 @@ static void publish_diagnostics(const char *uri, const char *text) {
         diag_count++;
     }
 
-    /* Scan for 'import' / 'require' keywords -> warnings */
+    /* 'require' is not GlowLang: point to 'use'. ('import' is valid.) */
     const char *scan = text;
     int scan_line = 0;
     while (*scan) {
         /* Track line number */
         if (*scan == '\n') { scan_line++; scan++; continue; }
 
-        /* Check for 'import' or 'require' at word boundary */
-        if (strncmp(scan, "import", 6) == 0 && (scan == text || !isalnum((unsigned char)*(scan-1))) && !isalnum((unsigned char)scan[6]) && scan[6] != '_') {
-            if (diag_count > 0 && offset < (int)sizeof(diag_buf) - 256) {
-                offset += snprintf(diag_buf + offset, sizeof(diag_buf) - offset, ",");
-            }
-            if (offset < (int)sizeof(diag_buf) - 256) {
-                offset += snprintf(diag_buf + offset, sizeof(diag_buf) - offset,
-                    "{\"range\":{\"start\":{\"line\":%d,\"character\":0},\"end\":{\"line\":%d,\"character\":6}},"
-                    "\"severity\":2,\"source\":\"glowlang\",\"message\":\"Use 'use' instead of 'import' in GlowLang\"}",
-                    scan_line, scan_line);
-                diag_count++;
-            }
-        }
+        /* Check for 'require' at a word boundary */
         if (strncmp(scan, "require", 7) == 0 && (scan == text || !isalnum((unsigned char)*(scan-1))) && !isalnum((unsigned char)scan[7]) && scan[7] != '_') {
             if (diag_count > 0 && offset < (int)sizeof(diag_buf) - 256) {
                 offset += snprintf(diag_buf + offset, sizeof(diag_buf) - offset, ",");

@@ -1568,6 +1568,9 @@ void compile(Node *n) {
 }
 
 void yyerror(const char *s) {
+    /* Recorded too, for the LSP's diagnostics and the REPL (they used to
+       see no errors at all). */
+    glow_add_error(line_num, s);
     fprintf(stderr, "\033[31mSyntaxError:\033[0m %s\n\n", s);
     if (compiling_file) {
         print_error_line(compiling_file, line_num);

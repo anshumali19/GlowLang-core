@@ -2496,220 +2496,470 @@ Value native_str_split(int argc, Value *args) {
     return value_list(l);
 }
 
-static Value http_request_native(int argc, Value *args) {
-    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) {
-        return value_none();
-    }
-    const char *method = AS_STRING(args[0]);
-    const char *url = AS_STRING(args[1]);
-    Value options = argc > 2 ? args[2] : value_none();
+/* ---- HTTP client: http.request(method, url, options) ----
+ *
+ * options: headers (dict), body (string), timeout (seconds, default 30),
+ * follow_redirects (default true), max_redirects (default 10) and verify
+ * (default true: check the server's TLS certificate and host name).
+ * Returns {status, body, headers, url}; a network, TLS or protocol
+ * failure raises an error saying what went wrong.
+ *
+ * HTTPS uses OpenSSL with SNI and certificate verification. Trusted roots
+ * come from the Windows certificate store on Windows and from the system
+ * CA bundle elsewhere. Bodies sent with chunked transfer encoding are
+ * decoded; redirects (301, 302, 303, 307, 308) are followed.
+ */
+#ifdef _WIN32
+#include <wincrypt.h>
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
+typedef SOCKET http_sock_t;
+#define HTTP_BAD_SOCK INVALID_SOCKET
+#define http_closesock closesocket
+#else
+#include <fcntl.h>
+#include <errno.h>
+typedef int http_sock_t;
+#define HTTP_BAD_SOCK (-1)
+#define http_closesock close
+#endif
 
-    int is_ssl = 0;
-    const char *host_start = url;
-    if (strncmp(url, "https://", 8) == 0) {
-        is_ssl = 1;
-        host_start = url + 8;
-    } else if (strncmp(url, "http://", 7) == 0) {
-        host_start = url + 7;
-    }
+typedef struct { char *p; size_t n, cap; } HttpBuf;
+static void hb_add(HttpBuf *b, const char *s, size_t n) {
+    if (b->n + n + 1 > b->cap) { b->cap = (b->n + n + 1) * 2; b->p = realloc(b->p, b->cap); }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+    b->p[b->n] = '\0';
+}
 
-    char hostname[256];
-    int port = is_ssl ? 443 : 80;
-    const char *path = "/";
+typedef struct {
+    int ssl;
+    char host[256];
+    int port;
+    char *path;          /* includes the query; malloc'd */
+} HttpUrl;
 
-    const char *slash = strchr(host_start, '/');
-    const char *colon = strchr(host_start, ':');
-
-    if (colon && (!slash || colon < slash)) {
-        int host_len = colon - host_start;
-        if (host_len > 255) host_len = 255;
-        strncpy(hostname, host_start, host_len);
-        hostname[host_len] = '\0';
-        port = atoi(colon + 1);
-        if (slash) path = slash;
+/* Splits http(s)://host[:port][/path?query]; returns an error or NULL. */
+static const char *http_parse_url(const char *url, HttpUrl *u) {
+    memset(u, 0, sizeof(*u));
+    const char *p;
+    if (strncmp(url, "https://", 8) == 0) { u->ssl = 1; p = url + 8; u->port = 443; }
+    else if (strncmp(url, "http://", 7) == 0) { p = url + 7; u->port = 80; }
+    else return "the URL must start with http:// or https://";
+    const char *host_end;
+    if (*p == '[') {   /* [IPv6] */
+        const char *close_br = strchr(p, ']');
+        if (!close_br) return "bad IPv6 address in the URL";
+        size_t n = (size_t)(close_br - p - 1);
+        if (n >= sizeof(u->host)) return "host name too long";
+        memcpy(u->host, p + 1, n); u->host[n] = '\0';
+        host_end = close_br + 1;
     } else {
-        if (slash) {
-            int host_len = slash - host_start;
-            if (host_len > 255) host_len = 255;
-            strncpy(hostname, host_start, host_len);
-            hostname[host_len] = '\0';
-            path = slash;
-        } else {
-            strncpy(hostname, host_start, 255);
-            hostname[255] = '\0';
-        }
+        host_end = p;
+        while (*host_end && *host_end != ':' && *host_end != '/' && *host_end != '?' && *host_end != '#') host_end++;
+        size_t n = (size_t)(host_end - p);
+        if (n == 0) return "the URL has no host";
+        if (n >= sizeof(u->host)) return "host name too long";
+        memcpy(u->host, p, n); u->host[n] = '\0';
     }
-
-    // Construct the request content BEFORE releasing GIL
-    char req[16384];
-    int req_len = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: GlowLang/1.0\r\n", method, path, hostname);
-
-    const char *body_str = NULL;
-    int body_len = 0;
-    if (GET_TYPE(options) == VAL_DICT) {
-        Dict *opts = AS_DICT(options);
-        Value v_headers = dict_get(opts, "headers");
-        if (GET_TYPE(v_headers) == VAL_DICT) {
-            Dict *hdrs = AS_DICT(v_headers);
-            for (int i = 0; i < hdrs->capacity; i++) {
-                if (GET_TYPE(hdrs->keys[i]) == VAL_STRING && GET_TYPE(hdrs->values[i]) == VAL_STRING) {
-                    /* Dict keys are interned C strings, not GC strings. */
-                    req_len += snprintf(req + req_len, sizeof(req) - req_len, "%s: %s\r\n", (const char*)(uintptr_t)(hdrs->keys[i] & MASK_PAYLOAD), AS_STRING(hdrs->values[i]));
-                }
-            }
-        }
-        Value v_body = dict_get(opts, "body");
-        if (GET_TYPE(v_body) == VAL_STRING) {
-            body_str = AS_STRING(v_body);
-            body_len = strlen(body_str);
-            req_len += snprintf(req + req_len, sizeof(req) - req_len, "Content-Length: %d\r\n", body_len);
-        }
+    p = host_end;
+    if (*p == ':') {
+        p++;
+        long port = strtol(p, (char**)&p, 10);
+        if (port <= 0 || port > 65535) return "bad port in the URL";
+        u->port = (int)port;
     }
-    req_len += snprintf(req + req_len, sizeof(req) - req_len, "\r\n");
+    const char *path_end = strchr(p, '#');
+    size_t plen = path_end ? (size_t)(path_end - p) : strlen(p);
+    int need_slash = plen == 0 || p[0] != '/';
+    u->path = malloc(plen + 2);
+    snprintf(u->path, plen + 2, "%s%.*s", need_slash ? "/" : "", (int)plen, p);
+    return NULL;
+}
 
-    glow_gil_release();
-
-    struct hostent *he = gethostbyname(hostname);
-    if (!he) {
-        glow_gil_acquire();
-        return value_none();
+/* The URL a Location header points to, made absolute against base. */
+static char *http_resolve_location(const HttpUrl *base, const char *loc) {
+    if (strncmp(loc, "http://", 7) == 0 || strncmp(loc, "https://", 8) == 0) return strdup(loc);
+    size_t n = strlen(base->host) + strlen(loc) + strlen(base->path) + 32;
+    char *out = malloc(n);
+    const char *scheme = base->ssl ? "https" : "http";
+    int default_port = base->port == (base->ssl ? 443 : 80);
+    char hostport[300];
+    if (strchr(base->host, ':')) snprintf(hostport, sizeof(hostport), "[%s]", base->host);
+    else snprintf(hostport, sizeof(hostport), "%s", base->host);
+    if (!default_port) { size_t l = strlen(hostport); snprintf(hostport + l, sizeof(hostport) - l, ":%d", base->port); }
+    if (strncmp(loc, "//", 2) == 0) snprintf(out, n, "%s:%s", scheme, loc);
+    else if (loc[0] == '/') snprintf(out, n, "%s://%s%s", scheme, hostport, loc);
+    else {
+        /* Relative to the directory of the current path. */
+        const char *q = strchr(base->path, '?');
+        size_t dir = q ? (size_t)(q - base->path) : strlen(base->path);
+        while (dir > 0 && base->path[dir - 1] != '/') dir--;
+        snprintf(out, n, "%s://%s%.*s%s", scheme, hostport, (int)dir, base->path, loc);
     }
+    return out;
+}
 
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        glow_gil_acquire();
-        return value_none();
-    }
+/* A monotonic clock in seconds. */
+static double http_now(void) {
+#ifdef _WIN32
+    return (double)GetTickCount64() / 1000.0;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+#endif
+}
 
+static void http_set_timeouts(http_sock_t s, double seconds) {
+#ifdef _WIN32
+    DWORD ms = (DWORD)(seconds * 1000);   /* Windows takes milliseconds, not a timeval */
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
+#else
     struct timeval tv;
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+    tv.tv_sec = (long)seconds;
+    tv.tv_usec = (long)((seconds - (double)tv.tv_sec) * 1e6);
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+}
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    memcpy(&addr.sin_addr.s_addr, he->h_addr_list[0], he->h_length);
+/* Connects to host:port within `seconds`, trying each address. */
+static http_sock_t http_connect(const char *host, int port, double seconds, char *err, size_t errsz) {
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    int rc = getaddrinfo(host, portstr, &hints, &res);
+    if (rc != 0 || !res) { snprintf(err, errsz, "cannot resolve host %s", host); return HTTP_BAD_SOCK; }
+    http_sock_t s = HTTP_BAD_SOCK;
+    int timed_out = 0;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (s == HTTP_BAD_SOCK) continue;
+        /* Non-blocking connect, so the timeout applies to connecting too. */
+#ifdef _WIN32
+        u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
+#else
+        int fl = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, fl | O_NONBLOCK);
+#endif
+        int c = connect(s, ai->ai_addr, (int)ai->ai_addrlen);
+        int ok = c == 0;
+        if (!ok) {
+            fd_set w, e;
+            FD_ZERO(&w); FD_SET(s, &w);
+            FD_ZERO(&e); FD_SET(s, &e);
+            struct timeval tv;
+            tv.tv_sec = (long)seconds;
+            tv.tv_usec = (long)((seconds - (double)tv.tv_sec) * 1e6);
+            int sel = select((int)s + 1, NULL, &w, &e, &tv);
+            if (sel == 0) timed_out = 1;
+            if (sel > 0 && FD_ISSET(s, &w)) {
+                int soerr = 0;
+                socklen_t len = sizeof(soerr);
+                getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&soerr, &len);
+                ok = soerr == 0;
+            }
+        }
+        if (ok) {
+#ifdef _WIN32
+            u_long b = 0; ioctlsocket(s, FIONBIO, &b);
+#else
+            fcntl(s, F_SETFL, fl);
+#endif
+            http_set_timeouts(s, seconds);
+            break;
+        }
+        http_closesock(s);
+        s = HTTP_BAD_SOCK;
+    }
+    freeaddrinfo(res);
+    if (s == HTTP_BAD_SOCK) snprintf(err, errsz, timed_out ? "connecting to %s:%d timed out" : "cannot connect to %s:%d", host, port);
+    return s;
+}
 
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sockfd);
-        glow_gil_acquire();
+/* One client TLS context for the whole program, trusting the system's
+   root certificates. */
+static SSL_CTX *http_ssl_ctx = NULL;
+static SSL_CTX *http_get_ssl_ctx(void) {
+    if (http_ssl_ctx) return http_ssl_ctx;
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) return NULL;
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+#ifdef _WIN32
+    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+    const wchar_t *stores[] = { L"ROOT", L"CA" };
+    for (int k = 0; k < 2; k++) {
+        HCERTSTORE hs = CertOpenSystemStoreW(0, stores[k]);
+        if (!hs) continue;
+        PCCERT_CONTEXT cc = NULL;
+        while ((cc = CertEnumCertificatesInStore(hs, cc)) != NULL) {
+            const unsigned char *der = cc->pbCertEncoded;
+            X509 *x = d2i_X509(NULL, &der, (long)cc->cbCertEncoded);
+            if (x) { X509_STORE_add_cert(store, x); X509_free(x); }
+        }
+        CertCloseStore(hs, 0);
+    }
+#else
+    SSL_CTX_set_default_verify_paths(ctx);
+    /* A statically linked OpenSSL may look in its build machine's folder;
+       add the usual system bundles as well. */
+    const char *bundles[] = { "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+                              "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem", "/usr/local/etc/openssl@3/cert.pem",
+                              "/opt/homebrew/etc/openssl@3/cert.pem", NULL };
+    for (int k = 0; bundles[k]; k++) {
+        FILE *f = fopen(bundles[k], "r");
+        if (f) { fclose(f); SSL_CTX_load_verify_locations(ctx, bundles[k], NULL); }
+    }
+#endif
+    http_ssl_ctx = ctx;
+    return ctx;
+}
+
+typedef struct { int status; HttpBuf headers_raw; HttpBuf body; } HttpResult;
+
+/* Decodes a chunked body in place; returns 0 if it is malformed. */
+static int http_dechunk(HttpBuf *b) {
+    size_t in = 0, out = 0;
+    for (;;) {
+        char *end;
+        unsigned long size = strtoul(b->p + in, &end, 16);
+        if (end == b->p + in) return 0;
+        char *line_end = strstr(end, "\r\n");
+        if (!line_end) return 0;
+        in = (size_t)(line_end - b->p) + 2;
+        if (size == 0) break;
+        if (in + size > b->n) return 0;
+        memmove(b->p + out, b->p + in, size);
+        out += size;
+        in += size;
+        if (in + 2 <= b->n && b->p[in] == '\r' && b->p[in + 1] == '\n') in += 2;
+    }
+    b->n = out;
+    b->p[out] = '\0';
+    return 1;
+}
+
+/* A header's value (case-insensitive name) from the raw header block. */
+static int http_header(const char *raw, const char *name, char *out, size_t outsz) {
+    size_t nl = strlen(name);
+    for (const char *line = raw; line && *line; ) {
+        const char *eol = strstr(line, "\r\n");
+        size_t len = eol ? (size_t)(eol - line) : strlen(line);
+        if (len > nl && line[nl] == ':' && strncasecmp(line, name, nl) == 0) {
+            const char *v = line + nl + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            size_t vl = len - (size_t)(v - line);
+            if (vl >= outsz) vl = outsz - 1;
+            memcpy(out, v, vl); out[vl] = '\0';
+            return 1;
+        }
+        line = eol ? eol + 2 : NULL;
+    }
+    return 0;
+}
+
+/* One request/response exchange (no redirects). Runs without the GIL. */
+static int http_exchange(const HttpUrl *u, const char *method, const char *extra_headers,
+                         const char *body, size_t body_len, double timeout, int verify,
+                         HttpResult *r, char *err, size_t errsz) {
+    http_sock_t s = http_connect(u->host, u->port, timeout, err, errsz);
+    if (s == HTTP_BAD_SOCK) return 0;
+    SSL *ssl = NULL;
+    if (u->ssl) {
+        SSL_CTX *ctx = http_get_ssl_ctx();
+        if (!ctx || !(ssl = SSL_new(ctx))) { http_closesock(s); snprintf(err, errsz, "cannot start TLS"); return 0; }
+        SSL_set_fd(ssl, (int)s);
+        SSL_set_tlsext_host_name(ssl, u->host);
+        if (verify) {
+            SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
+            SSL_set1_host(ssl, u->host);
+        }
+        if (SSL_connect(ssl) <= 0) {
+            long vr = SSL_get_verify_result(ssl);
+            if (verify && vr != X509_V_OK) snprintf(err, errsz, "TLS certificate of %s not trusted: %s", u->host, X509_verify_cert_error_string(vr));
+            else snprintf(err, errsz, "TLS handshake with %s failed", u->host);
+            SSL_free(ssl); http_closesock(s);
+            return 0;
+        }
+    }
+    HttpBuf req = { NULL, 0, 0 };
+    char line[1024];
+    int default_port = u->port == (u->ssl ? 443 : 80);
+    int v6 = strchr(u->host, ':') != NULL;
+    if (default_port) snprintf(line, sizeof(line), "%s %s HTTP/1.1\r\nHost: %s%s%s\r\n", method, u->path, v6 ? "[" : "", u->host, v6 ? "]" : "");
+    else snprintf(line, sizeof(line), "%s %s HTTP/1.1\r\nHost: %s%s%s:%d\r\n", method, u->path, v6 ? "[" : "", u->host, v6 ? "]" : "", u->port);
+    hb_add(&req, line, strlen(line));
+    hb_add(&req, extra_headers, strlen(extra_headers));
+    if (body) { snprintf(line, sizeof(line), "Content-Length: %zu\r\n", body_len); hb_add(&req, line, strlen(line)); }
+    hb_add(&req, "\r\n", 2);
+    if (body && body_len) hb_add(&req, body, body_len);
+    size_t sent = 0;
+    while (sent < req.n) {
+        int w = ssl ? SSL_write(ssl, req.p + sent, (int)(req.n - sent)) : send(s, req.p + sent, (int)(req.n - sent), 0);
+        if (w <= 0) break;
+        sent += (size_t)w;
+    }
+    free(req.p);
+    if (sent < req.n) { snprintf(err, errsz, "sending the request to %s failed", u->host); if (ssl) SSL_free(ssl); http_closesock(s); return 0; }
+    HttpBuf resp = { NULL, 0, 0 };
+    char chunk[16384];
+    int timed_out = 0;
+    for (;;) {
+        double waited_from = http_now();
+        int n = ssl ? SSL_read(ssl, chunk, sizeof(chunk)) : recv(s, chunk, sizeof(chunk), 0);
+        if (n > 0) { hb_add(&resp, chunk, (size_t)n); continue; }
+        /* A read that failed after waiting the whole timeout timed out
+           (the error codes for that differ between systems and TLS). */
+        if (n < 0 || (ssl && SSL_get_error(ssl, n) != SSL_ERROR_ZERO_RETURN))
+            timed_out = http_now() - waited_from >= timeout * 0.9;
+        break;
+    }
+    if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+    http_closesock(s);
+    char *hend = resp.p ? strstr(resp.p, "\r\n\r\n") : NULL;
+    if (!hend) {
+        free(resp.p);
+        snprintf(err, errsz, timed_out ? "%s did not answer within the %g-second timeout" : "%s sent no valid HTTP response", u->host, timeout);
+        return 0;
+    }
+    if (strncmp(resp.p, "HTTP/", 5) != 0 || !strchr(resp.p, ' ')) { free(resp.p); snprintf(err, errsz, "%s sent no valid HTTP response", u->host); return 0; }
+    r->status = atoi(strchr(resp.p, ' ') + 1);
+    size_t hlen = (size_t)(hend - resp.p);
+    const char *first_eol = strstr(resp.p, "\r\n");
+    size_t skip = (size_t)(first_eol - resp.p) + 2;
+    r->headers_raw.n = 0;
+    if (hlen > skip) hb_add(&r->headers_raw, resp.p + skip, hlen - skip);
+    else hb_add(&r->headers_raw, "", 0);
+    size_t body_start = hlen + 4;
+    hb_add(&r->body, resp.p + body_start, resp.n - body_start);
+    free(resp.p);
+    char val[256];
+    if (http_header(r->headers_raw.p, "Transfer-Encoding", val, sizeof(val)) && strstr(val, "chunked")) {
+        if (!http_dechunk(&r->body)) { snprintf(err, errsz, "%s sent a malformed chunked body", u->host); return 0; }
+    } else if (http_header(r->headers_raw.p, "Content-Length", val, sizeof(val))) {
+        size_t cl = (size_t)strtoull(val, NULL, 10);
+        if (cl < r->body.n) { r->body.n = cl; r->body.p[cl] = '\0'; }
+        else if (cl > r->body.n && timed_out) { snprintf(err, errsz, "%s stopped sending before the end of the body (timed out)", u->host); return 0; }
+    }
+    return 1;
+}
+
+static Value http_request_native(int argc, Value *args) {
+    char err[512];
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) {
+        pending_exception = value_string_copy("http.request(method, url, options) needs a method and a URL");
+        has_exception = 1;
         return value_none();
     }
+    char method[16];
+    snprintf(method, sizeof(method), "%s", AS_STRING(args[0]));
+    for (char *c = method; *c; c++) *c = (char)toupper((unsigned char)*c);
+    Value options = argc > 2 ? args[2] : value_none();
+    double timeout = 30;
+    int follow = 1, max_redirects = 10, verify = 1;
+    HttpBuf hdrs = { NULL, 0, 0 };
+    char *body = NULL;
+    size_t body_len = 0;
+    int has_ua = 0;
+    if (GET_TYPE(options) == VAL_DICT) {
+        Dict *o = AS_DICT(options);
+        Value v = dict_get(o, "timeout");
+        if (GET_TYPE(v) == VAL_INT || GET_TYPE(v) == VAL_FLOAT) timeout = val_to_double(v);
+        if (timeout <= 0) timeout = 30;
+        v = dict_get(o, "follow_redirects"); if (GET_TYPE(v) == VAL_BOOL) follow = AS_BOOL(v);
+        v = dict_get(o, "max_redirects"); if (GET_TYPE(v) == VAL_INT) max_redirects = (int)AS_INT(v);
+        v = dict_get(o, "verify"); if (GET_TYPE(v) == VAL_BOOL) verify = AS_BOOL(v);
+        v = dict_get(o, "headers");
+        if (GET_TYPE(v) == VAL_DICT) {
+            Dict *h = AS_DICT(v);
+            for (int i = 0; i < h->capacity; i++) {
+                if (GET_TYPE(h->keys[i]) != VAL_STRING) continue;
+                const char *k = (const char*)(uintptr_t)(h->keys[i] & MASK_PAYLOAD);
+                char *val = value_to_new_cstring(h->values[i]);
+                if (strpbrk(k, "\r\n:") || (val && strpbrk(val, "\r\n"))) {   /* no header injection */
+                    free(val); free(hdrs.p);
+                    pending_exception = value_string_copy("http.request: a header name or value contains a line break");
+                    has_exception = 1;
+                    return value_none();
+                }
+                if (strcasecmp(k, "User-Agent") == 0) has_ua = 1;
+                hb_add(&hdrs, k, strlen(k)); hb_add(&hdrs, ": ", 2);
+                hb_add(&hdrs, val ? val : "", val ? strlen(val) : 0); hb_add(&hdrs, "\r\n", 2);
+                free(val);
+            }
+        }
+        v = dict_get(o, "body");
+        if (GET_TYPE(v) == VAL_STRING) { body_len = rope_length(v); body = malloc(body_len + 1); memcpy(body, AS_STRING(v), body_len); body[body_len] = '\0'; }
+        else if (GET_TYPE(v) != VAL_NONE) { char *s = value_to_new_cstring(v); body = s; body_len = s ? strlen(s) : 0; }
+    }
+    if (!has_ua) { const char *ua = "User-Agent: GlowLang\r\n"; hb_add(&hdrs, ua, strlen(ua)); }
+    hb_add(&hdrs, "Connection: close\r\nAccept-Encoding: identity\r\n", 46);
 
-    SSL_CTX *ctx = NULL;
-    SSL *ssl = NULL;
-    if (is_ssl) {
-        SSL_library_init();
-        ctx = SSL_CTX_new(TLS_client_method());
-        if (!ctx) {
-            close(sockfd);
-            glow_gil_acquire();
-            return value_none();
-        }
-        ssl = SSL_new(ctx);
-        if (!ssl) {
-            SSL_CTX_free(ctx);
-            close(sockfd);
-            glow_gil_acquire();
-            return value_none();
-        }
-        SSL_set_fd(ssl, sockfd);
-        if (SSL_connect(ssl) <= 0) {
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            close(sockfd);
-            glow_gil_acquire();
-            return value_none();
+    char *url = strdup(AS_STRING(args[1]));
+    HttpResult r;
+    memset(&r, 0, sizeof(r));
+    int ok = 0, redirects = 0;
+    glow_gil_release();
+    for (;;) {
+        HttpUrl u;
+        const char *perr = http_parse_url(url, &u);
+        if (perr) { snprintf(err, sizeof(err), "%s", perr); break; }
+        free(r.headers_raw.p); free(r.body.p);
+        memset(&r, 0, sizeof(r));
+        ok = http_exchange(&u, method, hdrs.p, body, body_len, timeout, verify, &r, err, sizeof(err));
+        if (!ok) { free(u.path); break; }
+        char loc[2048];
+        int is_redirect = r.status == 301 || r.status == 302 || r.status == 303 || r.status == 307 || r.status == 308;
+        if (!follow || !is_redirect || !http_header(r.headers_raw.p, "Location", loc, sizeof(loc))) { free(u.path); break; }
+        if (++redirects > max_redirects) { snprintf(err, sizeof(err), "more than %d redirects", max_redirects); ok = 0; free(u.path); break; }
+        char *next = http_resolve_location(&u, loc);
+        free(u.path);
+        free(url);
+        url = next;
+        /* 303, and 301/302 after a POST, turn into a GET without a body. */
+        if (r.status == 303 || ((r.status == 301 || r.status == 302) && strcmp(method, "POST") == 0)) {
+            snprintf(method, sizeof(method), "GET");
+            free(body); body = NULL; body_len = 0;
         }
     }
-
-    if (is_ssl) {
-        SSL_write(ssl, req, req_len);
-        if (body_len > 0) SSL_write(ssl, body_str, body_len);
-    } else {
-        ssize_t _wr = send(sockfd, req, req_len, 0);
-        if (body_len > 0) _wr = send(sockfd, body_str, body_len, 0);
-        (void)_wr;
-    }
-
-    char *resp_buf = malloc(65536);
-    int resp_cap = 65536;
-    int resp_len = 0;
-
-    while (1) {
-        if (resp_len + 4096 >= resp_cap) {
-            resp_cap *= 2;
-            resp_buf = realloc(resp_buf, resp_cap);
-        }
-        int n;
-        if (is_ssl) {
-            n = SSL_read(ssl, resp_buf + resp_len, 4096);
-        } else {
-            n = read(sockfd, resp_buf + resp_len, 4096);
-        }
-        if (n <= 0) break;
-        resp_len += n;
-    }
-    resp_buf[resp_len] = '\0';
-
-    if (is_ssl) {
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        SSL_CTX_free(ctx);
-    }
-    close(sockfd);
-
     glow_gil_acquire();
-
-    int status = 0;
-    const char *body = "";
-    Dict *resp_headers = dict_new(4);
-
-    if (resp_len > 0) {
-        char *status_line = resp_buf;
-        char *headers_start = strstr(resp_buf, "\r\n");
-        if (headers_start) {
-            *headers_start = '\0';
-            headers_start += 2;
-            char *space1 = strchr(status_line, ' ');
-            if (space1) {
-                status = atoi(space1 + 1);
-            }
-
-            char *body_start = strstr(headers_start, "\r\n\r\n");
-            if (body_start) {
-                *body_start = '\0';
-                body = body_start + 4;
-            }
-
-            char *line = headers_start;
-            while (line && *line) {
-                char *next_line = strstr(line, "\r\n");
-                if (next_line) {
-                    *next_line = '\0';
-                    next_line += 2;
-                }
-                char *colon = strchr(line, ':');
-                if (colon) {
-                    *colon = '\0';
-                    char *val = colon + 1;
-                    while (*val == ' ') val++;
-                    dict_set(resp_headers, line, value_string_copy(val));
-                }
-                line = next_line;
-            }
-        }
+    free(hdrs.p);
+    free(body);
+    if (!ok) {
+        free(url); free(r.headers_raw.p); free(r.body.p);
+        char msg[600];
+        snprintf(msg, sizeof(msg), "http.request: %s", err);
+        pending_exception = value_string_copy(msg);
+        has_exception = 1;
+        return value_none();
     }
-
+    Dict *headers = dict_new(16);
+    for (char *line = r.headers_raw.p; line && *line; ) {
+        char *eol = strstr(line, "\r\n");
+        if (eol) *eol = '\0';
+        char *colon = strchr(line, ':');
+        if (colon) {
+            *colon = '\0';
+            char *v = colon + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            dict_set(headers, line, value_string_copy(v));
+        }
+        line = eol ? eol + 2 : NULL;
+    }
     Dict *result = dict_new(4);
-    dict_set(result, "status", value_int(status));
-    dict_set(result, "body", value_string_copy(body));
-    dict_set(result, "headers", value_dict(resp_headers));
-
-    free(resp_buf);
+    dict_set(result, "status", value_int(r.status));
+    dict_set(result, "body", value_string_copy_len(r.body.p ? r.body.p : "", r.body.n));
+    dict_set(result, "headers", value_dict(headers));
+    dict_set(result, "url", value_string_copy(url));
+    free(url); free(r.headers_raw.p); free(r.body.p);
     return value_dict(result);
 }
 
@@ -3594,6 +3844,10 @@ static Value native_profile_stop(int argc, Value *args) {
     free(entries);
     return value_none();
 }
+
+/* glowlang profile program.glow: count each line's runs, report at the end. */
+void glow_profile_begin(void) { native_profile_start(0, NULL); }
+void glow_profile_report(void) { native_profile_stop(0, NULL); }
 
 void print_error_trace(Value exception);
 

@@ -1,0 +1,31 @@
+random repeatable: true true float
+guard: [user.name must be text., user.age must be a number., user.admin must be true or false.]
+guard ok: true
+json types: true []
+json type error: false [root.n: expected number, got string]
+head/tail: 2 3 9
+[Dataset] Split: 7 train, 3 test
+split sizes: 10
+scaler: [{"x": -1}, {"x": 1}]
+[Pipeline:Regression] Starting with 4 steps
+[Pipeline] Step 1/4: Normalize(standard)
+[Pipeline] Step 2/4: TrainTestSplit(0.8)
+  → Train: 8 samples, Test: 2 samples
+[Pipeline] Step 3/4: LinearModel
+  → Epoch 0: MSE = 89.01693325182734
+  → Epoch 20: MSE = 9.814766041798006
+  → Epoch 40: MSE = 1.3177501441194686
+  → Epoch 60: MSE = 0.18231120046905364
+  → Epoch 80: MSE = 0.02532375851699287
+[Pipeline] Step 4/4: Evaluate
+  → MSE: 0.015177810349148488, RMSE: 0.1231982562747886, MAE: 0.12139258503316164, R²: 0.9962055474127128
+[Pipeline:Regression] Complete
+regression metric: regression
+cors: [*] https://a.com *
+cors: [*] https://evil.com *
+cors: [https://a.com] https://a.com https://a.com
+cors: [https://a.com] https://evil.com none
+url: https://x.com/api?q=a%20b%26c&lang=h%C3%A9llo
+where: 2 1 1
+where bad op: Table.where: unknown operator ~ (use > < >= <= == != is is_not contains)
+tensor std: 1.118033988749895
