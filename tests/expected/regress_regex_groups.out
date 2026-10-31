@@ -1,0 +1,29 @@
+find: 2026-10-31 4 14 [4, 14]
+groups: [2026, 10, 31] 2026 31 2026-10-31
+no match: none
+named: ana glow.dev {"user": ana, "host": glow.dev}
+bad name: re: no group named port
+optional group: [none, b]
+findall plain: [1, 22, 333]
+findall 1 group: [x, y]
+findall 2 groups: [[x, 1], [y, 2]]
+finditer: 4 6
+replace: a# b# c#
+replace count: a# b# c333
+replace groups: glow:ana web:bob
+replace named: 10/2026
+replace fn: 6 apples, 24 pears
+sub alias: f00
+empty matches: -a-b--d-
+bad group ref: re.replace: the replacement refers to a group the pattern does not have
+split: [a, b, c, d]
+split keeps groups: [1, -, 2, -, 3]
+split max: [a, b, c,d]
+fullmatch: true none ab
+ignore case: [Glow, GLOW, glow] true
+fullmatch (?i): true
+escape: 1\+1=2\? \(yes\) \[a\.b\] 4
+compiled: [a, b] y <q>
+match/search: true bbb none
+invalid: invalid regular expression: missing )
+linear: none 3000
