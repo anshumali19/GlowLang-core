@@ -669,12 +669,6 @@ struct Class {
     unsigned init_epoch;
 };
 
-struct Instance {
-    GCObject obj;
-    struct Class *klass;
-    Dict *properties;
-};
-
 struct List {
     GCObject obj;
     int refcount;
