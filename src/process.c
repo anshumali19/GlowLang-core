@@ -2036,12 +2036,32 @@ static Value fs_abspath(int argc, Value *args) {
     free(s);
     return v;
 #else
-    if (p[0] == '/') return value_string_copy(p);
     char cwd[4096];
-    if (!getcwd(cwd, sizeof(cwd))) return proc_error("fs.abspath: cannot read the current directory");
-    char *j = join2(cwd, p);
-    Value v = value_string_copy(j);
-    free(j);
+    char *j;
+    if (p[0] == '/') j = strdup(p);
+    else {
+        if (!getcwd(cwd, sizeof(cwd))) return proc_error("fs.abspath: cannot read the current directory");
+        j = join2(cwd, p);
+    }
+    /* Resolve . and .. and doubled slashes by name (as GetFullPathNameW
+       does on Windows); links are not followed. */
+    size_t n = strlen(j);
+    char *out = malloc(n + 2);
+    size_t o = 0;
+    for (char *seg = j; *seg; ) {
+        while (*seg == '/') seg++;
+        char *end = seg;
+        while (*end && *end != '/') end++;
+        size_t len = (size_t)(end - seg);
+        if (len == 0 || (len == 1 && seg[0] == '.')) { /* skip */ }
+        else if (len == 2 && seg[0] == '.' && seg[1] == '.') { while (o > 0 && out[o - 1] != '/') o--; if (o > 0) o--; }
+        else { out[o++] = '/'; memcpy(out + o, seg, len); o += len; }
+        seg = end;
+    }
+    if (o == 0) out[o++] = '/';
+    out[o] = '\0';
+    Value v = value_string_copy(out);
+    free(out); free(j);
     return v;
 #endif
 }
