@@ -1,0 +1,4 @@
+﻿# Module used by tests/regress_bom.glow; it also starts with a UTF-8 BOM.
+func bom_greeting(name):
+    return "Hello, " + name + "!"
+end

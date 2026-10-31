@@ -1,0 +1,8 @@
+﻿# This file starts with a UTF-8 byte order mark (Notepad, PowerShell 5's
+# Set-Content and Out-File write one). It used to be a syntax error.
+use "modules/bom_module"
+show "module with a BOM:", bom_greeting("Glow")
+
+# A BOM inside a string literal is text and stays in the string.
+let s = "﻿x"
+show "BOM in a string kept:", len(s) == 4
