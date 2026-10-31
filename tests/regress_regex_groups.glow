@@ -1,0 +1,69 @@
+# Capture groups, named groups, findall, replace, split, fullmatch and
+# (?i) in the re library. Before, re only told whether a pattern matched
+# and the matched text.
+import "re"
+
+let m = re.find("(\d{4})-(\d{2})-(\d{2})", "due 2026-10-31, paid 2026-11-02")
+show "find:", m.text, m.start, m.stop, m.span
+show "groups:", m.groups, m.group(1), m.group(3), m.group()
+show "no match:", re.find("\d+", "none here")
+
+let d = re.find("(?<user>\w+)@(?<host>[\w.]+)", "mail ana@glow.dev now")
+show "named:", d.group("user"), d.group("host"), d.named
+try:
+    d.group("port")
+catch e:
+    show "bad name:", e
+end
+
+# A group that does not take part is none.
+let opt = re.find("(a)|(b)", "b")
+show "optional group:", opt.groups
+
+show "findall plain:", re.findall("\d+", "a1 b22 c333")
+show "findall 1 group:", re.findall("(\w+)=\d+", "x=1, y=2")
+show "findall 2 groups:", re.findall("(\w+)=(\d+)", "x=1, y=2")
+show "finditer:", len(re.finditer("o", "foo boo")), re.finditer("o", "foo boo")[3].start
+
+show "replace:", re.replace("\d+", "a1 b22 c333", "#")
+show "replace count:", re.replace("\d+", "a1 b22 c333", "#", 2)
+show "replace groups:", re.replace("(\w+)@(\w+)", "ana@glow bob@web", "\2:\1")
+show "replace named:", re.replace("(?<y>\d{4})-(?<m>\d\d)", "2026-10", "\g<m>/\g<y>")
+show "replace fn:", re.replace("\d+", "3 apples, 12 pears", lambda(x): str(int(x.text) * 2))
+show "sub alias:", re.sub("o", "foo", "0")
+show "empty matches:", re.replace("x*", "abxd", "-")
+try:
+    re.replace("(a)", "a", "\2")
+catch e:
+    show "bad group ref:", e
+end
+
+show "split:", re.split("[,;] *", "a, b;c,  d")
+show "split keeps groups:", re.split("(-)", "1-2-3")
+show "split max:", re.split(",", "a,b,c,d", 2)
+
+show "fullmatch:", re.fullmatch("\d+", "123") != none, re.fullmatch("\d+", "123a"), re.fullmatch("a|ab", "ab").text
+show "ignore case:", re.findall("(?i)glow", "Glow GLOW glow"), re.match("(?i)^[a-c]+$", "AbC")
+show "fullmatch (?i):", re.fullmatch("(?i)yes", "YES") != none
+show "escape:", re.escape("1+1=2? (yes) [a.b]"), re.find(re.escape("a.b"), "axb a.b").start
+
+let r = re.compile("(\w+)@")
+show "compiled:", r.findall("a@ b@ c"), r.find("x y@").group(1), r.replace("q@", "<\1>")
+
+# The old API is unchanged.
+show "match/search:", re.match("b+", "abbbc"), re.search("b+", "abbbc"), re.search("z", "abc")
+
+try:
+    re.find("(unclosed", "x")
+catch e:
+    show "invalid:", e
+end
+
+# Long input stays linear: (a|aa)*b on 3000 a's.
+let long = ""
+let i = 0
+while i < 3000:
+    long = long + "a"
+    i = i + 1
+end
+show "linear:", re.find("(a|aa)*b", long), len(re.findall("a", long))

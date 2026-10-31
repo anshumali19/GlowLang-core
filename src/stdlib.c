@@ -1724,11 +1724,88 @@ MATH_FN1(trunc, trunc(x))
 #undef MATH_FN1
 static Value math_isnan(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_FLOAT && isnan(AS_FLOAT(args[0]))); }
 static Value math_isinf(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_FLOAT && isinf(AS_FLOAT(args[0]))); }
+/* An integer value for i: inline up to 48 bits, an exact double up to 53,
+   a big integer beyond. */
+static Value int_value_from_int64(int64_t i) {
+    if (fits_int48(i)) return value_int(i);
+    if (i >= -INT53_MAX && i <= INT53_MAX) return value_float((double)i);
+    return value_bigint(bigint_from_int64(i));
+}
+
+static Value int_error(const char *s, int base, int too_large) {
+    char m[200];
+    if (too_large) snprintf(m, sizeof(m), "Cannot convert \"%.100s\" to an int: too large for base %d", s, base);
+    else if (base != 10) snprintf(m, sizeof(m), "Cannot convert \"%.100s\" to an int in base %d", s, base);
+    else snprintf(m, sizeof(m), "Cannot convert \"%.100s\" to an int", s);
+    pending_exception = value_string_copy(m); has_exception = 1;
+    return value_none();
+}
+
+/* int(x) and int(text, base). Strings are parsed (they used to all give 0):
+   optional spaces and sign, then digits in the base (10 unless given; base
+   16 also takes a 0x prefix). Floats are truncated toward zero. */
 static Value native_int(int argc, Value *args) {
-    if (argc < 1) return value_none();
+    if (argc < 1) return value_int(0);
     Value v = args[0];
-    if (GET_TYPE(v) == VAL_INT) return v;
-    return value_int((int64_t)val_to_double(v));
+    if (GET_TYPE(v) == VAL_INT || (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && is_bigint(v))) return v;
+    if (GET_TYPE(v) == VAL_BOOL) return value_int(AS_BOOL(v) ? 1 : 0);
+    if (GET_TYPE(v) == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        if (isnan(d) || isinf(d)) { pending_exception = value_string_copy("int() of nan or infinity"); has_exception = 1; return value_none(); }
+        d = trunc(d);
+        if (d >= -9.2e18 && d <= 9.2e18) return int_value_from_int64((int64_t)d);
+        char buf[400];
+        snprintf(buf, sizeof(buf), "%.0f", d);
+        return value_bigint(bigint_from_string(buf));
+    }
+    if (GET_TYPE(v) != VAL_STRING) {
+        pending_exception = value_string_copy("int() needs a number or a string"); has_exception = 1;
+        return value_none();
+    }
+    const char *s = AS_STRING(v);
+    int base = 10;
+    if (argc > 1) {
+        if (GET_TYPE(args[1]) != VAL_INT || AS_INT(args[1]) < 2 || AS_INT(args[1]) > 36) {
+            pending_exception = value_string_copy("int(): the base must be from 2 to 36"); has_exception = 1;
+            return value_none();
+        }
+        base = (int)AS_INT(args[1]);
+    }
+    const char *p = s;
+    while (isspace((unsigned char)*p)) p++;
+    int neg = 0;
+    if (*p == '+' || *p == '-') { neg = *p == '-'; p++; }
+    if (base == 16 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    const char *digits = p;
+    while (*p) {
+        int c = tolower((unsigned char)*p), dv;
+        if (c >= '0' && c <= '9') dv = c - '0';
+        else if (c >= 'a' && c <= 'z') dv = c - 'a' + 10;
+        else break;
+        if (dv >= base) break;
+        p++;
+    }
+    const char *after = p;
+    while (isspace((unsigned char)*p)) p++;
+    if (after == digits || *p) return int_error(s, base, 0);
+    while (digits < after - 1 && *digits == '0') digits++;
+    size_t n = (size_t)(after - digits);
+    if (n <= 18 || base != 10) {
+        char buf[80];
+        if (n >= sizeof(buf)) return int_error(s, base, 1);
+        memcpy(buf, digits, n); buf[n] = '\0';
+        errno = 0;
+        unsigned long long u = strtoull(buf, NULL, base);
+        if (errno == ERANGE || u > (unsigned long long)INT64_MAX + (neg ? 1ULL : 0ULL)) return int_error(s, base, 1);
+        int64_t i = neg ? (int64_t)(0ULL - u) : (int64_t)u;
+        return int_value_from_int64(i);
+    }
+    char *buf = malloc(n + 2);
+    buf[0] = '-';
+    memcpy(buf + 1, digits, n); buf[n + 1] = '\0';
+    Value out = value_bigint(bigint_from_string(neg ? buf : buf + 1));
+    free(buf);
+    return out;
 }
 
 static void hex_encode(const unsigned char *in, size_t n, char *out) {
@@ -2691,6 +2768,224 @@ static Value os_format_time(int argc, Value *args) {
    so patterns behave identically on Windows, Linux and macOS. */
 int glow_regex_search(const char *pattern, const char *text, int *match_start, int *match_len,
                       char *err, size_t errlen);
+typedef struct GlowRegex GlowRegex;
+
+/* A growable byte buffer for building re results. */
+typedef struct { char *p; size_t n, cap; } ReBuf;
+static void rb_add(ReBuf *b, const char *s, size_t n) {
+    if (b->n + n + 1 > b->cap) {
+        b->cap = (b->n + n + 1) * 2;
+        b->p = realloc(b->p, b->cap);
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+}
+
+GlowRegex *glow_regex_compile(const char *pattern, char *err, size_t errlen);
+void glow_regex_free(GlowRegex *re);
+int glow_regex_groups(const GlowRegex *re);
+const char *glow_regex_group_name(const GlowRegex *re, int i);
+int glow_regex_each(const GlowRegex *re, const char *text, int len, int limit,
+                    int (*on_match)(void *ctx, const int *caps), void *ctx);
+
+/* Compiles args[0], raising the error if it is not a valid pattern. */
+static GlowRegex *re_compile_arg(Value pattern, const char *fn) {
+    char err[160];
+    if (GET_TYPE(pattern) != VAL_STRING) {
+        snprintf(err, sizeof(err), "re.%s: the pattern must be a string", fn);
+        pending_exception = value_string_copy(err); has_exception = 1;
+        return NULL;
+    }
+    GlowRegex *re = glow_regex_compile(AS_STRING(pattern), err, sizeof(err));
+    if (!re) { pending_exception = value_string_copy(err); has_exception = 1; }
+    return re;
+}
+
+static int re_text_arg(Value text, const char *fn) {
+    if (GET_TYPE(text) == VAL_STRING) return 1;
+    char err[120];
+    snprintf(err, sizeof(err), "re.%s: the text must be a string", fn);
+    pending_exception = value_string_copy(err); has_exception = 1;
+    return 0;
+}
+
+/* A match as a dict: text, start, end, groups (a list, none for a group
+   that did not take part) and named (name -> text). */
+static Value re_match_dict(const GlowRegex *re, const char *text, const int *caps) {
+    Dict *m = dict_new(8);
+    dict_set(m, "text", value_string_copy_len(text + caps[0], (size_t)(caps[1] - caps[0])));
+    dict_set(m, "start", value_int(caps[0]));
+    dict_set(m, "end", value_int(caps[1]));
+    int ng = glow_regex_groups(re);
+    List *groups = list_new(ng);
+    Dict *named = dict_new(4);
+    for (int g = 1; g <= ng; g++) {
+        Value v = caps[2 * g] >= 0 && caps[2 * g + 1] >= 0
+            ? value_string_copy_len(text + caps[2 * g], (size_t)(caps[2 * g + 1] - caps[2 * g]))
+            : value_none();
+        list_push(groups, v);
+        const char *name = glow_regex_group_name(re, g);
+        if (name) dict_set(named, name, v);
+    }
+    dict_set(m, "groups", value_list(groups));
+    dict_set(m, "named", value_dict(named));
+    return value_dict(m);
+}
+
+typedef struct { const GlowRegex *re; const char *text; List *out; int mode; } ReCollect;
+
+/* mode 0: match dicts; 1: findall values (the match, its one group, or a
+   list of its groups). */
+static int re_collect(void *ctx, const int *caps) {
+    ReCollect *c = ctx;
+    if (c->mode == 0) { list_push(c->out, re_match_dict(c->re, c->text, caps)); return 0; }
+    int ng = glow_regex_groups(c->re);
+    if (ng == 0) {
+        list_push(c->out, value_string_copy_len(c->text + caps[0], (size_t)(caps[1] - caps[0])));
+    } else {
+        List *row = list_new(ng);
+        for (int g = 1; g <= ng; g++) {
+            int s = caps[2 * g], e = caps[2 * g + 1];
+            list_push(row, s >= 0 && e >= 0 ? value_string_copy_len(c->text + s, (size_t)(e - s)) : value_string_copy(""));
+        }
+        list_push(c->out, ng == 1 ? row->items[0] : value_list(row));
+    }
+    return 0;
+}
+
+/* re_native.find(pattern, text): the first match or none. */
+static Value native_re_find(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    GlowRegex *re = re_compile_arg(args[0], "find");
+    if (!re) return value_none();
+    if (!re_text_arg(args[1], "find")) { glow_regex_free(re); return value_none(); }
+    const char *text = AS_STRING(args[1]);
+    ReCollect c = { re, text, list_new(1), 0 };
+    glow_regex_each(re, text, (int)strlen(text), 1, re_collect, &c);
+    Value r = c.out->size ? c.out->items[0] : value_none();
+    glow_regex_free(re);
+    return r;
+}
+
+/* re_native.all(pattern, text, findall_mode): every match, as match dicts
+   or (findall_mode) as findall values. */
+static Value native_re_all(int argc, Value *args) {
+    if (argc < 2) return value_list(list_new(0));
+    GlowRegex *re = re_compile_arg(args[0], "findall");
+    if (!re) return value_none();
+    if (!re_text_arg(args[1], "findall")) { glow_regex_free(re); return value_none(); }
+    const char *text = AS_STRING(args[1]);
+    ReCollect c = { re, text, list_new(4), argc > 2 && GET_TYPE(args[2]) == VAL_BOOL && AS_BOOL(args[2]) };
+    glow_regex_each(re, text, (int)strlen(text), 0, re_collect, &c);
+    glow_regex_free(re);
+    return value_list(c.out);
+}
+
+typedef struct {
+    const GlowRegex *re; const char *text; const char *repl;
+    ReBuf sb; int last; const char *err;
+} ReReplace;
+
+/* Appends the replacement for one match: \1..\99 and \g<name> / \g<1>
+   insert groups, \\ a backslash; other text is copied. */
+static int re_replace_one(void *ctx, const int *caps) {
+    ReReplace *r = ctx;
+    rb_add(&r->sb, r->text + r->last, (size_t)(caps[0] - r->last));
+    int ng = glow_regex_groups(r->re);
+    for (const char *p = r->repl; *p; p++) {
+        if (*p != '\\' || !p[1]) { rb_add(&r->sb, p, 1); continue; }
+        int g = -1;
+        if (p[1] == '\\') { rb_add(&r->sb, "\\", 1); p++; continue; }
+        if (p[1] >= '0' && p[1] <= '9') {
+            g = p[1] - '0'; p++;
+            if (p[1] >= '0' && p[1] <= '9' && g * 10 + (p[1] - '0') <= ng) { g = g * 10 + (p[1] - '0'); p++; }
+        } else if (p[1] == 'g' && p[2] == '<') {
+            const char *name = p + 3, *end = strchr(name, '>');
+            if (!end) { r->err = "re.replace: unterminated \\g<...> in the replacement"; return 1; }
+            size_t nlen = (size_t)(end - name);
+            char buf[64];
+            if (nlen == 0 || nlen >= sizeof(buf)) { r->err = "re.replace: bad group name in the replacement"; return 1; }
+            memcpy(buf, name, nlen); buf[nlen] = '\0';
+            if (buf[0] >= '0' && buf[0] <= '9') g = atoi(buf);
+            else for (int i = 1; i <= ng; i++) {
+                const char *gn = glow_regex_group_name(r->re, i);
+                if (gn && strcmp(gn, buf) == 0) { g = i; break; }
+            }
+            if (g < 0) { r->err = "re.replace: unknown group name in the replacement"; return 1; }
+            p = end;
+        } else { rb_add(&r->sb, p, 1); continue; }
+        if (g > ng) { r->err = "re.replace: the replacement refers to a group the pattern does not have"; return 1; }
+        int s = caps[2 * g], e = caps[2 * g + 1];
+        if (s >= 0 && e >= 0) rb_add(&r->sb, r->text + s, (size_t)(e - s));
+    }
+    r->last = caps[1];
+    return 0;
+}
+
+/* re_native.replace(pattern, text, replacement, count): count 0 replaces
+   every match. */
+static Value native_re_replace(int argc, Value *args) {
+    if (argc < 3) return value_none();
+    GlowRegex *re = re_compile_arg(args[0], "replace");
+    if (!re) return value_none();
+    if (!re_text_arg(args[1], "replace") || !re_text_arg(args[2], "replace")) { glow_regex_free(re); return value_none(); }
+    const char *text = AS_STRING(args[1]);
+    int count = argc > 3 && GET_TYPE(args[3]) == VAL_INT ? (int)AS_INT(args[3]) : 0;
+    ReReplace r = { re, text, AS_STRING(args[2]), { NULL, 0, 0 }, 0, NULL };
+    glow_regex_each(re, text, (int)strlen(text), count, re_replace_one, &r);
+    glow_regex_free(re);
+    if (r.err) { free(r.sb.p); pending_exception = value_string_copy(r.err); has_exception = 1; return value_none(); }
+    rb_add(&r.sb, text + r.last, strlen(text + r.last));
+    Value out = value_string_copy_len(r.sb.p ? r.sb.p : "", r.sb.n);
+    free(r.sb.p);
+    return out;
+}
+
+typedef struct { const GlowRegex *re; const char *text; List *out; int last; } ReSplit;
+
+/* Text between matches, plus each match's groups (as Python does). An
+   empty match at the very start splits nothing off. */
+static int re_split_one(void *ctx, const int *caps) {
+    ReSplit *s = ctx;
+    if (caps[1] == 0 && caps[0] == 0) return 0;
+    list_push(s->out, value_string_copy_len(s->text + s->last, (size_t)(caps[0] - s->last)));
+    int ng = glow_regex_groups(s->re);
+    for (int g = 1; g <= ng; g++) {
+        int a = caps[2 * g], b = caps[2 * g + 1];
+        list_push(s->out, a >= 0 && b >= 0 ? value_string_copy_len(s->text + a, (size_t)(b - a)) : value_none());
+    }
+    s->last = caps[1];
+    return 0;
+}
+
+/* re_native.split(pattern, text, maxsplit): maxsplit 0 splits at every
+   match. */
+static Value native_re_split(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    GlowRegex *re = re_compile_arg(args[0], "split");
+    if (!re) return value_none();
+    if (!re_text_arg(args[1], "split")) { glow_regex_free(re); return value_none(); }
+    const char *text = AS_STRING(args[1]);
+    int maxsplit = argc > 2 && GET_TYPE(args[2]) == VAL_INT ? (int)AS_INT(args[2]) : 0;
+    ReSplit s = { re, text, list_new(4), 0 };
+    glow_regex_each(re, text, (int)strlen(text), maxsplit, re_split_one, &s);
+    list_push(s.out, value_string_copy(text + s.last));
+    glow_regex_free(re);
+    return value_list(s.out);
+}
+
+/* re_native.escape(text): text with every regex metacharacter escaped. */
+static Value native_re_escape(int argc, Value *args) {
+    if (argc < 1 || !re_text_arg(args[0], "escape")) return value_none();
+    ReBuf sb = { NULL, 0, 0 };
+    for (const char *p = AS_STRING(args[0]); *p; p++) {
+        if (strchr("\\.^$|?*+()[]{}-/", *p)) rb_add(&sb, "\\", 1);
+        rb_add(&sb, p, 1);
+    }
+    Value out = value_string_copy_len(sb.p ? sb.p : "", sb.n);
+    free(sb.p);
+    return out;
+}
 
 static Value native_re_match(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_bool(0);
@@ -4219,9 +4514,14 @@ void std_init(void) {
     dict_set(threads, "active", native_func_new("active", native_threads_active));
     var_set("threads", value_dict(threads));
 
-    Dict *re_native = dict_new(4);
+    Dict *re_native = dict_new(8);
     dict_set(re_native, "match", native_func_new("match", native_re_match));
     dict_set(re_native, "search", native_func_new("search", native_re_search));
+    dict_set(re_native, "find", native_func_new("find", native_re_find));
+    dict_set(re_native, "all", native_func_new("all", native_re_all));
+    dict_set(re_native, "replace", native_func_new("replace", native_re_replace));
+    dict_set(re_native, "split", native_func_new("split", native_re_split));
+    dict_set(re_native, "escape", native_func_new("escape", native_re_escape));
     var_set("re_native", value_dict(re_native));
 
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION

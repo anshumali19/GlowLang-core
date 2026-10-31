@@ -1,0 +1,22 @@
+# int() parses strings. It used to turn every string into 0, so
+# int("42") + 1 was 1.
+show "basic:", int("42") + 1, int("-17"), int("  +8  "), int("007")
+show "floats:", int(3.9), int(-3.9), int(true), int(false)
+show "base:", int("ff", 16), int("0xFF", 16), int("1010", 2), int("z", 36), int("-777", 8)
+show "48-bit+:", int("281474976710656"), int("9007199254740993"), int("123456789012345678901234567890")
+show "big negative:", int("-99999999999999999999") + 1
+show "int stays:", int(5), type(int("12"))
+func try_int(label, f):
+    try:
+        show label, f()
+    catch e:
+        show label, "error:", e
+    end
+end
+try_int("not a number:", lambda(): int("abc"))
+try_int("decimal text:", lambda(): int("3.7"))
+try_int("empty:", lambda(): int(""))
+try_int("bad digit for base:", lambda(): int("12", 2))
+try_int("bad base:", lambda(): int("1", 99))
+try_int("nan:", lambda(): int(math.nan))
+try_int("list:", lambda(): int([1]))

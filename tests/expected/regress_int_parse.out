@@ -1,0 +1,13 @@
+basic: 43 -17 8 7
+floats: 3 -3 1 0
+base: 255 255 10 35 -511
+48-bit+: 281474976710656 9007199254740993 123456789012345678901234567890
+big negative: -99999999999999999998
+int stays: 5 int
+not a number: error: Cannot convert "abc" to an int
+decimal text: error: Cannot convert "3.7" to an int
+empty: error: Cannot convert "" to an int
+bad digit for base: error: Cannot convert "12" to an int in base 2
+bad base: error: int(): the base must be from 2 to 36
+nan: error: int() of nan or infinity
+list: error: int() needs a number or a string

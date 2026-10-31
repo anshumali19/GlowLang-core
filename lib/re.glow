@@ -1,35 +1,180 @@
-# re.glow — regular expressions on the built-in engine (src/regex.c):
-# literals, ., [sets] with ranges and [:classes:], ^ $, groups, |,
-# greedy and lazy * + ? {m,n}, \d \w \s \b and their negations. Matching
-# is linear in the worst case. match(text) is true when the pattern occurs
-# anywhere in text; search(text) returns the first matching text or none.
-# Not supported yet: capture-group contents, match positions, replace,
-# split and findall.
+# re.glow — regular expressions on GlowLang's built-in engine (src/regex.c).
+#
+# Syntax: literals, ., [sets] with ranges and [:classes:], ^ $, capturing
+# groups (...), named groups (?<name>...) or (?P<name>...), non-capturing
+# (?:...), |, greedy and lazy * + ? {m,n}, \d \w \s \b and their negations,
+# and a leading (?i) for case-insensitive matching. Matching is linear in the
+# worst case. Positions are byte offsets into the text.
+#
+#   re.find(pattern, text)         the first Match, or none
+#   re.fullmatch(pattern, text)    a Match if the whole text matches, or none
+#   re.findall(pattern, text)      every match: its text, or with one group
+#                                  that group, or with several a list of them
+#   re.finditer(pattern, text)     every match, as Match objects
+#   re.replace(pattern, text, replacement, count = 0)    (also re.sub)
+#                                  replacement is text, where \1 or \g<name>
+#                                  insert a group, or a function that takes
+#                                  a Match and returns the text to put in;
+#                                  count 0 replaces every match
+#   re.split(pattern, text, maxsplit = 0)   groups in the pattern are kept
+#   re.escape(text)                text with the metacharacters escaped
+#   re.match(pattern, text)        true if the pattern occurs in text
+#   re.search(pattern, text)       the first matching text, or none
+#   re.compile(pattern)            a RegExp with all of the above as methods
+#
+# After import "re", call them as re.find(...) and so on, or by their global
+# names re_find, re_findall, ... (match, search, compile and RegExp keep their
+# old global names). A match (RegexMatch) has .text (the whole match), .start, .stop (where it ends; `end`
+# is a keyword), .span ([start, stop]), .groups (a list; none for a group
+# that did not take part), .named (name -> text) and .group(n): 0 or no
+# argument for the whole match, a number for a group, or a group's name.
+
+blueprint RegexMatch:
+    action init(m):
+        self.text = m["text"]
+        self.start = m["start"]
+        self.stop = m["end"]
+        self.span = [m["start"], m["end"]]
+        self.groups = m["groups"]
+        self.named = m["named"]
+    end
+
+    action group(n = 0):
+        if type(n) == "string":
+            if not self.named.has(n):
+                throw "re: no group named " + n
+            end
+            return self.named[n]
+        end
+        if n == 0:
+            return self.text
+        end
+        if n < 0 or n > len(self.groups):
+            throw "re: no group " + str(n)
+        end
+        return self.groups[n - 1]
+    end
+end
+
+func re_find(pattern, text):
+    let m = re_native.find(pattern, text)
+    if m == none:
+        return none
+    end
+    return RegexMatch(m)
+end
+
+func re_fullmatch(pattern, text):
+    # Anchor both ends; a leading (?i) has to stay in front.
+    let flags = ""
+    let body = pattern
+    if pattern.starts_with("(?i)"):
+        flags = "(?i)"
+        body = pattern.slice(4, len(pattern))
+    end
+    let m = re_native.find(flags + "^(?:" + body + ")$", text)
+    if m == none:
+        return none
+    end
+    return RegexMatch(m)
+end
+
+func re_findall(pattern, text):
+    return re_native.all(pattern, text, true)
+end
+
+func re_finditer(pattern, text):
+    let out = []
+    for each m in re_native.all(pattern, text, false):
+        out.push(RegexMatch(m))
+    end
+    return out
+end
+
+func re_replace(pattern, text, replacement, count = 0):
+    if type(replacement) == "string":
+        return re_native.replace(pattern, text, replacement, count)
+    end
+    # A function: call it with each Match and splice in what it returns.
+    let out = ""
+    let last = 0
+    let done = 0
+    for each m in re_native.all(pattern, text, false):
+        if count > 0 and done >= count:
+            stop
+        end
+        out = out + text.slice(last, m["start"]) + str(replacement(RegexMatch(m)))
+        last = m["end"]
+        done = done + 1
+    end
+    return out + text.slice(last, len(text))
+end
+
+func re_sub(pattern, text, replacement, count = 0):
+    return re_replace(pattern, text, replacement, count)
+end
+
+func re_split(pattern, text, maxsplit = 0):
+    return re_native.split(pattern, text, maxsplit)
+end
+
+func re_escape(text):
+    return re_native.escape(text)
+end
+
+func match(pattern, text):
+    return re_native.match(pattern, text)
+end
+
+func search(pattern, text):
+    return re_native.search(pattern, text)
+end
 
 class RegExp:
     func init(pattern):
         self.pattern = pattern
     end
-
-    func match(string):
-        return re_native.match(self.pattern, string)
+    func find(text):
+        return re_find(self.pattern, text)
     end
-
-    func search(string):
-        return re_native.search(self.pattern, string)
+    func fullmatch(text):
+        return re_fullmatch(self.pattern, text)
+    end
+    func findall(text):
+        return re_findall(self.pattern, text)
+    end
+    func finditer(text):
+        return re_finditer(self.pattern, text)
+    end
+    func replace(text, replacement, count = 0):
+        return re_replace(self.pattern, text, replacement, count)
+    end
+    func sub(text, replacement, count = 0):
+        return re_replace(self.pattern, text, replacement, count)
+    end
+    func split(text, maxsplit = 0):
+        return re_split(self.pattern, text, maxsplit)
+    end
+    func match(text):
+        return re_native.match(self.pattern, text)
+    end
+    func search(text):
+        return re_native.search(self.pattern, text)
     end
 end
 
 func compile(pattern):
+    re_native.find(pattern, "")
     let r = RegExp()
     r.init(pattern)
     return r
 end
 
-func match(pattern, string):
-    return re_native.match(pattern, string)
-end
-
-func search(pattern, string):
-    return re_native.search(pattern, string)
-end
+# re.find(...), re.replace(...) and the rest: the functions above as one
+# namespace (re_find etc. are the same functions under their global names).
+let re = {
+    "find": re_find, "fullmatch": re_fullmatch, "findall": re_findall,
+    "finditer": re_finditer, "replace": re_replace, "sub": re_sub,
+    "split": re_split, "escape": re_escape, "match": match, "search": search,
+    "compile": compile
+}

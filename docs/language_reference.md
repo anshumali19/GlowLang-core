@@ -794,7 +794,7 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 | `show a, b` / `print` | Print values separated by spaces |
 | `len(x)` | Length of a string, list or dict |
 | `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, class name, ... |
-| `int(x)`, `float(x)`, `str(x)` / `string(x)`, `bool(x)` | Conversions |
+| `int(x)`, `float(x)`, `str(x)` / `string(x)`, `bool(x)` | Conversions; `int("42")`, `int("ff", 16)` parse text and raise on anything that is not a whole number |
 | `range(n)` | `[0, 1, ..., n-1]` |
 | `append(list, x)` | Add to a list |
 | `pairs(x)` | `[index, item]` / `[key, value]` pairs |
@@ -842,6 +842,35 @@ separated by `;`.
 
 ### JSON (`json.`)
 `parse(text)`, `stringify(value)`.
+
+### Regular Expressions (`import "re"`)
+```glow
+import "re"
+let m = re.find("(?<year>\d{4})-(\d\d)", "due 2026-10-31")
+show m.text, m.start, m.stop, m.group(1), m.group("year")   # 2026-10 4 11 2026 2026
+show re.findall("(\w+)=(\d+)", "x=1, y=2")          # [[x, 1], [y, 2]]
+show re.replace("(\w+)@(\w+)", "ana@glow", "\2:\1")  # glow:ana
+show re.replace("\d+", "3 apples", lambda(m): str(int(m.text) * 2))
+show re.split("[,;] *", "a, b;c")                    # [a, b, c]
+```
+| Function | Result |
+|----------|--------|
+| `re.find(pattern, text)` | First match, or `none` |
+| `re.fullmatch(pattern, text)` | A match if the whole text matches, or `none` |
+| `re.findall(pattern, text)` | Every match's text (or its group, or a list of its groups) |
+| `re.finditer(pattern, text)` | Every match as a match object |
+| `re.replace(pattern, text, replacement, count)` / `re.sub` | `\1` and `\g<name>` insert groups; the replacement can also be a function of the match |
+| `re.split(pattern, text, maxsplit)` | Pieces between matches; groups in the pattern are kept |
+| `re.escape(text)` | Text with the metacharacters escaped |
+| `re.match(pattern, text)` / `re.search(pattern, text)` | Whether it occurs / the first matching text |
+| `re.compile(pattern)` | An object with the methods above |
+
+A match has `.text`, `.start`, `.stop` (`end` is a keyword), `.span`,
+`.groups`, `.named` and `.group(n)`. Patterns support groups `( )`, named
+groups `(?<name> )`, `(?: )`, `|`, greedy and lazy `* + ? {m,n}`, sets with
+ranges and `[:classes:]`, `\d \w \s \b` and their negations, `^ $`, and a
+leading `(?i)` to ignore case. Matching takes time linear in the text, with
+no catastrophic backtracking. Positions are byte offsets.
 
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
