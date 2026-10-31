@@ -4,7 +4,32 @@ Welcome to **GlowLang** — a programming language with natural-language readabi
 
 ---
 
-## Prerequisites
+## Install on Windows: Microsoft Store
+
+On Windows, install GlowLang from the Microsoft Store. There is nothing to build:
+
+- Store page: **[apps.microsoft.com/detail/9P2D8F466LBX](https://apps.microsoft.com/detail/9P2D8F466LBX)** (Store ID `9P2D8F466LBX`), or
+- from a terminal:
+
+  ```powershell
+  winget install --id 9P2D8F466LBX --source msstore
+  ```
+
+The Store version is signed by Microsoft, so Windows runs it without SmartScreen or Smart App Control warnings, and the Store keeps it up to date. Afterwards `glowlang` and `gdu` work in every terminal (no PATH changes), and the Start menu has a **GlowLang** entry that opens the REPL. Check it:
+
+```powershell
+gdu --version
+```
+
+Then skip ahead to [Your First Program](#your-first-program).
+
+## Install on Linux or macOS
+
+Download the archive for your platform from the [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest) and unpack it, keeping the `lib/` folder next to `glowlang`. Or build from source as described below (also the way to work on GlowLang itself, on any platform).
+
+---
+
+## Prerequisites (building from source)
 
 Ensure your system has the following installed:
 
@@ -40,8 +65,8 @@ brew install flex bison openssl sqlite
 Clone the repository and build from source:
 
 ```bash
-git clone https://github.com/user/GlowLang.git
-cd GlowLang
+git clone https://github.com/anshumali19/GlowLang-core.git
+cd GlowLang-core
 make
 ```
 
@@ -49,7 +74,7 @@ This produces the GlowLang binary at `./bin/glowlang`.
 
 Verify your installation:
 ```bash
-./bin/glowlang --version
+./bin/glowlang run examples/hello.glow
 ```
 
 ---

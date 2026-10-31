@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/tests-135%20(output--checked)-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Apache%202.0%20%2B%20Commons%20Clause-blue" alt="License">
   <img src="https://img.shields.io/badge/platform-Windows%20x64%20(verified)%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
+  <a href="https://apps.microsoft.com/detail/9P2D8F466LBX"><img src="https://img.shields.io/badge/Microsoft%20Store-Get%20GlowLang-0078D4" alt="Get GlowLang from the Microsoft Store"></a>
 </p>
 
 ---
@@ -48,9 +49,31 @@ Measured with `benchmarks/run-benchmarks.ps1` on Windows (Intel i7-14650HX, MSVC
 
 GlowLang is faster than CPython on these workloads, and far slower than compiled languages such as C, Go or Rust.
 
-## 🚀 Quick Start
+## 📥 Install
+
+### Windows: Microsoft Store (recommended)
+
+Get GlowLang from the Microsoft Store: **[apps.microsoft.com/detail/9P2D8F466LBX](https://apps.microsoft.com/detail/9P2D8F466LBX)** (Store ID `9P2D8F466LBX`), or from a terminal:
+
+```powershell
+winget install --id 9P2D8F466LBX --source msstore
+```
+
+The Store version is signed by Microsoft, so Windows (SmartScreen, Smart App Control) runs it without warnings, and it updates itself. `glowlang` and `gdu` then work in every terminal without editing PATH, and the Start menu gets a GlowLang entry that opens the REPL.
+
+```powershell
+glowlang run app.glow
+```
+
+### Linux / macOS
+
+Download the archive for your platform from the [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest), unpack it, and keep the `lib/` folder next to `glowlang`. Or build from source (below).
+
+## 🚀 Build from Source
 
 ### Windows (x64)
+
+Building is only needed to work on GlowLang itself; to use it, install it from the Microsoft Store (above).
 
 Requirements: Visual Studio 2022+ Build Tools (C++), `win_flex`/`win_bison` (`winget install WinFlexBison.win_flex_bison`), and vcpkg with `openssl:x64-windows-static sqlite3:x64-windows-static`.
 
