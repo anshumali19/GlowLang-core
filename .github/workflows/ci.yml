@@ -82,8 +82,8 @@ jobs:
           cat jit.log
           grep -q '^\[jit\] ' jit.log
           # Real Apple silicon timings: compiled, then interpreter only.
-          time ./bin/glowlang run scripts/jit-smoke.glow
-          time GLOW_NOJITEXEC=1 ./bin/glowlang run scripts/jit-smoke.glow
+          time ./bin/glowlang run scripts/jit-bench.glow
+          time GLOW_NOJITEXEC=1 ./bin/glowlang run scripts/jit-bench.glow
 
   build-windows:
     runs-on: windows-latest
