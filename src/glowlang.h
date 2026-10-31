@@ -661,12 +661,6 @@ struct Class {
     unsigned init_epoch;
 };
 
-struct Instance {
-    GCObject obj;
-    struct Class *klass;
-    Dict *properties;
-};
-
 struct List {
     GCObject obj;
     int refcount;
@@ -693,6 +687,18 @@ struct Dict {
 };
 #define DICT_EMPTY   (-1)
 #define DICT_REMOVED (-2)
+
+/* An instance's fields are a dict embedded in the instance (properties
+   points at `fields`), and the dict's first slots follow the instance in
+   the same allocation, so creating an object is one GC allocation. The
+   embedded dict is not a GC object of its own: the instance traces and
+   frees it. Nothing hands `properties` out as a value. */
+struct Instance {
+    GCObject obj;
+    struct Class *klass;
+    Dict *properties;
+    struct Dict fields;     /* must stay last: its inline slots follow it */
+};
 void dict_init(Dict *d, int sz);
 Dict* dict_alloc(int sz, int stack);
 void dict_free_storage(Dict *d);

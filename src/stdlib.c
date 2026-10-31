@@ -1444,14 +1444,15 @@ Class* class_new(const char *name, Class *parent) {
     return c;
 }
 Instance* instance_new(Class *k) {
-    Instance *i = gc_alloc(sizeof(Instance), OBJ_INSTANCE);
+    int cap = DICT_INLINE_CAP;
+    while (cap < k->field_hint) cap *= 2;
+    Instance *i = gc_alloc(sizeof(Instance) + DICT_BLOCK_SIZE(cap), OBJ_INSTANCE);
     i->klass = k;
-    i->properties = NULL;
+    i->properties = &i->fields;
+    i->fields.obj.type = OBJ_DICT;
+    i->fields.size = 0; i->fields.used = 0;
+    dict_set_block(&i->fields, &i->fields + 1, cap);
     k->instances_created++;
-
-    vm_stack[vm_stack_top++] = value_instance(i);
-    i->properties = dict_new(k->field_hint);
-    vm_stack_top--;
     return i;
 }
 
