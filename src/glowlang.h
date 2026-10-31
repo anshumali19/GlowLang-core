@@ -31,6 +31,14 @@
 #define GLOW_COMPUTED_GOTO 1
 #endif
 
+/* Keeps a rarely taken path out of its caller, so the caller's common path
+   does not pay for the registers the rare one needs. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GLOW_NOINLINE __attribute__((noinline))
+#else
+#define GLOW_NOINLINE __declspec(noinline)
+#endif
+
 /* ================================================================
  *  VALUE TYPES
  * ================================================================ */
@@ -661,6 +669,12 @@ struct Class {
     unsigned init_epoch;
 };
 
+struct Instance {
+    GCObject obj;
+    struct Class *klass;
+    Dict *properties;
+};
+
 struct List {
     GCObject obj;
     int refcount;
@@ -875,6 +889,8 @@ Value dict_get(Dict *d, const char *key);
 int dict_get_idx(Dict *d, const char *key);
 int dict_remove(Dict *d, const char *key, Value *out);
 List* list_new(int sz);
+List* list_alloc(int sz, int stack);
+void list_free_storage(List *l);
 void list_push(List *l, Value val);
 PackedArray* packed_array_new(PackedType type, int capacity);
 Value packed_array_get(PackedArray *pa, int idx);
@@ -910,6 +926,7 @@ int list_contains(List *l, Value val);
 void list_sort(List *l);
 void list_reverse(List *l);
 Value value_string_copy(const char *s);
+Value value_string_alloc(size_t len, char **chars);
 Value rope_new(Value left, Value right);
 Value glow_string_concat(Value a, Value b);
 const char* rope_flatten(Value v);
@@ -927,6 +944,7 @@ Value bound_method_new(Value inst, FuncEntry *fe);
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 /* Core library (corelib.c): built-in list/string/dict methods and globals. */
 NativeFuncPtr glow_builtin_method(Value v, const char *name);
+NativeFuncPtr glow_method_lookup(Value v, const char *name, struct Instruction *pc, Value *member);
 void glow_corelib_init(void);
 void glow_datetime_init(void);
 /* process module (process.c): run and talk to other programs. */

@@ -1,0 +1,70 @@
+# Small lists keep their items inside the list object until they grow, and
+# upper/lower/replace/trim/split build their result string in one go.
+
+# Lists through the inline size and past it.
+let a = []
+let i = 0
+while i < 9:
+    a.push(i)
+    show "push", i, "->", len(a), a[len(a) - 1]
+    i = i + 1
+end
+show a
+
+let b = [1, 2, 3, 4]
+b.push(5)
+show "literal then push:", b
+b.insert(0, 0)
+b.remove(3)
+show "insert/remove:", b, b.index(4), b.contains(5)
+let c = b.copy()
+c.reverse()
+show "copy/reverse:", b, c
+c.sort()
+show "sort:", c
+c.extend([10, 11, 12, 13, 14])
+show "extend:", c, len(c)
+while len(c) > 0:
+    c.pop()
+end
+c.push("again")
+show "pop to empty then push:", c, len(c)
+c.clear()
+show "clear:", c, c.is_empty()
+show "map/filter:", [1, 2, 3].map(lambda(x): x * 10), [1, 2, 3, 4, 5, 6].filter(lambda(x): x % 2 == 0)
+show "nested:", [[1, 2], [3, [4, 5]], []]
+
+# Many small lists alive at once, across collections.
+let keep = []
+i = 0
+while i < 30000:
+    keep.push([i, i + 1])
+    i = i + 1
+end
+let bad = 0
+i = 0
+while i < 30000:
+    if keep[i][1] - keep[i][0] != 1:
+        bad = bad + 1
+    end
+    i = i + 997
+end
+show "kept:", len(keep), "bad:", bad
+
+# split: no delimiter, empty parts, many parts, multi-character delimiter.
+show "abc".split(","), "a,,b,".split(","), ",".split(",")
+show "1,2,3,4,5,6,7,8,9,10".split(",")
+show "a--b--c".split("--"), len("x y  z".split(" "))
+
+# upper / lower: ASCII letters change, everything else is kept byte for byte.
+show "MiXeD 123 _!".upper(), "MiXeD 123 _!".lower()
+show "héllo wörld".upper(), "ÀÉÎ".lower(), "".upper()
+
+# replace: no hits, empty replacement, longer replacement, overlapping
+# pattern (left to right), whole string, multi-byte text.
+show "abc".replace("x", "y"), "banana".replace("a", ""), "a.b.c".replace(".", "<->")
+show "aaa".replace("aa", "b"), "abc".replace("abc", "xyz"), "abc".replace("abcd", "x")
+show "café café".replace("é", "e"), "x".replace("", "y")
+
+# trim
+show "[" + "  pad  ".trim() + "]", "[" + "  pad  ".trim_start() + "]", "[" + "  pad  ".trim_end() + "]", "[" + "   ".trim() + "]"

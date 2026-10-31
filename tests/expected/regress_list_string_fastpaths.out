@@ -1,0 +1,29 @@
+push 0 -> 1 0
+push 1 -> 2 1
+push 2 -> 3 2
+push 3 -> 4 3
+push 4 -> 5 4
+push 5 -> 6 5
+push 6 -> 7 6
+push 7 -> 8 7
+push 8 -> 9 8
+[0, 1, 2, 3, 4, 5, 6, 7, 8]
+literal then push: [1, 2, 3, 4, 5]
+insert/remove: [0, 1, 2, 4, 5] 3 true
+copy/reverse: [0, 1, 2, 4, 5] [5, 4, 2, 1, 0]
+sort: [0, 1, 2, 4, 5]
+extend: [0, 1, 2, 4, 5, 10, 11, 12, 13, 14] 10
+pop to empty then push: [again] 1
+clear: [] true
+map/filter: [10, 20, 30] [2, 4, 6]
+nested: [[1, 2], [3, [4, 5]], []]
+kept: 30000 bad: 0
+[abc] [a, , b, ] [, ]
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[a, b, c] 4
+MIXED 123 _! mixed 123 _!
+HéLLO WöRLD ÀÉÎ 
+abc bnn a<->b<->c
+ba xyz abc
+cafe cafe x
+[pad] [pad  ] [  pad] []

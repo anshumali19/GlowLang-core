@@ -336,6 +336,11 @@ return value_none();
    out of machine or VM stack raises the usual recursion error. It returns the
    deopt sentinel only when an exception is pending; the caller then leaves
    compiled code at the call and the interpreter unwinds it. */
+static GLOW_NOINLINE void *self_call_specialization(FuncEntry *fe, Value *args) {
+    void *spec = func_get_specialization(fe, compute_signature(args, fe->param_count));
+    return spec != (void*)1 ? spec : NULL;
+}
+
 Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     typedef Value (*JITFunc)(Value *R, int *pc_idx);
     Bytecode *body = fe->body;
@@ -350,10 +355,7 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     vm_stack_top = needed;
 
     void *code = body->jit_code ? body->jit_code : body->baseline_jit_code;
-    if (!code && fe->spec_count > 0) {
-        void *spec = func_get_specialization(fe, compute_signature(&vm_stack[new_base], fe->param_count));
-        if (spec != (void*)1) code = spec;
-    }
+    if (!code && fe->spec_count > 0) code = self_call_specialization(fe, &vm_stack[new_base]);
     Value res;
     if (code && !glow_nojitexec) {
         int deopt_pc = 0;
@@ -471,18 +473,6 @@ Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) 
     return v;
 }
 
-/* A callable stored in a dict under `name` (module functions such as
-   fs.remove or os.exit live in dicts) takes precedence over the built-in
-   dict methods of the same name. */
-static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
-    Value v = dict_get(d, name);
-    if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
-        ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) { *out = v; return 1; }
-    }
-    return 0;
-}
-
 Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
     extern THREAD_LOCAL Bytecode *g_dbg_bc;
     extern THREAD_LOCAL Instruction *g_dbg_pc;
@@ -498,7 +488,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
        (and raises the proper error). */
     if (n && strcmp(n, "type") == 0) {
         native_fe = native_val_type; is_native_dict_str_method = 1;
-    } else if ((native_fe = glow_builtin_method(obj, n)) != NULL) {
+    } else if ((native_fe = glow_method_lookup(obj, n, pc, &fallback_callee)) != NULL) {
         is_native_dict_str_method = 1;
     } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(obj);
@@ -545,26 +535,6 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 if (GET_TYPE(field) != VAL_NONE) fallback_callee = field;
             }
         }
-    } else if(GET_TYPE(obj)==VAL_LIST) {
-        if (strcmp(n, "append") == 0 || strcmp(n, "push") == 0) { native_fe = native_list_append; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "pop") == 0) { native_fe = native_list_pop; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_list_len; is_native_dict_str_method = 1; }
-    } else if(GET_TYPE(obj)==VAL_DICT) {
-        Value dict_member;
-        if (dict_member_is_callable(AS_DICT(obj), n, &dict_member)) fallback_callee = dict_member;
-        else if (strcmp(n, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "merge") == 0) { native_fe = native_dict_merge; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
-        else fallback_callee = dict_get(AS_DICT(obj), n);
-    } else if(GET_TYPE(obj)==VAL_STRING) {
-        if (strcmp(n, "contains") == 0) { native_fe = native_str_contains; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "find") == 0) { native_fe = native_str_find; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "slice") == 0) { native_fe = native_str_slice; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
     }
 
     if (!(fe && fe->body) && !(native_fe && is_native_dict_str_method)) {
@@ -738,8 +708,12 @@ void simd_add_helper(Value v_a, Value v_b, Value v_target) {
      return 0.0;
  }
 
+/* A number result from C: a whole number that fits an inline (48-bit) int
+   becomes one, anything else stays a double. It used to box any whole
+   double as an inline int, so math.floor(1e15) wrapped to -125899906842624,
+   and converted NaN to an int64 (undefined behaviour). */
 Value value_from_double(double d) {
-    if (d == (int64_t)d) return value_int((int64_t)d);
+    if (d >= (double)INT48_MIN && d <= (double)INT48_MAX && d == (double)(int64_t)d) return value_int((int64_t)d);
     return value_float(d);
 }
 
@@ -765,6 +739,16 @@ static Value value_string_copy_len(const char *s, size_t len) {
     gs->size = (int)len;
     memcpy(gs->chars, s, len);
     gs->chars[len] = '\0';
+    return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+}
+
+/* A new string of len bytes (plus the terminator) for the caller to fill:
+   *chars points at its buffer. */
+Value value_string_alloc(size_t len, char **chars) {
+    GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
+    gs->size = (int)len;
+    gs->chars[len] = '\0';
+    *chars = gs->chars;
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
@@ -1056,6 +1040,12 @@ FuncEntry* func_get(const char *name) {
 
 TypeSignature compute_signature(Value *regs, int count) {
     TypeSignature sig = 0;
+    /* Runs on every compiled call. Vectorised (as clang would), it makes each
+       caller save and restore the SSE registers, which costs more than the
+       loop over a few arguments. */
+#if defined(__clang__)
+#pragma clang loop vectorize(disable) interleave(disable)
+#endif
     for (int i = 0; i < count && i < 16; i++) {
         uint64_t t = GET_TYPE(regs[i]);
         uint64_t jt = 0;
@@ -1110,6 +1100,26 @@ static void dict_set_block(Dict *d, void *block, int cap) {
     for (int i=0; i<cap; i++) d->keys[i] = value_none();
     memset(d->values, 0, sizeof(Value) * (size_t)cap);
     memset(d->index, 0xff, sizeof(int32_t) * (size_t)d->index_cap); /* DICT_EMPTY */
+}
+
+static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
+
+/* Free a dict's storage block unless it lives inside the Dict. */
+void dict_free_storage(Dict *d) {
+    if (d->keys && !dict_is_inline(d)) free(d->keys);
+    d->keys = NULL; d->values = NULL; d->index = NULL;
+}
+
+}
+
+static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
+
+/* Free a dict's storage block unless it lives inside the Dict. */
+void dict_free_storage(Dict *d) {
+    if (d->keys && !dict_is_inline(d)) free(d->keys);
+    d->keys = NULL; d->values = NULL; d->index = NULL;
+}
+
 }
 
 static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
@@ -1195,6 +1205,7 @@ static void dict_grow(Dict *d) {
     if (!was_inline) free(old_keys);
     d->used = n; d->size = n;
     for (int e=0; e<n; e++) dict_index_insert(d, e, intern_cached_hash(DICT_KEY_PTR(d, e)));
+    for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
 }
 
 void dict_set(Dict *d, const char *key, Value val) {
@@ -1243,10 +1254,52 @@ int dict_remove(Dict *d, const char *key, Value *out) {
     d->size--;
     return 1;
 }
-List* list_new(int sz) { List *l = gc_alloc(sizeof(List), OBJ_LIST); l->size = 0; l->capacity = sz; l->items = sz > 0 ? calloc(sz, sizeof(Value)) : NULL; return l; }
+/* Lists of up to LIST_INLINE_CAP items keep them inside the List object,
+   so a small list costs one GC allocation and no malloc; the first push
+   past that moves them to a malloc'd array. */
+#define LIST_INLINE_CAP 4
+static int list_is_inline(List *l) { return (void*)l->items == (void*)(l + 1); }
+
+List* list_alloc(int sz, int stack) {
+    if (sz < 0) sz = 0;
+    List *l;
+    if (sz <= LIST_INLINE_CAP) {
+        size_t bytes = sizeof(List) + sizeof(Value) * LIST_INLINE_CAP;
+        l = stack ? gc_alloc_stack(bytes, OBJ_LIST) : gc_alloc(bytes, OBJ_LIST);
+        l->items = (Value*)(l + 1);
+        l->capacity = LIST_INLINE_CAP;
+    } else {
+        l = stack ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
+        l->items = calloc((size_t)sz, sizeof(Value));
+        if (!l->items) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+        l->capacity = sz;
+    }
+    l->size = 0;
+    return l;
+}
+
+List* list_new(int sz) { return list_alloc(sz, 0); }
+
+/* Free a list's item array unless it lives inside the List. */
+void list_free_storage(List *l) {
+    if (l->items && !list_is_inline(l)) free(l->items);
+    l->items = NULL;
+}
 void list_push(List *l, Value v) {
     gc_write_barrier((GCObject*)l, v);
-    if (l->size >= l->capacity) { l->capacity = (l->capacity == 0) ? 4 : l->capacity * 2; l->items = realloc(l->items, sizeof(Value)*l->capacity); } l->items[l->size++] = v;
+    if (l->size >= l->capacity) {
+        int cap = l->capacity < 4 ? 8 : l->capacity * 2;
+        Value *items;
+        if (list_is_inline(l) || !l->items) {
+            items = malloc(sizeof(Value) * (size_t)cap);
+            if (items && l->size) memcpy(items, l->items, sizeof(Value) * (size_t)l->size);
+        } else {
+            items = realloc(l->items, sizeof(Value) * (size_t)cap);
+        }
+        if (!items) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+        l->items = items; l->capacity = cap;
+    }
+    l->items[l->size++] = v;
 }
 
 Value list_pop(List *l) {
@@ -1453,6 +1506,10 @@ Instance* instance_new(Class *k) {
     i->fields.size = 0; i->fields.used = 0;
     dict_set_block(&i->fields, &i->fields + 1, cap);
     k->instances_created++;
+
+    vm_stack[vm_stack_top++] = value_instance(i);
+    i->properties = dict_new(k->field_hint);
+    vm_stack_top--;
     return i;
 }
 
@@ -2521,7 +2578,7 @@ Value native_str_split(int argc, Value *args) {
         delim = AS_STRING(args[1]);
     }
 
-    List *l = list_new(8);
+    List *l = list_new(0);
 
     // Pause GC during split to protect the unrooted list 'l' and its items
     size_t old_gc_thresh = gc_threshold;

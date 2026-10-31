@@ -367,6 +367,7 @@ static void process_grey_stack(void) {
 }
 
 static void gc_free_object_payload(GCObject *unmarked) {
+    if (unmarked->type == OBJ_LIST) list_free_storage((List*)unmarked);
     if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
     else if (unmarked->type == OBJ_DICT) dict_free_storage((Dict*)unmarked);
     else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
@@ -477,6 +478,8 @@ GC_NOINLINE static void gc_full_collect_impl(void) {
                the dict keys nothing uses any more. */
             if (obj->type == OBJ_DICT || obj->type == OBJ_INSTANCE) {
                 Dict *d = obj->type == OBJ_DICT ? (Dict*)obj : &((Instance*)obj)->fields;
+            if (obj->type == OBJ_DICT) {
+                Dict *d = (Dict*)obj;
                 for (int i = 0; i < d->used; i++)
                     if (GET_TYPE(d->keys[i]) == VAL_STRING) intern_mark((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD));
             }
