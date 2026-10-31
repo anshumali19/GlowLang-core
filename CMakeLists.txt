@@ -19,10 +19,17 @@ if(MSVC)
     # runs on a clean Windows machine with no external DLLs. Requires CMP0091
     # (NEW as of CMake 3.15) for CMAKE_MSVC_RUNTIME_LIBRARY to take effect.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        # clang-cl (the release build, -T ClangCL): its interpreter is 5-16%
+        # faster than MSVC's. -fno-ms-tls-guards drops the on-demand init
+        # check clang-cl puts on every extern thread-local access (meant for
+        # C++ thread_local; C has no dynamic init), which the VM does per call.
+        add_compile_options(-fno-strict-aliasing "SHELL:-Xclang -fno-ms-tls-guards")
+    endif()
 endif()
 
-# Set common compiler flags like in Makefile
-if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang")
+# Set common compiler flags like in Makefile (clang-cl keeps MSVC's flags)
+if((CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang") AND NOT MSVC)
     # Enable optimization by default for release
     set(CMAKE_C_FLAGS_RELEASE "-O2")
     set(CMAKE_C_FLAGS_DEBUG "-O1 -g -fsanitize=address -fno-omit-frame-pointer")

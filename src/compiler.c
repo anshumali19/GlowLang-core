@@ -1322,7 +1322,7 @@ static int compile_expr(Node *n, int target_reg) {
             }
 
             // 4. Emit the call
-            int idx = bc_emit(compiling_bc, is_method ? OP_CALL_METHOD : ((n->type == NODE_CALL) ? OP_CALL : OP_CALL_VALUE), ac, is_method ? (intptr_t)n->left->name : ((intptr_t)n->name));
+            int idx = bc_emit(compiling_bc, is_method ? OP_CALL_METHOD : ((n->type == NODE_CALL) ? OP_CALL : OP_CALL_VALUE), ac, is_method ? (intptr_t)intern_string(n->left->name) : ((intptr_t)n->name));
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = callee_obj_reg;
             compiling_bc->code[idx].r2 = callee_frame_base;
