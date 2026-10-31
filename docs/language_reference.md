@@ -901,11 +901,26 @@ no catastrophic backtracking. Positions are byte offsets.
 
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
-`env(name)` / `getenv(name)`, `exit(code)`, `gc_info()`.
+`exit(code)`, `gc_info()`.
+Scripts: `args` (the arguments after the program file), `script` (its path),
+`getenv(name, default)` / `env(name)`, `env()` (all variables as a dict),
+`setenv(name, value)`, `unsetenv(name)`, `cwd()`, `chdir(dir)`, `home()`,
+`temp_dir()`, `pid()`, `platform` (`"windows"`, `"linux"`, `"macos"`),
+`isatty(fd)`, `read_stdin()`, `write(values...)` (no newline),
+`eprint(values...)` / `ewrite(values...)` (standard error). See the
+[shell scripting guide](shell_scripting.md).
 
 ### Files (`fs.`)
-`read(path)`, `write(path, text)`, `exists(path)`, `remove(path)`, `mkdir(path)`, `list(dir)` /
-`readdir(dir)`, `size(path)`, `stat(path)`.
+`read(path)`, `write(path, text)`, `append(path, text)`, `exists(path)`,
+`is_file(path)`, `is_dir(path)`, `remove(path)`, `remove_all(path)`
+(a directory and everything in it), `mkdir(path)`, `mkdirs(path)` (with
+parents), `copy(src, dst)`, `move(src, dst)`, `list(dir)` / `readdir(dir)`,
+`walk(dir)` (every file below dir), `glob(pattern)` (`*`, `?`, `[a-z]`,
+`**`), `size(path)`, `stat(path)`, and path pieces `join(a, b, ...)`,
+`basename`, `dirname`, `extension`, `abspath`.
+
+`chr(code)` and `ord(text)` convert between characters and Unicode code
+points.
 
 ### Crypto (`crypto.`)
 `sha256(data)`, `hmac(key, data)` / `hmac_sha256` (HMAC-SHA256), `blake3(data)`: hex digests

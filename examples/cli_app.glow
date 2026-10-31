@@ -18,7 +18,7 @@ app.option("--output", "Output directory", "build/")
 app.option("--target", "Build target architecture", "native")
 
 # Define positional args
-app.positional("source", "Source file to compile")
+app.positional("source", "Source file to compile", "main.glow")
 
 # Define subcommands
 app.subcommand("build", "Compile the project")
@@ -60,7 +60,7 @@ end
 show ""
 
 # 5. Display results in a table
-let table = Table()
+let table = TextTable()
 table.set_headers(["Step", "Status", "Time"])
 table.add_row(["Parse", "OK", "0.01s"])
 table.add_row(["Compile", "OK", "0.23s"])

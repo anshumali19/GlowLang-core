@@ -1,0 +1,451 @@
+# cli.glow — command-line programs: argument parsing, colored messages,
+# progress bars, text tables and prompts.
+#
+#   import "cli"
+#   let app = ArgParser("deploy", "Deploy the site")
+#   app.flag("--dry-run", "Show what would happen", "-n")
+#   app.option("--env", "Target environment", "staging", "-e")
+#   app.positional("version", "Version to deploy")
+#   app.subcommand("rollback", "Undo the last deploy")
+#   let args = app.parse_or_exit()      # reads os.args; --help prints usage
+#   show args["--env"], args["--dry-run"], args["version"], args["_subcommand"]
+#
+# ArgParser(name, description)
+#   .flag(name, help, short)             true when given, else false
+#   .option(name, help, default, short)  takes a value: --env prod, --env=prod,
+#                                        -e prod; default when not given
+#   .positional(name, help, default)     filled in order; required unless it
+#                                        has a default
+#   .subcommand(name, help)              the first argument may name one; it
+#                                        is result["_subcommand"] (or none)
+#   .parse(list)                         the result dict; raises on a mistake
+#   .parse_or_exit(list)                 the same, but prints the problem and
+#                                        the usage and exits with code 2, and
+#                                        handles --help / -h (list: os.args)
+#   .usage() / .help()                   the help text / print it
+# Arguments after a lone "--" are taken as positionals; extra positionals
+# go to result["_rest"].
+#
+# ColorOutput(): .success(text) .info(text) .warning(text) .error(text);
+# colors only when writing to a terminal and NO_COLOR is not set.
+# ProgressBar(total, width): .set_label(text), .update(done); redraws in
+# place on a terminal, prints just the final line otherwise.
+# TextTable(): .set_headers(list), .add_row(list), .render() / .to_string().
+# Prompt(): .ask(question, default), .confirm(question, default),
+# .menu(title, options) (the chosen option, or none at end of input).
+
+blueprint ArgParser:
+    action init(name, description = ""):
+        self.name = name
+        self.description = description
+        self.flags = []
+        self.options = []
+        self.positionals = []
+        self.subcommands = []
+    end
+
+    action flag(name, help = "", short = none):
+        self.flags.push({"name": name, "help": help, "short": short})
+        return self
+    end
+
+    action option(name, help = "", default = none, short = none):
+        self.options.push({"name": name, "help": help, "default": default, "short": short})
+        return self
+    end
+
+    action positional(name, help = "", default = none):
+        self.positionals.push({"name": name, "help": help, "default": default, "required": default == none})
+        return self
+    end
+
+    action subcommand(name, help = ""):
+        self.subcommands.push({"name": name, "help": help})
+        return self
+    end
+
+    action _find(list, arg):
+        for each item in list:
+            if item["name"] == arg or (item["short"] != none and item["short"] == arg):
+                return item
+            end
+        end
+        return none
+    end
+
+    action parse(args = none):
+        if args == none:
+            args = os.args
+        end
+        let result = {"_subcommand": none, "_rest": [], "--help": false}
+        for each f in self.flags:
+            result[f["name"]] = false
+        end
+        for each o in self.options:
+            result[o["name"]] = o["default"]
+        end
+        let loose = []
+        let i = 0
+        let only_positionals = false
+        while i < len(args):
+            let arg = str(args[i])
+            if only_positionals or not arg.starts_with("-") or arg == "-":
+                loose.push(arg)
+            eif arg == "--":
+                only_positionals = true
+            eif arg == "--help" or arg == "-h":
+                result["--help"] = true
+            else:
+                let value = none
+                let key = arg
+                let eq = arg.find("=")
+                if arg.starts_with("--") and eq > 0:
+                    key = arg.slice(0, eq)
+                    value = arg.slice(eq + 1, len(arg))
+                end
+                let f = self._find(self.flags, key)
+                let o = self._find(self.options, key)
+                if f != none:
+                    if value != none:
+                        throw self.name + ": " + f["name"] + " does not take a value"
+                    end
+                    result[f["name"]] = true
+                eif o != none:
+                    if value == none:
+                        i = i + 1
+                        if i >= len(args):
+                            throw self.name + ": " + o["name"] + " needs a value"
+                        end
+                        value = str(args[i])
+                    end
+                    result[o["name"]] = value
+                else:
+                    throw self.name + ": unknown option " + key
+                end
+            end
+            i = i + 1
+        end
+        # A subcommand, if any are defined, is the first loose argument.
+        if len(self.subcommands) > 0 and len(loose) > 0:
+            for each s in self.subcommands:
+                if s["name"] == loose[0]:
+                    result["_subcommand"] = loose[0]
+                end
+            end
+            if result["_subcommand"] != none:
+                let rest = []
+                let k = 1
+                while k < len(loose):
+                    rest.push(loose[k])
+                    k = k + 1
+                end
+                loose = rest
+            end
+        end
+        let p = 0
+        for each pos in self.positionals:
+            if p < len(loose):
+                result[pos["name"]] = loose[p]
+            eif pos["required"] and not result["--help"]:
+                throw self.name + ": missing " + pos["name"]
+            else:
+                result[pos["name"]] = pos["default"]
+            end
+            p = p + 1
+        end
+        while p < len(loose):
+            result["_rest"].push(loose[p])
+            p = p + 1
+        end
+        return result
+    end
+
+    action parse_or_exit(args = none):
+        let result = none
+        try:
+            result = self.parse(args)
+        catch e:
+            os.eprint(str(e))
+            os.eprint(self.usage())
+            os.exit(2)
+        end
+        if result["--help"]:
+            show self.usage()
+            os.exit(0)
+        end
+        return result
+    end
+
+    action _column(label, text):
+        let pad = label
+        while len(pad) < 24:
+            pad = pad + " "
+        end
+        return "  " + pad + " " + text
+    end
+
+    action usage():
+        let line = "Usage: " + self.name
+        if len(self.subcommands) > 0:
+            line = line + " <command>"
+        end
+        if len(self.flags) + len(self.options) > 0:
+            line = line + " [options]"
+        end
+        for each pos in self.positionals:
+            if pos["required"]:
+                line = line + " <" + pos["name"] + ">"
+            else:
+                line = line + " [" + pos["name"] + "]"
+            end
+        end
+        let out = [line]
+        if self.description != "":
+            out.push("")
+            out.push(self.description)
+        end
+        if len(self.subcommands) > 0:
+            out.push("")
+            out.push("Commands:")
+            for each s in self.subcommands:
+                out.push(self._column(s["name"], s["help"]))
+            end
+        end
+        if len(self.positionals) > 0:
+            out.push("")
+            out.push("Arguments:")
+            for each pos in self.positionals:
+                let extra = ""
+                if not pos["required"]:
+                    extra = " (default: " + str(pos["default"]) + ")"
+                end
+                out.push(self._column(pos["name"], pos["help"] + extra))
+            end
+        end
+        out.push("")
+        out.push("Options:")
+        for each f in self.flags:
+            let label = f["name"]
+            if f["short"] != none:
+                label = f["short"] + ", " + label
+            end
+            out.push(self._column(label, f["help"]))
+        end
+        for each o in self.options:
+            let label = o["name"] + " <value>"
+            if o["short"] != none:
+                label = o["short"] + ", " + label
+            end
+            let extra = ""
+            if o["default"] != none:
+                extra = " (default: " + str(o["default"]) + ")"
+            end
+            out.push(self._column(label, o["help"] + extra))
+        end
+        out.push(self._column("-h, --help", "Show this help"))
+        return out.join("\n")
+    end
+
+    action help():
+        show self.usage()
+    end
+end
+
+func _cli_color_on():
+    return os.isatty(1) and os.getenv("NO_COLOR") == none
+end
+
+blueprint ColorOutput:
+    action init():
+        self.enabled = _cli_color_on()
+    end
+    action _say(code, tag, text):
+        if self.enabled:
+            show chr(27) + "[" + code + "m" + tag + chr(27) + "[0m " + text
+        else:
+            show tag + " " + text
+        end
+    end
+    action success(text):
+        self._say("32", "[ok]", text)
+    end
+    action info(text):
+        self._say("36", "[info]", text)
+    end
+    action warning(text):
+        self._say("33", "[warn]", text)
+    end
+    action error(text):
+        self._say("31", "[error]", text)
+    end
+end
+
+blueprint ProgressBar:
+    action init(total, width = 30):
+        self.total = total
+        self.width = width
+        self.label = ""
+        self.live = os.isatty(1)
+    end
+    action set_label(text):
+        self.label = text
+    end
+    action render(done):
+        let frac = 1
+        if self.total > 0:
+            frac = min(max(done / self.total, 0), 1)
+        end
+        let filled = floor(frac * self.width)
+        let bar = ""
+        let i = 0
+        while i < self.width:
+            if i < filled:
+                bar = bar + "#"
+            else:
+                bar = bar + "-"
+            end
+            i = i + 1
+        end
+        let pct = str(floor(frac * 100)) + "%"
+        let text = "[" + bar + "] " + pct
+        if self.label != "":
+            text = self.label + " " + text
+        end
+        return text
+    end
+    action update(done):
+        let text = self.render(done)
+        if self.live:
+            os.write("\r" + text)
+            if done >= self.total:
+                os.write("\n")
+            end
+        eif done >= self.total:
+            show text
+        end
+    end
+end
+
+blueprint TextTable:
+    action init():
+        self.headers = []
+        self.rows = []
+    end
+    action set_headers(headers):
+        self.headers = headers
+    end
+    action add_row(row):
+        self.rows.push(row)
+    end
+    action to_string():
+        let all = []
+        if len(self.headers) > 0:
+            all.push(self.headers)
+        end
+        for each r in self.rows:
+            all.push(r)
+        end
+        let widths = []
+        for each r in all:
+            let c = 0
+            for each cell in r:
+                let w = len(str(cell))
+                if c >= len(widths):
+                    widths.push(w)
+                eif w > widths[c]:
+                    widths[c] = w
+                end
+                c = c + 1
+            end
+        end
+        let rule = "+"
+        for each w in widths:
+            let dash = ""
+            let k = 0
+            while k < w + 2:
+                dash = dash + "-"
+                k = k + 1
+            end
+            rule = rule + dash + "+"
+        end
+        let lines = [rule]
+        let n = 0
+        for each r in all:
+            let line = "|"
+            let c = 0
+            while c < len(widths):
+                let cell = ""
+                if c < len(r):
+                    cell = str(r[c])
+                end
+                while len(cell) < widths[c]:
+                    cell = cell + " "
+                end
+                line = line + " " + cell + " |"
+                c = c + 1
+            end
+            lines.push(line)
+            if n == 0 and len(self.headers) > 0:
+                lines.push(rule)
+            end
+            n = n + 1
+        end
+        lines.push(rule)
+        return lines.join("\n")
+    end
+    action render():
+        show self.to_string()
+    end
+end
+
+blueprint Prompt:
+    action init():
+        self.last = none
+    end
+    action ask(question, default = none):
+        let q = question
+        if default != none:
+            q = q + " [" + str(default) + "]"
+        end
+        let answer = input(q + " ")
+        if answer == none or answer.trim() == "":
+            return default
+        end
+        return answer.trim()
+    end
+    action confirm(question, default = false):
+        let hint = " [y/N]"
+        if default:
+            hint = " [Y/n]"
+        end
+        let answer = input(question + hint + " ")
+        if answer == none or answer.trim() == "":
+            return default
+        end
+        let a = answer.trim().lower()
+        return a == "y" or a == "yes"
+    end
+    action menu(title, options):
+        show title
+        let i = 1
+        for each o in options:
+            show "  " + str(i) + ") " + str(o)
+            i = i + 1
+        end
+        while true:
+            let answer = input("Choose 1-" + str(len(options)) + ": ")
+            if answer == none:
+                return none
+            end
+            let n = answer.trim()
+            if n.is_number():
+                let k = int(n)
+                if k >= 1 and k <= len(options):
+                    self.last = options[k - 1]
+                    return options[k - 1]
+                end
+            end
+            show "Please enter a number from 1 to " + str(len(options)) + "."
+        end
+    end
+end

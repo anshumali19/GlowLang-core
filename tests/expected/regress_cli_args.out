@@ -1,0 +1,42 @@
+basic: none false false staging none 1.2 none given []
+flags: none true true staging none 1.2 hello []
+option forms: none false false prod v9 1.2 none given []
+short option: none false false qa none 1.2 none given []
+subcommand: rollback false false staging none 1.1 none given []
+after --: none false false staging none --not-a-flag x [extra1, extra2]
+unknown: error: deploy: unknown option --nope
+missing value: error: deploy: --env needs a value
+flag with value: error: deploy: --force does not take a value
+missing positional: error: deploy: missing version
+help flag: true
+Usage: deploy <command> [options] <version> [note]
+
+Deploy the site
+
+Commands:
+  rollback                 Undo the last deploy
+
+Arguments:
+  version                  Version to deploy
+  note                     A note (default: none given)
+
+Options:
+  -n, --dry-run            Show what would happen
+  --force                  Skip checks
+  -e, --env <value>        Target environment (default: staging)
+  --tag <value>            Release tag
+  -h, --help               Show this help
+[ok] done
+[warn] careful
+Build [##########] 100%
+Build [##--------] 25%
++------------------+------+
+| Name             | Size |
++------------------+------+
+| a.txt            | 12   |
+| longer-name.glow | 3400 |
++------------------+------+
+Name? [anon] Sure? [Y/n] Pick:
+  1) a
+  2) b
+Choose 1-2: ask: anon confirm: true menu: none

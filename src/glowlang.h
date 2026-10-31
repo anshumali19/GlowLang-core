@@ -938,6 +938,8 @@ char *value_to_new_cstring(Value v);
 Value value_to_string_value(Value v);
 void var_set(const char *name, Value val);
 Value var_get(const char *name);
+void glow_scripting_init(void);
+void glow_set_script_args(const char *script, int n, char **argv);
 void func_table_init(void);
 FuncEntry* func_table_add(const char *name);
 FuncEntry* func_get(const char *name);

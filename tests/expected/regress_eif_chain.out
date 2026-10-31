@@ -1,0 +1,10 @@
+-5 [negative]
+0 [zero]
+3 [small]
+42 [medium]
+500 [large]
+one two none matched
+b ran
+evaluated: [a, b]
+A+ A B C D F
+loop: [1000, 1000, 1000]

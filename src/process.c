@@ -1304,6 +1304,797 @@ static Value process_find(int argc, Value *args) {
     return v;
 }
 
+/* ================================================================
+ * Scripting: os.args, environment, directories, stdin/stderr, and the
+ * fs helpers shell scripts need (copy, move, remove_all, mkdirs, glob,
+ * walk, path pieces). Paths are UTF-8 everywhere; on Windows they go
+ * through the wide-character APIs.
+ * ================================================================ */
+#include <stdio.h>
+#ifdef _WIN32
+#include <io.h>
+#include <direct.h>
+#include <sys/stat.h>
+#else
+#include <dirent.h>
+#endif
+
+#ifndef _WIN32
+extern char **environ;
+#endif
+
+static Value str_arg_or_raise(Value v, const char *fn, const char **out) {
+    if (GET_TYPE(v) != VAL_STRING) return proc_error("%s: expected a string", fn);
+    *out = AS_STRING(v);
+    return value_bool(1);
+}
+#define NEED_STR(v, fn, out) do { Value _r = str_arg_or_raise((v), (fn), (out)); if (has_exception) return _r; } while (0)
+
+/* Called by main with the script path and the arguments after it. */
+void glow_set_script_args(const char *script, int n, char **argv) {
+    Value osv = var_get("os");
+    if (GET_TYPE(osv) != VAL_DICT) return;
+    Dict *os = AS_DICT(osv);
+    List *l = list_new(n > 0 ? n : 1);
+#ifdef _WIN32
+    /* main's argv is in the ANSI code page; take the same arguments from the
+       Unicode command line so non-ASCII text survives. */
+    typedef LPWSTR *(WINAPI *CmdToArgv)(LPCWSTR, int*);
+    HMODULE shell = LoadLibraryW(L"shell32.dll");
+    CmdToArgv fn = shell ? (CmdToArgv)(void(*)(void))GetProcAddress(shell, "CommandLineToArgvW") : NULL;
+    int wargc = 0;
+    LPWSTR *wargv = fn ? fn(GetCommandLineW(), &wargc) : NULL;
+    if (wargv && wargc >= n) {
+        for (int i = wargc - n; i < wargc; i++) {
+            char *s = to_utf8(wargv[i]);
+            list_push(l, value_string_copy(s ? s : ""));
+            free(s);
+        }
+    } else {
+        for (int i = 0; i < n; i++) list_push(l, value_string_copy(argv[i]));
+    }
+    if (wargv) LocalFree(wargv);
+#else
+    for (int i = 0; i < n; i++) list_push(l, value_string_copy(argv[i]));
+#endif
+    dict_set(os, "args", value_list(l));
+    dict_set(os, "script", script ? value_string_copy(script) : value_none());
+}
+
+/* os.setenv(name, value): also seen by programs started afterwards. */
+static Value os_setenv(int argc, Value *args) {
+    const char *name, *val;
+    if (argc < 2) return proc_error("os.setenv(name, value)");
+    NEED_STR(args[0], "os.setenv", &name);
+    if (GET_TYPE(args[1]) != VAL_STRING) return proc_error("os.setenv: the value must be a string");
+    val = AS_STRING(args[1]);
+    if (!name[0] || strchr(name, '=')) return proc_error("os.setenv: invalid name \"%s\"", name);
+#ifdef _WIN32
+    wchar_t *wn = to_wide(name), *wv = to_wide(val);
+    int ok = wn && wv && SetEnvironmentVariableW(wn, wv) && _wputenv_s(wn, wv) == 0;
+    free(wn); free(wv);
+#else
+    int ok = setenv(name, val, 1) == 0;
+#endif
+    if (!ok) return proc_error("os.setenv: could not set %s", name);
+    return value_bool(1);
+}
+
+static Value os_unsetenv(int argc, Value *args) {
+    const char *name;
+    if (argc < 1) return proc_error("os.unsetenv(name)");
+    NEED_STR(args[0], "os.unsetenv", &name);
+#ifdef _WIN32
+    wchar_t *wn = to_wide(name);
+    if (wn) { SetEnvironmentVariableW(wn, NULL); _wputenv_s(wn, L""); }
+    free(wn);
+#else
+    unsetenv(name);
+#endif
+    return value_bool(1);
+}
+
+/* os.getenv(name, default): the variable's value (UTF-8 on every
+   platform), or default (none) when it is not set. */
+static Value os_getenv_utf8(int argc, Value *args) {
+    const char *name;
+    if (argc < 1) return proc_error("os.getenv(name)");
+    NEED_STR(args[0], "os.getenv", &name);
+    Value missing = argc > 1 ? args[1] : value_none();
+#ifdef _WIN32
+    wchar_t *wn = to_wide(name);
+    if (!wn) return missing;
+    DWORD n = GetEnvironmentVariableW(wn, NULL, 0);
+    if (n == 0) { free(wn); return missing; }
+    wchar_t *buf = malloc(sizeof(wchar_t) * n);
+    DWORD got = GetEnvironmentVariableW(wn, buf, n);
+    free(wn);
+    if (got >= n) { free(buf); return missing; }
+    buf[got] = 0;
+    char *s = to_utf8(buf);
+    free(buf);
+    Value v = value_string_copy(s ? s : "");
+    free(s);
+    return v;
+#else
+    const char *v = getenv(name);
+    return v ? value_string_copy(v) : missing;
+#endif
+}
+
+/* os.env(): every environment variable, as a dict. os.env(name) is
+   os.getenv(name), as it always was. */
+static Value os_env(int argc, Value *args) {
+    if (argc > 0 && GET_TYPE(args[0]) != VAL_NONE) return os_getenv_utf8(argc, args);
+    Dict *d = dict_new(64);
+#ifdef _WIN32
+    wchar_t *block = GetEnvironmentStringsW();
+    for (wchar_t *p = block; p && *p; p += wcslen(p) + 1) {
+        if (*p == L'=') continue;   /* hidden per-drive entries such as =C: */
+        char *s = to_utf8(p);
+        if (!s) continue;
+        char *eq = strchr(s, '=');
+        if (eq) { *eq = '\0'; dict_set(d, s, value_string_copy(eq + 1)); }
+        free(s);
+    }
+    if (block) FreeEnvironmentStringsW(block);
+#else
+    for (char **e = environ; e && *e; e++) {
+        const char *eq = strchr(*e, '=');
+        if (!eq || eq == *e) continue;
+        size_t n = (size_t)(eq - *e);
+        char *k = malloc(n + 1);
+        memcpy(k, *e, n); k[n] = '\0';
+        dict_set(d, k, value_string_copy(eq + 1));
+        free(k);
+    }
+#endif
+    return value_dict(d);
+}
+
+static Value os_chdir(int argc, Value *args) {
+    const char *path;
+    if (argc < 1) return proc_error("os.chdir(path)");
+    NEED_STR(args[0], "os.chdir", &path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(path);
+    int ok = w && SetCurrentDirectoryW(w);
+    free(w);
+#else
+    int ok = chdir(path) == 0;
+#endif
+    if (!ok) return proc_error("os.chdir: cannot change to %s", path);
+    return value_bool(1);
+}
+
+static Value env_or(const char *name, const char *fallback) {
+#ifdef _WIN32
+    wchar_t *wn = to_wide(name);
+    wchar_t buf[2048];
+    DWORD n = wn ? GetEnvironmentVariableW(wn, buf, 2048) : 0;
+    free(wn);
+    if (n > 0 && n < 2048) { char *s = to_utf8(buf); Value v = value_string_copy(s ? s : fallback); free(s); return v; }
+#else
+    const char *v = getenv(name);
+    if (v && v[0]) return value_string_copy(v);
+#endif
+    return value_string_copy(fallback);
+}
+
+static Value os_home(int argc, Value *args) {
+    (void)argc; (void)args;
+#ifdef _WIN32
+    return env_or("USERPROFILE", "C:\\");
+#else
+    return env_or("HOME", "/");
+#endif
+}
+
+static Value os_temp_dir(int argc, Value *args) {
+    (void)argc; (void)args;
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH + 2];
+    DWORD n = GetTempPathW(MAX_PATH + 1, buf);
+    if (n > 1 && (buf[n - 1] == L'\\' || buf[n - 1] == L'/')) buf[n - 1] = 0;
+    char *s = n ? to_utf8(buf) : NULL;
+    Value v = value_string_copy(s ? s : "C:\\Windows\\Temp");
+    free(s);
+    return v;
+#else
+    return env_or("TMPDIR", "/tmp");
+#endif
+}
+
+static Value os_pid(int argc, Value *args) {
+    (void)argc; (void)args;
+#ifdef _WIN32
+    return value_int((int64_t)GetCurrentProcessId());
+#else
+    return value_int((int64_t)getpid());
+#endif
+}
+
+/* os.isatty(fd): whether 0 (stdin), 1 (stdout) or 2 (stderr) is a terminal. */
+static Value os_isatty(int argc, Value *args) {
+    int fd = argc > 0 && GET_TYPE(args[0]) == VAL_INT ? (int)AS_INT(args[0]) : 1;
+#ifdef _WIN32
+    return value_bool(_isatty(fd) != 0);
+#else
+    return value_bool(isatty(fd) != 0);
+#endif
+}
+
+/* os.read_stdin(): everything left on standard input. */
+static Value os_read_stdin(int argc, Value *args) {
+    (void)argc; (void)args;
+    size_t cap = 4096, n = 0;
+    char *buf = malloc(cap);
+    glow_gil_release();
+    for (;;) {
+        if (n + 4096 > cap) { cap *= 2; buf = realloc(buf, cap); }
+        size_t got = fread(buf + n, 1, 4096, stdin);
+        n += got;
+        if (got == 0) break;
+    }
+    glow_gil_acquire();
+    buf[n] = '\0';
+    Value v = value_string_copy(buf);
+    free(buf);
+    return v;
+}
+
+static Value write_values(FILE *f, int argc, Value *args) {
+    for (int i = 0; i < argc; i++) {
+        if (i) fputc(' ', f);
+        if (GET_TYPE(args[i]) == VAL_STRING) fputs(AS_STRING(args[i]), f);
+        else { char *s = value_to_new_cstring(args[i]); fputs(s ? s : "", f); free(s); }
+    }
+    fflush(f);
+    return value_none();
+}
+
+/* os.write(values...): print without a newline. os.ewrite / os.eprint:
+   the same on standard error (eprint adds the newline). */
+static Value os_write(int argc, Value *args) { return write_values(stdout, argc, args); }
+static Value os_ewrite(int argc, Value *args) { fflush(stdout); return write_values(stderr, argc, args); }
+static Value os_eprint(int argc, Value *args) {
+    fflush(stdout);
+    write_values(stderr, argc, args);
+    fputc('\n', stderr); fflush(stderr);
+    return value_none();
+}
+
+/* ---- fs ---- */
+
+static int path_kind(const char *p) {   /* 0 missing, 1 file, 2 directory */
+#ifdef _WIN32
+    wchar_t *w = to_wide(p);
+    DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+    free(w);
+    if (a == INVALID_FILE_ATTRIBUTES) return 0;
+    return (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+#else
+    struct stat st;
+    if (stat(p, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 2 : 1;
+#endif
+}
+
+static Value fs_is_dir(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_STRING && path_kind(AS_STRING(args[0])) == 2); }
+static Value fs_is_file(int argc, Value *args) { return value_bool(argc > 0 && GET_TYPE(args[0]) == VAL_STRING && path_kind(AS_STRING(args[0])) == 1); }
+
+static FILE *fopen_utf8(const char *path, const char *mode) {
+#ifdef _WIN32
+    wchar_t *wp = to_wide(path), *wm = to_wide(mode);
+    FILE *f = wp && wm ? _wfopen(wp, wm) : NULL;
+    free(wp); free(wm);
+    return f;
+#else
+    return fopen(path, mode);
+#endif
+}
+
+/* fs.append(path, text): adds text to the end of a file (creating it). */
+static Value fs_append(int argc, Value *args) {
+    const char *path;
+    if (argc < 2) return proc_error("fs.append(path, text)");
+    NEED_STR(args[0], "fs.append", &path);
+    if (GET_TYPE(args[1]) != VAL_STRING) return proc_error("fs.append: the text must be a string");
+    FILE *f = fopen_utf8(path, "ab");
+    if (!f) return proc_error("fs.append: cannot open %s", path);
+    size_t n = rope_length(args[1]);
+    size_t w = fwrite(AS_STRING(args[1]), 1, n, f);
+    fclose(f);
+    if (w != n) return proc_error("fs.append: could not write all of %s", path);
+    return value_bool(1);
+}
+
+static int copy_file(const char *src, const char *dst, char *err, size_t errsz) {
+    FILE *in = fopen_utf8(src, "rb");
+    if (!in) { snprintf(err, errsz, "cannot read %s", src); return 0; }
+    FILE *out = fopen_utf8(dst, "wb");
+    if (!out) { fclose(in); snprintf(err, errsz, "cannot write %s", dst); return 0; }
+    char buf[65536];
+    size_t n;
+    int ok = 1;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    if (ferror(in)) ok = 0;
+    fclose(in);
+    if (fclose(out) != 0) ok = 0;
+    if (!ok) snprintf(err, errsz, "copying %s to %s failed", src, dst);
+    return ok;
+}
+
+/* The path dst names when it is an existing directory: dst/basename(src). */
+static char *into_dir(const char *src, const char *dst) {
+    if (path_kind(dst) != 2) return strdup(dst);
+    const char *base = src + strlen(src);
+    while (base > src && base[-1] != '/' && base[-1] != '\\') base--;
+    size_t n = strlen(dst) + strlen(base) + 2;
+    char *p = malloc(n);
+    size_t dl = strlen(dst);
+    snprintf(p, n, "%s%s%s", dst, (dl && (dst[dl - 1] == '/' || dst[dl - 1] == '\\')) ? "" : "/", base);
+    return p;
+}
+
+/* fs.copy(src, dst): copies a file; dst may be a directory. */
+static Value fs_copy(int argc, Value *args) {
+    const char *src, *dst;
+    if (argc < 2) return proc_error("fs.copy(src, dst)");
+    NEED_STR(args[0], "fs.copy", &src);
+    NEED_STR(args[1], "fs.copy", &dst);
+    if (path_kind(src) != 1) return proc_error("fs.copy: %s is not a file", src);
+    char *target = into_dir(src, dst);
+    char err[600];
+    int ok = copy_file(src, target, err, sizeof(err));
+    free(target);
+    if (!ok) return proc_error("fs.copy: %s", err);
+    return value_bool(1);
+}
+
+/* fs.move(src, dst): renames a file or directory, replacing a file at dst;
+   dst may be an existing directory to move into. */
+static Value fs_move(int argc, Value *args) {
+    const char *src, *dst;
+    if (argc < 2) return proc_error("fs.move(src, dst)");
+    NEED_STR(args[0], "fs.move", &src);
+    NEED_STR(args[1], "fs.move", &dst);
+    if (!path_kind(src)) return proc_error("fs.move: %s does not exist", src);
+    char *target = into_dir(src, dst);
+#ifdef _WIN32
+    wchar_t *ws = to_wide(src), *wd = to_wide(target);
+    int ok = ws && wd && MoveFileExW(ws, wd, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
+    free(ws); free(wd);
+#else
+    int ok = rename(src, target) == 0;
+    if (!ok && errno == EXDEV && path_kind(src) == 1) {
+        char err[600];
+        ok = copy_file(src, target, err, sizeof(err)) && unlink(src) == 0;
+    }
+#endif
+    if (!ok) { Value e = proc_error("fs.move: cannot move %s to %s", src, target); free(target); return e; }
+    free(target);
+    return value_bool(1);
+}
+
+/* Calls fn(dir, name, is_dir, ctx) for each entry of dir except . and ..;
+   returns 0 if dir cannot be listed. */
+typedef int (*DirFn)(const char *dir, const char *name, int is_dir, void *ctx);
+static int each_entry(const char *dir, DirFn fn, void *ctx) {
+#ifdef _WIN32
+    size_t n = strlen(dir);
+    char *pat = malloc(n + 3);
+    snprintf(pat, n + 3, "%s%s*", dir, (n && (dir[n - 1] == '/' || dir[n - 1] == '\\')) ? "" : "/");
+    wchar_t *wp = to_wide(pat);
+    free(pat);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = wp ? FindFirstFileW(wp, &fd) : INVALID_HANDLE_VALUE;
+    free(wp);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        char *name = to_utf8(fd.cFileName);
+        if (!name) continue;
+        /* A link or junction is not followed into (it may point anywhere). */
+        int is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+        int stop = fn(dir, name, is_dir, ctx);
+        free(name);
+        if (stop) break;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return 1;
+#else
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        size_t n = strlen(dir) + strlen(e->d_name) + 2;
+        char *full = malloc(n);
+        snprintf(full, n, "%s/%s", dir, e->d_name);
+        struct stat st;
+        int is_dir = lstat(full, &st) == 0 && S_ISDIR(st.st_mode);
+        free(full);
+        if (fn(dir, e->d_name, is_dir, ctx)) break;
+    }
+    closedir(d);
+    return 1;
+#endif
+}
+
+static char *join2(const char *a, const char *b) {
+    size_t la = strlen(a), n = la + strlen(b) + 2;
+    char *p = malloc(n);
+    if (!la || !strcmp(a, ".")) snprintf(p, n, "%s", b);
+    else snprintf(p, n, "%s%s%s", a, (a[la - 1] == '/' || a[la - 1] == '\\') ? "" : "/", b);
+    return p;
+}
+
+static int remove_path(const char *p);
+static int remove_entry(const char *dir, const char *name, int is_dir, void *ctx) {
+    (void)is_dir;
+    char *full = join2(dir, name);
+    if (!remove_path(full)) *(int*)ctx = 0;
+    free(full);
+    return 0;
+}
+
+static int remove_path(const char *p) {
+    int kind = path_kind(p);
+#ifdef _WIN32
+    wchar_t *w = to_wide(p);
+    DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+    int ok = 1;
+    if (a == INVALID_FILE_ATTRIBUTES) { free(w); return 1; }
+    if (a & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(w, a & ~FILE_ATTRIBUTE_READONLY);
+    if (kind == 2 && !(a & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        each_entry(p, remove_entry, &ok);
+        ok = RemoveDirectoryW(w) && ok;
+    } else if (kind == 2) {
+        ok = RemoveDirectoryW(w);      /* a junction: remove the link only */
+    } else {
+        ok = DeleteFileW(w);
+    }
+    free(w);
+    return ok;
+#else
+    struct stat st;
+    if (lstat(p, &st) != 0) return 1;
+    if (S_ISDIR(st.st_mode)) {
+        int ok = 1;
+        each_entry(p, remove_entry, &ok);
+        return rmdir(p) == 0 && ok;
+    }
+    (void)kind;
+    return unlink(p) == 0;
+#endif
+}
+
+/* fs.remove_all(path): deletes a file, or a directory and everything in
+   it (links inside are removed, not followed). A missing path is fine. A
+   filesystem root is refused. */
+static Value fs_remove_all(int argc, Value *args) {
+    const char *path;
+    if (argc < 1) return proc_error("fs.remove_all(path)");
+    NEED_STR(args[0], "fs.remove_all", &path);
+    const char *p = path;
+    while (*p == '/' || *p == '\\') p++;
+    int is_root = !*path || !*p || !strcmp(path, ".") || !strcmp(path, "..") ||
+                  (((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) && path[1] == ':' &&
+                   (!path[2] || ((path[2] == '/' || path[2] == '\\') && !path[3])));
+    if (is_root) return proc_error("fs.remove_all: refusing to remove \"%s\"", path);
+    if (!remove_path(path)) return proc_error("fs.remove_all: could not remove all of %s", path);
+    return value_bool(1);
+}
+
+static int make_dir(const char *p) {
+#ifdef _WIN32
+    wchar_t *w = to_wide(p);
+    int ok = w && (CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+    free(w);
+    return ok && path_kind(p) == 2;
+#else
+    return (mkdir(p, 0777) == 0 || errno == EEXIST) && path_kind(p) == 2;
+#endif
+}
+
+/* fs.mkdirs(path): creates a directory and any missing parents. */
+static Value fs_mkdirs(int argc, Value *args) {
+    const char *path;
+    if (argc < 1) return proc_error("fs.mkdirs(path)");
+    NEED_STR(args[0], "fs.mkdirs", &path);
+    char *buf = strdup(path);
+    size_t n = strlen(buf);
+    while (n > 1 && (buf[n - 1] == '/' || buf[n - 1] == '\\')) buf[--n] = '\0';
+    for (char *c = buf + 1; *c; c++) {
+        if (*c != '/' && *c != '\\') continue;
+        if (c[-1] == ':' || c[-1] == '/' || c[-1] == '\\') continue;   /* C:\ or a doubled slash */
+        char save = *c; *c = '\0';
+        if (path_kind(buf) != 2) make_dir(buf);
+        *c = save;
+    }
+    int ok = path_kind(buf) == 2 || make_dir(buf);
+    free(buf);
+    if (!ok) return proc_error("fs.mkdirs: cannot create %s", path);
+    return value_bool(1);
+}
+
+/* Shell-style matching of one path segment: * ? [abc] [a-z] [!abc]. */
+static int seg_match(const char *pat, const char *s) {
+    if (*s == '.' && *pat != '.') return 0;   /* * and ? do not match a leading dot */
+    const char *star = NULL, *ss = NULL;
+    while (*s) {
+        if (*pat == '*') { star = pat++; ss = s; continue; }
+        if (*pat == '?') { pat++; s++; continue; }
+        if (*pat == '[') {
+            const char *q = pat + 1;
+            int neg = *q == '!' || *q == '^';
+            if (neg) q++;
+            int hit = 0;
+            while (*q && *q != ']') {
+                if (q[1] == '-' && q[2] && q[2] != ']') { if ((unsigned char)*s >= (unsigned char)q[0] && (unsigned char)*s <= (unsigned char)q[2]) hit = 1; q += 3; }
+                else { if (*q == *s) hit = 1; q++; }
+            }
+            if (*q == ']' && hit != neg) { pat = q + 1; s++; continue; }
+        } else if (*pat == *s) { pat++; s++; continue; }
+        if (star) { pat = star + 1; s = ++ss; continue; }
+        return 0;
+    }
+    while (*pat == '*') pat++;
+    return !*pat;
+}
+
+typedef struct { char **segs; int nseg; List *out; } GlobCtx;
+static void glob_walk(GlobCtx *g, const char *dir, int seg, int show_dir);
+
+typedef struct { GlobCtx *g; int seg; int show_dir; } GlobStep;
+static int glob_entry(const char *dir, const char *name, int is_dir, void *ctx) {
+    GlobStep *st = ctx;
+    GlobCtx *g = st->g;
+    const char *pat = g->segs[st->seg];
+    if (!strcmp(pat, "**")) {
+        /* ** matches zero or more directories. */
+        if (name[0] == '.') return 0;
+        char *full = st->show_dir ? join2(dir, name) : strdup(name);
+        if (is_dir) glob_walk(g, full, st->seg, 1);
+        free(full);
+        return 0;
+    }
+    if (!seg_match(pat, name)) return 0;
+    char *full = st->show_dir ? join2(dir, name) : strdup(name);
+    if (st->seg == g->nseg - 1) list_push(g->out, value_string_copy(full));
+    else if (is_dir) glob_walk(g, full, st->seg + 1, 1);
+    free(full);
+    return 0;
+}
+
+static void glob_walk(GlobCtx *g, const char *dir, int seg, int show_dir) {
+    if (seg >= g->nseg) return;
+    if (!strcmp(g->segs[seg], "**")) {
+        glob_walk(g, dir, seg + 1, show_dir);   /* zero directories */
+        GlobStep st = { g, seg, show_dir };
+        each_entry(show_dir ? dir : ".", glob_entry, &st);
+        return;
+    }
+    if (!strpbrk(g->segs[seg], "*?[")) {
+        /* A literal segment: no need to list the directory. */
+        char *full = show_dir ? join2(dir, g->segs[seg]) : strdup(g->segs[seg]);
+        int kind = path_kind(full);
+        if (kind && seg == g->nseg - 1) list_push(g->out, value_string_copy(full));
+        else if (kind == 2) glob_walk(g, full, seg + 1, 1);
+        free(full);
+        return;
+    }
+    GlobStep st = { g, seg, show_dir };
+    each_entry(show_dir ? dir : ".", glob_entry, &st);
+}
+
+static int cmp_values_str(const void *a, const void *b) {
+    return strcmp(AS_STRING(*(const Value*)a), AS_STRING(*(const Value*)b));
+}
+
+/* fs.glob(pattern): matching paths, sorted. * ? [..] match within a name;
+   ** matches any number of directories. Names starting with . are only
+   matched by a pattern that starts with a dot. */
+static Value fs_glob(int argc, Value *args) {
+    const char *pattern;
+    if (argc < 1) return proc_error("fs.glob(pattern)");
+    NEED_STR(args[0], "fs.glob", &pattern);
+    char *copy = strdup(pattern);
+    GlobCtx g = { NULL, 0, list_new(8) };
+    char *start = copy;
+    const char *root = NULL;
+    if (copy[0] == '/' || copy[0] == '\\') root = "/";
+    g.segs = malloc(sizeof(char*) * (strlen(copy) + 1));
+    for (char *c = copy; ; c++) {
+        if (*c == '/' || *c == '\\' || !*c) {
+            int end = !*c;
+            *c = '\0';
+            if (*start) g.segs[g.nseg++] = start;
+            start = c + 1;
+            if (end) break;
+        }
+    }
+    if (g.nseg) {
+        if (root) glob_walk(&g, root, 0, 1);
+        else if (strlen(g.segs[0]) == 2 && g.segs[0][1] == ':') {
+            char drive[4] = { g.segs[0][0], ':', '/', 0 };
+            if (g.nseg == 1) list_push(g.out, value_string_copy(drive));
+            else { GlobCtx sub = { g.segs + 1, g.nseg - 1, g.out }; glob_walk(&sub, drive, 0, 1); }
+        } else glob_walk(&g, ".", 0, 0);
+    }
+    qsort(g.out->items, (size_t)g.out->size, sizeof(Value), cmp_values_str);
+    free(g.segs);
+    free(copy);
+    return value_list(g.out);
+}
+
+typedef struct { List *out; } WalkCtx;
+static void walk_dir(WalkCtx *w, const char *dir);
+static int walk_entry(const char *dir, const char *name, int is_dir, void *ctx) {
+    WalkCtx *w = ctx;
+    char *full = join2(dir, name);
+    if (is_dir) walk_dir(w, full);
+    else list_push(w->out, value_string_copy(full));
+    free(full);
+    return 0;
+}
+static void walk_dir(WalkCtx *w, const char *dir) { each_entry(dir, walk_entry, w); }
+
+/* fs.walk(dir): every file below dir (not directories), sorted. */
+static Value fs_walk(int argc, Value *args) {
+    const char *dir;
+    if (argc < 1) return proc_error("fs.walk(dir)");
+    NEED_STR(args[0], "fs.walk", &dir);
+    if (path_kind(dir) != 2) return proc_error("fs.walk: %s is not a directory", dir);
+    WalkCtx w = { list_new(16) };
+    walk_dir(&w, dir);
+    qsort(w.out->items, (size_t)w.out->size, sizeof(Value), cmp_values_str);
+    return value_list(w.out);
+}
+
+/* fs.join(a, b, ...): joins with /, which works on Windows too; a part
+   that is absolute starts over. */
+static Value fs_join(int argc, Value *args) {
+    char *acc = strdup("");
+    for (int i = 0; i < argc; i++) {
+        if (GET_TYPE(args[i]) != VAL_STRING) { free(acc); return proc_error("fs.join: every part must be a string"); }
+        const char *part = AS_STRING(args[i]);
+        int absolute = part[0] == '/' || part[0] == '\\' || (part[0] && part[1] == ':');
+        char *next = (absolute || !acc[0]) ? strdup(part) : join2(acc, part);
+        free(acc);
+        acc = next;
+    }
+    Value v = value_string_copy(acc);
+    free(acc);
+    return v;
+}
+
+static const char *base_of(const char *p, size_t *len) {
+    size_t n = strlen(p);
+    while (n > 1 && (p[n - 1] == '/' || p[n - 1] == '\\')) n--;
+    size_t i = n;
+    while (i > 0 && p[i - 1] != '/' && p[i - 1] != '\\') i--;
+    *len = n - i;
+    return p + i;
+}
+
+static Value fs_basename(int argc, Value *args) {
+    const char *p;
+    if (argc < 1) return proc_error("fs.basename(path)");
+    NEED_STR(args[0], "fs.basename", &p);
+    size_t n;
+    const char *b = base_of(p, &n);
+    char *s = malloc(n + 1); memcpy(s, b, n); s[n] = '\0';
+    Value v = value_string_copy(s); free(s);
+    return v;
+}
+
+static Value fs_dirname(int argc, Value *args) {
+    const char *p;
+    if (argc < 1) return proc_error("fs.dirname(path)");
+    NEED_STR(args[0], "fs.dirname", &p);
+    size_t n;
+    const char *b = base_of(p, &n);
+    size_t d = (size_t)(b - p);
+    while (d > 1 && (p[d - 1] == '/' || p[d - 1] == '\\') && !(d == 3 && p[1] == ':')) d--;
+    if (d == 0) return value_string_copy(".");
+    char *s = malloc(d + 1); memcpy(s, p, d); s[d] = '\0';
+    Value v = value_string_copy(s); free(s);
+    return v;
+}
+
+/* fs.extension(path): ".txt", or "" when there is none. */
+static Value fs_extension(int argc, Value *args) {
+    const char *p;
+    if (argc < 1) return proc_error("fs.extension(path)");
+    NEED_STR(args[0], "fs.extension", &p);
+    size_t n;
+    const char *b = base_of(p, &n);
+    for (size_t i = n; i > 1; i--) {
+        if (b[i - 1] == '.') {
+            char *s = malloc(n - i + 2); memcpy(s, b + i - 1, n - i + 1); s[n - i + 1] = '\0';
+            Value v = value_string_copy(s); free(s);
+            return v;
+        }
+    }
+    return value_string_copy("");
+}
+
+static Value fs_abspath(int argc, Value *args) {
+    const char *p;
+    if (argc < 1) return proc_error("fs.abspath(path)");
+    NEED_STR(args[0], "fs.abspath", &p);
+#ifdef _WIN32
+    wchar_t *w = to_wide(p);
+    wchar_t buf[32768];
+    DWORD n = w ? GetFullPathNameW(w, 32768, buf, NULL) : 0;
+    free(w);
+    if (!n || n >= 32768) return proc_error("fs.abspath: cannot resolve %s", p);
+    char *s = to_utf8(buf);
+    Value v = value_string_copy(s ? s : p);
+    free(s);
+    return v;
+#else
+    if (p[0] == '/') return value_string_copy(p);
+    char cwd[4096];
+    if (!getcwd(cwd, sizeof(cwd))) return proc_error("fs.abspath: cannot read the current directory");
+    char *j = join2(cwd, p);
+    Value v = value_string_copy(j);
+    free(j);
+    return v;
+#endif
+}
+
+void glow_scripting_init(void) {
+    Value osv = var_get("os"), fsv = var_get("fs");
+    if (GET_TYPE(osv) == VAL_DICT) {
+        Dict *os = AS_DICT(osv);
+        dict_set(os, "args", value_list(list_new(0)));
+        dict_set(os, "script", value_none());
+        dict_set(os, "setenv", native_func_new("setenv", os_setenv));
+        dict_set(os, "unsetenv", native_func_new("unsetenv", os_unsetenv));
+        dict_set(os, "env", native_func_new("env", os_env));
+        dict_set(os, "getenv", native_func_new("getenv", os_getenv_utf8));
+        dict_set(os, "cwd", native_func_new("cwd", process_cwd));
+        dict_set(os, "chdir", native_func_new("chdir", os_chdir));
+        dict_set(os, "home", native_func_new("home", os_home));
+        dict_set(os, "temp_dir", native_func_new("temp_dir", os_temp_dir));
+        dict_set(os, "pid", native_func_new("pid", os_pid));
+        dict_set(os, "isatty", native_func_new("isatty", os_isatty));
+        dict_set(os, "read_stdin", native_func_new("read_stdin", os_read_stdin));
+        dict_set(os, "write", native_func_new("write", os_write));
+        dict_set(os, "ewrite", native_func_new("ewrite", os_ewrite));
+        dict_set(os, "eprint", native_func_new("eprint", os_eprint));
+#if defined(_WIN32)
+        dict_set(os, "platform", value_string_copy("windows"));
+#elif defined(__APPLE__)
+        dict_set(os, "platform", value_string_copy("macos"));
+#elif defined(__linux__)
+        dict_set(os, "platform", value_string_copy("linux"));
+#else
+        dict_set(os, "platform", value_string_copy("unix"));
+#endif
+    }
+    if (GET_TYPE(fsv) == VAL_DICT) {
+        Dict *fs = AS_DICT(fsv);
+        dict_set(fs, "is_dir", native_func_new("is_dir", fs_is_dir));
+        dict_set(fs, "is_file", native_func_new("is_file", fs_is_file));
+        dict_set(fs, "append", native_func_new("append", fs_append));
+        dict_set(fs, "copy", native_func_new("copy", fs_copy));
+        dict_set(fs, "move", native_func_new("move", fs_move));
+        dict_set(fs, "remove_all", native_func_new("remove_all", fs_remove_all));
+        dict_set(fs, "mkdirs", native_func_new("mkdirs", fs_mkdirs));
+        dict_set(fs, "glob", native_func_new("glob", fs_glob));
+        dict_set(fs, "walk", native_func_new("walk", fs_walk));
+        dict_set(fs, "join", native_func_new("join", fs_join));
+        dict_set(fs, "basename", native_func_new("basename", fs_basename));
+        dict_set(fs, "dirname", native_func_new("dirname", fs_dirname));
+        dict_set(fs, "extension", native_func_new("extension", fs_extension));
+        dict_set(fs, "abspath", native_func_new("abspath", fs_abspath));
+    }
+}
+
 void glow_process_init(void) {
 #ifndef _WIN32
     /* A program that exits while we write to it must not kill GlowLang. */

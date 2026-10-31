@@ -1,0 +1,39 @@
+child: 3 3 [3, two words, ünïcödé] deploy
+no args: 0 0 [] deploy
+no #! and no .glow: 1 true
+getenv: héllo wörld héllo wörld héllo wörld
+default: fallback none
+child env: héllo wörld
+unset: none false
+glob: [src/a.txt] [src/a.txt, src/b.log] [src/b.log]
+glob **: [src/a.txt, src/deep/c.txt, src/deep/er/d.txt]
+glob dotfiles: [src/.hidden.txt]
+walk: [src/.hidden.txt, src/a.txt, src/b.log, src/deep/c.txt, src/deep/er/d.txt]
+append: A+1 fresh
+after copy/move: [deploy, env.glow, er_moved/d.txt, moved.log, plain, src/.hidden.txt, src/a.txt, src/deep/a.txt, src/deep/c.txt, src/new.txt] true false
+kinds: true false true false
+back: true
+bad chdir: true
+bad copy: true
+root refused: fs.remove_all: refusing to remove "/"
+removed: false
+join: a/b/c.txt a/b /abs x
+basename: c.tar.gz b c
+dirname: a/b . /
+extension: .gz  
+abspath: true true
+chr/ord: A é € 65 233 8364 true
+sh: line 1
+line 2
+line 3
+sh_lines: [line 1, line 2, line 3]
+sh_ok: true false
+sh failure: true true
+pipe: LINE 1
+LINE 2
+LINE 3
+input option: PIPED TEXT
+shell string: line 3
+quote: [it's two words, plain]
+which: none true
+namespace: line 1 true

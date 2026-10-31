@@ -1,0 +1,102 @@
+# Shell scripting: os.args, the environment, directories, fs helpers,
+# chr/ord, and lib/shell.glow. Runs the same on Windows, Linux and macOS.
+import "shell"
+
+# A child GlowLang script gets its arguments in os.args, and a file that
+# starts with #! runs without the .glow extension.
+let work = fs.join(os.temp_dir(), "glow_shell_test_" + str(os.pid()))
+fs.remove_all(work)
+fs.mkdirs(fs.join(work, "src", "deep", "er"))
+let child = fs.join(work, "deploy")
+fs.write(child, "#!/usr/bin/env glowlang\nshow len(os.args), os.args, fs.basename(os.script)\nos.exit(len(os.args))\n")
+let r = process.run([process.executable, child, "3", "two words", "ünïcödé"])
+show "child:", r.code, r.stdout.trim()
+let r2 = process.run([process.executable, "run", child])
+show "no args:", r2.code, r2.stdout.trim()
+fs.write(fs.join(work, "plain"), "show 1\n")
+let r3 = process.run([process.executable, fs.join(work, "plain")])
+show "no #! and no .glow:", r3.code, r3.stderr.contains(".glow")
+
+# Environment, visible to programs started afterwards.
+os.setenv("GLOW_SHELL_TEST", "héllo wörld")
+show "getenv:", os.getenv("GLOW_SHELL_TEST"), os.env("GLOW_SHELL_TEST"), os.env()["GLOW_SHELL_TEST"]
+show "default:", os.getenv("GLOW_SHELL_UNSET_X", "fallback"), os.getenv("GLOW_SHELL_UNSET_X")
+fs.write(fs.join(work, "env.glow"), "show os.getenv(\"GLOW_SHELL_TEST\")\n")
+show "child env:", process.run([process.executable, fs.join(work, "env.glow")]).stdout.trim()
+os.unsetenv("GLOW_SHELL_TEST")
+show "unset:", os.getenv("GLOW_SHELL_TEST"), os.env().has("GLOW_SHELL_TEST")
+
+# Files and directories.
+fs.write(fs.join(work, "src", "a.txt"), "A")
+fs.write(fs.join(work, "src", "b.log"), "B")
+fs.write(fs.join(work, "src", "deep", "c.txt"), "C")
+fs.write(fs.join(work, "src", "deep", "er", "d.txt"), "D")
+fs.write(fs.join(work, "src", ".hidden.txt"), "H")
+let start = os.cwd()
+os.chdir(work)
+show "glob:", fs.glob("src/*.txt"), fs.glob("src/[ab].*"), fs.glob("src/?.log")
+show "glob **:", fs.glob("src/**/*.txt")
+show "glob dotfiles:", fs.glob("src/.*")
+show "walk:", fs.walk("src")
+fs.append("src/a.txt", "+1")
+fs.append("src/new.txt", "fresh")
+show "append:", fs.read("src/a.txt"), fs.read("src/new.txt")
+fs.copy("src/a.txt", "src/deep")
+fs.move("src/b.log", "moved.log")
+fs.move("src/deep/er", "er_moved")
+show "after copy/move:", fs.walk("."), fs.is_dir("er_moved"), fs.exists("src/b.log")
+show "kinds:", fs.is_dir("src"), fs.is_file("src"), fs.is_file("moved.log"), fs.is_dir("nope")
+os.chdir(start)
+show "back:", os.cwd() == start
+try:
+    os.chdir(fs.join(work, "does-not-exist"))
+catch e:
+    show "bad chdir:", e.starts_with("os.chdir: cannot change to")
+end
+try:
+    fs.copy(fs.join(work, "missing.txt"), work)
+catch e:
+    show "bad copy:", e.contains("is not a file")
+end
+try:
+    fs.remove_all("/")
+catch e:
+    show "root refused:", e
+end
+fs.remove_all(work)
+show "removed:", fs.exists(work)
+
+# Path pieces.
+show "join:", fs.join("a", "b", "c.txt"), fs.join("a/", "b"), fs.join("a", "/abs"), fs.join("", "x")
+show "basename:", fs.basename("a/b/c.tar.gz"), fs.basename("a/b/"), fs.basename("c")
+show "dirname:", fs.dirname("a/b/c.txt"), fs.dirname("c.txt"), fs.dirname("/top")
+show "extension:", fs.extension("a/b/c.tar.gz"), fs.extension("Makefile"), fs.extension(".bashrc")
+show "abspath:", fs.abspath("x").ends_with("x"), fs.abspath(".") == fs.abspath(os.cwd())
+
+# chr and ord work on Unicode code points.
+show "chr/ord:", chr(65), chr(233), chr(8364), ord("A"), ord("é"), ord("€"), ord(chr(128512)) == 128512
+
+# lib/shell.glow: sh, sh_ok, sh_lines, sh_run, pipe, quote, which.
+let glow = quote(process.executable)
+fs.mkdirs(work)
+let script = fs.join(work, "count.glow")
+fs.write(script, "let i = 1\nwhile i <= 3:\n    show \"line \" + str(i)\n    i = i + 1\nend\n")
+show "sh:", sh([process.executable, script])
+show "sh_lines:", sh_lines([process.executable, script])
+show "sh_ok:", sh_ok([process.executable, script]), sh_ok([process.executable, fs.join(work, "nope.glow")])
+fs.write(fs.join(work, "fail.glow"), "os.eprint(\"boom\")\nos.exit(3)\n")
+try:
+    sh([process.executable, fs.join(work, "fail.glow")])
+catch e:
+    show "sh failure:", e.contains("exit 3"), e.contains("boom")
+end
+fs.write(fs.join(work, "upper.glow"), "show os.read_stdin().upper().trim()\n")
+show "pipe:", pipe([[process.executable, script], [process.executable, fs.join(work, "upper.glow")]])
+show "input option:", sh([process.executable, fs.join(work, "upper.glow")], {"input": "piped text"})
+show "shell string:", sh(glow + " " + quote(script)).split("\n")[2]
+fs.write(fs.join(work, "args.glow"), "show os.args
+")
+show "quote:", sh(glow + " " + quote(fs.join(work, "args.glow")) + " " + quote("it's two words") + " plain")
+show "which:", which("definitely-not-a-program-xyz"), shell.which != none
+show "namespace:", shell.sh([process.executable, script]).split("\n")[0], shell.ok([process.executable, script])
+fs.remove_all(work)
