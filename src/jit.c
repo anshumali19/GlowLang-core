@@ -52,6 +52,15 @@ extern FuncEntry* func_get(const char *name);
 
 typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64)
+/* GLOW_JIT_DEBUG=1: report every function compiled, on stderr. */
+static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, size_t bytes) {
+    if (!glow_jit_debug) return;
+    if (!fe) fe = bc->owner;
+    fprintf(stderr, "[jit] %s: %s (%zu bytes)\n", tier, (fe && fe->name) ? fe->name : "<script>", bytes);
+}
+#endif
+
 static void jit_emit_byte(JITBuffer *buf, uint8_t b) {
     if (buf->size < buf->capacity) buf->code[buf->size++] = b;
 }
@@ -1074,6 +1083,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     }
     mprotect(code, size, PROT_READ | PROT_EXEC);
     bc->jit_code = code; bc->jit_size = size;
+    jit_debug_compiled(bc, fe, "optimizing", buf.size);
     free(offsets); free(jumps);
 }
 
@@ -1456,8 +1466,10 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         free(offsets);
         bc->osr_code = code; bc->osr_code_size = size;
         bc->osr_entries = entries;
+        jit_debug_compiled(bc, fe, "osr", buf.size);
     } else {
         bc->baseline_jit_code = code; bc->baseline_jit_size = size; bc->baseline_jit_offsets = offsets; bc->jit_tier = JIT_TIER_BASELINE;
+        jit_debug_compiled(bc, fe, "baseline", buf.size);
     }
     free(jumps);
 }
@@ -2131,6 +2143,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
         return;
     }
     a64_code_finish(code, size);
+    jit_debug_compiled(bc, fe, osr ? "osr" : mode == A64_BASELINE ? "baseline" : "optimizing", a.buf.size);
     free(jumps);
     if (osr) {
         void **entries = calloc((size_t)bc->count, sizeof(void*));

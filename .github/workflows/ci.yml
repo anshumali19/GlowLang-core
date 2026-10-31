@@ -24,6 +24,12 @@ jobs:
       - name: Run test suite
         run: make test
 
+      - name: Check the JIT compiles code
+        run: |
+          GLOW_JIT_DEBUG=1 ./bin/glowlang run scripts/jit-smoke.glow 2> jit.log
+          cat jit.log
+          grep -q '^\[jit\] ' jit.log
+
       - name: Run test suite (interpreter only)
         run: GLOW_NOJITEXEC=1 GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
 
@@ -69,6 +75,12 @@ jobs:
         run: cmake --build build --config Release
       - name: Run test suite
         run: GLOWLANG_BIN=./bin/glowlang ./scripts/run-tests.sh
+      # Apple silicon: proves the ARM64 backend ran, not just the interpreter.
+      - name: Check the JIT compiles code (ARM64)
+        run: |
+          GLOW_JIT_DEBUG=1 ./bin/glowlang run scripts/jit-smoke.glow 2> jit.log
+          cat jit.log
+          grep -q '^\[jit\] ' jit.log
 
   build-windows:
     runs-on: windows-latest
