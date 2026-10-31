@@ -402,7 +402,7 @@ static Value vm_get_const_string(const char *s) {
 /* Forward declarations for the numeric-tower helpers defined below (used by
    val_eq / comparisons which appear earlier in this file). */
 static inline int value_exact_int64(Value v, int64_t *out);
-static inline int is_fractional_double(Value v);
+static inline int is_inexact_double(Value v);
 static inline BigInt* value_to_bigint(Value v);
 static inline int value_cmp(Value a, Value b);
 
@@ -414,7 +414,11 @@ int val_eq(Value a, Value b) {
         int64_t ia, ib;
         if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib)) return ia == ib;
         if (is_bigint(a) && is_bigint(b)) return bigint_cmp(AS_BIGINT(a), AS_BIGINT(b)) == 0;
-        return 0;
+        /* A big int equals a double only when the double is that exact
+           whole number (2 ** 64 == 18446744073709551616.0). */
+        Value f = is_bigint(a) ? b : a;
+        if (GET_TYPE(f) != VAL_FLOAT || !isfinite(AS_FLOAT(f)) || AS_FLOAT(f) != floor(AS_FLOAT(f))) return 0;
+        return bigint_cmp(value_to_bigint(a), value_to_bigint(b)) == 0;
     }
     uint64_t ta = IS_FLOAT_BITS(a) ? VAL_FLOAT : ((a) & MASK_TYPE) >> 48;
     uint64_t tb = IS_FLOAT_BITS(b) ? VAL_FLOAT : ((b) & MASK_TYPE) >> 48;
@@ -495,18 +499,33 @@ static inline int value_exact_int64(Value v, int64_t *out) {
     }
     return 0;
 }
-static inline int is_fractional_double(Value v) {
-    if (GET_TYPE(v) == VAL_FLOAT) {
-        double d = AS_FLOAT(v);
-        return !(isfinite(d) && d == floor(d));
-    }
-    return 0;
+/* A double that is not exactly an int64: it has a fraction, is NaN or
+   infinite, or is too big (|d| >= 2^63). Arithmetic with one is done in
+   doubles; converting it to an int64 (as the big-int path used to) gave
+   garbage such as 1e300 * 2 == -18446744073709551616. */
+static inline int is_inexact_double(Value v) {
+    int64_t i;
+    return GET_TYPE(v) == VAL_FLOAT && !value_exact_int64(v, &i);
 }
+/* The exact big integer equal to a finite whole double: its 53-bit
+   mantissa times a power of two. */
+static BigInt* bigint_from_whole_double(double d) {
+    int e;
+    double frac = frexp(d, &e);              /* d = frac * 2^e, 0.5 <= |frac| < 1 */
+    BigInt *r = bigint_from_int64((int64_t)ldexp(frac, 53));
+    e -= 53;
+    if (e < 0) return bigint_from_int64((int64_t)d); /* small: already exact */
+    BigInt *two62 = bigint_from_int64((int64_t)1 << 62);
+    while (e >= 62) { r = bigint_mul(r, two62); e -= 62; }
+    if (e > 0) r = bigint_mul(r, bigint_from_int64((int64_t)1 << e));
+    return r;
+}
+/* Only reached for big ints and whole numbers (doubles included). */
 static inline BigInt* value_to_bigint(Value v) {
     if (is_bigint(v)) return AS_BIGINT(v);
     int64_t i;
     if (value_exact_int64(v, &i)) return bigint_from_int64(i);
-    return bigint_from_int64((int64_t)val_to_double(v));
+    return bigint_from_whole_double(trunc(val_to_double(v)));
 }
 /* Exact three-way comparison of two values (int/bigint vs double). */
 int glow_value_cmp(Value a, Value b);
@@ -542,7 +561,9 @@ static inline int value_cmp(Value a, Value b) {
     if (GET_TYPE(b) == VAL_BOOL) b = value_int(AS_BOOL(b));
     if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib))
         return (ia > ib) ? 1 : (ia < ib) ? -1 : 0;
-    if (is_bigint(a) || is_bigint(b))
+    if ((is_bigint(a) || is_bigint(b)) &&
+        !(GET_TYPE(a) == VAL_FLOAT && !isfinite(AS_FLOAT(a))) &&
+        !(GET_TYPE(b) == VAL_FLOAT && !isfinite(AS_FLOAT(b))))
         return bigint_cmp(value_to_bigint(a), value_to_bigint(b));
     double da = val_to_double(a), db = val_to_double(b);
     return (da > db) ? 1 : (da < db) ? -1 : 0;
@@ -565,7 +586,7 @@ static inline Value num_add(Value a, Value b) {
         if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
         return value_bigint(bigint_from_int64(r));
     }
-    if (is_fractional_double(a) || is_fractional_double(b))
+    if (is_inexact_double(a) || is_inexact_double(b))
         return num_from_double(val_to_double(a) + val_to_double(b));
     return value_bigint(bigint_add(value_to_bigint(a), value_to_bigint(b)));
 }
@@ -579,7 +600,7 @@ static inline Value num_sub(Value a, Value b) {
         if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
         return value_bigint(bigint_from_int64(r));
     }
-    if (is_fractional_double(a) || is_fractional_double(b))
+    if (is_inexact_double(a) || is_inexact_double(b))
         return num_from_double(val_to_double(a) - val_to_double(b));
     return value_bigint(bigint_sub(value_to_bigint(a), value_to_bigint(b)));
 }
@@ -593,7 +614,7 @@ static inline Value num_mul(Value a, Value b) {
         if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
         return value_bigint(bigint_from_int64(r));
     }
-    if (is_fractional_double(a) || is_fractional_double(b))
+    if (is_inexact_double(a) || is_inexact_double(b))
         return num_from_double(val_to_double(a) * val_to_double(b));
     return value_bigint(bigint_mul(value_to_bigint(a), value_to_bigint(b)));
 }
@@ -676,8 +697,7 @@ static int seq_repeat(Value a, Value b, Value *out) {
    (-7 % 3 == 2). Exact for integers. */
 static Value num_mod(Value a, Value b) {
     int64_t ia, ib;
-    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && ib != 0 &&
-        !is_fractional_double(a) && !is_fractional_double(b)) {
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && ib != 0) {
         int64_t r = (ib == -1) ? 0 : ia % ib;
         if (r != 0 && ((r < 0) != (ib < 0))) r += ib;
         if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
