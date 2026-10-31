@@ -889,6 +889,8 @@ Value native_tensor_shape(int argc, Value *args);
 Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing);
 Value glow_property_error(Value o, const char *n);
 int global_slot_declared(int slot);
+void glow_profile_begin(void);
+void glow_profile_report(void);
 Value native_len(int argc, Value *args);
 Value list_pop(List *l);
 void list_insert(List *l, int idx, Value val);

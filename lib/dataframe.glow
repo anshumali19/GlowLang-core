@@ -82,20 +82,8 @@ class Table:
         let r = 0
         while r < len(self.rows):
             let cell = self.rows[r][idx]
-            let match = false
-            
-            if operator == "is":
-                match = (cell == target_str)
-            end
-            if operator == "is_not":
-                match = (cell != target_str)
-            end
-            if operator == "contains":
-                # Using native string contains if available, else simple fallback
-                # Assuming `contains` method on strings is native in GlowLang (which we saw earlier)
-                match = cell.contains(target_str)
-            end
-            
+            let match = _table_match(cell, operator, target_str)
+
             if match:
                 append(new_rows, self.rows[r])
             end
@@ -106,6 +94,42 @@ class Table:
         t.init(self.columns, new_rows)
         return t
     end
+end
+
+# Whether a cell passes `cell operator target`. CSV cells are text, so
+# > < >= <= == != compare as numbers when both sides are numbers, and as
+# text otherwise. "is", "is_not" and "contains" compare text.
+func _table_match(cell, operator, target):
+    when operator == "is":
+        return str(cell) == str(target)
+    eif operator == "is_not":
+        return str(cell) != str(target)
+    eif operator == "contains":
+        return str(cell).contains(str(target))
+    end
+    let a = cell
+    let b = target
+    when str(a).trim().is_number() and str(b).trim().is_number():
+        a = float(str(a).trim())
+        b = float(str(b).trim())
+    otherwise:
+        a = str(a)
+        b = str(b)
+    end
+    when operator == ">":
+        return a > b
+    eif operator == "<":
+        return a < b
+    eif operator == ">=":
+        return a >= b
+    eif operator == "<=":
+        return a <= b
+    eif operator == "==":
+        return a == b
+    eif operator == "!=":
+        return a != b
+    end
+    throw "Table.where: unknown operator " + str(operator) + " (use > < >= <= == != is is_not contains)"
 end
 
 func read_table(filepath):

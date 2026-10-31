@@ -87,6 +87,27 @@ blueprint JsonPath:
 end
 
 # Schema Validator
+# Whether a GlowLang value of type `actual` (as type() names it) is what a
+# schema type asks for. Both JSON Schema names (integer, number, boolean,
+# array, object, null) and GlowLang's own (int, float, bool, list, dict,
+# none) work.
+func _json_type_ok(expected, actual):
+    when expected == "integer" or expected == "int":
+        return actual == "int"
+    eif expected == "number":
+        return actual == "int" or actual == "float"
+    eif expected == "boolean":
+        return actual == "bool"
+    eif expected == "array":
+        return actual == "list"
+    eif expected == "object":
+        return actual == "dict"
+    eif expected == "null":
+        return actual == "none"
+    end
+    return actual == expected
+end
+
 blueprint JsonValidator:
     action init():
         self.errors = []
@@ -107,18 +128,8 @@ blueprint JsonValidator:
         when schema.has("type"):
             let expected = schema["type"]
             let actual = type(data)
-            when expected == "string" and actual != "string":
-                append(self.errors, path + ": expected string, got " + actual)
-            eif expected == "integer" and actual != "integer":
-                append(self.errors, path + ": expected integer, got " + actual)
-            eif expected == "number" and actual != "integer" and actual != "float":
-                append(self.errors, path + ": expected number, got " + actual)
-            eif expected == "boolean" and actual != "boolean":
-                append(self.errors, path + ": expected boolean, got " + actual)
-            eif expected == "list" and actual != "list":
-                append(self.errors, path + ": expected list, got " + actual)
-            eif expected == "dict" and actual != "dict":
-                append(self.errors, path + ": expected dict, got " + actual)
+            when not _json_type_ok(expected, actual):
+                append(self.errors, path + ": expected " + expected + ", got " + actual)
             end
         end
 
@@ -202,7 +213,7 @@ func _diff_recursive(a, b, path, changes):
         when len(b) > max_len:
             max_len = len(b)
         end
-        for i from 0 to max_len:
+        for i from 0 to max_len - 1:
             when i < len(a) and i < len(b):
                 _diff_recursive(a[i], b[i], path + "[" + i + "]", changes)
             eif i >= len(a):

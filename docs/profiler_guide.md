@@ -26,44 +26,41 @@ profiler.report()
 | `profiler.time(name, func)` | Time a function call |
 | `profiler.memory()` | Get current memory usage |
 
+## Line Profiling from the Command Line
+
+`glowlang profile` runs a program and then lists the lines that ran most often:
+
+```bash
+glowlang profile program.glow
+```
+
+```
+--- Performance Hot-Spots ---
+  Executions | Source Location
+  -----------+------------------
+       46401 | program.glow:5
+       27900 | program.glow:2
+```
+
+Profiling runs the program in the interpreter (compiled code does not count
+lines), so it is slower than `glowlang run`. In VS Code, **GlowLang: Profile
+Current File** runs the same command.
+
 ## Trace Mode
 
-Run with `--trace` to generate detailed execution traces:
+`glowlang trace` prints every bytecode instruction as it runs, with the
+registers after it:
 
 ```bash
-glowlang --trace program.glow 2>trace.log
+glowlang trace program.glow > trace.log
 ```
 
-## Standalone Profiler (tools/profiler/glow_profiler.c)
+`tools/debugger/glow_debugger.c` replays such a log (see the debugger guide).
 
-```bash
-# Build
-gcc tools/profiler/glow_profiler.c -o bin/glow_profiler
+## Tools Not Connected Yet
 
-# Text report
-./bin/glow_profiler trace.log
-
-# HTML report
-./bin/glow_profiler --html trace.log > report.html
-
-# Flamegraph data
-./bin/glow_profiler --flamegraph trace.log > stacks.folded
-# Use with Brendan Gregg's flamegraph.pl:
-# flamegraph.pl stacks.folded > flamegraph.svg
-```
-
-## Inspector (tools/inspector/glow_inspector.c)
-
-```bash
-# Build
-gcc tools/inspector/glow_inspector.c -o bin/glow_inspector
-
-# Full report
-./bin/glow_inspector trace.log
-
-# GC stats only
-./bin/glow_inspector --gc trace.log
-
-# Stack only
-./bin/glow_inspector --stack trace.log
-```
+`tools/profiler/glow_profiler.c`, `tools/inspector/glow_inspector.c`,
+`tools/profiler/profiler.html` and `tools/stack_visualizer/visualizer.html`
+read trace formats (`[TRACE]`/`[GC]` lines, JSON profiles) that the runtime
+does not produce, so they show nothing, or sample data, today. Use
+`glowlang profile` and `glowlang trace` instead.

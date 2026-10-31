@@ -99,7 +99,7 @@ blueprint Dataset:
         when count > self.size:
             count = self.size
         end
-        for i from 0 to count:
+        for i from 0 to count - 1:
             append(result, self.data[i])
         end
         return result
@@ -111,7 +111,7 @@ blueprint Dataset:
         when start < 0:
             start = 0
         end
-        for i from start to self.size:
+        for i from start to self.size - 1:
             append(result, self.data[i])
         end
         return result
@@ -170,7 +170,7 @@ blueprint Dataset:
         for each fname in self.feature_names:
             let values = []
             for each row in self.data:
-                when type(row[fname]) == "integer" or type(row[fname]) == "float":
+                when type(row[fname]) == "int" or type(row[fname]) == "float":
                     append(values, row[fname])
                 end
             end
@@ -213,7 +213,7 @@ func train_test_split(dataset, train_ratio):
     train.label_name = dataset.label_name
     test.label_name = dataset.label_name
     
-    for i from 0 to split_idx:
+    for i from 0 to split_idx - 1:
         append(train.data, dataset.data[i])
         when len(dataset.labels) > 0:
             append(train.labels, dataset.labels[i])
@@ -221,7 +221,7 @@ func train_test_split(dataset, train_ratio):
     end
     train.size = len(train.data)
     
-    for i from split_idx to dataset.size:
+    for i from split_idx to dataset.size - 1:
         append(test.data, dataset.data[i])
         when len(dataset.labels) > 0:
             append(test.labels, dataset.labels[i])
@@ -258,7 +258,7 @@ blueprint BatchIterator:
         
         let batch_data = []
         let batch_labels = []
-        for i from start to end_idx:
+        for i from start to end_idx - 1:
             append(batch_data, self.dataset.data[i])
             when len(self.dataset.labels) > 0:
                 append(batch_labels, self.dataset.labels[i])
@@ -342,7 +342,7 @@ blueprint StandardScaler:
             for each v in values:
                 var_sum = var_sum + (v - mean) * (v - mean)
             end
-            let std = sqrt(var_sum / len(values))
+            let std = math.sqrt(var_sum / len(values))
             self.means[col] = mean
             self.stds[col] = std
         end

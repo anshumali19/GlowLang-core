@@ -44,14 +44,13 @@
                     "default": true,
                     "description": "Enable GlowLang LSP server for diagnostics and completion"
                 },
-                "glowlang.profilerPort": {
-                    "type": "number",
-                    "default": 9229,
-                    "description": "Port for the profiler web UI"
-                },
                 "glowlang.trace.server": {
                     "type": "string",
-                    "enum": ["off", "messages", "verbose"],
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
                     "default": "off",
                     "description": "Trace LSP server communication"
                 }
@@ -60,8 +59,14 @@
         "languages": [
             {
                 "id": "glow",
-                "aliases": ["GlowLang", "Glow", "glow"],
-                "extensions": [".glow"],
+                "aliases": [
+                    "GlowLang",
+                    "Glow",
+                    "glow"
+                ],
+                "extensions": [
+                    ".glow"
+                ],
                 "configuration": "./language-configuration.json",
                 "icon": {
                     "light": "./images/glow-icon.png",
@@ -101,18 +106,6 @@
                 "command": "glowlang.profile",
                 "title": "GlowLang: Profile Current File",
                 "icon": "$(graph)"
-            },
-            {
-                "command": "glowlang.openProfiler",
-                "title": "GlowLang: Open Profiler UI"
-            },
-            {
-                "command": "glowlang.openStackVisualizer",
-                "title": "GlowLang: Open Stack Visualizer"
-            },
-            {
-                "command": "glowlang.openPlayground",
-                "title": "GlowLang: Open Interactive Playground"
             },
             {
                 "command": "glowlang.packageInit",
@@ -170,7 +163,9 @@
         "taskDefinitions": [
             {
                 "type": "glowlang",
-                "required": ["file"],
+                "required": [
+                    "file"
+                ],
                 "properties": {
                     "file": {
                         "type": "string",

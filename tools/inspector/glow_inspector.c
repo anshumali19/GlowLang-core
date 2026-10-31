@@ -1,3 +1,7 @@
+/* NOT CONNECTED YET: this tool reads [GC] and [TRACE] lines, and the
+ * GlowLang runtime does not print them (`glowlang trace` prints
+ * "DEBUG <pc>: <op> ..." lines instead), so today it finds nothing.
+ * For line counts use `glowlang profile program.glow`. */
 /*
  * GlowLang Inspector Tool
  * Visualizes VM stack, heap, GC stats, and runtime state from trace output.

@@ -1,19 +1,19 @@
 # GlowLang for Visual Studio Code
 
-Full-featured VS Code extension for the **GlowLang** programming language — an industrial-grade JIT-compiled language with natural-language syntax, native networking, and GPU-ready tensor operations.
+VS Code support for the **GlowLang** programming language: syntax highlighting, snippets, run/debug/profile commands and the GlowLang language server.
 
 ## Features
 
 ### Syntax Highlighting
 Rich TextMate grammar with support for:
-- All GlowLang keywords (`func`, `task`, `blueprint`, `action`, `when`, `otherwise`, `for each`, etc.)
+- All GlowLang keywords (`func`, `blueprint`, `action`, `when`, `eif`, `otherwise`, `for each`, etc.)
 - String interpolation with `f"Hello {name}"`
 - Triple-quoted strings, comments (`#`, `//`, `/* */`)
 - Blueprint/class definitions, method calls, operators
-- Numeric literals (integer, float, hex)
+- Numeric literals (integer and float)
 
 ### Snippets
-25+ snippets for rapid development:
+26 snippets, including:
 - `func` — Function definition
 - `blueprint` — Class/blueprint with init and methods
 - `foreach` — For each loop
@@ -29,26 +29,21 @@ Rich TextMate grammar with support for:
 ### Run & Debug
 - **Ctrl+Shift+R** — Run current .glow file
 - **Ctrl+Shift+D** — Debug current .glow file
+- **GlowLang: Profile Current File** runs `glowlang profile`, which prints how often each line ran
 - Right-click context menu for run and profile
 - Title bar play/debug buttons
 
 ### LSP Integration
-- Real-time diagnostics and error checking
-- Auto-completion (when LSP server is available)
+- Syntax errors shown as you type (the server is `glowlang --lsp`)
+- Completion of keywords and built-ins, hover and go-to-definition
 - Restart LSP via command palette
 
-### Profiler & Stack Visualizer
-- Open profiler UI directly in VS Code
-- Visualize VM stack frames in the stack visualizer
-- Both tools run as webview panels
-
 ### Package Manager
-- Initialize new GlowLang projects
-- Install dependencies
+- **GlowLang: Initialize Package** and **Install Dependencies** run `gdu init` and `gdu install` (gdu is found next to `glowlang`, or on PATH)
 
 ## Requirements
 
-- GlowLang compiler (`bin/glowlang`) built from source
+- GlowLang: on Windows install it from the Microsoft Store (`winget install --id 9P2D8F466LBX --source msstore`); elsewhere use a release or a source build. Set `glowlang.path` if `glowlang` is not on PATH.
 - VS Code 1.75.0 or later
 
 ## Extension Settings
@@ -57,7 +52,6 @@ Rich TextMate grammar with support for:
 |---------|---------|-------------|
 | `glowlang.path` | `glowlang` | Path to the glowlang executable |
 | `glowlang.enableLsp` | `true` | Enable LSP server |
-| `glowlang.profilerPort` | `9229` | Profiler web UI port |
 | `glowlang.trace.server` | `off` | LSP trace level |
 
 ## Installation
@@ -79,8 +73,7 @@ code .
 
 ## Known Issues
 
-- LSP server requires `--lsp` flag support in the glowlang binary
-- Profiler requires `--profile` flag for data generation
+- Diagnostics report syntax errors; errors that only appear when the program runs (an undefined name, a wrong type) are not shown in the editor
 
 ## License
 

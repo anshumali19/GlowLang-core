@@ -21,7 +21,7 @@
 | **Runtime** | Register-based bytecode VM; x86-64 template JIT (Windows x64 and System V ABIs) with on-stack replacement for hot loops (on Apple silicon and other ARM64 machines the interpreter runs everything); non-moving mark-and-sweep GC |
 | **Numbers** | Integers of any size (never overflow), floats, exact integer `**`, floor `%`; arithmetic on non-numbers raises a clear error |
 | **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()`; `lib/async.glow` channels, tasks and timers |
-| **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and client |
+| **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and an HTTP/HTTPS client (`http.request`: certificate verification, redirects, chunked bodies, timeouts) |
 | **Database** | SQLite bindings (`sqlite.open`, `sqlite.exec`, `sqlite.query`, `sqlite.close`) |
 | **Tensors** | `tensor.zeros/ones/add/dot/matmul`; AVX2+FMA kernels chosen at run time when the CPU has them, scalar code otherwise |
 | **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`), BLAKE3 |
@@ -29,7 +29,7 @@
 | **Collections** | Lists and dicts compared by contents; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`; out-of-range indexes raise errors |
 | **Functions** | Closures (lambdas and nested functions); recursion to about 61,000 calls in compiled code and 65,000 in the interpreter, then a clear "Maximum recursion depth exceeded" error |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir`, `fs.remove` |
-| **Tooling** | `trace`, `debug`, `check` and `package` subcommands, profiler, LSP server, `gdu` package manager |
+| **Tooling** | `trace`, `debug`, `check`, `profile` (line counts) and `package` subcommands, LSP server (syntax errors, completion, hover, go-to-definition), `gdu` package manager |
 | **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
 | **Testing** | Test programs whose output is compared line by line with `tests/expected/`, run in CI on Windows, Linux and macOS; fuzz harnesses, ASan/TSan make targets |
 

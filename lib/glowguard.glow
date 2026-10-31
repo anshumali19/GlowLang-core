@@ -1,6 +1,10 @@
 # GlowGuard - Declarative Schema Validation Library for GlowLang
-# Provides data validation and schema constraints (similar to Zod and Pydantic).
-# Note: Low-level memory safety and buffer protections are enforced at the C runtime level.
+# Provides data validation and schema constraints (similar to Zod and Pydantic):
+#   let g = GlowGuard()
+#   let user = g.object({"name": g.str().min(2), "age": g.num().min(0), "admin": g.bool()})
+#   let r = user.validate(data, "user")    # r["valid"], r["errors"], r["data"]
+# Each guard checks the value's type first (a string where a number is
+# expected is an error), then its limits.
 
 blueprint ValidatorResult:
     action init(valid, data, errors):
@@ -28,6 +32,9 @@ blueprint StringGuard:
     end
 
     action validate(value, path):
+        when type(value) != "string":
+            return {"valid": false, "data": value, "errors": [path + " must be text."]}
+        end
         let l = len(value)
         when self._min is not none and l < self._min:
             return {"valid": false, "data": value, "errors": [path + " must be at least " + self._min + " characters."]}
@@ -57,6 +64,9 @@ blueprint NumberGuard:
     end
 
     action validate(value, path):
+        when type(value) != "int" and type(value) != "float":
+            return {"valid": false, "data": value, "errors": [path + " must be a number."]}
+        end
         when self._min is not none and value < self._min:
             return {"valid": false, "data": value, "errors": [path + " must be at least " + self._min + "."]}
         end
@@ -73,6 +83,9 @@ blueprint BooleanGuard:
     end
 
     action validate(value, path):
+        when type(value) != "bool":
+            return {"valid": false, "data": value, "errors": [path + " must be true or false."]}
+        end
         return {"valid": true, "data": value, "errors": []}
     end
 end
