@@ -5,6 +5,6 @@ Read as rows:
   Row  2 :  [Bob, 30, London]
   Row  3 :  [Charlie, 28, Paris]
 Read as dictionaries:
-  Record  0 :  {"City": New York, "Age": 24, "Name": Alice}
-  Record  1 :  {"City": London, "Age": 30, "Name": Bob}
-  Record  2 :  {"City": Paris, "Age": 28, "Name": Charlie}
+  Record  0 :  {"Name": Alice, "Age": 24, "City": New York}
+  Record  1 :  {"Name": Bob, "Age": 30, "City": London}
+  Record  2 :  {"Name": Charlie, "Age": 28, "City": Paris}

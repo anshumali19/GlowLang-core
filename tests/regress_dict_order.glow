@@ -1,0 +1,49 @@
+# Dicts keep insertion order: keys(), values(), loops, show and
+# json.stringify list entries in the order they were added. They used to
+# come out in hash order.
+let d = {"zebra": 1, "apple": 2, "mango": 3}
+d["kiwi"] = 4
+show "keys:", d.keys()
+show "values:", d.values()
+for each k, v in d:
+    show " ", k, v
+end
+show "json:", json.stringify(d)
+
+# Updating a key keeps its place; removing and re-adding moves it to the end.
+d["apple"] = 20
+show "updated:", d
+d.remove("zebra")
+d["zebra"] = 100
+show "re-added:", d
+
+# JSON round trips keep the document's order.
+let doc = json.parse("{\"id\": 7, \"name\": \"x\", \"tags\": [1, 2], \"ok\": true}")
+show "round trip:", json.stringify(doc)
+
+# Order survives growth and many removals.
+let big = {}
+let i = 0
+while i < 2000:
+    big["k" + str(i)] = i
+    i = i + 1
+end
+let j = 0
+while j < 2000:
+    if j % 3 == 0:
+        big.remove("k" + str(j))
+    end
+    j = j + 1
+end
+let ks = big.keys()
+show "big:", len(ks), len(big), ks[0], ks[1], ks[len(ks) - 1]
+show "lookups:", big["k1999"], big.has("k1998"), big["k3"], big.get("k3", "gone")
+let in_order = true
+let prev = -1
+for each k, v in big:
+    if v <= prev:
+        in_order = false
+    end
+    prev = v
+end
+show "in order:", in_order

@@ -2906,11 +2906,7 @@ int jit_exception_pending(void) { return has_exception; }
         /* Each dict entry reads 2 registers: key at r1+i*2, value at r1+i*2+1 */
         int dict_reg_span = n * 2; CLAMP_REG_COUNT(pc->r1, dict_reg_span); n = dict_reg_span / 2;
         Dict *d = pc->is_stack_alloc ? gc_alloc_stack(sizeof(Dict), OBJ_DICT) : gc_alloc(sizeof(Dict), OBJ_DICT);
-        d->capacity = 8; while(d->capacity < n*2) d->capacity *= 2;
-        d->keys = calloc(d->capacity, sizeof(Value));
-        d->values = calloc(d->capacity, sizeof(Value));
-        for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
-        d->size = 0;
+        dict_init(d, n);
         for (int i=0; i<n; i++) {
             Value k = R(pc->r1 + i * 2);
             Value v = R(pc->r1 + i * 2 + 1);

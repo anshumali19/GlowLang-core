@@ -367,7 +367,7 @@ static void process_grey_stack(void) {
 
 static void gc_free_object_payload(GCObject *unmarked) {
     if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
-    else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); }
+    else if (unmarked->type == OBJ_DICT) { free(((Dict*)unmarked)->keys); free(((Dict*)unmarked)->values); free(((Dict*)unmarked)->index); }
     else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
     /* close_v2: the handle and its query iterators may be swept in any order. */
     else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close_v2(((SQLiteHandle*)unmarked)->db); }

@@ -1127,14 +1127,69 @@ static uint32_t hash_string(const char *s) {
     return hash;
 }
 
-Dict* dict_new(int sz) {
+/* Fill a freshly allocated Dict with room for about sz entries. */
+void dict_init(Dict *d, int sz) {
     int cap = 8; while (cap < sz) cap *= 2;
-    Dict *d = gc_alloc(sizeof(Dict), OBJ_DICT);
-    d->capacity = cap; d->size = 0;
+    d->capacity = cap; d->size = 0; d->used = 0;
     d->keys = calloc(cap, sizeof(Value));
     d->values = calloc(cap, sizeof(Value));
     for (int i=0; i<cap; i++) d->keys[i] = value_none();
+    d->index_cap = cap * 2;
+    d->index = malloc(sizeof(int32_t) * (size_t)d->index_cap);
+    for (int i=0; i<d->index_cap; i++) d->index[i] = DICT_EMPTY;
+}
+
+Dict* dict_new(int sz) {
+    Dict *d = gc_alloc(sizeof(Dict), OBJ_DICT);
+    dict_init(d, sz);
     return d;
+}
+
+#define DICT_KEY_PTR(d, e) ((const char*)(uintptr_t)((d)->keys[e] & MASK_PAYLOAD))
+
+/* The index slot holding interned key k (hash h), or -1. */
+static int dict_find_slot(Dict *d, const char *k, uint32_t h) {
+    uint32_t mask = (uint32_t)(d->index_cap - 1);
+    uint32_t s = h & mask;
+    for (;;) {
+        int32_t e = d->index[s];
+        if (e == DICT_EMPTY) return -1;
+        if (e >= 0 && DICT_KEY_PTR(d, e) == k) return (int)s;
+        s = (s + 1) & mask;
+    }
+}
+
+/* Put entry e (key hash h) into the index. */
+static void dict_index_insert(Dict *d, int e, uint32_t h) {
+    uint32_t mask = (uint32_t)(d->index_cap - 1);
+    uint32_t s = h & mask;
+    while (d->index[s] >= 0) s = (s + 1) & mask;
+    d->index[s] = e;
+}
+
+/* Make room for one more entry: drop removed entries (keeping order),
+   grow if the dict is more than half full, and rebuild the index. */
+static void dict_grow(Dict *d) {
+    int cap = d->capacity;
+    if ((d->size + 1) * 2 > cap) cap *= 2;
+    Value *keys = calloc(cap, sizeof(Value));
+    Value *values = calloc(cap, sizeof(Value));
+    for (int i=0; i<cap; i++) keys[i] = value_none();
+    int n = 0;
+    for (int i=0; i<d->used; i++) {
+        if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+        keys[n] = d->keys[i]; values[n] = d->values[i]; n++;
+    }
+    free(d->keys); free(d->values);
+    d->keys = keys; d->values = values;
+    d->capacity = cap; d->used = n; d->size = n;
+    if (d->index_cap < cap * 2) {
+        free(d->index);
+        d->index_cap = cap * 2;
+        d->index = malloc(sizeof(int32_t) * (size_t)d->index_cap);
+    }
+    for (int i=0; i<d->index_cap; i++) d->index[i] = DICT_EMPTY;
+    for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
 }
 
 void dict_set(Dict *d, const char *key, Value val) {
@@ -1142,77 +1197,46 @@ void dict_set(Dict *d, const char *key, Value val) {
     uint32_t h;
     const char *interned = intern_string_hash(key, &h);
     gc_write_barrier((GCObject*)d, val);
-    int idx = h & (d->capacity - 1);
-
-    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
-        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) {
-            d->values[idx] = val; return;
-        }
-        idx = (idx + 1) & (d->capacity - 1);
-    }
-
-    if (d->size * 2 >= d->capacity) {
-        int old_cap = d->capacity;
-        Value *old_keys = d->keys;
-        Value *old_values = d->values;
-        d->capacity *= 2;
-        d->keys = calloc(d->capacity, sizeof(Value));
-        d->values = calloc(d->capacity, sizeof(Value));
-        for (int i=0; i<d->capacity; i++) d->keys[i] = value_none();
-        d->size = 0;
-        /* Re-insert with known-interned keys: hash once, skip intern_string. */
-        for (int i=0; i<old_cap; i++) {
-            if (GET_TYPE(old_keys[i]) != VAL_NONE) {
-                const char *k = (const char*)(uintptr_t)(old_keys[i] & MASK_PAYLOAD);
-                uint32_t kh = hash_string(k);
-                int ki = kh & (d->capacity - 1);
-                while (GET_TYPE(d->keys[ki]) != VAL_NONE)
-                    ki = (ki + 1) & (d->capacity - 1);
-                d->keys[ki] = make_value(VAL_STRING, (uintptr_t)k);
-                d->values[ki] = old_values[i];
-                d->size++;
-            }
-        }
-        free(old_keys); free(old_values);
-        /* Re-insert the new key (already interned, hash known). */
-        idx = h & (d->capacity - 1);
-        while (GET_TYPE(d->keys[idx]) != VAL_NONE)
-            idx = (idx + 1) & (d->capacity - 1);
-        d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
-        d->values[idx] = val;
-        d->size++;
-        return;
-    }
-
-    d->keys[idx] = make_value(VAL_STRING, (uintptr_t)interned);
-    d->values[idx] = val;
+    int s = dict_find_slot(d, interned, h);
+    if (s >= 0) { d->values[d->index[s]] = val; return; }
+    if (d->used >= d->capacity) dict_grow(d);
+    int e = d->used++;
+    d->keys[e] = make_value(VAL_STRING, (uintptr_t)interned);
+    d->values[e] = val;
     d->size++;
+    dict_index_insert(d, e, h);
 }
 
 Value dict_get(Dict *d, const char *key) {
-    if (!d || d->capacity == 0 || !key) return value_none();
-    uint32_t h;
-    const char *interned = intern_string_find(key, &h);
-    if (!interned) return value_none();
-    int idx = h & (d->capacity - 1);
-    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
-        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return d->values[idx];
-        idx = (idx + 1) & (d->capacity - 1);
-    }
-    return value_none();
+    int e = dict_get_idx(d, key);
+    return e >= 0 ? d->values[e] : value_none();
 }
 
+/* The entry number of key (stable until the dict next grows), or -1. */
 int dict_get_idx(Dict *d, const char *key) {
     if (!d || d->capacity == 0 || !key) return -1;
     uint32_t h;
     const char *interned = intern_string_find(key, &h);
     if (!interned) return -1;
-    int idx = h & (d->capacity - 1);
-    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
-        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) return idx;
-        idx = (idx + 1) & (d->capacity - 1);
-    }
-    return -1;
+    int s = dict_find_slot(d, interned, h);
+    return s >= 0 ? d->index[s] : -1;
+}
+
+/* Remove key; returns 1 and its value in *out if it was there. */
+int dict_remove(Dict *d, const char *key, Value *out) {
+    if (!d || d->capacity == 0 || !key) return 0;
+    uint32_t h;
+    const char *interned = intern_string_find(key, &h);
+    if (!interned) return 0;
+    int s = dict_find_slot(d, interned, h);
+    if (s < 0) return 0;
+    int e = d->index[s];
+    if (out) *out = d->values[e];
+    d->index[s] = DICT_REMOVED;
+    d->keys[e] = value_none();
+    d->values[e] = value_none();
+    d->size--;
+    return 1;
 }
 List* list_new(int sz) { List *l = gc_alloc(sizeof(List), OBJ_LIST); l->size = 0; l->capacity = sz; l->items = sz > 0 ? calloc(sz, sizeof(Value)) : NULL; return l; }
 void list_push(List *l, Value v) {
@@ -2306,35 +2330,9 @@ Value native_dict_remove(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT || GET_TYPE(args[1]) != VAL_STRING) {
         return value_none();
     }
-    Dict *d = AS_DICT(args[0]);
-    const char *key = AS_STRING(args[1]);
-    uint32_t h;
-    const char *interned = intern_string_find(key, &h);
-    if (!interned || d->capacity == 0) return value_none();
-    int idx = h & (d->capacity - 1);
-    while (GET_TYPE(d->keys[idx]) != VAL_NONE) {
-        if ((const char*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD) == interned) {
-            Value val = d->values[idx];
-            d->keys[idx] = value_none();
-            d->values[idx] = value_none();
-            d->size--;
-
-            // Rehash cluster following idx
-            int next_idx = (idx + 1) & (d->capacity - 1);
-            while (GET_TYPE(d->keys[next_idx]) != VAL_NONE) {
-                Value k_rehash = d->keys[next_idx];
-                Value v_rehash = d->values[next_idx];
-                d->keys[next_idx] = value_none();
-                d->values[next_idx] = value_none();
-                d->size--;
-                dict_set(d, (const char*)(uintptr_t)(k_rehash & MASK_PAYLOAD), v_rehash);
-                next_idx = (next_idx + 1) & (d->capacity - 1);
-            }
-            return val;
-        }
-        idx = (idx + 1) & (d->capacity - 1);
-    }
-    return value_none();
+    Value val = value_none();
+    dict_remove(AS_DICT(args[0]), AS_STRING(args[1]), &val);
+    return val;
 }
 
 Value native_dict_merge(int argc, Value *args) {

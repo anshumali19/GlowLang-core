@@ -270,6 +270,11 @@ let empty = {}
 let user = {"name": "Alice", "age": 30}
 ```
 
+Dictionaries keep insertion order: `keys()`, `values()`, `for each` loops,
+`show` and `json.stringify` list entries in the order they were added.
+Updating a key keeps its place; removing a key and adding it again moves it
+to the end. `json.parse` keeps the document's order.
+
 ### Access and Modification
 ```glow
 let name = user["name"]           # Key access
