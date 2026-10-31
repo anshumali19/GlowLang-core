@@ -979,7 +979,9 @@ int global_get_slot(const char *name) {
         }
     }
     int slot = global_table.count++;
-    global_table.names[slot] = name;
+    /* Interned (permanently): callers may pass a dict key or other string
+       that does not outlive this table. */
+    global_table.names[slot] = intern_string(name);
     global_table.index[h] = slot;
 
     // Check if this is a builtin or already defined function
@@ -1192,7 +1194,7 @@ static void dict_grow(Dict *d) {
     }
     if (!was_inline) free(old_keys);
     d->used = n; d->size = n;
-    for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
+    for (int e=0; e<n; e++) dict_index_insert(d, e, intern_cached_hash(DICT_KEY_PTR(d, e)));
 }
 
 void dict_set(Dict *d, const char *key, Value val) {

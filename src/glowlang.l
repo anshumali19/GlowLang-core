@@ -16,16 +16,65 @@
    dicts can compare keys by pointer. Open addressing with the hash stored per
    slot; the table doubles at 50% load, so lookups stay O(1) however many
    distinct keys a program creates. Protected by the GIL. */
+/* Every interned string carries a header: its hash (so dicts never hash a
+   key twice) and two flags. Strings interned by the lexer, the compiler or
+   any other C code are permanent: code and caches hold on to those
+   pointers. Strings that only ever became dict keys at run time (JSON
+   keys, d[k] = v with computed k) are "dynamic": a full collection marks
+   the keys of every live dict (intern_mark) and then frees the dynamic
+   strings nobody marked (intern_sweep), so a program that builds and drops
+   dicts with millions of distinct keys no longer keeps every key forever.
+   Interning a dynamic string again from C makes it permanent. */
+typedef struct { uint32_t hash; uint8_t dynamic; uint8_t marked; uint16_t pad; } InternHeader;
+#define INTERN_HEADER(s) ((InternHeader*)((char*)(s) - sizeof(InternHeader)))
+
 typedef struct { const char *str; uint32_t hash; } InternSlot;
 static InternSlot *intern_slots = NULL;
 static uint32_t intern_cap = 0;
 static uint32_t intern_count = 0;
 
-static char *arena_strdup(const char *s) {
+/* Dynamic strings come from free lists by size (8-byte steps up to
+   INTERN_POOL_MAX bytes, carved from 64 KB pages); a swept string goes back
+   on its list for the next key of that size. Cheaper than malloc/free per
+   key, and memory stays bounded by the most keys alive at once. */
+#define INTERN_POOL_MAX 256
+#define INTERN_POOL_PAGE 65536
+static void *intern_pool_free[INTERN_POOL_MAX / 8 + 1];
+static char *intern_pool_cur = NULL, *intern_pool_end = NULL;
+
+static size_t intern_pool_size(size_t n) { return (n + 7) & ~(size_t)7; }
+
+static void *intern_pool_alloc(size_t n) {
+    n = intern_pool_size(n);
+    if (n > INTERN_POOL_MAX) return malloc(n);
+    void **slot = &intern_pool_free[n / 8];
+    if (*slot) { void *p = *slot; *slot = *(void**)p; return p; }
+    if (!intern_pool_cur || intern_pool_cur + n > intern_pool_end) {
+        intern_pool_cur = malloc(INTERN_POOL_PAGE);
+        if (!intern_pool_cur) return NULL;
+        intern_pool_end = intern_pool_cur + INTERN_POOL_PAGE;
+    }
+    void *p = intern_pool_cur;
+    intern_pool_cur += n;
+    return p;
+}
+
+static void intern_pool_release(void *p, size_t n) {
+    n = intern_pool_size(n);
+    if (n > INTERN_POOL_MAX) { free(p); return; }
+    *(void**)p = intern_pool_free[n / 8];
+    intern_pool_free[n / 8] = p;
+}
+
+static char *intern_new_string(const char *s, uint32_t h, int dynamic) {
     size_t len = strlen(s) + 1;
-    char *dup = arena_alloc(len);
-    memcpy(dup, s, len);
-    return dup;
+    InternHeader *hdr = dynamic ? intern_pool_alloc(sizeof(InternHeader) + len)
+                                : arena_alloc(sizeof(InternHeader) + len);
+    if (!hdr) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+    hdr->hash = h; hdr->dynamic = (uint8_t)dynamic; hdr->marked = 0; hdr->pad = 0;
+    char *str = (char*)(hdr + 1);
+    memcpy(str, s, len);
+    return str;
 }
 
 /* FNV-1a; the same hash that hash_string() in stdlib.c produces, so dict
@@ -39,9 +88,9 @@ static uint32_t intern_hash(const char *s) {
     return h;
 }
 
-static void intern_grow(void) {
-    uint32_t new_cap = intern_cap ? intern_cap * 2 : 4096;
+static void intern_rehash(uint32_t new_cap) {
     InternSlot *ns = calloc(new_cap, sizeof(InternSlot));
+    if (!ns) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
     uint32_t mask = new_cap - 1;
     for (uint32_t i = 0; i < intern_cap; i++) {
         if (!intern_slots[i].str) continue;
@@ -54,17 +103,23 @@ static void intern_grow(void) {
     intern_cap = new_cap;
 }
 
-static const char *intern_lookup(const char *s, uint32_t h, int insert) {
+static void intern_grow(void) { intern_rehash(intern_cap ? intern_cap * 2 : 4096); }
+
+/* mode 0: find only; 1: intern permanently; 2: intern as a dict key. */
+static const char *intern_lookup(const char *s, uint32_t h, int mode) {
     if (!intern_slots) intern_grow();
-    if (insert && (intern_count + 1) * 2 > intern_cap) intern_grow();
+    if (mode && (intern_count + 1) * 2 > intern_cap) intern_grow();
     uint32_t mask = intern_cap - 1;
     uint32_t i = h & mask;
     while (intern_slots[i].str) {
-        if (intern_slots[i].hash == h && strcmp(intern_slots[i].str, s) == 0) return intern_slots[i].str;
+        if (intern_slots[i].hash == h && strcmp(intern_slots[i].str, s) == 0) {
+            if (mode == 1) INTERN_HEADER(intern_slots[i].str)->dynamic = 0;
+            return intern_slots[i].str;
+        }
         i = (i + 1) & mask;
     }
-    if (!insert) return NULL;
-    char *dup = arena_strdup(s);
+    if (!mode) return NULL;
+    char *dup = intern_new_string(s, h, mode == 2);
     intern_slots[i].str = dup;
     intern_slots[i].hash = h;
     intern_count++;
@@ -75,11 +130,12 @@ const char *intern_string(const char *s) {
     return intern_lookup(s, intern_hash(s), 1);
 }
 
-/* Intern a string AND return its hash. */
+/* Intern a dict key (collectable once no live dict uses it) and return
+   its hash. */
 const char *intern_string_hash(const char *s, uint32_t *out_hash) {
     uint32_t h = intern_hash(s);
     *out_hash = h;
-    return intern_lookup(s, h, 1);
+    return intern_lookup(s, h, 2);
 }
 
 /* Look a string up without interning it: NULL means no dict can contain it
@@ -90,8 +146,47 @@ const char *intern_string_find(const char *s, uint32_t *out_hash) {
     return intern_lookup(s, h, 0);
 }
 
+/* The hash of a string returned by one of the functions above. */
+uint32_t intern_cached_hash(const char *interned) {
+    return INTERN_HEADER(interned)->hash;
+}
+
+/* A live dict still uses this key (called during a full collection). */
+void intern_mark(const char *interned) {
+    INTERN_HEADER(interned)->marked = 1;
+}
+
+/* After a full collection: free the dynamic strings no live dict marked,
+   clear the marks, and rebuild the table without them. */
+void intern_sweep(void) {
+    if (!intern_slots) return;
+    uint32_t live = 0, freed = 0;
+    for (uint32_t i = 0; i < intern_cap; i++) {
+        const char *str = intern_slots[i].str;
+        if (!str) continue;
+        InternHeader *hdr = INTERN_HEADER(str);
+        if (hdr->dynamic && !hdr->marked) {
+            intern_pool_release(hdr, sizeof(InternHeader) + strlen(str) + 1);
+            intern_slots[i].str = NULL;
+            freed++;
+        } else {
+            hdr->marked = 0;
+            live++;
+        }
+    }
+    intern_count = live;
+    if (!freed) return;
+    /* Rebuild (deleting in place would break the probe chains), shrinking
+       when most of the table is now empty. */
+    uint32_t cap = 4096;
+    while (cap < live * 4) cap *= 2;
+    if (cap > intern_cap) cap = intern_cap;
+    intern_rehash(cap);
+}
+
 void intern_cleanup(void) {
-    /* The strings themselves live in the arena (freed by arena_free_all). */
+    /* Permanent strings live in the arena (freed by arena_free_all);
+       dynamic ones in the pool pages, which live until exit. */
     free(intern_slots);
     intern_slots = NULL;
     intern_cap = 0;

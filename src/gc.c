@@ -472,11 +472,19 @@ GC_NOINLINE static void gc_full_collect_impl(void) {
             *p = obj->next;
             gc_release_object(obj);
         } else {
+            /* Keys of surviving dicts stay interned; intern_sweep frees
+               the dict keys nothing uses any more. */
+            if (obj->type == OBJ_DICT) {
+                Dict *d = (Dict*)obj;
+                for (int i = 0; i < d->used; i++)
+                    if (GET_TYPE(d->keys[i]) == VAL_STRING) intern_mark((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD));
+            }
             obj->marked = 0;
             obj->generation = 1;
             p = &obj->next;
         }
     }
+    intern_sweep();
     gc_clear_remembered_set();
     gc_reclaim_empty_blocks();
     gc_set_next_threshold();
