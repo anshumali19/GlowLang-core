@@ -16,10 +16,12 @@ Tensors support SIMD-accelerated element-wise operations:
 a = tensor.ones(1000)
 b = tensor.ones(1000)
 
-c = a + b          # Element-wise add (AVX2/SSE4.2)
-d = a - b          # Element-wise subtract
-e = a * b          # Element-wise multiply
+c = tensor.add(a, b)    # Element-wise add (AVX2 when the CPU has it)
+d = tensor.sub(a, b)    # Element-wise subtract
+e = tensor.mul(a, b)    # Element-wise multiply
 ```
+
+The `+`, `-` and `*` operators do not work on tensors; use these functions.
 
 ## Indexing
 
@@ -45,6 +47,6 @@ Tensors are backed by `PackedArray` objects with `PACKED_FLOAT64` type. They are
 
 ## Performance Notes
 
-- Operations use AVX2 and SSE4.2 when available
-- The `OP_SIMD_ADD`, `OP_PACKED_ADD`, `OP_PACKED_MUL` opcodes are JIT-compiled
-- Maximum tensor size: 10,000,000 elements
+- Element-wise add, subtract, multiply, dot and matmul use AVX2 + FMA when the CPU has them (checked at run time), and plain scalar code otherwise (also on ARM64, and with GLOW_NO_SIMD=1)
+- The work happens inside the native `tensor.*` functions; a loop over elements in GlowLang code is much slower than one call such as `tensor.add`
+- Maximum tensor size: 10,000,000 elements (`tensor.create`, `zeros` and `ones` return `none` for larger sizes)

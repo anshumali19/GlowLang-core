@@ -44,3 +44,10 @@ func profiler_memory():
     let gc = os.gc_info()
     return gc["allocated"]
 end
+
+# profiler.start(), profiler.report() and so on, as docs/profiler_guide.md
+# shows them: the functions above under one name.
+let profiler = {
+    "start": profiler_start, "stop": profiler_stop, "report": profiler_report,
+    "time": profiler_time, "memory": profiler_memory
+}

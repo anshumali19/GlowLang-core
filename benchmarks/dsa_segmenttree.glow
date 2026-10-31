@@ -4,7 +4,7 @@ func build(arr, tree, node, start, endx):
         tree[node] = arr[start]
         return 0
     end
-    let mid = (start + endx) / 2
+    let mid = floor((start + endx) / 2)
     build(arr, tree, 2 * node, start, mid)
     build(arr, tree, 2 * node + 1, mid + 1, endx)
     tree[node] = tree[2 * node] + tree[2 * node + 1]
@@ -12,14 +12,18 @@ func build(arr, tree, node, start, endx):
 end
 
 func query(tree, node, start, endx, l, r):
-    if r < start: return 0 end
-    if endx < l: return 0 end
+    if r < start:
+        return 0
+    end
+    if endx < l:
+        return 0
+    end
     if l <= start:
         if endx <= r:
             return tree[node]
         end
     end
-    let mid = (start + endx) / 2
+    let mid = floor((start + endx) / 2)
     let p1 = query(tree, 2 * node, start, mid, l, r)
     let p2 = query(tree, 2 * node + 1, mid + 1, endx, l, r)
     return p1 + p2

@@ -1,6 +1,8 @@
 /* Knapsack Problem DP */
 func max(a, b):
-    if a > b: return a end
+    if a > b:
+        return a
+    end
     return b
 end
 

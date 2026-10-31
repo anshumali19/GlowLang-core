@@ -64,7 +64,8 @@ integers.
 A register VM. Frames for GlowLang-to-GlowLang calls are pushed on an explicit frame array, not the C
 stack. Each `run_bytecode` activation (for example a native callback) uses its own slice of that
 array. Dispatch uses computed `goto` when built with GCC or Clang, and a `switch` with MSVC (the
-default Windows build). Recursion is limited to 65,500 nested calls and also stops before the
+default Windows build). Recursion is limited to 65,500 nested calls (about 61,000 when the calls
+run as JIT-compiled code, which uses more machine stack per call) and also stops before the
 thread's machine stack runs out; both raise a catchable "Maximum recursion depth exceeded" error.
 
 ### JIT
@@ -137,7 +138,7 @@ Other make targets: `make test`, `make test-sanitized` (ASan + TSan), `make fuzz
 
 ## Testing
 
-- `tests/*.glow` (135 programs). `scripts/run-tests.ps1` (Windows) and `scripts/run-tests.sh`
+- `tests/*.glow`. `scripts/run-tests.ps1` (Windows) and `scripts/run-tests.sh`
   (Linux/macOS/Git Bash) run each with a timeout and check the exit code
   (`tests/expected/exit_codes.txt`), compare stdout with `tests/expected/<name>.out` (`{{ANY}}`
   matches variable text such as timings), and check required stderr lines (`<name>.err`).

@@ -70,34 +70,47 @@ show "All workers complete"
 
 ---
 
-## 2. Task Declaration
+## 2. Tasks with Results (`lib/async.glow`)
 
-### The `task` Keyword
-Use `task` to declare functions that are designed for concurrent execution:
+`spawn` starts a function and forgets it. To get a result back, or an error,
+use `Task` and `TaskGroup` from `lib/async.glow`:
 
 ```glow
-task fetch_page(url):
-    show f"Fetching {url}..."
-    os.sleep(500)   # Simulate network I/O
-    show f"Fetched {url} successfully"
-    return "HTML content"
+import "async"
+
+func fetch_page(url):
+    os.sleep(500)   # waiting (I/O, sleep) lets other threads run
+    return "HTML of " + url
 end
 
-task process_data(data):
-    show "Processing data..."
-    os.sleep(300)   # Simulate computation
-    show "Data processed"
-end
+# One task: start it on a background thread, wait for its result.
+let t = Task("home", lambda(): fetch_page("https://example.com"))
+t.start()
+show t.wait()                       # HTML of https://example.com
+show t.status                       # done
 
-# Launch tasks concurrently
-spawn fetch_page("https://example.com")
-spawn fetch_page("https://api.example.com")
-spawn process_data("raw-data")
+# Several at once: about 0.5 s in total, not 1.5 s.
+let group = TaskGroup("pages")
+group.create("a", lambda(): fetch_page("a.example"))
+group.create("b", lambda(): fetch_page("b.example"))
+group.create("c", lambda(): fetch_page("c.example"))
+show group.start_all()              # [HTML of a.example, HTML of b.example, HTML of c.example]
+group.summary()                     # TaskGroup 'pages': 3 tasks, 3 done, 0 failed
 
-os.sleep(1000)
+# An error inside a task is kept, not lost.
+let bad = Task("bad", lambda(): 1 / 0)
+bad.start()
+bad.wait()
+show bad.status, bad.error          # failed Division by zero
 ```
 
-`task` is semantically identical to `func` — it's a documentation convention indicating the function is designed for concurrent use.
+`Task(name, fn)` has `start()` (run on a background thread), `run()` (run
+now, on this thread), `wait()` (the result), and `.status` (`pending`,
+`running`, `done`, `failed`), `.result` and `.error`. `TaskGroup` has
+`create(name, fn)`, `start_all()` (all at once; returns their results in
+order), `run_all()` (one after another), `wait_all()`, `results()` and
+`summary()`. The library also has `Channel` (a message queue between
+threads), `Timer` and `Periodic`.
 
 ---
 
@@ -241,7 +254,7 @@ main_work()
 
 ### Parallel Data Fetching
 ```glow
-task fetch_users():
+func fetch_users():
     show "Fetching users from database..."
     let db = sqlite.open("app.db")
     let users = sqlite.query(db, "SELECT * FROM users")
@@ -249,7 +262,7 @@ task fetch_users():
     show "Users fetched:", len(users), "records"
 end
 
-task fetch_config():
+func fetch_config():
     show "Fetching config from Redis..."
     let r = redis.connect("127.0.0.1", 6379)
     when r is not none:
@@ -260,7 +273,7 @@ task fetch_config():
     end
 end
 
-task send_notification():
+func send_notification():
     show "Sending notification..."
     os.sleep(300)   # Simulate HTTP call
     show "Notification sent"
