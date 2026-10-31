@@ -686,12 +686,24 @@ import "lib/utils.glow"         # Import local file
 import "lib/ai.glow"            # Import AI library
 ```
 
-### Remote Imports (via gdu (Glow Dependency Utility))
-```glow
-import "https://github.com/user/math.glow"
+### Packages (gdu)
+`import` and `use` read local files only; they never download anything. To
+use a published package, install it with `gdu` (the GlowLang package
+manager), which puts it in `.glow_pkg/` next to your program:
+
+```bash
+gdu install middleware
 ```
 
-The `gdu (Glow Dependency Utility)` package manager resolves remote URLs to locally cached files.
+```glow
+use "middleware"     # found in .glow_pkg/ before the standard library
+```
+
+The packages available are the folders of
+[GlowLang-packages/packages](https://github.com/anshumali19/GlowLang-packages/tree/main/packages).
+
+A name without `.glow` is looked up next to the importing file, then in
+`.glow_pkg/`, then in the standard library.
 
 ### Module Pattern
 ```glow

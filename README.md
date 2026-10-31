@@ -5,9 +5,9 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
-  <img src="https://img.shields.io/badge/tests-135%20(output--checked)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-output--checked%20on%203%20OSes-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Apache%202.0%20%2B%20Commons%20Clause-blue" alt="License">
-  <img src="https://img.shields.io/badge/platform-Windows%20x64%20(verified)%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
   <a href="https://apps.microsoft.com/detail/9P2D8F466LBX"><img src="https://img.shields.io/badge/Microsoft%20Store-Get%20GlowLang-0078D4" alt="Get GlowLang from the Microsoft Store"></a>
 </p>
 
@@ -18,7 +18,7 @@
 | Category | What exists today |
 |----------|-------------------|
 | **Natural syntax** | `show`, `when`/`eif`/`otherwise`, `whenever`, `every`, `for each key, value in`, `is in`, `blueprint`, `action`/`can`, `use`/`import`, `ask` |
-| **Runtime** | Register-based bytecode VM; x86-64 template JIT (Windows x64 and System V ABIs) with on-stack replacement for hot loops; non-moving mark-and-sweep GC |
+| **Runtime** | Register-based bytecode VM; x86-64 template JIT (Windows x64 and System V ABIs) with on-stack replacement for hot loops (on Apple silicon and other ARM64 machines the interpreter runs everything); non-moving mark-and-sweep GC |
 | **Numbers** | Integers of any size (never overflow), floats, exact integer `**`, floor `%`; arithmetic on non-numbers raises a clear error |
 | **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()`; `lib/async.glow` channels, tasks and timers |
 | **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and client |
@@ -27,11 +27,11 @@
 | **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`), BLAKE3 |
 | **Text** | f-strings with any expression, string methods (`upper`, `replace`, `trim`, `split`, `join`, ...), regular expressions, JSON |
 | **Collections** | Lists and dicts compared by contents; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`; out-of-range indexes raise errors |
-| **Functions** | Closures (lambdas and nested functions), recursion to 65,500 calls with or without the JIT |
+| **Functions** | Closures (lambdas and nested functions); recursion to about 61,000 calls in compiled code and 65,000 in the interpreter, then a clear "Maximum recursion depth exceeded" error |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir`, `fs.remove` |
 | **Tooling** | `trace`, `debug`, `check` and `package` subcommands, profiler, LSP server, `gdu` package manager |
 | **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
-| **Testing** | 135 test programs whose output is compared line by line with `tests/expected/`, fuzz harnesses, ASan/TSan make targets |
+| **Testing** | Test programs whose output is compared line by line with `tests/expected/`, run in CI on Windows, Linux and macOS; fuzz harnesses, ASan/TSan make targets |
 
 ## ⚡ Performance
 
@@ -80,7 +80,7 @@ Requirements: Visual Studio 2022+ Build Tools (C++), `win_flex`/`win_bison` (`wi
 ```powershell
 .\build.bat                      # builds and signs bin\glowlang.exe (see scripts\build-windows.ps1)
 .\bin\glowlang.exe run examples\hello.glow
-.\run_all_tests.bat              # 135 tests, output-checked
+.\run_all_tests.bat              # the output-checked test suite
 ```
 
 `build.bat -NoSign` skips signing. The build signs with a self-signed development certificate; Windows does not trust that certificate on other machines, and Smart App Control (when enabled) may block a fresh build. In that case rebuild, or sign with a trusted code-signing certificate.
@@ -96,7 +96,7 @@ make                  # bin/glowlang and bin/gdu
 make test             # output-checked test suite (scripts/run-tests.sh)
 ```
 
-The Linux and macOS builds are set up in the `Makefile`, `CMakeLists.txt` and CI, but the results on this page were measured on Windows only.
+CI builds and tests every change on Linux, macOS and Windows, and each release is built and tested on Linux x64, macOS (Intel and Apple silicon) and Windows x64. The performance numbers above were measured on Windows.
 
 ## 📝 Hello World
 
@@ -219,7 +219,7 @@ make fuzz-all                               # fuzz harnesses
 .\scripts\run-tests.ps1 -ExtraEnv @{GLOWLANG_GC_STRESS='1'}
 ```
 
-On Windows the suite passes in four modes: default, interpreter only (`GLOW_NOJITEXEC=1`), GC stress (`GLOWLANG_GC_STRESS=1`) and scalar math (`GLOW_NO_SIMD=1`).
+The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), without the baseline JIT (`GLOW_NOBASEEXEC=1`), GC stress (`GLOWLANG_GC_STRESS=1`) and scalar math (`GLOW_NO_SIMD=1`). CI runs the default mode on every platform, plus the interpreter-only, GC-stress and AddressSanitizer runs on Linux.
 
 ## 📖 Documentation
 

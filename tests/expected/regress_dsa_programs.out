@@ -1,0 +1,20 @@
+ackermann: 2045
+bellmanford: [0, -1, 2, -2, 1]
+bst: true | false
+dijkstra: [0, 4, 12, 19, 21, 11, 9, 8, 14]
+editdistance: 3
+fenwicktree: 12
+floydwarshall: [[0, 5, 8, 9], [999999, 0, 3, 4], [999999, 999999, 0, 1], [999999, 999999, 999999, 0]]
+graph_dfs_bfs: BFS: | BFS visited  2 | BFS visited  0 | BFS visited  3 | BFS visited  1 | DFS: | DFS visited  2 | DFS visited  0 | DFS visited  1 | DFS visited  3
+heapsort: [5, 6, 7, 11, 12, 13]
+kmp: Found pattern at index  10
+knapsack: 220
+lcs: 3
+lis: 5
+mergesort: 1 | 50
+nqueens: 2680
+quicksort: [1, 5, 7, 8, 9, 10]
+rabinkarp: Pattern found at index  0 | Pattern found at index  10
+segmenttree: 15
+subsetsum: true
+trie: true

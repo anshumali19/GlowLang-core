@@ -1,13 +1,18 @@
 /* Longest Increasing Subsequence */
 func max(a, b):
-    if a > b: return a end
+    if a > b:
+        return a
+    end
     return b
 end
 
 func lis(arr, n):
     let dp = range(n)
     let i = 0
-    while i < n: dp[i] = 1 i = i + 1 end
+    while i < n:
+        dp[i] = 1
+        i = i + 1
+    end
     
     i = 1
     while i < n:
@@ -24,7 +29,9 @@ func lis(arr, n):
     let ans = 0
     i = 0
     while i < n:
-        if dp[i] > ans: ans = dp[i] end
+        if dp[i] > ans:
+            ans = dp[i]
+        end
         i = i + 1
     end
     return ans

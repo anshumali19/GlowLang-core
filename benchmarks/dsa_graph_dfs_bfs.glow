@@ -1,14 +1,19 @@
 /* Graph DFS & BFS */
 func len2(arr):
     let count = 0
-    for a in arr: count = count + 1 end
+    for each a in arr:
+        count = count + 1
+    end
     return count
 end
 
 func BFS(graph, V, start):
     let visited = range(V)
     let i = 0
-    while i < V: visited[i] = false i = i + 1 end
+    while i < V:
+        visited[i] = false
+        i = i + 1
+    end
     
     let queue = [start]
     visited[start] = true
@@ -51,7 +56,10 @@ end
 func DFS(graph, V, start):
     let visited = range(V)
     let i = 0
-    while i < V: visited[i] = false i = i + 1 end
+    while i < V:
+        visited[i] = false
+        i = i + 1
+    end
     DFSUtil(graph, V, start, visited)
 end
 

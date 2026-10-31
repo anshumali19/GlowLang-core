@@ -55,3 +55,10 @@ func debug_profile_end():
     debug.profile_stop()
     return true
 end
+
+# debug.heap_stats(), debug.breakpoint() and debug.profile_end(), as
+# docs/debugger_guide.md shows them (debug.assert, debug.stacktrace and
+# debug.profile_start are built in).
+debug["heap_stats"] = debug_heap_stats
+debug["breakpoint"] = debug_break
+debug["profile_end"] = debug_profile_end

@@ -7,29 +7,31 @@ Use the built-in debugger library for runtime introspection:
 ```glow
 use "lib/debugger.glow"
 
-# Assert with message
-debug.assert(x > 0, "x must be positive")
+let x = 5
+debug.assert(x > 0, "x must be positive")   # raises when the condition is false
 
-# Get stack trace
-trace = debug.stacktrace()
-show trace
+debug.stacktrace()          # prints the current call stack
 
-# Inspect heap
-stats = debug.heap_stats()
-show "Allocated: " + stats["allocated"]
-show "Freed: " + stats["freed"]
+let stats = debug.heap_stats()
+show "Allocated: " + str(stats["allocated"]) + " bytes"
+show "Next collection at: " + str(stats["threshold"]) + " bytes"
 ```
 
 ### Available Functions
 
 | Function | Description |
 |----------|-------------|
-| `debug.assert(cond, msg)` | Assert condition, throw on failure |
-| `debug.stacktrace()` | Return current stack trace as string |
-| `debug.heap_stats()` | Return GC heap statistics dict |
-| `debug.break()` | Trigger a breakpoint (SIGINT) |
-| `debug.profile_start()` | Start profiling |
-| `debug.profile_end()` | End profiling and report |
+| `debug.assert(cond, msg)` | Raise an error with msg when cond is false |
+| `debug.stacktrace()` | Print the current call stack |
+| `debug.dump_stack()` | Print the current frame's registers |
+| `debug.heap_stats()` | GC heap statistics: `allocated` and `threshold` (bytes) |
+| `debug.breakpoint()` | Print a breakpoint marker and the current frame (it does not pause the program; for that, run `glowlang debug program.glow`) |
+| `debug.profile_start()` | Start counting how often each line runs |
+| `debug.profile_end()` / `debug.profile_stop()` | Stop and print the most-run lines |
+
+`debug.heap_stats`, `debug.breakpoint` and `debug.profile_end` come from
+`lib/debugger.glow` (also available as `debug_heap_stats()` and so on); the
+others are built in.
 
 ## Standalone Debugger (tools/debugger/glow_debugger.c)
 

@@ -1,0 +1,17 @@
+# The algorithm programs in benchmarks/dsa_*.glow, described in
+# docs/DSA_TESTS_DOCUMENTATION.md. That page said all of them passed while 8
+# could not even run (one-line `if ...: ... end` blocks GlowLang does not
+# accept, a `&` operator it does not have, fractional list indexes). Each
+# answer here was checked against a reference implementation.
+let names = ["ackermann", "bellmanford", "bst", "dijkstra", "editdistance", "fenwicktree",
+             "floydwarshall", "graph_dfs_bfs", "heapsort", "kmp", "knapsack", "lcs", "lis",
+             "mergesort", "nqueens", "quicksort", "rabinkarp", "segmenttree", "subsetsum", "trie"]
+for each name in names:
+    let r = process.run([process.executable, "run", "benchmarks/dsa_" + name + ".glow"], {"timeout": 60})
+    let out = r.stdout.replace("\r\n", "\n").trim().replace("\n", " | ")
+    if r.code != 0:
+        show name, "FAILED with exit code", r.code, r.stderr.trim()
+    else:
+        show name + ":", out
+    end
+end

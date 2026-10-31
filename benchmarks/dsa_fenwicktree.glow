@@ -1,9 +1,19 @@
 /* Fenwick Tree BIT */
+
+# The lowest set bit of x (x & -x in C): the largest power of two that
+# divides x. GlowLang has no bitwise operators, so it is computed.
+func lowbit(x):
+    let p = 1
+    while x % (p * 2) == 0:
+        p = p * 2
+    end
+    return p
+end
 func update(BITree, n, index, val):
     index = index + 1
     while index <= n:
         BITree[index] = BITree[index] + val
-        index = index + (index & (0 - index))
+        index = index + lowbit(index)
     end
 end
 
@@ -12,7 +22,7 @@ func getSum(BITree, index):
     index = index + 1
     while index > 0:
         sum = sum + BITree[index]
-        index = index - (index & (0 - index))
+        index = index - lowbit(index)
     end
     return sum
 end

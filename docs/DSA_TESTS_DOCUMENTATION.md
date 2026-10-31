@@ -1,6 +1,6 @@
 # GlowLang DSA Tests Documentation
 
-This document outlines the 20 Data Structures and Algorithms (DSA) test implementations written in GlowLang. These tests serve as benchmarks and demonstrate the language's capabilities in handling complex logic, arrays, and object-oriented concepts.
+This document outlines 20 Data Structures and Algorithms (DSA) programs written in GlowLang. They live in `benchmarks/dsa_*.glow`, and `tests/regress_dsa_programs.glow` runs all of them in the test suite and checks each answer.
 
 ---
 
@@ -11,8 +11,12 @@ This document outlines the 20 Data Structures and Algorithms (DSA) test implemen
 - **GlowLang Syntax Snippet**:
   ```glow
   func ackermann(m, n):
-      if m == 0: return n + 1 end
-      if m > 0 and n == 0: return ackermann(m - 1, 1) end
+      if m == 0:
+          return n + 1
+      end
+      if m > 0 and n == 0:
+          return ackermann(m - 1, 1)
+      end
       return ackermann(m - 1, ackermann(m, n - 1))
   end
   ```
@@ -25,7 +29,10 @@ This document outlines the 20 Data Structures and Algorithms (DSA) test implemen
   ```glow
   blueprint NQueens:
       can backtrack(board, row):
-          if row == self.n: self.count = self.count + 1 return 0 end
+          if row == self.n:
+              self.count = self.count + 1
+              return 0
+          end
           /* ... loop and recursive call ... */
       end
   end
@@ -38,8 +45,10 @@ This document outlines the 20 Data Structures and Algorithms (DSA) test implemen
 - **GlowLang Syntax Snippet**:
   ```glow
   func mergeSort(arr, left, right):
-      when left >= right: return arr end
-      let mid = (left + right) / 2
+      when left >= right:
+          return arr
+      end
+      let mid = floor((left + right) / 2)    # / divides exactly; indexes must be whole
       arr = mergeSort(arr, left, mid)
       arr = mergeSort(arr, mid + 1, right)
       return merge(arr, left, mid, right)
@@ -158,7 +167,15 @@ This document outlines the 20 Data Structures and Algorithms (DSA) test implemen
 - **Space Complexity**: \( O(N) \)
 - **GlowLang Syntax Snippet**:
   ```glow
-  index = index + (index & (0 - index))
+  # GlowLang has no bitwise operators; lowbit(x) is x & -x, computed:
+  func lowbit(x):
+      let p = 1
+      while x % (p * 2) == 0:
+          p = p * 2
+      end
+      return p
+  end
+  index = index + lowbit(index)
   ```
 
 ### 14. Edit Distance (`dsa_editdistance.glow`)
@@ -240,22 +257,27 @@ This document outlines the 20 Data Structures and Algorithms (DSA) test implemen
 
 ---
 
-## 21. EXECUTION REPORT (GlowLang - MAY 2026)
-As of the high-performance architectural redesign, all 20 complex DSA problems have been verified for **behavioral correctness** and **stability** on the Register-based VM.
+## 21. Results
 
-### Summary Metrics:
-- **Total Problems**: 20
-- **Total PASS Rate**: 100%
-- **Total Execution Time**: 0.134 seconds (Full Suite)
-- **Average Performance**: <0.010s per problem
+`tests/regress_dsa_programs.glow` runs every program and compares its output with the expected answers, which were checked against reference implementations:
 
-| Algorithm | Result | Performance Note |
-| :--- | :--- | :--- |
-| Ackermann | ✅ PASS | Massive recursion handled via 16-bit registers. |
-| N-Queens | ✅ PASS | Recursive backtracking solver. |
-| Dijkstra | ✅ PASS | O(V^2) array-based shortest path. |
-| Merge Sort | ✅ PASS | Memory stable with bump-pointer allocation. |
-| Bellman-Ford | ✅ PASS | Linear DP paths optimized by SSA pass. |
+| Program | Output |
+| :--- | :--- |
+| Ackermann A(3, 8) | 2045 |
+| Bellman-Ford | [0, -1, 2, -2, 1] |
+| BST search 5, 20 | true, false |
+| Dijkstra (9 nodes) | [0, 4, 12, 19, 21, 11, 9, 8, 14] |
+| Edit distance sunday → saturday | 3 |
+| Fenwick tree prefix sum | 12 |
+| Floyd-Warshall | all-pairs distances of the 4-node graph |
+| Graph BFS / DFS from 2 | 2 0 3 1 / 2 0 1 3 |
+| Heap sort, quick sort, merge sort | sorted |
+| KMP / Rabin-Karp | pattern at index 10 / at 0 and 10 |
+| 0/1 knapsack | 220 |
+| LCS / LIS | 3 / 5 |
+| N-Queens (N = 11) | 2680 |
+| Segment tree range sum | 15 |
+| Subset sum to 9 | true |
+| Trie search | true |
 
-**Conclusion:** all 20 programs give correct results. These are small inputs that finish in milliseconds; for comparisons with other languages on larger workloads, see `benchmarks/RESULTS.md`.
-
+An earlier version of this page said all 20 passed when 8 of them could not run: they used one-line `if ...: ... end` blocks (GlowLang blocks always span lines), a `&` operator GlowLang does not have, and fractional list indexes from `/`. Those programs were fixed, and the test now keeps them honest. These are small inputs that finish in milliseconds; for timings against other languages, see `benchmarks/RESULTS.md`.
