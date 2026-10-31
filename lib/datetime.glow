@@ -1,36 +1,214 @@
-# datetime.glow — format Unix timestamps (seconds since 1970, from os.time())
-# in local time with strftime codes: DateTime(os.time()).to_string(),
-# .format("%Y-%m-%d"), .get_year() and the other getters. Parsing dates and
-# time zones are not supported yet.
+# datetime.glow — dates and times: parsing, formatting, arithmetic, UTC
+# offsets and local time. The calendar maths and the parser are built in
+# (src/datetime.c), so they behave the same on Windows, Linux and macOS.
+#
+#   import "datetime"
+#   let t = datetime.parse("2026-10-31T14:05:00+05:30")
+#   show t.year, t.month, t.day, t.hour, t.weekday_name()   # 2026 10 31 14 Saturday
+#   show t.to_utc().iso()                         # 2026-10-31T08:35:00Z
+#   show t.add_days(1).format("%d %B %Y")         # 01 November 2026
+#   let d = datetime.parse("31/10/2026 9:30 PM", "%d/%m/%Y %I:%M %p")
+#
+#   datetime.now()                 the current local time
+#   datetime.utcnow()              the current time in UTC
+#   datetime.create(year, month, day, hour, minute, second, microsecond, offset)
+#                                  everything after day is optional
+#   datetime.parse(text)           ISO 8601: 2026-10-31, 2026-10-31T14:05,
+#                                  2026-10-31 14:05:09.250Z, ...+05:30
+#   datetime.parse(text, format)   strptime codes (below)
+#   datetime.from_timestamp(seconds, offset)
+#   datetime.days_in_month(year, month), datetime.is_leap(year)
+#
+# A DateTime is an instant (.timestamp: Unix seconds, with a fraction) shown
+# at a UTC offset (.offset, seconds east of UTC). Without an offset it is in
+# the computer's local time zone (.is_local), daylight saving included.
+# Named zones such as "Asia/Kolkata" are not supported; use offsets.
+#
+# Fields: year, month, day, hour, minute, second, microsecond, weekday
+# (Monday is 0), yearday (1 to 366).
+# Methods: format(fmt), iso(), to_string(), weekday_name(), month_name(),
+# add_seconds/add_minutes/add_hours/add_days/add_months/add_years(n) (new
+# DateTimes; days, months and years keep the wall-clock time, and adding a
+# month to Jan 31 gives the last day of February), diff(other) (seconds),
+# before/after/equals(other), start_of_day(), to_utc(), to_local(),
+# with_offset(seconds). get_year/get_month/get_day return text, as before.
+#
+# Format codes (format and parse): %Y year, %y two-digit year, %m month,
+# %d day, %e day padded with a space, %H hour, %I 12-hour hour, %p AM/PM,
+# %M minute, %S second, %f microseconds, %B month name, %b short month name,
+# %A day name, %a short day name, %j day of the year, %z +hhmm, %Z UTC or
+# +hh:mm, %F %Y-%m-%d, %T %H:%M:%S, %u weekday 1-7 (Monday 1), %w 0-6
+# (Sunday 0), %s Unix seconds, %% a percent sign.
 
 class DateTime:
-    func init(timestamp):
+    func init(timestamp = none, offset = none):
+        if timestamp == none:
+            timestamp = datetime_native.now()
+        end
         self.timestamp = timestamp
+        self.is_local = offset == none
+        if offset == none:
+            offset = datetime_native.local_offset(timestamp)
+        end
+        self.offset = offset
+        let f = datetime_native.fields(timestamp, offset)
+        self.year = f[0]
+        self.month = f[1]
+        self.day = f[2]
+        self.hour = f[3]
+        self.minute = f[4]
+        self.second = f[5]
+        self.microsecond = f[6]
+        self.weekday = f[7]
+        self.yearday = f[8]
     end
 
     func format(fmt):
-        return os.format_time(fmt, self.timestamp)
+        return datetime_native.format(self.timestamp, self.offset, fmt)
     end
 
     func to_string():
         return self.format("%Y-%m-%d %H:%M:%S")
     end
 
+    # ISO 8601, e.g. 2026-10-31T14:05:00+05:30 (Z for UTC).
+    func iso():
+        let s = self.format("%Y-%m-%dT%H:%M:%S")
+        if self.microsecond > 0:
+            s = s + "." + self.format("%f")
+        end
+        if self.offset == 0:
+            return s + "Z"
+        end
+        return s + self.format("%Z")
+    end
+
+    func weekday_name():
+        return self.format("%A")
+    end
+
+    func month_name():
+        return self.format("%B")
+    end
+
+    # The same instant, shown elsewhere.
+    func to_utc():
+        return DateTime(self.timestamp, 0)
+    end
+    func to_local():
+        return DateTime(self.timestamp)
+    end
+    func with_offset(seconds):
+        return DateTime(self.timestamp, seconds)
+    end
+
+    # A DateTime with these fields, in the same zone (local stays local).
+    func _with_fields(year, month, day, hour, minute, second, microsecond):
+        let zone = self.offset
+        if self.is_local:
+            zone = none
+        end
+        return DateTime(datetime_native.make(year, month, day, hour, minute, second, microsecond, zone), zone)
+    end
+
+    func add_seconds(n):
+        let zone = self.offset
+        if self.is_local:
+            zone = none
+        end
+        return DateTime(self.timestamp + n, zone)
+    end
+    func add_minutes(n):
+        return self.add_seconds(n * 60)
+    end
+    func add_hours(n):
+        return self.add_seconds(n * 3600)
+    end
+
+    func add_days(n):
+        # Count days on the calendar, keeping the wall-clock time.
+        let midnight = datetime_native.make(self.year, self.month, self.day, 0, 0, 0, 0, 0)
+        let f = datetime_native.fields(midnight + n * 86400, 0)
+        return self._with_fields(f[0], f[1], f[2], self.hour, self.minute, self.second, self.microsecond)
+    end
+
+    func add_months(n):
+        let index = self.year * 12 + (self.month - 1) + n
+        let year = floor(index / 12)
+        let month = index - year * 12 + 1
+        let day = min(self.day, datetime_native.days_in_month(year, month))
+        return self._with_fields(year, month, day, self.hour, self.minute, self.second, self.microsecond)
+    end
+
+    func add_years(n):
+        return self.add_months(n * 12)
+    end
+
+    func start_of_day():
+        return self._with_fields(self.year, self.month, self.day, 0, 0, 0, 0)
+    end
+
+    # Seconds from other to this one.
+    func diff(other):
+        return self.timestamp - other.timestamp
+    end
+    func before(other):
+        return self.timestamp < other.timestamp
+    end
+    func after(other):
+        return self.timestamp > other.timestamp
+    end
+    func equals(other):
+        return self.timestamp == other.timestamp
+    end
+
     func get_year():
         return self.format("%Y")
     end
-
     func get_month():
         return self.format("%m")
     end
-    
     func get_day():
         return self.format("%d")
     end
 end
 
-func datetime_now():
-    let dt = DateTime()
-    dt.init(os.time())
-    return dt
+func dt_now():
+    return DateTime()
 end
+
+func dt_utcnow():
+    return DateTime(none, 0)
+end
+
+func dt_from_timestamp(seconds, offset = none):
+    return DateTime(seconds, offset)
+end
+
+func dt_create(year, month, day, hour = 0, minute = 0, second = 0, microsecond = 0, offset = none):
+    return DateTime(datetime_native.make(year, month, day, hour, minute, second, microsecond, offset), offset)
+end
+
+func dt_parse(text, format = none):
+    let r = datetime_native.parse(text, format)
+    return DateTime(r[0], r[1])
+end
+
+func dt_days_in_month(year, month):
+    return datetime_native.days_in_month(year, month)
+end
+
+func dt_is_leap(year):
+    return datetime_native.days_in_month(year, 2) == 29
+end
+
+# The old way to get the current time.
+func datetime_now():
+    return DateTime()
+end
+
+let datetime = {
+    "now": dt_now, "utcnow": dt_utcnow, "from_timestamp": dt_from_timestamp,
+    "create": dt_create, "parse": dt_parse, "days_in_month": dt_days_in_month,
+    "is_leap": dt_is_leap
+}

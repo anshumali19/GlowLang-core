@@ -1,0 +1,67 @@
+# Parsing, formatting, arithmetic and UTC offsets in lib/datetime.glow.
+# Before, datetime could only format a timestamp in local time. Values
+# here use explicit offsets so the output is the same in every time zone.
+import "datetime"
+
+let t = datetime.parse("2026-10-31T14:05:09.250+05:30")
+show "fields:", t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond, t.offset
+show "names:", t.weekday, t.weekday_name(), t.month_name(), t.yearday
+show "timestamp:", t.timestamp
+show "iso:", t.iso(), t.to_utc().iso()
+show "format:", t.format("%A %d %B %Y, %I:%M %p (%Z) day %j")
+
+# Every ISO form.
+for each s in ["2026-10-31", "2026-10-31T14:05", "2026-10-31 14:05:09Z", "2026-10-31T14:05:09.5-04:00", "2026-10-31T14:05:09+0530", "2000-02-29T23:59:59.999999Z"]:
+    let p = datetime.parse(s)
+    if p.is_local:
+        show " ", s, "->", p.to_string(), "(local)"
+    else:
+        show " ", s, "->", p.to_utc().iso()
+    end
+end
+
+# strptime-style formats.
+show "dmy 12h:", datetime.parse("31/10/2026 9:30 PM +0000", "%d/%m/%Y %I:%M %p %z").iso()
+show "names:", datetime.parse("Sat, 31 Oct 2026 08:00:00 Z", "%a, %d %b %Y %H:%M:%S %z").iso()
+show "midnight 12 AM:", datetime.parse("2026-01-01 12:15 AM Z", "%F %I:%M %p %z").iso()
+show "day of year:", datetime.parse("2024-366 Z", "%Y-%j %z").iso()
+show "two-digit year:", datetime.parse("01-02-68 Z", "%d-%m-%y %z").year, datetime.parse("01-02-69 Z", "%d-%m-%y %z").year
+
+# Arithmetic keeps the wall clock; months clamp to the month's last day.
+let jan31 = datetime.create(2024, 1, 31, 10, 0, 0, 0, 0)
+show "add_months:", jan31.add_months(1).iso(), jan31.add_months(13).iso(), jan31.add_months(-2).iso()
+show "add_years leap:", datetime.create(2024, 2, 29, 0, 0, 0, 0, 0).add_years(1).iso()
+show "add_days:", jan31.add_days(30).iso(), jan31.add_days(-31).iso(), jan31.add_days(366).iso()
+show "add_hours:", jan31.add_hours(20).iso(), jan31.add_minutes(-90).iso(), jan31.add_seconds(0.5).iso()
+show "start_of_day:", t.start_of_day().iso()
+show "diff:", jan31.add_days(2).diff(jan31), jan31.diff(jan31.add_hours(1))
+show "compare:", jan31.before(jan31.add_seconds(1)), jan31.after(jan31), jan31.equals(datetime.parse("2024-01-31T15:30:00+05:30"))
+
+# Converting between offsets keeps the instant.
+let ny = t.with_offset(-4 * 3600)
+show "offsets:", ny.iso(), ny.timestamp == t.timestamp
+
+# Calendar facts.
+show "leap:", datetime.is_leap(2024), datetime.is_leap(1900), datetime.is_leap(2000), datetime.days_in_month(2023, 2)
+show "epoch:", datetime.from_timestamp(0, 0).iso(), datetime.from_timestamp(-86400, 0).iso()
+show "old dates:", datetime.create(1066, 10, 14, 0, 0, 0, 0, 0).weekday_name(), datetime.create(1969, 7, 20, 20, 17, 0, 0, 0).timestamp
+
+# Local time round-trips through its own wall clock.
+let here = datetime.create(2026, 6, 15, 9, 45)
+show "local:", here.is_local, here.hour, here.minute, datetime.parse(here.to_string()).timestamp == here.timestamp
+show "now:", datetime.now().year >= 2026, datetime.utcnow().offset
+
+# Errors say what is wrong.
+func try_it(label, f):
+    try:
+        show label, f()
+    catch e:
+        show label, "error:", e
+    end
+end
+try_it("bad date:", lambda(): datetime.parse("2026-02-30"))
+try_it("bad text:", lambda(): datetime.parse("yesterday"))
+try_it("leftover:", lambda(): datetime.parse("2026-10-31 extra"))
+try_it("format mismatch:", lambda(): datetime.parse("31.10.2026", "%d/%m/%Y"))
+try_it("bad month:", lambda(): datetime.create(2026, 13, 1))
+try_it("bad code:", lambda(): t.format("%Q"))
