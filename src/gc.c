@@ -366,6 +366,7 @@ static void process_grey_stack(void) {
 }
 
 static void gc_free_object_payload(GCObject *unmarked) {
+    if (unmarked->type == OBJ_LIST) list_free_storage((List*)unmarked);
     if (unmarked->type == OBJ_LIST) free(((List*)unmarked)->items);
     else if (unmarked->type == OBJ_DICT) dict_free_storage((Dict*)unmarked);
     else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }

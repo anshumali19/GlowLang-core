@@ -1045,19 +1045,6 @@ static void glow_debug_hook(Bytecode *bc, Instruction *pc, int base_reg) {
     }
 }
 
-/* A callable stored in a dict under `name` (module functions such as
-   fs.remove or os.exit live in dicts) takes precedence over the built-in
-   dict methods of the same name. */
-static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
-    Value v = dict_get(d, name);
-    if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
-        ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) { *out = v; return 1; }
-    }
-    return 0;
-}
-
-
 /* Directory part of a path ("" when there is none), with a trailing slash. */
 int glow_self_exe_path(char *out, size_t outsz) {
     if (!out || outsz < 2) return -1;
@@ -2580,7 +2567,6 @@ int jit_exception_pending(void) { return has_exception; }
     l_OP_CALL_METHOD: {
         int ac = pc->arg;
         Value obj = R(pc->r1);
-        Value dict_member = value_none();
 
         FuncEntry *fe = NULL;
         NativeFuncPtr native_fe = NULL;
@@ -2591,7 +2577,7 @@ int jit_exception_pending(void) { return has_exception; }
         if (mname && strcmp(mname, "type") == 0) {
             native_fe = native_val_type;
             is_native_dict_str_method = 1;
-        } else if ((native_fe = glow_builtin_method(obj, mname)) != NULL) {
+        } else if ((native_fe = glow_method_lookup(obj, mname, pc, &fallback_callee)) != NULL) {
             is_native_dict_str_method = 1;
         } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
             ObjType ot = GET_OBJ_TYPE(obj);
@@ -2613,30 +2599,6 @@ int jit_exception_pending(void) { return has_exception; }
                     Value field = dict_get(inst->properties, mname);
                     if (GET_TYPE(field) != VAL_NONE) fallback_callee = field;
                 }
-            }
-        } else if(GET_TYPE(obj)==VAL_LIST) {
-            if (strcmp(mname, "append") == 0 || strcmp(mname, "push") == 0) { native_fe = native_list_append; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "pop") == 0) { native_fe = native_list_pop; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "len") == 0) { native_fe = native_list_len; is_native_dict_str_method = 1; }
-        } else if(GET_TYPE(obj)==VAL_DICT) {
-            if (dict_member_is_callable(AS_DICT(obj), mname, &dict_member)) fallback_callee = dict_member;
-            else if (strcmp(mname, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "merge") == 0) { native_fe = native_dict_merge; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
-            else {
-                fallback_callee = dict_get(AS_DICT(obj), mname);
-            }
-        } else if(GET_TYPE(obj)==VAL_STRING) {
-            if (strcmp(mname, "contains") == 0) { native_fe = native_str_contains; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "find") == 0) { native_fe = native_str_find; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "slice") == 0) { native_fe = native_str_slice; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
-            else if (strcmp(mname, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
-            else {
-                fallback_callee = value_none();
             }
         }
 
@@ -2748,8 +2710,7 @@ int jit_exception_pending(void) { return has_exception; }
     }
     l_OP_LIST_LITERAL: {
         int n = pc->arg; CLAMP_REG_COUNT(pc->r1, n);
-        List *l = pc->is_stack_alloc ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
-        l->size = 0; l->capacity = n; l->items = n > 0 ? calloc(n, sizeof(Value)) : NULL;
+        List *l = list_alloc(n, pc->is_stack_alloc);
         for (int i=0; i<n; i++) list_push(l, R(pc->r1 + i));
         R(pc->r0) = value_list(l); pc++; goto l_DISPATCH;
     }

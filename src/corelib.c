@@ -305,29 +305,31 @@ static Value core_bool(int argc, Value *args) {
 
 /* ---- string methods ---- */
 
-static Value str_map(Value s, int (*f)(int)) {
+/* upper()/lower(): ASCII letters only, as toupper/tolower do in the C
+   locale the runtime always uses. Written straight into the new string. */
+static Value str_case(Value s, int upper) {
     size_t n = rope_length(s);
-    char *buf = malloc(n + 1);
-    const char *src = AS_STRING(s);
-    for (size_t i = 0; i < n; i++) buf[i] = (char)f((unsigned char)src[i]);
-    buf[n] = '\0';
-    Value r = value_string_copy(buf);
-    free(buf);
+    char *out;
+    Value r = value_string_alloc(n, &out);
+    const unsigned char *src = (const unsigned char*)AS_STRING(s);
+    unsigned char lo = upper ? 'a' : 'A', hi = upper ? 'z' : 'Z';
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = src[i];
+        out[i] = (char)(c >= lo && c <= hi ? c ^ 0x20 : c);
+    }
     return r;
 }
-static Value s_upper(int argc, Value *args) { (void)argc; return str_map(args[0], toupper); }
-static Value s_lower(int argc, Value *args) { (void)argc; return str_map(args[0], tolower); }
+static Value s_upper(int argc, Value *args) { (void)argc; return str_case(args[0], 1); }
+static Value s_lower(int argc, Value *args) { (void)argc; return str_case(args[0], 0); }
 
 static Value trim_impl(Value s, int left, int right) {
     const char *p = AS_STRING(s);
     size_t n = rope_length(s), a = 0, b = n;
     if (left) while (a < b && isspace((unsigned char)p[a])) a++;
     if (right) while (b > a && isspace((unsigned char)p[b - 1])) b--;
-    char *buf = malloc(b - a + 1);
-    memcpy(buf, p + a, b - a);
-    buf[b - a] = '\0';
-    Value r = value_string_copy(buf);
-    free(buf);
+    char *out;
+    Value r = value_string_alloc(b - a, &out);
+    memcpy(out, AS_STRING(s) + a, b - a);
     return r;
 }
 static Value s_trim(int argc, Value *args) { (void)argc; return trim_impl(args[0], 1, 1); }
@@ -345,23 +347,40 @@ static Value s_ends_with(int argc, Value *args) {
     return value_bool(m <= n && memcmp(AS_STRING(args[0]) + (n - m), AS_STRING(args[1]), m) == 0);
 }
 
+/* The first occurrence of needle (m > 0 bytes) in [p, end), or NULL. */
+static const char *find_bytes(const char *p, const char *end, const char *needle, size_t m) {
+    while ((size_t)(end - p) >= m) {
+        p = memchr(p, needle[0], (size_t)(end - p) - m + 1);
+        if (!p) return NULL;
+        if (memcmp(p, needle, m) == 0) return p;
+        p++;
+    }
+    return NULL;
+}
+
 /* text.replace(old, new): every occurrence. */
 static Value s_replace(int argc, Value *args) {
     if (!arg_is(argc, args, 1, VAL_STRING) || !arg_is(argc, args, 2, VAL_STRING)) return raise("replace() needs two strings");
     const char *s = AS_STRING(args[0]);
     size_t n = rope_length(args[0]);
     const char *from = AS_STRING(args[1]); size_t fl = rope_length(args[1]);
-    const char *to = AS_STRING(args[2]); size_t tl = rope_length(args[2]);
-    if (fl == 0) return args[0];
-    char *buf = NULL; size_t len = 0, cap = 0;
-    buf_append(&buf, &len, &cap, "", 0);
-    size_t i = 0;
-    while (i < n) {
-        if (i + fl <= n && memcmp(s + i, from, fl) == 0) { buf_append(&buf, &len, &cap, to, tl); i += fl; }
-        else { buf_append(&buf, &len, &cap, s + i, 1); i++; }
+    size_t tl = rope_length(args[2]);
+    if (fl == 0 || fl > n) return args[0];
+    /* Count first, so the result is allocated once at its final size. */
+    size_t hits = 0;
+    for (const char *p = s, *end = s + n; (p = find_bytes(p, end, from, fl)) != NULL; p += fl) hits++;
+    if (hits == 0) return args[0];
+    char *out;
+    Value r = value_string_alloc(n - hits * fl + hits * tl, &out);
+    s = AS_STRING(args[0]); from = AS_STRING(args[1]);
+    const char *to = AS_STRING(args[2]);
+    const char *p = s, *end = s + n, *hit;
+    while ((hit = find_bytes(p, end, from, fl)) != NULL) {
+        memcpy(out, p, (size_t)(hit - p)); out += hit - p;
+        memcpy(out, to, tl); out += tl;
+        p = hit + fl;
     }
-    Value r = value_string_copy(buf);
-    free(buf);
+    memcpy(out, p, (size_t)(end - p));
     return r;
 }
 
@@ -606,6 +625,56 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name) {
                 if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) return NULL;
             }
             return find_method(dict_methods, name);
+        }
+        default: return NULL;
+    }
+}
+
+/* glow_builtin_method with a cache in the calling instruction (pc may be
+   NULL). cache[2] holds the built-in found for a string, list or dict
+   receiver; the name is fixed per instruction, so the receiver kind is the
+   whole key. cache[3] holds a dict and the entry number where `name` was
+   found (a module function such as math.sqrt); it is reused while that
+   entry still holds `name`. The compiler interns method names, so
+   comparing key pointers is enough, and a stale dict address can only ever
+   match an entry for the same name.
+   A callable dict member wins over a built-in of the same name (fs.remove,
+   os.exit) and is returned in *member (and NULL); so is a
+   non-callable member when there is no built-in by that name. */
+static const char kind_string, kind_list, kind_dict;
+
+static int is_callable_obj(Value m) {
+    if (GET_TYPE(m) != VAL_OBJECT || !(m & MASK_PAYLOAD)) return 0;
+    ObjType ot = GET_OBJ_TYPE(m);
+    return ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS;
+}
+
+static NativeFuncPtr cached_find(Instruction *pc, const char *kind, const MethodEntry *t, const char *name) {
+    if (pc && pc->cache[2].key == kind) return (NativeFuncPtr)pc->cache[2].val;
+    NativeFuncPtr fn = find_method(t, name);
+    if (fn && pc) { pc->cache[2].key = (void*)kind; pc->cache[2].val = (intptr_t)fn; }
+    return fn;
+}
+
+NativeFuncPtr glow_method_lookup(Value v, const char *name, Instruction *pc, Value *member) {
+    *member = value_none();
+    if (!name) return NULL;
+    switch (GET_TYPE(v)) {
+        case VAL_STRING: return (v & MASK_PAYLOAD) ? cached_find(pc, &kind_string, string_methods, name) : NULL;
+        case VAL_LIST: return cached_find(pc, &kind_list, list_methods, name);
+        case VAL_DICT: {
+            Dict *d = AS_DICT(v);
+            intptr_t e = pc ? pc->cache[3].val - 1 : -1;
+            if (!(pc && pc->cache[3].key == (void*)d && e >= 0 && e < d->capacity &&
+                  GET_TYPE(d->keys[e]) == VAL_STRING &&
+                  (const char*)(uintptr_t)(d->keys[e] & MASK_PAYLOAD) == name)) {
+                e = dict_get_idx(d, name);
+                if (e >= 0 && pc) { pc->cache[3].key = (void*)d; pc->cache[3].val = e + 1; }
+            }
+            if (e >= 0 && is_callable_obj(d->values[e])) { *member = d->values[e]; return NULL; }
+            NativeFuncPtr fn = cached_find(pc, &kind_dict, dict_methods, name);
+            if (!fn && e >= 0) *member = d->values[e];
+            return fn;
         }
         default: return NULL;
     }

@@ -471,18 +471,6 @@ Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) 
     return v;
 }
 
-/* A callable stored in a dict under `name` (module functions such as
-   fs.remove or os.exit live in dicts) takes precedence over the built-in
-   dict methods of the same name. */
-static int dict_member_is_callable(Dict *d, const char *name, Value *out) {
-    Value v = dict_get(d, name);
-    if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD)) {
-        ObjType ot = GET_OBJ_TYPE(v);
-        if (ot == OBJ_NATIVE_FUNC || ot == OBJ_CLOSURE || ot == OBJ_BOUND_METHOD || ot == OBJ_CLASS) { *out = v; return 1; }
-    }
-    return 0;
-}
-
 Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
     extern THREAD_LOCAL Bytecode *g_dbg_bc;
     extern THREAD_LOCAL Instruction *g_dbg_pc;
@@ -498,7 +486,7 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
        (and raises the proper error). */
     if (n && strcmp(n, "type") == 0) {
         native_fe = native_val_type; is_native_dict_str_method = 1;
-    } else if ((native_fe = glow_builtin_method(obj, n)) != NULL) {
+    } else if ((native_fe = glow_method_lookup(obj, n, pc, &fallback_callee)) != NULL) {
         is_native_dict_str_method = 1;
     } else if(GET_TYPE(obj)==VAL_OBJECT && (obj & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(obj);
@@ -545,26 +533,6 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 if (GET_TYPE(field) != VAL_NONE) fallback_callee = field;
             }
         }
-    } else if(GET_TYPE(obj)==VAL_LIST) {
-        if (strcmp(n, "append") == 0 || strcmp(n, "push") == 0) { native_fe = native_list_append; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "pop") == 0) { native_fe = native_list_pop; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_list_len; is_native_dict_str_method = 1; }
-    } else if(GET_TYPE(obj)==VAL_DICT) {
-        Value dict_member;
-        if (dict_member_is_callable(AS_DICT(obj), n, &dict_member)) fallback_callee = dict_member;
-        else if (strcmp(n, "has") == 0) { native_fe = native_dict_has; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "keys") == 0) { native_fe = native_dict_keys; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "values") == 0) { native_fe = native_dict_values; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "remove") == 0) { native_fe = native_dict_remove; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "merge") == 0) { native_fe = native_dict_merge; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
-        else fallback_callee = dict_get(AS_DICT(obj), n);
-    } else if(GET_TYPE(obj)==VAL_STRING) {
-        if (strcmp(n, "contains") == 0) { native_fe = native_str_contains; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "find") == 0) { native_fe = native_str_find; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "slice") == 0) { native_fe = native_str_slice; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "split") == 0) { native_fe = native_str_split; is_native_dict_str_method = 1; }
-        else if (strcmp(n, "len") == 0) { native_fe = native_len; is_native_dict_str_method = 1; }
     }
 
     if (!(fe && fe->body) && !(native_fe && is_native_dict_str_method)) {
@@ -765,6 +733,16 @@ static Value value_string_copy_len(const char *s, size_t len) {
     gs->size = (int)len;
     memcpy(gs->chars, s, len);
     gs->chars[len] = '\0';
+    return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+}
+
+/* A new string of len bytes (plus the terminator) for the caller to fill:
+   *chars points at its buffer. */
+Value value_string_alloc(size_t len, char **chars) {
+    GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
+    gs->size = (int)len;
+    gs->chars[len] = '\0';
+    *chars = gs->chars;
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
@@ -1241,10 +1219,52 @@ int dict_remove(Dict *d, const char *key, Value *out) {
     d->size--;
     return 1;
 }
-List* list_new(int sz) { List *l = gc_alloc(sizeof(List), OBJ_LIST); l->size = 0; l->capacity = sz; l->items = sz > 0 ? calloc(sz, sizeof(Value)) : NULL; return l; }
+/* Lists of up to LIST_INLINE_CAP items keep them inside the List object,
+   so a small list costs one GC allocation and no malloc; the first push
+   past that moves them to a malloc'd array. */
+#define LIST_INLINE_CAP 4
+static int list_is_inline(List *l) { return (void*)l->items == (void*)(l + 1); }
+
+List* list_alloc(int sz, int stack) {
+    if (sz < 0) sz = 0;
+    List *l;
+    if (sz <= LIST_INLINE_CAP) {
+        size_t bytes = sizeof(List) + sizeof(Value) * LIST_INLINE_CAP;
+        l = stack ? gc_alloc_stack(bytes, OBJ_LIST) : gc_alloc(bytes, OBJ_LIST);
+        l->items = (Value*)(l + 1);
+        l->capacity = LIST_INLINE_CAP;
+    } else {
+        l = stack ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
+        l->items = calloc((size_t)sz, sizeof(Value));
+        if (!l->items) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+        l->capacity = sz;
+    }
+    l->size = 0;
+    return l;
+}
+
+List* list_new(int sz) { return list_alloc(sz, 0); }
+
+/* Free a list's item array unless it lives inside the List. */
+void list_free_storage(List *l) {
+    if (l->items && !list_is_inline(l)) free(l->items);
+    l->items = NULL;
+}
 void list_push(List *l, Value v) {
     gc_write_barrier((GCObject*)l, v);
-    if (l->size >= l->capacity) { l->capacity = (l->capacity == 0) ? 4 : l->capacity * 2; l->items = realloc(l->items, sizeof(Value)*l->capacity); } l->items[l->size++] = v;
+    if (l->size >= l->capacity) {
+        int cap = l->capacity < 4 ? 8 : l->capacity * 2;
+        Value *items;
+        if (list_is_inline(l) || !l->items) {
+            items = malloc(sizeof(Value) * (size_t)cap);
+            if (items && l->size) memcpy(items, l->items, sizeof(Value) * (size_t)l->size);
+        } else {
+            items = realloc(l->items, sizeof(Value) * (size_t)cap);
+        }
+        if (!items) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+        l->items = items; l->capacity = cap;
+    }
+    l->items[l->size++] = v;
 }
 
 Value list_pop(List *l) {
@@ -2504,7 +2524,7 @@ Value native_str_split(int argc, Value *args) {
         delim = AS_STRING(args[1]);
     }
 
-    List *l = list_new(8);
+    List *l = list_new(0);
 
     // Pause GC during split to protect the unrooted list 'l' and its items
     size_t old_gc_thresh = gc_threshold;

@@ -1,0 +1,87 @@
+# Each method-call instruction remembers what it found last time. These
+# cases change the receiver or the dict under it and check that the call
+# still reaches the right function.
+
+# One call site, receivers of different kinds.
+func size_of(x):
+    return x.len()
+end
+for each v in ["abc", [1, 2, 3, 4], {"a": 1}, "hello", [9], {"a": 1, "b": 2}]:
+    show "len:", size_of(v)
+end
+
+func has_a(x):
+    return x.contains("a")
+end
+show "contains:", has_a("cat"), has_a(["a", "b"]), has_a("dog"), has_a(["x"])
+
+# A module-like dict whose function is replaced, removed and re-added.
+let tools = {"twice": lambda(n): n * 2}
+func call_twice(t, n):
+    return t.twice(n)
+end
+show "twice:", call_twice(tools, 5)
+tools.twice = lambda(n): n * 3
+show "replaced:", call_twice(tools, 5)
+tools.remove("twice")
+let i = 0
+while i < 20:
+    tools["filler" + str(i)] = i
+    i = i + 1
+end
+tools["twice"] = lambda(n): n * 4
+show "re-added after growing:", call_twice(tools, 5)
+
+# Two different dicts through the same call site.
+let a = {"twice": lambda(n): n + 100}
+let b = {"pad": 0, "twice": lambda(n): n + 200}
+show "a then b:", call_twice(a, 1), call_twice(b, 1), call_twice(a, 2)
+
+# A callable member wins over the built-in of the same name; when it goes,
+# the built-in is used again.
+let d = {"keys": lambda(): "custom keys", "x": 1}
+func call_keys(x):
+    return x.keys()
+end
+show "override:", call_keys(d)
+d.remove("keys")
+show "built-in again:", call_keys(d)
+d["keys"] = lambda(): "custom again"
+show "override again:", call_keys(d)
+
+# A non-callable value under the name still fails as before.
+func call_x(x):
+    return x.x()
+end
+try:
+    show call_x({"x": 5})
+catch e:
+    show "not callable:", e
+end
+
+# Module functions in a hot loop (the case the cache exists for).
+let s = 0.0
+i = 0
+while i < 20000:
+    s = s + math.sqrt(4.0) + math.abs(-1)
+    i = i + 1
+end
+show "math:", s
+
+# The same switches once the call site is hot enough to be compiled.
+let total = 0
+i = 0
+while i < 6000:
+    if i % 3 == 0:
+        total = total + call_twice(a, 1)
+    eif i % 3 == 1:
+        total = total + call_twice(b, 1)
+    else:
+        total = total + call_twice(tools, 1) + size_of("ab") + size_of([1])
+    end
+    if i == 3000:
+        a.twice = lambda(n): n
+    end
+    i = i + 1
+end
+show "hot:", total
