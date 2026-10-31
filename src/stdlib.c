@@ -1092,23 +1092,56 @@ static uint32_t hash_string(const char *s) {
     return hash;
 }
 
+/* A dict's keys, values and index live in one block: cap keys, cap values,
+   then 2*cap int32 index slots. Small dicts keep that block inside the Dict
+   object itself (DICT_INLINE_CAP entries), so `{}` or a two-field instance
+   costs one GC allocation and no malloc. */
+#define DICT_INLINE_CAP 4
+#define DICT_BLOCK_SIZE(cap) ((size_t)(cap) * 2 * sizeof(Value) + (size_t)(cap) * 2 * sizeof(int32_t))
+
+static void dict_set_block(Dict *d, void *block, int cap) {
+    d->keys = (Value*)block;
+    d->values = d->keys + cap;
+    d->index = (int32_t*)(d->values + cap);
+    d->capacity = cap;
+    d->index_cap = cap * 2;
+    for (int i=0; i<cap; i++) d->keys[i] = value_none();
+    memset(d->values, 0, sizeof(Value) * (size_t)cap);
+    memset(d->index, 0xff, sizeof(int32_t) * (size_t)d->index_cap); /* DICT_EMPTY */
+}
+
+static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
+
+/* Free a dict's storage block unless it lives inside the Dict. */
+void dict_free_storage(Dict *d) {
+    if (d->keys && !dict_is_inline(d)) free(d->keys);
+    d->keys = NULL; d->values = NULL; d->index = NULL;
+}
+
 /* Fill a freshly allocated Dict with room for about sz entries. */
 void dict_init(Dict *d, int sz) {
     int cap = 8; while (cap < sz) cap *= 2;
-    d->capacity = cap; d->size = 0; d->used = 0;
-    d->keys = calloc(cap, sizeof(Value));
-    d->values = calloc(cap, sizeof(Value));
-    for (int i=0; i<cap; i++) d->keys[i] = value_none();
-    d->index_cap = cap * 2;
-    d->index = malloc(sizeof(int32_t) * (size_t)d->index_cap);
-    for (int i=0; i<d->index_cap; i++) d->index[i] = DICT_EMPTY;
+    d->size = 0; d->used = 0;
+    void *block = malloc(DICT_BLOCK_SIZE(cap));
+    if (!block) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+    dict_set_block(d, block, cap);
 }
 
-Dict* dict_new(int sz) {
-    Dict *d = gc_alloc(sizeof(Dict), OBJ_DICT);
+/* A new dict for about sz entries; small ones carry their storage inline. */
+Dict* dict_alloc(int sz, int stack) {
+    if (sz <= DICT_INLINE_CAP) {
+        size_t bytes = sizeof(Dict) + DICT_BLOCK_SIZE(DICT_INLINE_CAP);
+        Dict *d = stack ? gc_alloc_stack(bytes, OBJ_DICT) : gc_alloc(bytes, OBJ_DICT);
+        d->size = 0; d->used = 0;
+        dict_set_block(d, d + 1, DICT_INLINE_CAP);
+        return d;
+    }
+    Dict *d = stack ? gc_alloc_stack(sizeof(Dict), OBJ_DICT) : gc_alloc(sizeof(Dict), OBJ_DICT);
     dict_init(d, sz);
     return d;
 }
+
+Dict* dict_new(int sz) { return dict_alloc(sz, 0); }
 
 #define DICT_KEY_PTR(d, e) ((const char*)(uintptr_t)((d)->keys[e] & MASK_PAYLOAD))
 
@@ -1137,23 +1170,28 @@ static void dict_index_insert(Dict *d, int e, uint32_t h) {
 static void dict_grow(Dict *d) {
     int cap = d->capacity;
     if ((d->size + 1) * 2 > cap) cap *= 2;
-    Value *keys = calloc(cap, sizeof(Value));
-    Value *values = calloc(cap, sizeof(Value));
-    for (int i=0; i<cap; i++) keys[i] = value_none();
+    Value *old_keys = d->keys, *old_values = d->values;
+    int old_used = d->used, was_inline = dict_is_inline(d);
+    void *block;
+    Value saved[2 * DICT_INLINE_CAP];
+    if (cap == d->capacity && was_inline) {
+        /* Compacting in place: copy the live entries out first. */
+        memcpy(saved, old_keys, sizeof(Value) * (size_t)old_used);
+        memcpy(saved + DICT_INLINE_CAP, old_values, sizeof(Value) * (size_t)old_used);
+        old_keys = saved; old_values = saved + DICT_INLINE_CAP;
+        block = d + 1;
+    } else {
+        block = malloc(DICT_BLOCK_SIZE(cap));
+        if (!block) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+    }
+    dict_set_block(d, block, cap);
     int n = 0;
-    for (int i=0; i<d->used; i++) {
-        if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
-        keys[n] = d->keys[i]; values[n] = d->values[i]; n++;
+    for (int i=0; i<old_used; i++) {
+        if (GET_TYPE(old_keys[i]) == VAL_NONE) continue;
+        d->keys[n] = old_keys[i]; d->values[n] = old_values[i]; n++;
     }
-    free(d->keys); free(d->values);
-    d->keys = keys; d->values = values;
-    d->capacity = cap; d->used = n; d->size = n;
-    if (d->index_cap < cap * 2) {
-        free(d->index);
-        d->index_cap = cap * 2;
-        d->index = malloc(sizeof(int32_t) * (size_t)d->index_cap);
-    }
-    for (int i=0; i<d->index_cap; i++) d->index[i] = DICT_EMPTY;
+    if (!was_inline) free(old_keys);
+    d->used = n; d->size = n;
     for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
 }
 
@@ -1410,7 +1448,7 @@ Instance* instance_new(Class *k) {
     k->instances_created++;
 
     vm_stack[vm_stack_top++] = value_instance(i);
-    i->properties = dict_new(8);
+    i->properties = dict_new(k->field_hint);
     vm_stack_top--;
     return i;
 }
@@ -1434,6 +1472,7 @@ Value instance_get(Instance *inst, const char *name) {
 void instance_set(Instance *inst, const char *name, Value val) {
     if (trace_mode) printf("DEBUG: instance_set(%s) on Inst %p, Props %p, val 0x%lx\n", name, (void*)inst, (void*)inst->properties, (unsigned long)val);
     dict_set(inst->properties, name, val);
+    if (inst->properties->size > inst->klass->field_hint) inst->klass->field_hint = inst->properties->size;
     gc_write_barrier((GCObject*)inst, val);
 }
 

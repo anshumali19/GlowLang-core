@@ -1,0 +1,83 @@
+# Small dicts keep their entries inside the dict object and move to a
+# separate block when they grow; order, removal and lookups must survive
+# every transition.
+
+# Fill past the inline size one key at a time, then check the order.
+let d = {}
+let i = 0
+while i < 10:
+    d["k" + str(i)] = i
+    i = i + 1
+end
+show "grown:", len(d), d.keys()
+
+# Remove and re-add inside the inline size: the dict compacts in place.
+let s = {"a": 1, "b": 2, "c": 3, "d": 4}
+let r = 0
+while r < 20:
+    s.remove("a")
+    s["a"] = r
+    r = r + 1
+end
+show "churned:", len(s), s.keys(), s["a"], s["b"]
+s.remove("b")
+s.remove("c")
+s["e"] = 5
+s["f"] = 6
+s["g"] = 7
+show "mixed:", s.keys(), s.values()
+show "missing:", s.zzz, s.has("b")
+
+# Literals of every size up to and past the inline size.
+show {}, {"x": 1}, {"x": 1, "y": 2, "z": 3, "w": 4}, len({"a": 1, "b": 2, "c": 3, "d": 4, "e": 5})
+
+# A class with many fields: later instances start at the learned size.
+blueprint Wide:
+    action init(n):
+        self.a = n
+        self.b = n + 1
+        self.c = n + 2
+        self.d = n + 3
+        self.e = n + 4
+        self.f = n + 5
+        self.g = n + 6
+    end
+    action total():
+        return self.a + self.b + self.c + self.d + self.e + self.f + self.g
+    end
+end
+let sum = 0
+let objs = []
+i = 0
+while i < 2000:
+    let w = Wide(i)
+    objs.push(w)
+    sum = sum + w.total()
+    i = i + 1
+end
+show "wide:", sum, objs[1999].g
+
+# A small class, many instances kept alive across collections.
+blueprint Pair:
+    action init(a, b):
+        self.a = a
+        self.b = b
+    end
+end
+let pairs = []
+i = 0
+while i < 50000:
+    pairs.push(Pair(i, i * 2))
+    i = i + 1
+end
+let ok = true
+i = 0
+while i < 50000:
+    if pairs[i].a != i or pairs[i].b != i * 2:
+        ok = false
+    end
+    i = i + 2500
+end
+show "pairs:", len(pairs), ok
+pairs[7].extra = "late"
+show "late field:", pairs[7].extra, pairs[7].a
