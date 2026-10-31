@@ -1,0 +1,35 @@
+fields: 2026 10 31 14 5 9 250000 19800
+names: 5 Saturday October 304
+timestamp: 1793435709.25
+iso: 2026-10-31T14:05:09.250000+05:30 2026-10-31T08:35:09.250000Z
+format: Saturday 31 October 2026, 02:05 PM (+05:30) day 304
+  2026-10-31 -> 2026-10-31 00:00:00 (local)
+  2026-10-31T14:05 -> 2026-10-31 14:05:00 (local)
+  2026-10-31 14:05:09Z -> 2026-10-31T14:05:09Z
+  2026-10-31T14:05:09.5-04:00 -> 2026-10-31T18:05:09.500000Z
+  2026-10-31T14:05:09+0530 -> 2026-10-31T08:35:09Z
+  2000-02-29T23:59:59.999999Z -> 2000-02-29T23:59:59.999999Z
+dmy 12h: 2026-10-31T21:30:00Z
+names: 2026-10-31T08:00:00Z
+midnight 12 AM: 2026-01-01T00:15:00Z
+day of year: 2024-12-31T00:00:00Z
+two-digit year: 2068 1969
+add_months: 2024-02-29T10:00:00Z 2025-02-28T10:00:00Z 2023-11-30T10:00:00Z
+add_years leap: 2025-02-28T00:00:00Z
+add_days: 2024-03-01T10:00:00Z 2023-12-31T10:00:00Z 2025-01-31T10:00:00Z
+add_hours: 2024-02-01T06:00:00Z 2024-01-31T08:30:00Z 2024-01-31T10:00:00.500000Z
+start_of_day: 2026-10-31T00:00:00+05:30
+diff: 172800 -3600
+compare: true false true
+offsets: 2026-10-31T04:35:09.250000-04:00 true
+leap: true false true 28
+epoch: 1970-01-01T00:00:00Z 1969-12-31T00:00:00Z
+old dates: Sunday -14182980
+local: true 9 45 true
+now: true 0
+bad date: error: datetime.parse: cannot read "2026-02-30": day out of range for that month
+bad text: error: datetime.parse: cannot read "yesterday": expected YYYY-MM-DD
+leftover: error: datetime.parse: cannot read "2026-10-31 extra": unexpected text after the date
+format mismatch: error: datetime.parse: cannot read "31.10.2026": the text does not match the format
+bad month: error: datetime: month must be 1 to 12
+bad code: error: datetime: unknown format code %Q

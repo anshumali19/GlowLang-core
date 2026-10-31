@@ -4263,6 +4263,7 @@ void std_init(void) {
     var_set("media", value_dict(media));
 
     glow_corelib_init();
+    glow_datetime_init();
 }
 
 Value glow_native_pairs(int argc, Value *args) { return native_pairs(argc, args); }

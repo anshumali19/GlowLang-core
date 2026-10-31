@@ -72,6 +72,7 @@ set(GLOW_SOURCES
     src/corelib.c
     src/process.c
     src/ffi.c
+    src/datetime.c
     src/blake3.c
 )
 

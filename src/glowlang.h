@@ -894,6 +894,7 @@ Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 /* Core library (corelib.c): built-in list/string/dict methods and globals. */
 NativeFuncPtr glow_builtin_method(Value v, const char *name);
 void glow_corelib_init(void);
+void glow_datetime_init(void);
 /* process module (process.c): run and talk to other programs. */
 void glow_process_init(void);
 /* ffi module (ffi.c): call functions in C libraries. */

@@ -863,6 +863,36 @@ secrets in constant time. `uuid4()`: a random UUID. For signing messages, see `l
 ### Debugging (`debug.`)
 `assert(condition, message)`, `stacktrace()`, `dump_stack()`, `profile_start()`, `profile_stop()`.
 
+### Dates and Times (`import "datetime"`)
+```glow
+import "datetime"
+let t = datetime.parse("2026-10-31T14:05:00+05:30")
+show t.year, t.month, t.day, t.hour, t.weekday_name()   # 2026 10 31 14 Saturday
+show t.to_utc().iso()                                   # 2026-10-31T08:35:00Z
+show t.add_days(1).format("%d %B %Y")                   # 01 November 2026
+let d = datetime.parse("31/10/2026 9:30 PM", "%d/%m/%Y %I:%M %p")
+let deadline = datetime.create(2026, 12, 31, 23, 59)    # local time
+show deadline.diff(datetime.now()) / 86400, "days left"
+```
+`datetime.parse(text)` reads ISO 8601 (`2026-10-31`, `2026-10-31T14:05`,
+`2026-10-31 14:05:09.250Z`, `...+05:30`); `datetime.parse(text, format)`
+takes strptime codes. Also `datetime.now()`, `datetime.utcnow()`,
+`datetime.create(year, month, day, hour, minute, second, microsecond, offset)`,
+`datetime.from_timestamp(seconds, offset)`, `datetime.days_in_month(y, m)` and
+`datetime.is_leap(y)`.
+
+A DateTime has `.timestamp` (Unix seconds), `.offset` (seconds east of UTC;
+local time when none is given, daylight saving included), `.year` ...
+`.microsecond`, `.weekday` (Monday 0) and `.yearday`, and the methods
+`format`, `iso`, `to_string`, `weekday_name`, `month_name`, `add_seconds`,
+`add_minutes`, `add_hours`, `add_days`, `add_months`, `add_years`, `diff`,
+`before`, `after`, `equals`, `start_of_day`, `to_utc`, `to_local` and
+`with_offset`. Adding months clamps to the month's last day (Jan 31 + 1
+month is Feb 28 or 29). Format codes: `%Y %y %m %d %e %H %I %p %M %S %f %B
+%b %A %a %j %z %Z %F %T %u %w %s %%`. Named time zones (`Asia/Kolkata`) are
+not supported; use offsets. Parsing and formatting are built in, so they
+behave the same on every platform.
+
 ### Other modules
 `gui` (X11: `open`, `clear`, `draw_rect`, `poll`), `collision.aabb(...)`, `crypto`, `net`, `ssl`.
 
