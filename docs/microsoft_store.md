@@ -1,5 +1,11 @@
 # Publishing GlowLang on the Microsoft Store
 
+> **GlowLang is live on the Microsoft Store:**
+> [apps.microsoft.com/detail/9P2D8F466LBX](https://apps.microsoft.com/detail/9P2D8F466LBX)
+> (Store ID `9P2D8F466LBX`). Users install it with
+> `winget install --id 9P2D8F466LBX --source msstore`. The rest of this page
+> is for maintainers publishing new versions.
+
 Windows blocks or warns about unsigned programs downloaded from the internet,
 and Smart App Control blocks them outright. Apps published on the Microsoft
 Store as MSIX packages are signed by Microsoft, so Windows trusts them, at no
