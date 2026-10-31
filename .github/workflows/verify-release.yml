@@ -61,8 +61,8 @@ jobs:
     steps:
       # This workflow's smoke program, and (in released/) the tests at the
       # released commit. The binaries come from the release, not a build.
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.tag.outputs.tag }}
           path: released
