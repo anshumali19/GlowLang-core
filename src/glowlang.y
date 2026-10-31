@@ -15,6 +15,7 @@
 #endif
 #include "glowlang.h"
 #include "lsp.h"
+#include "version.h"
 
 extern int yylex(void);
 extern void lexer_cleanup(void);
@@ -266,9 +267,13 @@ int glow_main(int argc, char **argv) {
     }
 
     const char *subcommand = argv[1];
+    if (strcmp(subcommand, "--version") == 0 || strcmp(subcommand, "-v") == 0 || strcmp(subcommand, "version") == 0) {
+        printf("GlowLang %s\n", GLOWLANG_VERSION);
+        return 0;
+    }
     if (strcmp(subcommand, "--help") == 0 || strcmp(subcommand, "-h") == 0 || strcmp(subcommand, "help") == 0) {
-        printf("GlowLang v1.0 - Production Runtime\n");
-        printf("Usage: glow <subcommand> [args]\n\n");
+        printf("GlowLang %s\n", GLOWLANG_VERSION);
+        printf("Usage: glowlang <subcommand> [args]\n\n");
         printf("Subcommands:\n");
         printf("  run <file.glow>   Execute a GlowLang script (default)\n");
         printf("  repl              Launch the interactive development shell\n");
@@ -277,7 +282,8 @@ int glow_main(int argc, char **argv) {
         printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
-        printf("  --lsp             Start the Language Server Protocol (LSP) mode\n\n");
+        printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
+        printf("  --version         Print the GlowLang version\n\n");
         printf("Options:\n");
         printf("  -o <output>       Specify output file for 'package' subcommand\n");
         return 0;

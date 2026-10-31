@@ -38,7 +38,11 @@ func g():
     end
 end
 show "returned:", g()
-show "problem is not a global:", type(problem)
+try:
+    show type(problem)
+catch e:
+    show "problem is not a global:", e
+end
 
 # Exceptions raised inside a hot (compiled) loop are still caught.
 func hot():

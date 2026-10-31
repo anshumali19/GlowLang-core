@@ -437,52 +437,13 @@ Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) 
     return VAL_DEOPT_SENTINEL;
 }
 
+/* o.n from JIT code: glow_get_property, shared with the interpreter. A
+   missing property returns the deopt sentinel, so the interpreter re-runs
+   the instruction and raises the error. */
 Value jit_get_property_helper(Value o, const char *n, Instruction *pc) {
-    if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD)) {
-        ObjType ot = GET_OBJ_TYPE(o);
-        if(ot==OBJ_INSTANCE) {
-            Instance *inst = AS_INSTANCE(o);
-            Dict *d = inst->properties;
-            intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
-            Value v;
-            if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
-                v = d->values[idx];
-            } else {
-                int new_idx = dict_get_idx(d, n);
-                if (new_idx != -1) {
-                    if (pc) {
-                        pc->cache[0].val = new_idx + 1;
-                        pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
-                    }
-                    v = d->values[new_idx];
-                } else {
-                    v = class_get_method(inst->klass, n);
-                }
-            }
-            if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
-                v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
-            }
-            return v;
-        } return value_none();
-    } else if(GET_TYPE(o)==VAL_DICT) {
-        Value v = dict_get(AS_DICT(o), n);
-        if (GET_TYPE(v) == VAL_NONE) {
-            if (strcmp(n, "has") == 0) v = bound_native_method_new(o, native_dict_has);
-            else if (strcmp(n, "keys") == 0) v = bound_native_method_new(o, native_dict_keys);
-            else if (strcmp(n, "values") == 0) v = bound_native_method_new(o, native_dict_values);
-            else if (strcmp(n, "remove") == 0) v = bound_native_method_new(o, native_dict_remove);
-            else if (strcmp(n, "merge") == 0) v = bound_native_method_new(o, native_dict_merge);
-        }
-        return v;
-    } else if(GET_TYPE(o)==VAL_STRING) {
-        Value v = value_none();
-        if (strcmp(n, "contains") == 0) v = bound_native_method_new(o, native_str_contains);
-        else if (strcmp(n, "find") == 0) v = bound_native_method_new(o, native_str_find);
-        else if (strcmp(n, "slice") == 0) v = bound_native_method_new(o, native_str_slice);
-        else if (strcmp(n, "split") == 0) v = bound_native_method_new(o, native_str_split);
-        return v;
-    }
-    return value_none();
+    int missing = 0;
+    Value v = glow_get_property(o, n, pc, &missing);
+    return missing ? VAL_DEOPT_SENTINEL : v;
 }
 
 Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) {
@@ -975,6 +936,10 @@ int global_find_slot(const char *name) {
         h = (h + 1) & mask;
     }
     return -1;
+}
+
+int global_slot_declared(int slot) {
+    return slot >= 0 && slot < global_declared_cap && global_declared[slot];
 }
 
 int global_is_declared(const char *name) {
@@ -3439,7 +3404,7 @@ static Value native_tensor_set(int argc, Value *args) {
     return value_none();
 }
 
-static Value native_tensor_shape(int argc, Value *args) {
+Value native_tensor_shape(int argc, Value *args) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || GET_OBJ_TYPE(args[0]) != OBJ_PACKED_ARRAY) return value_none();
     PackedArray *pa = AS_PACKED_ARRAY(args[0]);
     List *l = list_new(pa->ndims);
@@ -3993,36 +3958,41 @@ static Value native_string_builder_build(int argc, Value *args) {
     return value_string_copy(sb->buffer);
 }
 
-Value native_type(int argc, Value *args) {
-    if (argc < 1) return value_none();
-    uint64_t t = GET_TYPE(args[0]);
-    if (t == VAL_INT) return value_string_copy("int");
+/* The name type() gives v. */
+const char *glow_type_name(Value v) {
+    uint64_t t = GET_TYPE(v);
+    if (t == VAL_INT) return "int";
     if (t == VAL_FLOAT) {
         /* Integers past the 48-bit inline range are stored as exact doubles
            (up to 2^53); they are still integers. */
-        double d = AS_FLOAT(args[0]);
+        double d = AS_FLOAT(v);
         if (d == floor(d) && fabs(d) > 140737488355327.0 && fabs(d) <= 9007199254740992.0)
-            return value_string_copy("int");
-        return value_string_copy("float");
+            return "int";
+        return "float";
     }
-    if (t == VAL_BOOL) return value_string_copy("bool");
-    if (t == VAL_STRING) return value_string_copy("string");
-    if (t == VAL_LIST) return value_string_copy("list");
-    if (t == VAL_DICT) return value_string_copy("dict");
-    if (t == VAL_NONE) return value_string_copy("none");
+    if (t == VAL_BOOL) return "bool";
+    if (t == VAL_STRING) return "string";
+    if (t == VAL_LIST) return "list";
+    if (t == VAL_DICT) return "dict";
+    if (t == VAL_NONE) return "none";
     if (t == VAL_OBJECT) {
-        if (!(args[0] & MASK_PAYLOAD)) return value_string_copy("object");
-        ObjType ot = GET_OBJ_TYPE(args[0]);
-        if (ot == OBJ_CLASS) return value_string_copy("class");
-        if (ot == OBJ_INSTANCE) return value_string_copy("instance");
-        if (ot == OBJ_BOUND_METHOD) return value_string_copy("method");
-        if (ot == OBJ_NATIVE_FUNC) return value_string_copy("native_func");
-        if (ot == OBJ_PACKED_ARRAY) return value_string_copy("tensor");
-        if (ot == OBJ_BIGINT) return value_string_copy("int");
-        if (ot == OBJ_TRAIT) return value_string_copy("trait");
-        return value_string_copy("object");
+        if (!(v & MASK_PAYLOAD)) return "object";
+        ObjType ot = GET_OBJ_TYPE(v);
+        if (ot == OBJ_CLASS) return "class";
+        if (ot == OBJ_INSTANCE) return "instance";
+        if (ot == OBJ_BOUND_METHOD) return "method";
+        if (ot == OBJ_NATIVE_FUNC) return "native_func";
+        if (ot == OBJ_PACKED_ARRAY) return "tensor";
+        if (ot == OBJ_BIGINT) return "int";
+        if (ot == OBJ_TRAIT) return "trait";
+        return "object";
     }
-    return value_string_copy("none");
+    return "none";
+}
+
+Value native_type(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    return value_string_copy(glow_type_name(args[0]));
 }
 
 static Value native_dump_stack(int argc, Value *args) {
@@ -4102,6 +4072,11 @@ void std_init(void) {
     var_set("int", native_func_new("int", native_int));
     var_set("str", native_func_new("str", native_str));
     var_set("string", native_func_new("string", native_str));
+    /* `none` is a predefined name rather than a keyword, and `pass` (the
+       Python-style do-nothing statement) reads one; declaring them keeps
+       them working now that undeclared names raise. */
+    var_set("none", value_none());
+    var_set("pass", value_none());
     var_set("pairs", native_func_new("pairs", native_pairs));
     var_set("input", native_func_new("input", native_input));
     var_set("ask", native_func_new("ask", native_input));

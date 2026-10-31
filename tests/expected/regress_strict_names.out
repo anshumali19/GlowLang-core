@@ -1,0 +1,16 @@
+undefined name: error: name 'undefined_thing' is not defined
+string .length: error: string has no property 'length' (use len(x) for its length)
+list .size: error: list has no property 'size' (use len(x) for its length)
+int property: error: int has no property 'value'
+property of none: error: cannot read property 'name' of none
+missing field: error: Point has no property or method 'y'
+field holding none: none
+method value: method
+dict key: 5 missing key: none
+declared none: none
+declared later: here
+hot property: 15000
+hot missing property: error: Point has no property or method 'z'
+hot undefined name: error: name 'not_declared_anywhere' is not defined
+tensor shape: [6] [6]
+--version: 0 true

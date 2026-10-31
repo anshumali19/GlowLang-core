@@ -223,13 +223,18 @@ static void emit_exception_check(JITBuffer *buf, int i) {
 /* After a runtime call helper: the deopt sentinel means the helper declined
    the call without doing anything, so let the interpreter run this
    instruction. */
-static void emit_deopt_check(JITBuffer *buf, int i) {
-    emit_mov_rcx_imm64(buf, VAL_DEOPT_SENTINEL);
+/* Exit to the interpreter at instruction i when rax holds `bits`. */
+static void emit_deopt_if_rax_eq(JITBuffer *buf, uint64_t bits, int i) {
+    emit_mov_rcx_imm64(buf, bits);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xc8); // cmp rax, rcx
     jit_emit_byte(buf, 0x75);                                                     // jne skip
     uint32_t pos = buf->size; jit_emit_byte(buf, 0);
     emit_side_exit(buf, i);
     if (pos < buf->size) buf->code[pos] = (uint8_t)(buf->size - (pos + 1));
+}
+
+static void emit_deopt_check(JITBuffer *buf, int i) {
+    emit_deopt_if_rax_eq(buf, VAL_DEOPT_SENTINEL, i);
 }
 
 extern Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc);
@@ -717,6 +722,10 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x09);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x81);
                 jit_emit_u32(&buf, pc->arg * 8);
+                /* A global never declared anywhere reads as none here; the
+                   interpreter raises "name is not defined" for it. Declared
+                   stays declared, so declared globals need no check. */
+                if (!global_slot_declared(pc->arg)) emit_deopt_if_rax_eq(&buf, value_none(), i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
@@ -756,6 +765,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
                 emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
@@ -1062,6 +1072,10 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x09);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x8b); jit_emit_byte(&buf, 0x81);
                 jit_emit_u32(&buf, pc->arg * 8);
+                /* A global never declared anywhere reads as none here; the
+                   interpreter raises "name is not defined" for it. Declared
+                   stays declared, so declared globals need no check. */
+                if (!global_slot_declared(pc->arg)) emit_deopt_if_rax_eq(&buf, value_none(), i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
@@ -1101,6 +1115,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
                 emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
             }
