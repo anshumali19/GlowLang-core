@@ -1,0 +1,81 @@
+# Dict keys made at run time are freed once no live dict uses them (a full
+# collection sweeps them). Keys still in use must survive, whatever else
+# was dropped around them.
+
+# Many short-lived dicts with distinct keys; only the last one is kept.
+func build(prefix, n):
+    let d = {}
+    let i = 0
+    while i < n:
+        d[prefix + str(i)] = i
+        i = i + 1
+    end
+    return d
+end
+let kept = none
+let r = 0
+while r < 20:
+    kept = build("round" + str(r) + "_", 3000)
+    r = r + 1
+end
+show "kept:", len(kept), kept["round19_0"], kept["round19_2999"], kept.has("round0_0")
+
+# Two dicts share keys; dropping one must not free the keys the other uses.
+let a = build("shared_", 2000)
+let b = {}
+for each k in a.keys():
+    b[k] = a[k] * 2
+end
+a = none
+let junk = 0
+while junk < 20:
+    build("junk" + str(junk) + "_", 2000)
+    junk = junk + 1
+end
+show "shared:", len(b), b["shared_0"], b["shared_1999"], b.keys()[5]
+
+# JSON round trips create and drop keys constantly.
+let doc = {"alpha": 1, "beta": [1, 2, {"gamma": "x", "delta_" + str(7): true}], "eps": {"zeta": 2.5}}
+let text = ""
+r = 0
+while r < 500:
+    text = json.stringify(json.parse(json.stringify(doc)))
+    r = r + 1
+end
+show "json:", text
+
+# A key removed and re-added, and a dict iterated after collections.
+let c = {}
+r = 0
+while r < 3000:
+    c["temp" + str(r % 7)] = r
+    if r % 3 == 0:
+        c.remove("temp" + str(r % 7))
+    end
+    r = r + 1
+end
+let names = c.keys()
+names.sort()
+show "churn:", names, len(c)
+
+# A run-time key that later names a field written by code.
+let fields = {}
+fields["dyn" + "amic_field"] = 1
+blueprint Holder:
+    action init():
+        self.dynamic_field = 42
+    end
+end
+let h = Holder()
+show "field:", h.dynamic_field, fields["dynamic_field"]
+
+# Keys that are never stored (lookups of missing keys) intern nothing.
+let missing = 0
+r = 0
+while r < 2000:
+    if not kept.has("nope" + str(r)):
+        missing = missing + 1
+    end
+    r = r + 1
+end
+show "missing:", missing

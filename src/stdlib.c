@@ -963,7 +963,9 @@ int global_get_slot(const char *name) {
         }
     }
     int slot = global_table.count++;
-    global_table.names[slot] = name;
+    /* Interned (permanently): callers may pass a dict key or other string
+       that does not outlive this table. */
+    global_table.names[slot] = intern_string(name);
     global_table.index[h] = slot;
 
     // Check if this is a builtin or already defined function
@@ -1108,6 +1110,16 @@ void dict_free_storage(Dict *d) {
     d->keys = NULL; d->values = NULL; d->index = NULL;
 }
 
+}
+
+static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
+
+/* Free a dict's storage block unless it lives inside the Dict. */
+void dict_free_storage(Dict *d) {
+    if (d->keys && !dict_is_inline(d)) free(d->keys);
+    d->keys = NULL; d->values = NULL; d->index = NULL;
+}
+
 /* Fill a freshly allocated Dict with room for about sz entries. */
 void dict_init(Dict *d, int sz) {
     int cap = 8; while (cap < sz) cap *= 2;
@@ -1182,6 +1194,7 @@ static void dict_grow(Dict *d) {
     }
     if (!was_inline) free(old_keys);
     d->used = n; d->size = n;
+    for (int e=0; e<n; e++) dict_index_insert(d, e, intern_cached_hash(DICT_KEY_PTR(d, e)));
     for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
 }
 
