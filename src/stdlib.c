@@ -1110,26 +1110,6 @@ void dict_free_storage(Dict *d) {
     d->keys = NULL; d->values = NULL; d->index = NULL;
 }
 
-}
-
-static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
-
-/* Free a dict's storage block unless it lives inside the Dict. */
-void dict_free_storage(Dict *d) {
-    if (d->keys && !dict_is_inline(d)) free(d->keys);
-    d->keys = NULL; d->values = NULL; d->index = NULL;
-}
-
-}
-
-static int dict_is_inline(Dict *d) { return (void*)d->keys == (void*)(d + 1); }
-
-/* Free a dict's storage block unless it lives inside the Dict. */
-void dict_free_storage(Dict *d) {
-    if (d->keys && !dict_is_inline(d)) free(d->keys);
-    d->keys = NULL; d->values = NULL; d->index = NULL;
-}
-
 /* Fill a freshly allocated Dict with room for about sz entries. */
 void dict_init(Dict *d, int sz) {
     int cap = 8; while (cap < sz) cap *= 2;
@@ -1205,7 +1185,6 @@ static void dict_grow(Dict *d) {
     if (!was_inline) free(old_keys);
     d->used = n; d->size = n;
     for (int e=0; e<n; e++) dict_index_insert(d, e, intern_cached_hash(DICT_KEY_PTR(d, e)));
-    for (int e=0; e<n; e++) dict_index_insert(d, e, hash_string(DICT_KEY_PTR(d, e)));
 }
 
 void dict_set(Dict *d, const char *key, Value val) {
@@ -1506,10 +1485,6 @@ Instance* instance_new(Class *k) {
     i->fields.size = 0; i->fields.used = 0;
     dict_set_block(&i->fields, &i->fields + 1, cap);
     k->instances_created++;
-
-    vm_stack[vm_stack_top++] = value_instance(i);
-    i->properties = dict_new(k->field_hint);
-    vm_stack_top--;
     return i;
 }
 
