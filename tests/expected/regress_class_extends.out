@@ -1,0 +1,5 @@
+Rex barks | animal
+Tom says meow | animal
+Bit barks | puppy | ...
+built: 13890
+error: class Broken can only extend a class (got int)

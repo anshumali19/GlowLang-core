@@ -1,0 +1,64 @@
+# `blueprint Child extends Parent:` inherits the parent's methods, including
+# init; a child can override them. (The parent register was never passed to
+# the class definition, so `extends` usually inherited nothing.)
+
+blueprint Animal:
+    action init(name):
+        self.name = name
+        self.sound = "..."
+    end
+    action speak():
+        return self.name + " says " + self.sound
+    end
+    action kind():
+        return "animal"
+    end
+end
+
+blueprint Dog extends Animal:
+    action speak():
+        return self.name + " barks"
+    end
+end
+
+blueprint Cat extends Animal:
+    action init(name):
+        self.name = name
+        self.sound = "meow"
+    end
+end
+
+blueprint Puppy extends Dog:
+    action kind():
+        return "puppy"
+    end
+end
+
+let d = Dog("Rex")
+let c = Cat("Tom")
+let p = Puppy("Bit")
+show d.speak(), "|", d.kind()
+show c.speak(), "|", c.kind()
+show p.speak(), "|", p.kind(), "|", p.sound
+
+# Many constructions through an inherited init.
+let total = 0
+let i = 0
+while i < 3000:
+    total = total + len(Dog("d" + str(i)).name)
+    i = i + 1
+end
+show "built:", total
+
+# Extending something that is not a class is an error.
+let not_a_class = 5
+try:
+    blueprint Broken extends not_a_class:
+        action f():
+            return 1
+        end
+    end
+    show "no error"
+catch e:
+    show "error:", e
+end

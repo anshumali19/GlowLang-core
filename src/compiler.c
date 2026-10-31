@@ -990,13 +990,18 @@ static void compile_stmt(Node *n) {
             const char *old_class = compiling_class_name;
             compiling_class_name = n->name;
             Class *pc = last_compiling_class; last_compiling_class = (Class*)1;
+            int parent_reg = -1;
             if (n->parent_name) {
-                int r = next_free_reg++;
+                parent_reg = next_free_reg++;
                 int slot = global_get_slot(n->parent_name);
                 int idx = bc_emit(compiling_bc, OP_LOAD_VAR, slot, 0);
-                compiling_bc->code[idx].r0 = r;
+                compiling_bc->code[idx].r0 = parent_reg;
             }
-            bc_emit(compiling_bc, OP_CLASS_DEF, n->parent_name ? 1 : 0, (intptr_t)n->name);
+            int class_idx = bc_emit(compiling_bc, OP_CLASS_DEF, n->parent_name ? 1 : 0, (intptr_t)n->name);
+            /* OP_CLASS_DEF reads the parent from r1. It used to be left at 0,
+               so `extends` took whatever register 0 held: usually no parent at
+               all, and a crash when it held some other object. */
+            if (parent_reg >= 0) compiling_bc->code[class_idx].r1 = parent_reg;
             compile_stmt(n->left);
             last_compiling_class = pc;
             compiling_class_name = old_class;
