@@ -80,7 +80,7 @@ jobs:
       - name: Install dependencies (vcpkg)
         run: vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static
       - name: Configure CMake
-        run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+        run: cmake -B build -S . -T ClangCL -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
       - name: Build GlowLang
         run: cmake --build build --config Release
       - name: Run test suite
