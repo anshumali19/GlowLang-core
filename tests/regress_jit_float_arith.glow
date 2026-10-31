@@ -78,3 +78,8 @@ end
 show 1e300 * 2, 1e19 + 1, 9.3e18 - 1, 1e300 * 1e300, 2 ** 100 + 1e300
 show 2 ** 100 < 1e300, 1e300 > 2 ** 100, 2 ** 100 == 2.0 ** 100, 2 ** 64 == 18446744073709551616.0, -(2 ** 70) < -1e21
 show 2 ** 100 < inf, 2 ** 100 > -inf, 7.5 % 2, -7 % 3, 1e19 % 7
+
+# Whole-number results from the C library at or beyond 2^47 used to wrap
+# (math.floor(1e15) gave -125899906842624).
+show math.floor(1e15), math.sqrt(1e30), math.abs(-3e15), math.floor(2.5e14), math.ceil(-2.5e14)
+show math.floor(140737488355327.0), math.floor(140737488355328.0), math.floor(1e15) + 1, math.sqrt(-1)
