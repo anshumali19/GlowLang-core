@@ -657,6 +657,8 @@ struct Class {
     Shape *stable_shape;
     int instances_created;
     int field_hint;     /* most fields an instance has had: new ones start that big */
+    Value init_method;  /* class_init_method's cache, valid while init_epoch == glow_method_epoch */
+    unsigned init_epoch;
 };
 
 struct Instance {
@@ -907,6 +909,10 @@ Value glow_string_concat(Value a, Value b);
 const char* rope_flatten(Value v);
 Class* class_new(const char *name, Class *parent);
 Value class_get_method(Class *c, const char *name);
+/* Bumped whenever a class or trait gains a method, which invalidates every
+   class's cached init method. */
+extern unsigned glow_method_epoch;
+Value class_init_method(Class *k);
 Instance* instance_new(Class *c);
 Value instance_get(Instance *inst, const char *name);
 void instance_set(Instance *inst, const char *name, Value val);

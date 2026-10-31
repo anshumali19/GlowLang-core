@@ -775,6 +775,20 @@ void vm_stack_cleanup(void) {
     free(vm_stack);
     vm_stack = NULL;
 }
+/* The global `self`, swapped around constructor and method calls. Its slot
+   never moves, so look it up once instead of hashing "self" every time. */
+static int glow_self_slot = -1;
+static inline int self_slot(void) {
+    if (glow_self_slot < 0) glow_self_slot = global_get_slot("self");
+    return glow_self_slot;
+}
+static inline Value self_get(void) { return global_table.values[self_slot()]; }
+static inline void self_set(Value v) {
+    int s = self_slot();
+    global_table.values[s] = v;
+    global_mark_declared(s);
+}
+
 
 static void* thread_wrapper(void *arg) {
     ThreadData *td = (ThreadData*)arg;
@@ -814,7 +828,7 @@ static void* thread_wrapper(void *arg) {
         } else if (ot == OBJ_BOUND_METHOD) {
             BoundMethod *bm = AS_BOUND_METHOD(td->callee);
             if (GET_TYPE(bm->instance) != VAL_NONE) {
-                var_set("self", bm->instance);
+                self_set(bm->instance);
             }
             if (bm->method && bm->method->body) {
                 run_bytecode(bm->method->body, NULL, NULL, 0);
@@ -2096,7 +2110,7 @@ int jit_exception_pending(void) { return has_exception; }
                 if (ot == OBJ_CLASS) {
                     Value inst = value_instance(instance_new(AS_CLASS(v)));
                     R(pc->r0) = inst;
-                    Value init_method = class_get_method(AS_CLASS(v), "init");
+                    Value init_method = class_init_method(AS_CLASS(v));
                     if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
                         Value temp[256];
                         int count = (ac > 255) ? 255 : ac;
@@ -2114,12 +2128,12 @@ int jit_exception_pending(void) { return has_exception; }
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = var_get("self");
-                        var_set("self", inst);
+                        Value old_self = self_get();
+                        self_set(inst);
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        var_set("self", old_self);
+                        self_set(old_self);
                     }
                 }
                 else if (ot == OBJ_BOUND_METHOD) {
@@ -2261,7 +2275,7 @@ int jit_exception_pending(void) { return has_exception; }
                 }
                 else if (ot == OBJ_CLASS) {
                     Value inst = value_instance(instance_new(AS_CLASS(callee)));
-                    Value init_method = class_get_method(AS_CLASS(callee), "init");
+                    Value init_method = class_init_method(AS_CLASS(callee));
                     if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
                         Value temp[256];
                         int count = (ac > 255) ? 255 : ac;
@@ -2278,12 +2292,12 @@ int jit_exception_pending(void) { return has_exception; }
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = var_get("self");
-                        var_set("self", inst);
+                        Value old_self = self_get();
+                        self_set(inst);
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        var_set("self", old_self);
+                        self_set(old_self);
                     }
                     R(pc->r0) = inst;
                     goto l_OP_RETURN;
@@ -2443,6 +2457,7 @@ int jit_exception_pending(void) { return has_exception; }
             if (colon) mname = colon + 2;
             if(vm_last_class) dict_set(vm_last_class->methods, mname, bound_method_new(value_none(), fe));
             else if(vm_last_trait) dict_set(vm_last_trait->methods, mname, bound_method_new(value_none(), fe));
+            glow_method_epoch++;
         }
         pc++; goto l_DISPATCH;
     }
@@ -2490,7 +2505,7 @@ int jit_exception_pending(void) { return has_exception; }
             if(ot==OBJ_CLASS) {
                 Value inst = value_instance(instance_new(AS_CLASS(callee)));
                 R(pc->r0) = inst;
-                Value init_method = class_get_method(AS_CLASS(callee), "init");
+                Value init_method = class_init_method(AS_CLASS(callee));
                 if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
                     Value temp[256];
                     int count = (ac > 255) ? 255 : ac;
@@ -2507,12 +2522,12 @@ int jit_exception_pending(void) { return has_exception; }
                         for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                     }
 
-                    Value old_self = var_get("self");
-                    var_set("self", inst);
+                    Value old_self = self_get();
+                    self_set(inst);
                     if (ife && ife->body) {
                         DO_CALL(ife->body, NULL, callee_base, -1);
                     }
-                    var_set("self", old_self);
+                    self_set(old_self);
                 }
             }
             else if(ot==OBJ_BOUND_METHOD) {
@@ -2704,7 +2719,7 @@ int jit_exception_pending(void) { return has_exception; }
                 } else if (ot == OBJ_CLASS) {
                     Value inst = value_instance(instance_new(AS_CLASS(fallback_callee)));
                     R(pc->r0) = inst;
-                    Value init_method = class_get_method(AS_CLASS(fallback_callee), "init");
+                    Value init_method = class_init_method(AS_CLASS(fallback_callee));
                     if (GET_TYPE(init_method) == VAL_OBJECT && (init_method & MASK_PAYLOAD)) {
                         Value temp[256];
                         int count = (ac > 255) ? 255 : ac;
@@ -2722,12 +2737,12 @@ int jit_exception_pending(void) { return has_exception; }
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = var_get("self");
-                        var_set("self", inst);
+                        Value old_self = self_get();
+                        self_set(inst);
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        var_set("self", old_self);
+                        self_set(old_self);
                     }
                 } else {
                     pending_exception = value_string_copy("Object is not callable");
@@ -2928,6 +2943,7 @@ int jit_exception_pending(void) { return has_exception; }
             for (int i = 0; i < t->methods->capacity; i++) {
                 if (t->methods->keys[i] != 0 && GET_TYPE(t->methods->keys[i]) != VAL_NONE) {
                     dict_set(vm_last_class->methods, (const char*)(uintptr_t)(t->methods->keys[i] & MASK_PAYLOAD), t->methods->values[i]);
+                    glow_method_epoch++;
                 }
             }
         }

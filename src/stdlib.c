@@ -1464,6 +1464,20 @@ Value class_get_method(Class *k, const char *n) {
     return value_none();
 }
 
+unsigned glow_method_epoch = 1;
+
+/* The class's init method (or none), looked up once per class instead of on
+   every construction. Methods are only added while classes and traits are
+   defined, and each addition bumps glow_method_epoch. The cached value is
+   also stored in the class's methods dict, so the GC keeps it alive. */
+Value class_init_method(Class *k) {
+    if (k->init_epoch != glow_method_epoch) {
+        k->init_method = class_get_method(k, "init");
+        k->init_epoch = glow_method_epoch;
+    }
+    return k->init_method;
+}
+
 Value instance_get(Instance *inst, const char *name) {
     if (trace_mode) printf("DEBUG: instance_get(%s) on Inst %p, Props %p\n", name, (void*)inst, (void*)inst->properties);
     Value v = dict_get(inst->properties, name);
