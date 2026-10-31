@@ -1,0 +1,58 @@
+# lib/cli.glow: the library examples/cli_app.glow uses (it did not exist).
+import "cli"
+
+let app = ArgParser("deploy", "Deploy the site")
+app.flag("--dry-run", "Show what would happen", "-n")
+app.flag("--force", "Skip checks")
+app.option("--env", "Target environment", "staging", "-e")
+app.option("--tag", "Release tag")
+app.positional("version", "Version to deploy")
+app.positional("note", "A note", "none given")
+app.subcommand("rollback", "Undo the last deploy")
+
+func show_parse(label, args):
+    try:
+        let r = app.parse(args)
+        show label, r["_subcommand"], r["--dry-run"], r["--force"], r["--env"], r["--tag"], r["version"], r["note"], r["_rest"]
+    catch e:
+        show label, "error:", e
+    end
+end
+
+show_parse("basic:", ["1.2"])
+show_parse("flags:", ["-n", "--force", "1.2", "hello"])
+show_parse("option forms:", ["--env", "prod", "--tag=v9", "1.2"])
+show_parse("short option:", ["-e", "qa", "1.2"])
+show_parse("subcommand:", ["rollback", "1.1"])
+show_parse("after --:", ["--", "--not-a-flag", "x", "extra1", "extra2"])
+show_parse("unknown:", ["--nope", "1.2"])
+show_parse("missing value:", ["1.2", "--env"])
+show_parse("flag with value:", ["--force=yes", "1.2"])
+show_parse("missing positional:", ["--force"])
+show "help flag:", app.parse(["--help"])["--help"]
+show app.usage()
+
+# ColorOutput prints plain tags when not writing to a terminal.
+let c = ColorOutput()
+c.success("done")
+c.warning("careful")
+
+# ProgressBar prints only the final line when not on a terminal.
+let bar = ProgressBar(4, 10)
+bar.set_label("Build")
+let i = 0
+while i <= 4:
+    bar.update(i)
+    i = i + 1
+end
+show bar.render(1)
+
+let t = TextTable()
+t.set_headers(["Name", "Size"])
+t.add_row(["a.txt", 12])
+t.add_row(["longer-name.glow", 3400])
+t.render()
+
+# Prompt reads answers from standard input; at its end the default is used.
+let p = Prompt()
+show "ask:", p.ask("Name?", "anon"), "confirm:", p.confirm("Sure?", true), "menu:", p.menu("Pick:", ["a", "b"])

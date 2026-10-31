@@ -1,0 +1,86 @@
+# Only the first true branch of if / eif / else runs. Each eif used to be a
+# separate if, and the else block ran even when an eif matched, so 0 was
+# "zero, small, medium, large".
+func classify(n):
+    let out = []
+    if n < 0:
+        out.push("negative")
+    eif n == 0:
+        out.push("zero")
+    eif n < 10:
+        out.push("small")
+    eif n < 100:
+        out.push("medium")
+    else:
+        out.push("large")
+    end
+    return out
+end
+for each n in [-5, 0, 3, 42, 500]:
+    show n, classify(n)
+end
+
+# eif without else, and a chain where no branch matches.
+func pick(n):
+    let r = "none matched"
+    if n == 1:
+        r = "one"
+    eif n == 2:
+        r = "two"
+    end
+    return r
+end
+show pick(1), pick(2), pick(3)
+
+# Conditions after the matching branch are not even evaluated.
+let calls = []
+func check(name, result):
+    calls.push(name)
+    return result
+end
+if check("a", false):
+    show "a"
+eif check("b", true):
+    show "b ran"
+eif check("c", true):
+    show "c"
+else:
+    show "else"
+end
+show "evaluated:", calls
+
+# Nested chains inside branches.
+func grade(score, bonus):
+    if score >= 90:
+        if bonus:
+            return "A+"
+        else:
+            return "A"
+        end
+    eif score >= 75:
+        return "B"
+    else:
+        if score >= 50:
+            return "C"
+        eif score >= 30:
+            return "D"
+        end
+        return "F"
+    end
+end
+show grade(95, true), grade(95, false), grade(80, true), grade(60, false), grade(40, false), grade(10, false)
+
+# In a hot loop (compiled code takes the same branches).
+let counts = [0, 0, 0]
+let i = 0
+while i < 3000:
+    if i % 3 == 0:
+        counts[0] = counts[0] + 1
+    eif i % 3 == 1:
+        counts[1] = counts[1] + 1
+    else:
+        counts[2] = counts[2] + 1
+    end
+    i = i + 1
+end
+show "loop:", counts

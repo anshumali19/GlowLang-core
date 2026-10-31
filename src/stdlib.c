@@ -4236,6 +4236,7 @@ void std_init(void) {
     dict_set(fs, "read", native_func_new("read", native_fs_read));
     dict_set(fs, "list", native_func_new("list", native_fs_readdir));
     var_set("fs", value_dict(fs));
+    glow_scripting_init();   /* os.args, os.env, fs.glob, ... (process.c) */
 
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4);

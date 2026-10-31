@@ -41,6 +41,15 @@ static Node *with_param_defaults(int count, char **names, struct Node **defaults
     if (!prologue) return body;
     return body ? newSeqNode(prologue, body) : prologue;
 }
+/* Puts else_part at the end of an eif chain: the else branch of its last
+   if. Returns the chain (or else_part when there is no chain). */
+static Node *attach_else(Node *chain, Node *else_part) {
+    if (!chain) return else_part;
+    Node *last = chain;
+    while (last->third) last = last->third;
+    last->third = else_part;
+    return chain;
+}
 %}
 
 %union {
@@ -102,7 +111,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | TRAIT ID COLON NEWLINE lines END { $$ = node_new(NODE_TRAIT); $$->name = $2; $$->left = $5; }
     | USE ID { $$ = node_new(NODE_USE_TRAIT); $$->name = $2; }
     | WHENEVER condition COLON NEWLINE lines END { $$ = node_new(NODE_WHENEVER); $$->left = $2; $$->right = $5; }
-    | WHEN condition COLON NEWLINE lines eif_chain otherwise_part END { $$ = newIfNode($2, $5, $7 ? newSeqNode($6, $7) : $6); }
+    | WHEN condition COLON NEWLINE lines eif_chain otherwise_part END { $$ = newIfNode($2, $5, attach_else($6, $7)); }
     | WHILE condition COLON NEWLINE lines END { $$ = newWhileNode($2, $5); }
     | UNTIL condition COLON NEWLINE lines END { $$ = newUntilNode($2, $5); }
     | REPEAT expr TIMES_KW COLON NEWLINE lines END { $$ = newRepeatNode($2, $6); }
@@ -131,7 +140,10 @@ param_list: param { $$ = $1; }
 param: ID { $$.count = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = NULL; }
     | ID ASSIGN expr { $$.count = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = $3; };
 condition: expr;
-eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = newSeqNode($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
+/* Each eif is the else branch of the one before it, so only the first
+   true branch runs (they used to run as separate ifs, and the otherwise
+   block ran even when an eif matched). */
+eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = attach_else($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
 expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr IN_KW expr { $$ = newBinOp(NODE_IN, $1, $3); } | expr NOT_OP IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); } | expr WHEN expr OTHERWISE expr %prec WHEN { $$ = node_new(NODE_COND); $$->left = $3; $$->right = $1; $$->third = $5; };
@@ -180,6 +192,27 @@ dict_elements: expr COLON expr { $$.count = 1; $$.keys = arena_alloc(sizeof(Node
 
 %%
 Node *root = NULL;
+/* A program file: name.glow, or any file that starts with #! (a script
+   run as ./deploy through "#!/usr/bin/env glowlang"). */
+static int glow_source_ok(const char *filename) {
+    const char *ext = strrchr(filename, '.');
+    if (ext && strcmp(ext, ".glow") == 0) return 1;
+    FILE *f = fopen(filename, "rb");
+    if (!f) return 0;
+    char head[2] = { 0, 0 };
+    size_t n = fread(head, 1, 2, f);
+    fclose(f);
+    return n == 2 && head[0] == '#' && head[1] == '!';
+}
+
+/* os.args: the arguments after the program file on the command line. */
+static void glow_pass_script_args(const char *filename, int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] == filename) { glow_set_script_args(filename, argc - i - 1, argv + i + 1); return; }
+    }
+    glow_set_script_args(filename, 0, NULL);
+}
+
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 void dump_all_bc() {
     printf("Main:\n");
@@ -351,11 +384,11 @@ int glow_main(int argc, char **argv) {
         }
 
         if (filename) {
-            const char *ext = strrchr(filename, '.');
-            if (!ext || strcmp(ext, ".glow") != 0) {
-                fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension.\n");
+            if (!glow_source_ok(filename)) {
+                fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension (or start with a #! line).\n");
                 return 1;
             }
+            glow_pass_script_args(filename, argc, argv);
             yyin = fopen(filename, "r");
             if (yyin) {
                 compiling_file = filename;
@@ -411,11 +444,11 @@ int glow_main(int argc, char **argv) {
     } else {
         // Old style: glow file.glow
         const char *filename = subcommand;
-        const char *ext = strrchr(filename, '.');
-        if (!ext || strcmp(ext, ".glow") != 0) {
-            fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension.\n");
+        if (!glow_source_ok(filename)) {
+            fprintf(stderr, "Error: GlowLang source files must have the '.glow' extension (or start with a #! line).\n");
             return 1;
         }
+        glow_pass_script_args(filename, argc, argv);
         yyin = fopen(filename, "r");
         if (yyin) {
             compiling_file = filename;

@@ -187,6 +187,36 @@ static Value core_reversed(int argc, Value *args) {
     return v;
 }
 
+/* chr(code): the character with that Unicode code point, as UTF-8 text
+   (chr(27) is the escape character terminals use for colors). */
+static Value core_chr(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT) return raise("chr() needs a whole number");
+    int64_t c = AS_INT(args[0]);
+    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) return raise("chr(): not a Unicode code point");
+    char b[5] = { 0 };
+    if (c < 0x80) b[0] = (char)c;
+    else if (c < 0x800) { b[0] = (char)(0xC0 | (c >> 6)); b[1] = (char)(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) { b[0] = (char)(0xE0 | (c >> 12)); b[1] = (char)(0x80 | ((c >> 6) & 0x3F)); b[2] = (char)(0x80 | (c & 0x3F)); }
+    else { b[0] = (char)(0xF0 | (c >> 18)); b[1] = (char)(0x80 | ((c >> 12) & 0x3F)); b[2] = (char)(0x80 | ((c >> 6) & 0x3F)); b[3] = (char)(0x80 | (c & 0x3F)); }
+    if (c == 0) return value_string_copy("");   /* text cannot hold a NUL */
+    return value_string_copy(b);
+}
+
+/* ord(text): the code point of the first character of text (UTF-8). */
+static Value core_ord(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) return raise("ord() needs a string");
+    const unsigned char *s = (const unsigned char*)AS_STRING(args[0]);
+    if (!s[0]) return raise("ord() of an empty string");
+    int n = s[0] < 0x80 ? 1 : (s[0] >> 5) == 6 ? 2 : (s[0] >> 4) == 14 ? 3 : (s[0] >> 3) == 30 ? 4 : 0;
+    if (!n) return value_int(s[0]);
+    int64_t c = n == 1 ? s[0] : n == 2 ? (s[0] & 0x1F) : n == 3 ? (s[0] & 0x0F) : (s[0] & 0x07);
+    for (int i = 1; i < n; i++) {
+        if ((s[i] & 0xC0) != 0x80) return value_int(s[0]);   /* not valid UTF-8: the byte */
+        c = (c << 6) | (s[i] & 0x3F);
+    }
+    return value_int(c);
+}
+
 static Value core_float(int argc, Value *args) {
     if (argc < 1) return value_float(0.0);
     Value v = args[0];
@@ -554,6 +584,8 @@ void glow_corelib_init(void) {
     var_set("sorted", native_func_new("sorted", core_sorted));
     var_set("reversed", native_func_new("reversed", core_reversed));
     var_set("float", native_func_new("float", core_float));
+    var_set("chr", native_func_new("chr", core_chr));
+    var_set("ord", native_func_new("ord", core_ord));
     var_set("bool", native_func_new("bool", core_bool));
 
     Value math = var_get("math");
@@ -575,11 +607,7 @@ void glow_corelib_init(void) {
         dict_set(m, "e", value_float(2.71828182845904523536));
         dict_set(m, "inf", value_float(INFINITY));
     }
-    Value os = var_get("os");
-    if (GET_TYPE(os) == VAL_DICT) {
-        Value getenv_fn = dict_get(AS_DICT(os), "getenv");
-        if (GET_TYPE(getenv_fn) != VAL_NONE) dict_set(AS_DICT(os), "env", getenv_fn);
-    }
+    /* os.env is set up with the scripting functions in process.c. */
     Value debug = var_get("debug");
     Value assert_fn = var_get("assert");
     if (GET_TYPE(debug) == VAL_DICT && GET_TYPE(assert_fn) != VAL_NONE) dict_set(AS_DICT(debug), "assert", assert_fn);
