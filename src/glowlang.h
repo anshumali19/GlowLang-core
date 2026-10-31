@@ -656,6 +656,7 @@ struct Class {
     Shape *root_shape;
     Shape *stable_shape;
     int instances_created;
+    int field_hint;     /* most fields an instance has had: new ones start that big */
 };
 
 struct Instance {
@@ -691,6 +692,8 @@ struct Dict {
 #define DICT_EMPTY   (-1)
 #define DICT_REMOVED (-2)
 void dict_init(Dict *d, int sz);
+Dict* dict_alloc(int sz, int stack);
+void dict_free_storage(Dict *d);
 
 struct Closure {
     GCObject obj;

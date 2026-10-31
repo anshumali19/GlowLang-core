@@ -1,0 +1,8 @@
+grown: 10 [k0, k1, k2, k3, k4, k5, k6, k7, k8, k9]
+churned: 4 [b, c, d, a] 19 2
+mixed: [d, a, e, f, g] [4, 19, 5, 6, 7]
+missing: none false
+{} {"x": 1} {"x": 1, "y": 2, "z": 3, "w": 4} 5
+wide: 14035000 2005
+pairs: 50000 true
+late field: late 7
