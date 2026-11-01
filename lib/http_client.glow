@@ -146,18 +146,13 @@ end
 # - _ . ~ stay; every other byte (UTF-8 included) becomes %XX.
 func url_encode(text):
     let hex = "0123456789ABCDEF"
-    let keep = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
     let out = ""
-    let i = 0
-    while i < len(text):
-        let c = text[i]
-        when keep.contains(c):
-            out = out + c
+    for each b in str(text).bytes():
+        when (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b == 46 or b == 126:
+            out = out + chr(b)
         otherwise:
-            let b = ord(c)
             out = out + "%" + hex[floor(b / 16)] + hex[b % 16]
         end
-        i = i + 1
     end
     return out
 end

@@ -5,4 +5,4 @@ show "module with a BOM:", bom_greeting("Glow")
 
 # A BOM inside a string literal is text and stays in the string.
 let s = "﻿x"
-show "BOM in a string kept:", len(s) == 4
+show "BOM in a string kept:", s.byte_len() == 4, len(s) == 2

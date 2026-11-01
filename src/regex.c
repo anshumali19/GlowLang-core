@@ -24,7 +24,29 @@
 enum { RX_CHAR, RX_ANY, RX_SET, RX_BOL, RX_EOL, RX_WORDB, RX_NWORDB, RX_SPLIT, RX_JMP, RX_MATCH, RX_SAVE };
 
 typedef struct { unsigned char op; unsigned char c; int x, y; } RxInst;
-typedef struct { uint32_t bits[8]; } RxSet;
+/* A bracket set or class. bits holds ASCII (0-127). Characters from U+0080
+   up are matched against ranges (pairs lo, hi), and the result is flipped
+   when the set is negated ([^...], \D \W \S). */
+typedef struct { uint32_t bits[8]; int negated; int nranges, cap_ranges; int32_t *ranges; } RxSet;
+
+/* Text is UTF-8. The character at text[pos] (pos < len): its code point in
+   *cp and the position after it. A byte that does not start a valid
+   sequence is a character by itself (its value as the code point), the
+   rule the rest of the runtime uses too. */
+static int rx_decode(const char *text, int pos, int len, int *cp) {
+    unsigned char b = (unsigned char)text[pos];
+    int n = b < 0x80 ? 1 : (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : (b >> 3) == 30 ? 4 : 1;
+    if (n == 1 || pos + n > len) { *cp = b; return pos + 1; }
+    int c = n == 2 ? (b & 0x1F) : n == 3 ? (b & 0x0F) : (b & 0x07);
+    for (int k = 1; k < n; k++) {
+        unsigned char cb = (unsigned char)text[pos + k];
+        if ((cb & 0xC0) != 0x80) { *cp = b; return pos + 1; }
+        c = (c << 6) | (cb & 0x3F);
+    }
+    *cp = c;
+    return pos + n;
+}
+static int rx_next(const char *text, int pos, int len) { int cp; return rx_decode(text, pos, len, &cp); }
 
 enum { N_EMPTY, N_CHAR, N_ANY, N_SET, N_BOL, N_EOL, N_WORDB, N_NWORDB, N_CAT, N_ALT, N_REP, N_GROUP };
 typedef struct RxNode {
@@ -72,10 +94,33 @@ static int rx_new_set(RxCompiler *rc) {
     return rc->nsets++;
 }
 
+static void set_free_ranges(RxSet *sets, int n) { for (int i = 0; i < n; i++) free(sets[i].ranges); }
+
 static void set_add(RxSet *s, int c) { s->bits[(c & 255) >> 5] |= 1u << (c & 31); }
 static int set_has(const RxSet *s, int c) { return (s->bits[(c & 255) >> 5] >> (c & 31)) & 1; }
 static void set_add_range(RxSet *s, int lo, int hi) { for (int c = lo; c <= hi; c++) set_add(s, c); }
-static void set_invert(RxSet *s) { for (int i = 0; i < 8; i++) s->bits[i] = ~s->bits[i]; }
+static void set_invert(RxSet *s) { for (int i = 0; i < 8; i++) s->bits[i] = ~s->bits[i]; s->negated = !s->negated; }
+
+/* Adds code points lo..hi: ASCII into the bitmap, the rest as a range. */
+static void set_add_cp_range(RxSet *s, int lo, int hi) {
+    if (lo < 0x80) set_add_range(s, lo, hi < 0x7F ? hi : 0x7F);
+    if (hi < 0x80) return;
+    if (lo < 0x80) lo = 0x80;
+    if (s->nranges == s->cap_ranges) {
+        s->cap_ranges = s->cap_ranges ? s->cap_ranges * 2 : 4;
+        s->ranges = realloc(s->ranges, sizeof(int32_t) * 2 * (size_t)s->cap_ranges);
+    }
+    s->ranges[2 * s->nranges] = lo;
+    s->ranges[2 * s->nranges + 1] = hi;
+    s->nranges++;
+}
+
+static int set_has_cp(const RxSet *s, int cp) {
+    if (cp < 0x80) return set_has(s, cp);
+    int in = 0;
+    for (int i = 0; i < s->nranges && !in; i++) in = cp >= s->ranges[2 * i] && cp <= s->ranges[2 * i + 1];
+    return in != s->negated;
+}
 
 /* (?i): give every letter in the set its other case too. */
 static void set_fold_case(RxSet *s) {
@@ -157,21 +202,22 @@ static RxNode *rx_parse_set(RxCompiler *rc) {
             if (e == 'D' || e == 'W' || e == 'S') {
                 RxSet tmp; memset(&tmp, 0, sizeof(tmp)); set_add_class(&tmp, (char)(e + 32)); set_invert(&tmp);
                 for (int i = 0; i < 8; i++) s->bits[i] |= tmp.bits[i];
+                set_add_cp_range(s, 0x80, 0x10FFFF);   /* the classes are ASCII */
                 continue;
             }
             lo = rx_escape_char(e);
         } else {
-            lo = (unsigned char)*rc->p++;
+            rc->p = rc->p + (rx_decode(rc->p, 0, (int)strlen(rc->p), &lo));
         }
         if (rc->p[0] == '-' && rc->p[1] && rc->p[1] != ']') {
             int hi;
             rc->p++;
             if (*rc->p == '\\' && rc->p[1]) { hi = rx_escape_char(rc->p[1]); rc->p += 2; }
-            else hi = (unsigned char)*rc->p++;
+            else rc->p = rc->p + (rx_decode(rc->p, 0, (int)strlen(rc->p), &hi));
             if (hi < lo) { rc->err = "invalid range in []"; return NULL; }
-            set_add_range(&rc->sets[si], lo, hi);
+            set_add_cp_range(&rc->sets[si], lo, hi);
         } else {
-            set_add(&rc->sets[si], lo);
+            set_add_cp_range(&rc->sets[si], lo, lo);
         }
     }
     if (*rc->p != ']') { rc->err = "unterminated []"; return NULL; }
@@ -263,6 +309,22 @@ static RxNode *rx_parse_atom(RxCompiler *rc) {
         return rx_char_node(rc, rx_escape_char(e));
     }
     if (c == '*' || c == '+' || c == '?' || c == '{') { rc->err = "quantifier with nothing to repeat"; return NULL; }
+    {
+        int cp, n = rx_decode(rc->p, 0, (int)strlen(rc->p), &cp);
+        if (n > 1) {
+            RxNode *seq = NULL;
+            for (int k = n - 1; k >= 0; k--) {
+                RxNode *ch = rx_node(rc, N_CHAR);
+                ch->c = (unsigned char)rc->p[k];
+                if (!seq) { seq = ch; continue; }
+                RxNode *cat = rx_node(rc, N_CAT);
+                cat->a = ch; cat->b = seq;
+                seq = cat;
+            }
+            rc->p += n;
+            return seq;
+        }
+    }
     rc->p++;
     return rx_char_node(rc, (unsigned char)c);
 }
@@ -408,7 +470,7 @@ typedef struct { int pc, pos; } RxState;
 
 struct GlowRegex {
     RxInst *prog; int nprog;
-    RxSet *sets;
+    RxSet *sets; int nsets;
     int ngroups;
     char **names;
     int anchored;               /* the program starts with ^ */
@@ -438,7 +500,7 @@ static int rx_exec(RxMatcher *m, int from, int *caps) {
        successful path, so they say nothing about this one: forget them. */
     for (size_t i = 0; i < m->ntouched; i++) m->visited[m->touched[i] >> 3] = 0;
     m->ntouched = 0;
-    for (int start = from; start <= len; start++) {
+    for (int start = from; start <= len; start = start < len ? rx_next(text, start, len) : len + 1) {
         if (re->anchored && start > 0) break;
         for (int i = 0; i < ncap; i++) caps[i] = -1;
         int sp = 0;
@@ -453,10 +515,13 @@ static int rx_exec(RxMatcher *m, int from, int *caps) {
                     if (pos < len && (unsigned char)text[pos] == in->c) { pc++; pos++; continue; }
                     break;
                 } else if (in->op == RX_ANY) {
-                    if (pos < len) { pc++; pos++; continue; }
+                    if (pos < len) { pc++; pos = rx_next(text, pos, len); continue; }
                     break;
                 } else if (in->op == RX_SET) {
-                    if (pos < len && set_has(&re->sets[in->x], (unsigned char)text[pos])) { pc++; pos++; continue; }
+                    if (pos < len) {
+                        int cp, next = rx_decode(text, pos, len, &cp);
+                        if (set_has_cp(&re->sets[in->x], cp)) { pc++; pos = next; continue; }
+                    }
                     break;
                 } else if (in->op == RX_BOL) {
                     if (pos == 0) { pc++; continue; }
@@ -512,6 +577,7 @@ static void rx_compiler_free(RxCompiler *rc, int keep_program) {
     for (int i = 0; i < rc->nnodes; i++) free(rc->nodes[i]);
     free(rc->nodes);
     if (!keep_program) {
+        set_free_ranges(rc->sets, rc->nsets);
         free(rc->sets);
         free(rc->prog);
         for (int i = 0; i < rc->ngroups; i++) free(rc->names ? rc->names[i] : NULL);
@@ -538,7 +604,7 @@ GlowRegex *glow_regex_compile(const char *pattern, char *err, size_t errlen) {
     }
     GlowRegex *re = calloc(1, sizeof(GlowRegex));
     re->prog = rc.prog; re->nprog = rc.nprog;
-    re->sets = rc.sets;
+    re->sets = rc.sets; re->nsets = rc.nsets;
     re->ngroups = rc.ngroups;
     re->names = rc.names;
     re->anchored = rc.nprog > 0 && rc.prog[0].op == RX_BOL;
@@ -550,6 +616,7 @@ GlowRegex *glow_regex_compile(const char *pattern, char *err, size_t errlen) {
 
 void glow_regex_free(GlowRegex *re) {
     if (!re) return;
+    set_free_ranges(re->sets, re->nsets);
     free(re->prog); free(re->sets); free(re->split_id);
     for (int i = 0; i < re->ngroups; i++) free(re->names[i]);
     free(re->names);
@@ -582,7 +649,7 @@ int glow_regex_each(const GlowRegex *re, const char *text, int len, int limit,
         if (!rx_exec(&m, pos, caps)) break;
         count++;
         if (on_match(ctx, caps)) break;
-        pos = caps[1] > caps[0] ? caps[1] : caps[1] + 1;
+        pos = caps[1] > caps[0] ? caps[1] : (caps[1] < len ? rx_next(text, caps[1], len) : caps[1] + 1);
     }
     free(caps); free(m.stack); free(m.visited); free(m.touched);
     return count;

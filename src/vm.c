@@ -2814,11 +2814,10 @@ int jit_exception_pending(void) { return has_exception; }
             } else {
                 int64_t i;
                 if (!index_value(idx_arg, &i)) { index_error("String index must be a whole number", 0, 0); goto l_OP_THROW; }
-                int64_t len = (int64_t)rope_length(coll);
+                int64_t len = glow_str_len(coll);
                 if (i < 0) i += len;
                 if (i < 0 || i >= len) { index_error("String index out of range", i < 0 ? i - len : i, len); goto l_OP_THROW; }
-                char char_str[2] = { AS_STRING(coll)[i], '\0' };
-                v = value_string_copy(char_str);
+                v = glow_str_char_at(coll, i);
             }
             R(pc->r0) = v;
         } else R(pc->r0) = value_none();
@@ -2882,7 +2881,7 @@ int jit_exception_pending(void) { return has_exception; }
         }
         pthread_detach(t); pc++; goto l_DISPATCH;
     }
-    l_OP_LEN: { Value v = R(pc->r1); if(GET_TYPE(v)==VAL_STRING) R(pc->r0) = value_int((int64_t)rope_length(v)); else if(GET_TYPE(v)==VAL_LIST) R(pc->r0) = value_int(AS_LIST(v)->size); else R(pc->r0) = value_int(0); pc++; goto l_DISPATCH; }
+    l_OP_LEN: { Value v = R(pc->r1); if(GET_TYPE(v)==VAL_STRING) R(pc->r0) = value_int(glow_str_len(v)); else if(GET_TYPE(v)==VAL_LIST) R(pc->r0) = value_int(AS_LIST(v)->size); else R(pc->r0) = value_int(0); pc++; goto l_DISPATCH; }
     l_OP_RANGE: { int n = (int)AS_INT(R(pc->r1)); if (n < 0 || n > 10000000) n = 0; List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, value_int(i)); R(pc->r0) = value_list(l); pc++; goto l_DISPATCH; }
     l_OP_APPEND: { Value v = R(pc->r1), l = R(pc->r0); if(GET_TYPE(l)==VAL_LIST) list_push(AS_LIST(l), v); pc++; goto l_DISPATCH; }
     l_OP_TYPE: {
@@ -2962,7 +2961,7 @@ int jit_exception_pending(void) { return has_exception; }
         Value endV = R(pc->r2 + 1);
         int slen = 0;
         if (GET_TYPE(obj) == VAL_STRING) {
-            slen = strlen(AS_STRING(obj));
+            slen = (int)glow_str_len(obj);   /* characters */
         } else if (GET_TYPE(obj) == VAL_LIST) {
             slen = AS_LIST(obj)->size;
         }
@@ -2984,12 +2983,8 @@ int jit_exception_pending(void) { return has_exception; }
         if (e > slen) e = slen;
         if (s > e) s = e;
         if (GET_TYPE(obj) == VAL_STRING) {
-            int rlen = e - s;
-            char *sub = malloc(rlen + 1);
-            strncpy(sub, AS_STRING(obj) + s, rlen);
-            sub[rlen] = 0;
-            R(pc->r0) = value_string_copy(sub);
-            free(sub);
+            size_t a = glow_str_byte_offset(obj, s), b = glow_str_byte_offset(obj, e);
+            R(pc->r0) = value_string_copy_len(AS_STRING(obj) + a, b - a);
         } else if (GET_TYPE(obj) == VAL_LIST) {
             List *rl = list_new(e - s);
             for (int i = s; i < e; i++) {
@@ -3282,11 +3277,13 @@ int jit_exception_pending(void) { return has_exception; }
                      pc++; goto l_DISPATCH;
                  }
             } else if (type == VAL_STRING) {
+                 /* One character per step; it->index is a byte offset. */
                  const char *s = AS_STRING(coll);
-                 int len = strlen(s);
-                 if (it->index < len) {
-                     char buf[2] = { s[it->index++], '\0' };
-                     R(pc->r0) = value_string_copy(buf);
+                 size_t len = rope_length(coll);
+                 if ((size_t)it->index < len) {
+                     size_t start = (size_t)it->index, next = glow_utf8_step(s, start, len);
+                     it->index = (int)next;
+                     R(pc->r0) = value_string_copy_len(s + start, next - start);
                      pc++; goto l_DISPATCH;
                  }
             }

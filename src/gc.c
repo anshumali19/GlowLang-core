@@ -486,6 +486,7 @@ GC_NOINLINE static void gc_full_collect_impl(void) {
         }
     }
     intern_sweep();
+    glow_str_cursor_reset();
     gc_clear_remembered_set();
     gc_reclaim_empty_blocks();
     gc_set_next_threshold();
@@ -548,6 +549,7 @@ GC_NOINLINE static void gc_minor_collect_impl(void) {
         }
         p = &obj->next;
     }
+    glow_str_cursor_reset();
     gc_clear_remembered_set();
     gc_reclaim_empty_blocks();
     gc_allocated_at_last_gc = gc_allocated;

@@ -9,7 +9,7 @@ show "hmac rfc4231 #2:", crypto.hmac("Jefe", "what do ya want for nothing?") == 
 show "sha256 with a zero byte differs from truncated:", crypto.sha256("a\0b") != crypto.sha256("a")
 let k = kavach_new_key()
 show "key length:", len(k), "keys differ:", k != kavach_new_key()
-show "random_bytes length:", len(crypto.random_bytes(16)), "hex length:", len(hash.random_hex(8))
+show "random_bytes length:", crypto.random_bytes(16).byte_len(), "hex length:", len(hash.random_hex(8))
 let u = crypto.uuid4()
 show "uuid shape:", len(u), u[14], u.split("-").len() == 5
 show "uuids differ:", crypto.uuid4() != crypto.uuid4()

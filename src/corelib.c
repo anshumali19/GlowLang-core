@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include "unicode_case.h"
 
 extern int glow_value_cmp(Value a, Value b);
 
@@ -305,19 +306,68 @@ static Value core_bool(int argc, Value *args) {
 
 /* ---- string methods ---- */
 
-/* upper()/lower(): ASCII letters only, as toupper/tolower do in the C
-   locale the runtime always uses. Written straight into the new string. */
+/* upper()/lower(): Unicode case mapping (src/unicode_case.h, generated
+   from the Unicode database), including mappings to several characters
+   such as German sharp s to "SS". Pure ASCII text, the common case, is
+   converted in place without decoding. */
+static size_t utf8_put(char *out, int32_t c) {
+    if (c < 0x80) { out[0] = (char)c; return 1; }
+    if (c < 0x800) { out[0] = (char)(0xC0 | (c >> 6)); out[1] = (char)(0x80 | (c & 0x3F)); return 2; }
+    if (c < 0x10000) { out[0] = (char)(0xE0 | (c >> 12)); out[1] = (char)(0x80 | ((c >> 6) & 0x3F)); out[2] = (char)(0x80 | (c & 0x3F)); return 3; }
+    out[0] = (char)(0xF0 | (c >> 18)); out[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((c >> 6) & 0x3F)); out[3] = (char)(0x80 | (c & 0x3F));
+    return 4;
+}
+
 static Value str_case(Value s, int upper) {
     size_t n = rope_length(s);
-    char *out;
-    Value r = value_string_alloc(n, &out);
     const unsigned char *src = (const unsigned char*)AS_STRING(s);
     unsigned char lo = upper ? 'a' : 'A', hi = upper ? 'z' : 'Z';
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = src[i];
-        out[i] = (char)(c >= lo && c <= hi ? c ^ 0x20 : c);
+    size_t i = 0;
+    while (i < n && src[i] < 0x80) i++;
+    if (i == n) {
+        char *out;
+        Value r = value_string_alloc(n, &out);
+        src = (const unsigned char*)AS_STRING(s);
+        for (i = 0; i < n; i++) {
+            unsigned char c = src[i];
+            out[i] = (char)(c >= lo && c <= hi ? c ^ 0x20 : c);
+        }
+        glow_str_mark_ascii(r);
+        return r;
     }
+    /* A character's mapping is at most three characters of four bytes. */
+    char *buf = malloc(n * 3 + 16);
+    if (!buf) return raise("out of memory");
+    size_t len = 0;
+    for (i = 0; i < n; ) {
+        unsigned char c = src[i];
+        if (c < 0x80) { buf[len++] = (char)(c >= lo && c <= hi ? c ^ 0x20 : c); i++; continue; }
+        size_t next = glow_utf8_step((const char*)src, i, n);
+        if (next == i + 1) { buf[len++] = (char)c; i++; continue; }   /* not UTF-8: kept as is */
+        int32_t cp = c >= 0xF0 ? (c & 0x07) : c >= 0xE0 ? (c & 0x0F) : (c & 0x1F);
+        for (size_t k = i + 1; k < next; k++) cp = (cp << 6) | (src[k] & 0x3F);
+        const char *multi;
+        int32_t m = unicode_case_map(upper, cp, &multi);
+        if (multi) { size_t ml = strlen(multi); memcpy(buf + len, multi, ml); len += ml; }
+        else len += utf8_put(buf + len, m);
+        i = next;
+    }
+    Value r = value_string_copy_len(buf, len);
+    free(buf);
     return r;
+}
+/* text.byte_len(): the size in bytes (UTF-8), for protocols and files;
+   len(text) counts characters. */
+static Value s_byte_len(int argc, Value *args) { (void)argc; return value_int((int64_t)rope_length(args[0])); }
+/* text.bytes(): its UTF-8 bytes as a list of numbers 0-255. */
+static Value s_bytes(int argc, Value *args) {
+    (void)argc;
+    size_t n = rope_length(args[0]);
+    List *l = list_new((int)n);
+    const unsigned char *p = (const unsigned char*)AS_STRING(args[0]);
+    for (size_t i = 0; i < n; i++) list_push(l, value_int(p[i]));
+    return value_list(l);
 }
 static Value s_upper(int argc, Value *args) { (void)argc; return str_case(args[0], 1); }
 static Value s_lower(int argc, Value *args) { (void)argc; return str_case(args[0], 0); }
@@ -589,7 +639,7 @@ static const MethodEntry string_methods[] = {
     {"starts_with", s_starts_with}, {"ends_with", s_ends_with}, {"replace", s_replace},
     {"count", s_count}, {"join", s_join}, {"lines", s_lines}, {"is_number", s_is_number},
     {"contains", native_str_contains}, {"find", native_str_find}, {"slice", native_str_slice},
-    {"split", native_str_split}, {"len", native_len}, {NULL, NULL}
+    {"split", native_str_split}, {"len", native_len}, {"byte_len", s_byte_len}, {"bytes", s_bytes}, {NULL, NULL}
 };
 static const MethodEntry list_methods[] = {
     {"push", native_list_append}, {"append", native_list_append}, {"add", native_list_append},

@@ -70,7 +70,7 @@ GlowLang is dynamically typed with the following value types:
 |------|---------|-------------|
 | Integer | `42`, `-7`, `2 ** 100` | Exact integer of any size (never overflows) |
 | Float | `3.14`, `-0.5`, `1e-3` | 64-bit double-precision |
-| String | `"hello"`, `f"hi {x}"` | Byte string (UTF-8 text) |
+| String | `"hello"`, `f"hi {x}"` | Unicode text (stored as UTF-8) |
 | Boolean | `true`, `false` | Boolean value |
 | List | `[1, 2, 3]` | Dynamic array |
 | Dictionary | `{"a": 1}` | Hash map |
@@ -201,6 +201,26 @@ let sub = s[0:5]             # Slicing: "Hello"
 let parts = s.split(", ")    # Split into a list
 ```
 
+### Unicode
+Strings hold Unicode text (stored as UTF-8), and everything that counts or
+indexes works in characters (code points), as in Python: `len`, `s[i]`,
+slices, `find`, `split("")`, `for each ch in s`, `pairs(s)` and regex match
+positions.
+```glow
+let s = "héllo 😀"
+show len(s), s[1], s[-1], s[0:5]    # 7 é 😀 héllo
+show s.find("😀"), s.byte_len()      # 6 11
+show "straße".upper(), "ΑΒΓ".lower() # STRASSE αβγ
+```
+`s.byte_len()` and `s.bytes()` (a list of numbers 0-255) give the UTF-8
+bytes, for protocols and binary data: an HTTP `Content-Length`, say, or
+`crypto.random_bytes(n)`, which returns n raw bytes. `upper()` and `lower()`
+use the full Unicode case tables (including mappings to several characters,
+as `ß` to `SS`), without locale or context rules such as Greek final sigma.
+A byte that is not valid UTF-8 counts as one character, so no input is lost.
+Indexing pure-ASCII text is constant-time, and walking any string with
+`s[i]` from start to end takes linear time.
+
 ### String Methods
 | Method | Result |
 |--------|--------|
@@ -208,11 +228,12 @@ let parts = s.split(", ")    # Split into a list
 | `s.trim()` (`strip`), `s.trim_start()`, `s.trim_end()` | Whitespace removed |
 | `s.replace(old, new)` | Every occurrence replaced |
 | `s.contains(x)`, `s.starts_with(x)`, `s.ends_with(x)` | `true` / `false` |
-| `s.find(x)` | Position of `x`, or `-1` |
+| `s.find(x)` | Position of `x` (in characters), or `-1` |
 | `s.count(x)` | Number of occurrences |
 | `s.split(sep)`, `s.lines()` | List of parts |
 | `sep.join(list)` | Items joined with `sep` |
 | `s.is_number()` | Whether `float(s)` would succeed |
+| `s.byte_len()`, `s.bytes()` | Size in UTF-8 bytes; the bytes as a list of numbers |
 
 ---
 
@@ -947,7 +968,9 @@ A match has `.text`, `.start`, `.stop` (`end` is a keyword), `.span`,
 groups `(?<name> )`, `(?: )`, `|`, greedy and lazy `* + ? {m,n}`, sets with
 ranges and `[:classes:]`, `\d \w \s \b` and their negations, `^ $`, and a
 leading `(?i)` to ignore case. Matching takes time linear in the text, with
-no catastrophic backtracking. Positions are byte offsets.
+no catastrophic backtracking. `.`, sets (`[é-ë]`, `[^a]`) and literals match
+whole characters, and positions count characters like string indexes; `\d \w
+\s`, `\b` and `(?i)` cover ASCII only (as Python's `re.ASCII`).
 
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,

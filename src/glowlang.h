@@ -112,9 +112,13 @@ typedef struct PackedArray {
     char device[16];   // "cpu", "cuda", etc.
 } PackedArray;
 
+/* size is in bytes (UTF-8). nchars1 caches the number of characters (code
+   points) plus one; 0 means not counted yet. A string whose character count
+   equals its size is pure ASCII, so character and byte positions agree. */
 typedef struct {
     GCObject obj;
     int size;
+    int nchars1;
     char chars[];
 } GCString;
 
@@ -132,6 +136,7 @@ typedef struct BigInt {
 typedef struct RopeNode {
     GCObject obj;
     size_t length;
+    int64_t nchars1;   /* characters + 1, when known at concatenation; else 0 */
     bool is_leaf;
     union {
         struct {
@@ -921,6 +926,19 @@ void list_sort(List *l);
 void list_reverse(List *l);
 Value value_string_copy(const char *s);
 Value value_string_alloc(size_t len, char **chars);
+Value value_string_copy_len(const char *s, size_t len);
+/* Strings are UTF-8; lengths, indexes and positions seen by programs count
+   characters (code points). A byte that is not part of a valid UTF-8
+   sequence counts as one character, so no input is lost. */
+size_t glow_utf8_step(const char *s, size_t i, size_t n);
+size_t glow_utf8_count(const char *s, size_t n);
+int64_t glow_str_len(Value v);
+size_t glow_str_byte_offset(Value v, int64_t char_index);
+int64_t glow_str_char_index(Value v, size_t byte_offset);
+void glow_str_cursor_reset(void);
+int glow_str_is_ascii(Value v);
+void glow_str_mark_ascii(Value v);
+Value glow_str_char_at(Value v, int64_t char_index);
 Value rope_new(Value left, Value right);
 Value glow_string_concat(Value a, Value b);
 const char* rope_flatten(Value v);
