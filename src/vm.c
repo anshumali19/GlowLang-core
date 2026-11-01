@@ -1286,6 +1286,88 @@ int jit_exception_pending(void) { return has_exception; }
 /* Back-edge threshold after which a loop is compiled for on-stack entry. */
 #define GLOW_OSR_THRESHOLD 1000
 
+/* ---- Helpers for compiled code (see glowlang.h) ---- */
+
+Value jit_mod_helper(Value a, Value b) {
+    if (!is_numeric(a) || !is_numeric(b) || val_to_double(b) == 0.0) return VAL_DEOPT_SENTINEL;
+    return num_mod(a, b);
+}
+
+Value jit_pow_helper(Value a, Value b) {
+    if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
+    return num_pow(a, b);
+}
+
+Value jit_neg_helper(Value v) {
+    if (!is_numeric(v)) return VAL_DEOPT_SENTINEL;
+    if (GET_TYPE(v) == VAL_INT) { int64_t x = AS_INT(v); return x == INT48_MIN ? value_float(-(double)x) : value_int(-x); }
+    if (is_bigint(v)) return value_bigint(bigint_negate(AS_BIGINT(v)));
+    return num_from_double(-val_to_double(v));
+}
+
+Value jit_const_string(const char *s) { return vm_get_const_string(s); }
+
+Value jit_list_literal(Value *regs, int n) {
+    List *l = list_alloc(n, 0);
+    for (int i = 0; i < n; i++) list_push(l, regs[i]);
+    return value_list(l);
+}
+
+/* Keys at regs[2i], values at regs[2i+1]; non-string keys are skipped. */
+Value jit_dict_literal(Value *regs, int n) {
+    Dict *d = dict_alloc(n, 0);
+    for (int i = 0; i < n; i++)
+        if (GET_TYPE(regs[2 * i]) == VAL_STRING) dict_set(d, AS_STRING(regs[2 * i]), regs[2 * i + 1]);
+    return value_dict(d);
+}
+
+Value jit_iter_start(Value coll) {
+    if (GET_TYPE(coll) == VAL_OBJECT && (coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_SQLITE_ITER) return coll;
+    Iterator *it = gc_alloc(sizeof(Iterator), OBJ_ITERATOR);
+    it->iterable = coll;
+    it->index = 0;
+    return make_value(VAL_OBJECT, (uintptr_t)it);
+}
+
+/* The next item of a for-each loop, or JIT_ITER_DONE. The interpreter's
+   OP_ITER_NEXT uses it too. */
+Value jit_iter_next(Value vit) {
+    if (GET_TYPE(vit) != VAL_OBJECT || !(vit & MASK_PAYLOAD)) return JIT_ITER_DONE;
+    GCObject *obj = (GCObject*)(uintptr_t)(vit & MASK_PAYLOAD);
+    if (obj->type == OBJ_ITERATOR) {
+        Iterator *it = (Iterator*)obj;
+        Value coll = it->iterable;
+        int type = GET_TYPE(coll);
+        if (type == VAL_LIST) {
+            List *l = AS_LIST(coll);
+            if (it->index < l->size) return l->items[it->index++];
+        } else if (type == VAL_DICT) {
+            Dict *d = AS_DICT(coll);
+            while (it->index < d->capacity && (d->keys[it->index] == 0 || GET_TYPE(d->keys[it->index]) == VAL_NONE)) it->index++;
+            if (it->index < d->capacity) return value_string_copy((const char*)(uintptr_t)(d->keys[it->index++] & MASK_PAYLOAD));
+        } else if (type == VAL_STRING) {
+            /* One character per step; it->index is a byte offset. */
+            const char *s = AS_STRING(coll);
+            size_t len = rope_length(coll);
+            if ((size_t)it->index < len) {
+                size_t start = (size_t)it->index, next = glow_utf8_step(s, start, len);
+                it->index = (int)next;
+                return value_string_copy_len(s + start, next - start);
+            }
+        }
+    } else if (obj->type == OBJ_SQLITE_ITER) {
+        SQLiteIter *it = (SQLiteIter*)obj;
+        if (!it->done) {
+            int rc = sqlite3_step(it->stmt);
+            if (rc == SQLITE_ROW) return glow_sqlite_row(it->stmt);
+            it->done = 1;
+            sqlite3_finalize(it->stmt);
+            it->stmt = NULL;
+        }
+    }
+    return JIT_ITER_DONE;
+}
+
  Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
      #ifdef _WIN32
      glow_ensure_veh();
@@ -3252,56 +3334,8 @@ int jit_exception_pending(void) { return has_exception; }
         pc++; goto l_DISPATCH;
     }
     l_OP_ITER_NEXT: {
-        Value vit = R(pc->r1);
-        if (GET_TYPE(vit) != VAL_OBJECT || !(vit & MASK_PAYLOAD)) {
-            if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
-            pc = bc->code + pc->arg; DISPATCH();
-        }
-        GCObject *obj = (GCObject*)(uintptr_t)(vit & MASK_PAYLOAD);
-
-        if (obj->type == OBJ_ITERATOR) {
-            Iterator *it = (Iterator*)obj;
-            Value coll = it->iterable;
-            int type = GET_TYPE(coll);
-            if (type == VAL_LIST) {
-                 List *l = AS_LIST(coll);
-                 if (it->index < l->size) {
-                     R(pc->r0) = l->items[it->index++];
-                     pc++; goto l_DISPATCH;
-                 }
-            } else if (type == VAL_DICT) {
-                 Dict *d = AS_DICT(coll);
-                 while (it->index < d->capacity && (d->keys[it->index] == 0 || GET_TYPE(d->keys[it->index]) == VAL_NONE)) it->index++;
-                 if (it->index < d->capacity) {
-                     R(pc->r0) = value_string_copy((const char*)(uintptr_t)(d->keys[it->index++] & MASK_PAYLOAD));
-                     pc++; goto l_DISPATCH;
-                 }
-            } else if (type == VAL_STRING) {
-                 /* One character per step; it->index is a byte offset. */
-                 const char *s = AS_STRING(coll);
-                 size_t len = rope_length(coll);
-                 if ((size_t)it->index < len) {
-                     size_t start = (size_t)it->index, next = glow_utf8_step(s, start, len);
-                     it->index = (int)next;
-                     R(pc->r0) = value_string_copy_len(s + start, next - start);
-                     pc++; goto l_DISPATCH;
-                 }
-            }
-        } else if (obj->type == OBJ_SQLITE_ITER) {
-            SQLiteIter *it = (SQLiteIter*)obj;
-            if (!it->done) {
-                int rc = sqlite3_step(it->stmt);
-                if (rc == SQLITE_ROW) {
-                    R(pc->r0) = glow_sqlite_row(it->stmt);
-                    pc++; goto l_DISPATCH;
-                } else {
-                    it->done = 1;
-                    sqlite3_finalize(it->stmt);
-                    it->stmt = NULL;
-                }
-            }
-        }
-
+        Value next = jit_iter_next(R(pc->r1));
+        if (next != JIT_ITER_DONE) { R(pc->r0) = next; pc++; goto l_DISPATCH; }
         if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
         pc = bc->code + pc->arg; DISPATCH();
     }

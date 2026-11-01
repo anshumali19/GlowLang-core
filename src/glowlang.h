@@ -190,6 +190,8 @@ static inline int fits_int48(int64_t v) { return v >= INT48_MIN && v <= INT48_MA
 #define INT53_MAX ((int64_t)9007199254740992LL)
 
 #define VAL_DEOPT_SENTINEL (MASK_NAN | ((uint64_t)VAL_NONE << 48) | 0xDE0FULL)
+/* jit_iter_next's answer when the loop is over. */
+#define JIT_ITER_DONE (MASK_NAN | ((uint64_t)VAL_NONE << 48) | 0xD0E1ULL)
 #define IS_DEOPT(v)      ((v) == VAL_DEOPT_SENTINEL)
 #define IS_TRACE_EXIT(v) ((v) == (MASK_NAN | ((uint64_t)VAL_TRACE_EXIT << 48)))
 
@@ -308,6 +310,17 @@ extern Value glow_store_index_jit(Value coll, Value v_idx, Value v_val);
 extern Value jit_int_add(Value a, Value b);
 extern Value jit_int_sub(Value a, Value b);
 extern Value jit_int_mul(Value a, Value b);
+/* Compiled code calls these for the operations it does not do inline; each
+   does what the interpreter does, and returns VAL_DEOPT_SENTINEL where the
+   interpreter would raise, so it raises there. */
+Value jit_mod_helper(Value a, Value b);
+Value jit_pow_helper(Value a, Value b);
+Value jit_neg_helper(Value v);
+Value jit_const_string(const char *s);
+Value jit_list_literal(Value *regs, int n);
+Value jit_dict_literal(Value *regs, int n);
+Value jit_iter_start(Value coll);
+Value jit_iter_next(Value it);
 extern Value jit_int_lt(Value a, Value b);
 extern Value jit_int_gt(Value a, Value b);
 extern Value jit_int_lte(Value a, Value b);
