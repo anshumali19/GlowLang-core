@@ -22,7 +22,7 @@ kept: 30000 bad: 0
 [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 [a, b, c] 4
 MIXED 123 _! mixed 123 _!
-HéLLO WöRLD ÀÉÎ 
+HÉLLO WÖRLD àéî 
 abc bnn a<->b<->c
 ba xyz abc
 cafe cafe x
