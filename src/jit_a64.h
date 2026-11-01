@@ -35,6 +35,10 @@ static inline uint32_t a64_cmp(int rn, int rm) { return 0xEB000000u | (A64_R(rm)
 static inline uint32_t a64_and(int rd, int rn, int rm) { return 0x8A000000u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
 static inline uint32_t a64_orr(int rd, int rn, int rm) { return 0xAA000000u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
 static inline uint32_t a64_mul(int rd, int rn, int rm) { return 0x9B007C00u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
+static inline uint32_t a64_sdiv(int rd, int rn, int rm) { return 0x9AC00C00u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
+/* msub xd, xn, xm, xa: xd = xa - xn * xm */
+static inline uint32_t a64_msub(int rd, int rn, int rm, int ra) { return 0x9B008000u | (A64_R(rm) << 16) | (A64_R(ra) << 10) | (A64_R(rn) << 5) | A64_R(rd); }
+static inline uint32_t a64_eor(int rd, int rn, int rm) { return 0xCA000000u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
 static inline uint32_t a64_smulh(int rd, int rn, int rm) { return 0x9B407C00u | (A64_R(rm) << 16) | (A64_R(rn) << 5) | A64_R(rd); }
 /* Bitfield moves: sbfx/ubfx extract `width` bits from `lsb`; asr/lsr. */
 static inline uint32_t a64_sbfx(int rd, int rn, int lsb, int width) { return 0x93400000u | ((uint32_t)lsb << 16) | ((uint32_t)(lsb + width - 1) << 10) | (A64_R(rn) << 5) | A64_R(rd); }

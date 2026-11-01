@@ -738,6 +738,39 @@ static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
 
 extern Value jit_div_helper(Value a, Value b);
 
+/* Inline integer modulo with the interpreter's floor rule (the result has
+   the divisor's sign: -7 % 3 == 2). Other operands, and a zero divisor,
+   go to the helper, which declines the latter so the interpreter raises. */
+static void emit_jit_int_mod(JITBuffer *buf, int r0, int r1, int r2, int i) {
+    uint32_t jne_a, jne_b;
+    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xc9); // test rcx, rcx
+    uint32_t jz_zero = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x99);                     // cqo
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xf7); jit_emit_byte(buf, 0xf9); // idiv rcx (remainder in rdx)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xd2); // test rdx, rdx
+    uint32_t jz_fixed = buf->size; jit_emit_byte(buf, 0x74); jit_emit_byte(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd0); // mov rax, rdx
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x31); jit_emit_byte(buf, 0xc8); // xor rax, rcx
+    uint32_t jns_fixed = buf->size; jit_emit_byte(buf, 0x79); jit_emit_byte(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x01); jit_emit_byte(buf, 0xca); // add rdx, rcx
+    uint32_t fixed = buf->size;
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd0); // mov rax, rdx
+    emit_box_int_rax(buf);
+    uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    uint32_t slow = buf->size;
+    emit_call_binop_helper(buf, r1, r2, (uintptr_t)jit_mod_helper);
+    emit_deopt_check(buf, i);
+    uint32_t done = buf->size;
+    emit_mov_reg_rax(buf, r0);
+    buf->code[jz_fixed + 1] = (uint8_t)(fixed - (jz_fixed + 2));
+    buf->code[jns_fixed + 1] = (uint8_t)(fixed - (jns_fixed + 2));
+    *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow - (jne_a + 6));
+    *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow - (jne_b + 6));
+    *(uint32_t*)(buf->code + jz_zero + 2) = (uint32_t)(slow - (jz_zero + 6));
+    *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done - (jmp_done + 5));
+}
+
 /* Inline double division; the helper handles big ints and declines
    division by zero so the interpreter raises the error. */
 static void emit_jit_div(JITBuffer *buf, int r0, int r1, int r2, int i) {
@@ -807,6 +840,9 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
             case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
             case OP_LOAD_LOCAL: case OP_STORE_LOCAL:
+            case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
+            case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
+            case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
                 break;
             default: bc->jit_failed = 1; return;
         }
@@ -1065,6 +1101,50 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 break;
             }
+            case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_POW:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_pow_helper);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_NEG:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_neg_helper);
+                emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_CONST_STRING:
+                emit_mov_arg1_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_const_string);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_LIST_LITERAL: case OP_DICT_LITERAL:
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r1 * 8); // add r10, r1*8
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                emit_mov_rax_imm64(&buf, pc->op == OP_LIST_LITERAL ? (uintptr_t)jit_list_literal : (uintptr_t)jit_dict_literal);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_ITER_START:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_start);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_ITER_NEXT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_next);
+                emit_call_rax(&buf);
+                emit_mov_rcx_imm64(&buf, JIT_ITER_DONE);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8); // cmp rax, rcx
+                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84);                          // je: the loop is over
+                jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++;
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
             case OP_RETURN: {
                 emit_mov_rax_reg(&buf, pc->r0);
                 emit_epilogue(&buf);
@@ -1161,6 +1241,9 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
             case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
             case OP_LOAD_LOCAL: case OP_STORE_LOCAL:
+            case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
+            case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
+            case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
                 break;
             default: bc->jit_failed = 1; return;
         }
@@ -1415,6 +1498,50 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
                 break;
             }
+            case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_POW:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_pow_helper);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_NEG:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_neg_helper);
+                emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_CONST_STRING:
+                emit_mov_arg1_imm64(&buf, (uintptr_t)pc->ptr);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_const_string);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_LIST_LITERAL: case OP_DICT_LITERAL:
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r1 * 8); // add r10, r1*8
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                emit_mov_rax_imm64(&buf, pc->op == OP_LIST_LITERAL ? (uintptr_t)jit_list_literal : (uintptr_t)jit_dict_literal);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_ITER_START:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_start);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_ITER_NEXT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_next);
+                emit_call_rax(&buf);
+                emit_mov_rcx_imm64(&buf, JIT_ITER_DONE);
+                jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8); // cmp rax, rcx
+                jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84);                          // je: the loop is over
+                jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++;
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
             case OP_RETURN: {
                 emit_mov_rax_reg(&buf, pc->r0);
                 jit_baseline_emit_epilogue(&buf);
@@ -1865,6 +1992,34 @@ static void a64_div(A64 *a, int r0, int r1, int r2, int i) {
     a64_store_reg(a, 0, r0);
 }
 
+/* % with the interpreter's floor rule (the result has the divisor's sign);
+   other operands and a zero divisor go to the helper. */
+static void a64_int_mod(A64 *a, int r0, int r1, int r2, int i) {
+    A64Jumps slow = {0};
+    a64_load_ints(a, r1, r2, &slow);
+    uint32_t zero = a64_here(a);
+    a64_emit(a, a64_cbz(1, 0));
+    a64_jumps_add(&slow, zero);
+    a64_emit(a, a64_sdiv(9, 0, 1));
+    a64_emit(a, a64_msub(2, 9, 1, 0));      /* x2 = x0 - (x0 / x1) * x1 */
+    uint32_t exact = a64_here(a);
+    a64_emit(a, a64_cbz(2, 0));
+    a64_emit(a, a64_eor(9, 2, 1));
+    uint32_t same_sign = a64_here(a);
+    a64_emit(a, a64_tbz(9, 63, 0));
+    a64_emit(a, a64_add(2, 2, 1));
+    a64_link_here(a, exact);
+    a64_link_here(a, same_sign);
+    a64_emit(a, a64_mov_reg(0, 2));
+    a64_box_int(a);
+    uint32_t done = a64_b_fwd(a);
+    a64_jumps_link_here(a, &slow);
+    a64_call_binop(a, r1, r2, (const void*)jit_mod_helper);
+    a64_deopt_check(a, i);   /* declined: modulo by zero */
+    a64_link_here(a, done);
+    a64_store_reg(a, 0, r0);
+}
+
 /* Ordered comparison of two ints into a bool; otherwise the helper. */
 static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i) {
     A64Jumps slow = {0};
@@ -1897,6 +2052,9 @@ static int a64_supported(OpCode op) {
         case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
         case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
         case OP_LOAD_LOCAL: case OP_STORE_LOCAL:
+        case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
+        case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
+        case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
             return 1;
         default:
             return 0;
@@ -2104,6 +2262,43 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                 a64_load_reg(A, 1, pc->r2);
                 a64_load_reg(A, 2, pc->r0);
                 a64_call(A, (const void*)simd_add_helper);
+                break;
+            case OP_MOD: a64_int_mod(A, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_POW:
+                a64_call_binop(A, pc->r1, pc->r2, (const void*)jit_pow_helper);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_NEG:
+                a64_load_reg(A, 0, pc->r1);
+                a64_call(A, (const void*)jit_neg_helper);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_CONST_STRING:
+                a64_mov_imm(A, 0, (uintptr_t)pc->ptr);
+                a64_call(A, (const void*)jit_const_string);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_LIST_LITERAL: case OP_DICT_LITERAL:
+                a64_addr_reg(A, 0, pc->r1);
+                a64_mov_imm(A, 1, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                a64_call(A, pc->op == OP_LIST_LITERAL ? (const void*)jit_list_literal : (const void*)jit_dict_literal);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_ITER_START:
+                a64_load_reg(A, 0, pc->r1);
+                a64_call(A, (const void*)jit_iter_start);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_ITER_NEXT:
+                a64_load_reg(A, 0, pc->r1);
+                a64_call(A, (const void*)jit_iter_next);
+                a64_mov_imm(A, 9, JIT_ITER_DONE);
+                a64_emit(A, a64_cmp(0, 9));
+                a64_emit(A, a64_b_cond(A64_NE, 8));   /* not over: skip the exit */
+                jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++;
+                a64_store_reg(A, 0, pc->r0);
                 break;
             case OP_RETURN:
                 a64_load_reg(A, 0, pc->r0);

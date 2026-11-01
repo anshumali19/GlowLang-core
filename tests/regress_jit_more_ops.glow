@@ -1,0 +1,121 @@
+# Compiled code now runs %, **, unary minus, every comparison, for-each,
+# list and dict literals and string constants itself. Each function below
+# runs hot enough to be compiled; the results must be the interpreter's.
+
+func f_mod(a, b):
+    return a % b
+end
+func f_pow(a, b):
+    return a ** b
+end
+func f_neg(a):
+    return -a
+end
+func f_cmp(a, b):
+    return [a < b, a <= b, a > b, a >= b, a == b, a != b]
+end
+func describe(r):
+    return type(r) + ":" + str(r)
+end
+
+let nums = [0, 1, -1, 7, -7, 3, -3, 140737488355327, -140737488355328, 2 ** 60, 0.5, -2.5, 7.0, 1e300]
+func run_mod(record):
+    let out = []
+    for each a in nums:
+        for each b in nums:
+            let r = "error"
+            try:
+                r = describe(f_mod(a, b))
+            catch e:
+                r = "error: " + str(e)
+            end
+            if record:
+                out.push(str(a) + " % " + str(b) + " = " + r)
+            end
+        end
+    end
+    return out
+end
+let w = 0
+while w < 30:
+    run_mod(false)
+    w = w + 1
+end
+for each line in run_mod(true):
+    show line
+end
+
+# Unary minus at the 48-bit edge, on floats and big ints.
+let negs = []
+for each v in [0, 5, -5, 140737488355327, -140737488355328, 2.5, 2 ** 70]:
+    let i = 0
+    let r = none
+    while i < 300:
+        r = f_neg(v)
+        i = i + 1
+    end
+    negs.push(describe(r))
+end
+show "neg:", negs
+try:
+    show f_neg("x")
+catch e:
+    show "neg error:", e
+end
+
+# Powers.
+let pows = []
+for each p in [[2, 10], [2, 70], [-3, 3], [2, -1], [9, 0.5], [0, 0]]:
+    let i = 0
+    let r = none
+    while i < 300:
+        r = f_pow(p[0], p[1])
+        i = i + 1
+    end
+    pows.push(describe(r))
+end
+show "pow:", pows
+
+# Every comparison on mixed values (ints, floats, NaN, none, strings, lists).
+let nan = 1e300 * 1e300 - 1e300 * 1e300
+let pairs_to_compare = [[1, 2], [2.5, 2], [3, 3.0], [nan, 1], [nan, nan], ["a", "b"], ["b", "b"], [[1, 2], [1, 3]], [none, none], [none, 0]]
+for each pr in pairs_to_compare:
+    let i = 0
+    let r = none
+    while i < 300:
+        try:
+            r = f_cmp(pr[0], pr[1])
+        catch e:
+            r = "error: " + str(e)
+        end
+        i = i + 1
+    end
+    show "cmp", pr[0], pr[1], r
+end
+
+# for-each over lists, dicts, strings and empty things, with literals and
+# string constants inside a hot loop.
+func walk(n):
+    let total = 0
+    let words = ""
+    let i = 0
+    while i < n:
+        for each x in [1, 2, 3]:
+            total = total + x
+        end
+        for each k in {"a": 1, "bb": 2}:
+            words = words + k
+        end
+        for each ch in "hé":
+            words = words + ch
+        end
+        for each e in []:
+            total = total + 1000
+        end
+        let d = {"n": i, "label": "row"}
+        total = total + d["n"] % 3
+        i = i + 1
+    end
+    return [total, len(words), words.slice(0, 7)]
+end
+show "walk:", walk(2000)
