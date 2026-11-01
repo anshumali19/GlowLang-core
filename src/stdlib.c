@@ -645,12 +645,11 @@ Value glow_index_jit(Value coll, Value v_idx) {
         return v;
     } else if (GET_TYPE(coll) == VAL_STRING) {
         if (GET_TYPE(v_idx) != VAL_INT) return VAL_DEOPT_SENTINEL;
-        int64_t len = (int64_t)rope_length(coll);
+        int64_t len = glow_str_len(coll);
         int64_t i = AS_INT(v_idx);
         if (i < 0) i += len;
         if (i < 0 || i >= len) return VAL_DEOPT_SENTINEL;
-        char ch[2] = { AS_STRING(coll)[i], '\0' };
-        return value_string_copy(ch);
+        return glow_str_char_at(coll, i);
     }
     return value_none();
 }
@@ -733,7 +732,7 @@ Value value_string_copy(const char *s) {
 /* Build a GCString directly from a length-delimited span (which need not be
    NUL-terminated), allocating the string once. Lets callers that already know
    the length (slice, split, JSON keys) avoid a temp malloc + second copy. */
-static Value value_string_copy_len(const char *s, size_t len) {
+Value value_string_copy_len(const char *s, size_t len) {
     if (!s) { s = ""; len = 0; }
     GCString *gs = gc_alloc(sizeof(GCString) + len + 1, OBJ_STRING);
     gs->size = (int)len;
@@ -752,8 +751,130 @@ Value value_string_alloc(size_t len, char **chars) {
     return make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
 }
 
+/* ---- UTF-8: character positions ---- */
+
+/* The byte index just past the character starting at s[i] (i < n). A lead
+   byte followed by the right number of continuation bytes is one character;
+   any other byte stands alone. */
+size_t glow_utf8_step(const char *s, size_t i, size_t n) {
+    unsigned char b = (unsigned char)s[i];
+    size_t len = b < 0x80 ? 1 : (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : (b >> 3) == 30 ? 4 : 1;
+    if (len == 1) return i + 1;
+    if (i + len > n) return i + 1;
+    for (size_t k = 1; k < len; k++)
+        if (((unsigned char)s[i + k] & 0xC0) != 0x80) return i + 1;
+    return i + len;
+}
+
+size_t glow_utf8_count(const char *s, size_t n) {
+    size_t count = 0, i = 0;
+    while (i < n) {
+        /* Runs of ASCII are the common case: eight bytes at a time. */
+        if (i + 8 <= n) {
+            uint64_t w;
+            memcpy(&w, s + i, 8);
+            if (!(w & 0x8080808080808080ULL)) { i += 8; count += 8; continue; }
+        }
+        if ((unsigned char)s[i] < 0x80) { i++; count++; continue; }
+        i = glow_utf8_step(s, i, n);
+        count++;
+    }
+    return count;
+}
+
+/* The last non-ASCII position looked up (see glow_str_byte_offset).
+   One for all threads: only the GIL holder runs, and the collector resets it. */
+static struct { GCString *g; int64_t ch; size_t byte; } str_cursor;
+
+/* The flat GCString holding v's bytes (ropes are flattened once). */
+static GCString *str_flat_object(Value v) {
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (o->type == OBJ_STRING) return (GCString*)o;
+    rope_flatten(v);
+    return (GCString*)(uintptr_t)(((RopeNode*)o)->leaf.flat_string & MASK_PAYLOAD);
+}
+
+/* The number of characters in v, counted once and cached. */
+int64_t glow_str_len(Value v) {
+    if (GET_TYPE(v) != VAL_STRING || !(v & MASK_PAYLOAD)) return 0;
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (o->type == OBJ_ROPE && ((RopeNode*)o)->nchars1) return ((RopeNode*)o)->nchars1 - 1;
+    GCString *g = str_flat_object(v);
+    if (!g->nchars1) g->nchars1 = (int)glow_utf8_count(g->chars, (size_t)g->size) + 1;
+    return g->nchars1 - 1;
+}
+
+/* Is v known to be pure ASCII (counted, and as many characters as bytes)? */
+int glow_str_is_ascii(Value v) {
+    if (GET_TYPE(v) != VAL_STRING || !(v & MASK_PAYLOAD)) return 0;
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (o->type != OBJ_STRING) return 0;
+    GCString *g = (GCString*)o;
+    return g->nchars1 == g->size + 1;
+}
+
+/* Record that a new flat string is pure ASCII, sparing the count. */
+void glow_str_mark_ascii(Value v) {
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (o->type == OBJ_STRING) ((GCString*)o)->nchars1 = ((GCString*)o)->size + 1;
+}
+
+/* The byte offset where character char_index starts (the byte length for
+   an index at or past the end). */
+size_t glow_str_byte_offset(Value v, int64_t char_index) {
+    if (GET_TYPE(v) != VAL_STRING || !(v & MASK_PAYLOAD) || char_index <= 0) return 0;
+    GCString *g = str_flat_object(v);
+    size_t n = (size_t)g->size;
+    if (glow_str_len(v) == (int64_t)n) return (size_t)char_index < n ? (size_t)char_index : n;
+    /* Continue from the last position looked up in this string when it is
+       not past this one, so walking a string with s[i] is not quadratic. */
+    int64_t k = 0;
+    size_t i = 0;
+    if (str_cursor.g == g && str_cursor.ch <= char_index) { k = str_cursor.ch; i = str_cursor.byte; }
+    for (; k < char_index && i < n; k++) i = glow_utf8_step(g->chars, i, n);
+    str_cursor.g = g; str_cursor.ch = k; str_cursor.byte = i;
+    return i;
+}
+
+/* The collector frees strings; forget the cursor so it never refers to a
+   string reallocated at the same address. */
+void glow_str_cursor_reset(void) { str_cursor.g = NULL; }
+
+/* The character index of byte offset byte_offset. */
+int64_t glow_str_char_index(Value v, size_t byte_offset) {
+    if (GET_TYPE(v) != VAL_STRING || !(v & MASK_PAYLOAD)) return 0;
+    GCString *g = str_flat_object(v);
+    size_t n = (size_t)g->size;
+    if (byte_offset > n) byte_offset = n;
+    if (glow_str_len(v) == (int64_t)n) return (int64_t)byte_offset;
+    return (int64_t)glow_utf8_count(g->chars, byte_offset);
+}
+
+/* Character char_index of v (0 <= char_index < length) as a string. */
+Value glow_str_char_at(Value v, int64_t char_index) {
+    GCString *g = str_flat_object(v);
+    size_t n = (size_t)g->size;
+    size_t a = glow_str_byte_offset(v, char_index);
+    if (a >= n) return value_string_copy("");
+    g = str_flat_object(v);   /* value_string_copy_len may collect; v keeps g alive */
+    return value_string_copy_len(g->chars + a, glow_utf8_step(g->chars, a, n) - a);
+}
+
+/* v's character count, if it is known or cheap to get (a short string). */
+static int64_t str_chars_if_cheap(Value v) {
+    if (!(v & MASK_PAYLOAD)) return 0;
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (o->type == OBJ_ROPE) return ((RopeNode*)o)->nchars1 - 1;
+    GCString *g = (GCString*)o;
+    if (!g->nchars1 && g->size <= 256) g->nchars1 = (int)glow_utf8_count(g->chars, (size_t)g->size) + 1;
+    return g->nchars1 - 1;
+}
+
 Value rope_new(Value left, Value right) {
+    int64_t cl = str_chars_if_cheap(left), cr = str_chars_if_cheap(right);
     RopeNode *rn = gc_alloc(sizeof(RopeNode), OBJ_ROPE);
+    /* Counted now so len() of a long concatenation needs no flattening. */
+    if (cl >= 0 && cr >= 0) rn->nchars1 = cl + cr + 1;
     rn->length = rope_length(left) + rope_length(right);
     rn->is_leaf = false;
     rn->internal.left = (RopeNode*)(uintptr_t)(left & MASK_PAYLOAD);
@@ -1672,11 +1793,13 @@ static Value native_pairs(int argc, Value *args) {
     } else if (GET_TYPE(coll) == VAL_STRING) {
         const char *s = AS_STRING(coll);
         size_t n = rope_length(coll);
-        for (size_t i = 0; i < n; i++) {
-            char ch[2] = { s[i], 0 };
+        int64_t ci = 0;
+        for (size_t i = 0; i < n; ci++) {
+            size_t next = glow_utf8_step(s, i, n);
             List *p = list_new(2); Value pv = value_list(p);
-            list_push(p, value_int((int64_t)i)); list_push(p, value_string_copy(ch));
+            list_push(p, value_int(ci)); list_push(p, value_string_copy_len(s + i, next - i));
             list_push(out, pv);
+            i = next;
             s = AS_STRING(coll);
         }
     } else {
@@ -1740,7 +1863,7 @@ void glow_add_error(int line, const char *msg) {
 Value native_len(int argc, Value *args) {
     if (argc < 1) return value_int(0);
     Value v = args[0];
-    if (GET_TYPE(v) == VAL_STRING) return value_int((int64_t)rope_length(v));
+    if (GET_TYPE(v) == VAL_STRING) return value_int(glow_str_len(v));
     if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size);
     if (GET_TYPE(v) == VAL_DICT) return value_int(AS_DICT(v)->size);
     if (GET_TYPE(v) == VAL_OBJECT) {
@@ -2496,37 +2619,37 @@ Value native_str_find(int argc, Value *args) {
     const char *sub = AS_STRING(args[1]);
     const char *found = strstr(s, sub);
     if (found) {
-        return value_int(found - s);
+        return value_int(glow_str_char_index(args[0], (size_t)(found - s)));
     }
     return value_int(-1);
 }
 
+/* text.slice(start, end): characters start..end-1; negative indexes count
+   from the end, and both are clamped to the string. */
 Value native_str_slice(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING) {
         return value_none();
     }
-    const char *s = AS_STRING(args[0]);
-    int len = strlen(s);
+    int64_t len = glow_str_len(args[0]);
 
-    int start = 0;
+    int64_t start = 0;
     if (GET_TYPE(args[1]) == VAL_INT) {
-        start = (int)AS_INT(args[1]);
+        start = AS_INT(args[1]);
     } else if (GET_TYPE(args[1]) == VAL_FLOAT) {
-        start = (int)AS_FLOAT(args[1]);
+        start = (int64_t)AS_FLOAT(args[1]);
     }
-
     if (start < 0) {
         start = len + start;
         if (start < 0) start = 0;
     }
     if (start > len) start = len;
 
-    int end = len;
+    int64_t end = len;
     if (argc >= 3 && GET_TYPE(args[2]) != VAL_NONE) {
         if (GET_TYPE(args[2]) == VAL_INT) {
-            end = (int)AS_INT(args[2]);
+            end = AS_INT(args[2]);
         } else if (GET_TYPE(args[2]) == VAL_FLOAT) {
-            end = (int)AS_FLOAT(args[2]);
+            end = (int64_t)AS_FLOAT(args[2]);
         }
         if (end < 0) {
             end = len + end;
@@ -2535,12 +2658,12 @@ Value native_str_slice(int argc, Value *args) {
         if (end > len) end = len;
     }
 
-    if (start > end) {
+    if (start >= end) {
         return value_string_copy("");
     }
-
-    int slice_len = end - start;
-    return value_string_copy_len(s + start, (size_t)slice_len);
+    size_t a = glow_str_byte_offset(args[0], start);
+    size_t b = glow_str_byte_offset(args[0], end);
+    return value_string_copy_len(AS_STRING(args[0]) + a, b - a);
 }
 
 Value native_str_split(int argc, Value *args) {
@@ -2561,24 +2684,31 @@ Value native_str_split(int argc, Value *args) {
 
     size_t delim_len = strlen(delim);
     if (delim_len == 0) {
-        int len = strlen(s);
-        for (int i = 0; i < len; i++) {
-            char buf[2] = { s[i], '\0' };
-            list_push(l, value_string_copy(buf));
+        size_t len = strlen(s);
+        for (size_t i = 0; i < len; ) {
+            size_t next = glow_utf8_step(s, i, len);
+            list_push(l, value_string_copy_len(s + i, next - i));
+            i = next;
         }
         gc_threshold = old_gc_thresh;
         return value_list(l);
     }
 
+    /* Pieces of an ASCII string are ASCII: count them now, for free. */
+    int ascii = glow_str_len(args[0]) == (int64_t)rope_length(args[0]);   /* counted once, then cached */
     const char *current = s;
     const char *next = strstr(current, delim);
     while (next != NULL) {
         size_t part_len = next - current;
-        list_push(l, value_string_copy_len(current, part_len));
+        Value piece = value_string_copy_len(current, part_len);
+        if (ascii) glow_str_mark_ascii(piece);
+        list_push(l, piece);
         current = next + delim_len;
         next = strstr(current, delim);
     }
-    list_push(l, value_string_copy(current));
+    Value last = value_string_copy(current);
+    if (ascii) glow_str_mark_ascii(last);
+    list_push(l, last);
 
     gc_threshold = old_gc_thresh;
     return value_list(l);
@@ -3112,11 +3242,11 @@ static int re_text_arg(Value text, const char *fn) {
 
 /* A match as a dict: text, start, end, groups (a list, none for a group
    that did not take part) and named (name -> text). */
-static Value re_match_dict(const GlowRegex *re, const char *text, const int *caps) {
+static Value re_match_dict(const GlowRegex *re, const char *text, const int *caps, int64_t start_char, int64_t end_char) {
     Dict *m = dict_new(8);
     dict_set(m, "text", value_string_copy_len(text + caps[0], (size_t)(caps[1] - caps[0])));
-    dict_set(m, "start", value_int(caps[0]));
-    dict_set(m, "end", value_int(caps[1]));
+    dict_set(m, "start", value_int(start_char));
+    dict_set(m, "end", value_int(end_char));
     int ng = glow_regex_groups(re);
     List *groups = list_new(ng);
     Dict *named = dict_new(4);
@@ -3133,13 +3263,28 @@ static Value re_match_dict(const GlowRegex *re, const char *text, const int *cap
     return value_dict(m);
 }
 
-typedef struct { const GlowRegex *re; const char *text; List *out; int mode; } ReCollect;
+/* text_v is the text as a value; (byte, ch) is a cursor for turning the
+   byte offsets the matcher reports into character positions, moved forward
+   as matches arrive in order. */
+typedef struct { const GlowRegex *re; const char *text; List *out; int mode; Value text_v; size_t byte; int64_t ch; } ReCollect;
+
+/* The character position of byte offset `at` (matches come in order). */
+static int64_t re_char_pos(ReCollect *c, size_t at) {
+    if (at < c->byte) { c->byte = 0; c->ch = 0; }
+    size_t n = rope_length(c->text_v);
+    while (c->byte < at && c->byte < n) { c->byte = glow_utf8_step(c->text, c->byte, n); c->ch++; }
+    return c->ch;
+}
 
 /* mode 0: match dicts; 1: findall values (the match, its one group, or a
    list of its groups). */
 static int re_collect(void *ctx, const int *caps) {
     ReCollect *c = ctx;
-    if (c->mode == 0) { list_push(c->out, re_match_dict(c->re, c->text, caps)); return 0; }
+    if (c->mode == 0) {
+        int64_t a = re_char_pos(c, (size_t)caps[0]), b = re_char_pos(c, (size_t)caps[1]);
+        list_push(c->out, re_match_dict(c->re, c->text, caps, a, b));
+        return 0;
+    }
     int ng = glow_regex_groups(c->re);
     if (ng == 0) {
         list_push(c->out, value_string_copy_len(c->text + caps[0], (size_t)(caps[1] - caps[0])));
@@ -3161,7 +3306,7 @@ static Value native_re_find(int argc, Value *args) {
     if (!re) return value_none();
     if (!re_text_arg(args[1], "find")) { glow_regex_free(re); return value_none(); }
     const char *text = AS_STRING(args[1]);
-    ReCollect c = { re, text, list_new(1), 0 };
+    ReCollect c = { re, text, list_new(1), 0, args[1], 0, 0 };
     glow_regex_each(re, text, (int)strlen(text), 1, re_collect, &c);
     Value r = c.out->size ? c.out->items[0] : value_none();
     glow_regex_free(re);
@@ -3176,7 +3321,7 @@ static Value native_re_all(int argc, Value *args) {
     if (!re) return value_none();
     if (!re_text_arg(args[1], "findall")) { glow_regex_free(re); return value_none(); }
     const char *text = AS_STRING(args[1]);
-    ReCollect c = { re, text, list_new(4), argc > 2 && GET_TYPE(args[2]) == VAL_BOOL && AS_BOOL(args[2]) };
+    ReCollect c = { re, text, list_new(4), argc > 2 && GET_TYPE(args[2]) == VAL_BOOL && AS_BOOL(args[2]), args[1], 0, 0 };
     glow_regex_each(re, text, (int)strlen(text), 0, re_collect, &c);
     glow_regex_free(re);
     return value_list(c.out);

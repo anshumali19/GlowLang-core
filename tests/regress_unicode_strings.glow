@@ -1,0 +1,53 @@
+# Strings are UTF-8, and everything a program sees counts characters (code
+# points): len, indexes, slices, find, split(""), iteration, regex
+# positions. byte_len() and bytes() give the bytes. Expected values match
+# Python's.
+import "re"
+
+let s = "héllo wörld ✓ 😀!"
+show "len:", len(s), "bytes:", s.byte_len()
+show "index:", s[0], s[1], s[12], s[14], s[-1], s[-2]
+show "slice:", s.slice(0, 5), "|", s.slice(6, 11), "|", s.slice(-3), "|", s.slice(13, 100), "|", s.slice(5, 2), "|"
+show "slice syntax:", s[0:5], "|", s[6:], "|", s[:2], "|", s[-2:]
+show "find:", s.find("ö"), s.find("😀"), s.find("!"), s.find("x"), s.find("")
+show "split:", "ab😀c".split(""), "α,β,γ".split(","), len("日本語のテキスト".split("の"))
+
+let chars = []
+for each ch in "añ😀z":
+    chars.push(ch)
+end
+show "for each:", chars, len(chars)
+show "pairs:", pairs("ñ😀")
+show "contains:", s.contains("wörld"), "😀" in s, s.starts_with("hé"), s.ends_with("😀!")
+show "count/replace:", "ñañaña".count("ña"), "ñañaña".replace("ña", "NA")
+
+# Out of range is an error, as for lists.
+try:
+    show s[16]
+catch e:
+    show "index error:", e
+end
+
+# Case mapping covers every script, including mappings to several characters.
+show "upper:", "straße".upper(), "ǆ".upper(), "ﬁ".upper(), "ΐ".upper()
+show "upper:", "αβγ δ", "αβγ δ".upper(), "привет".upper(), "çàé".upper(), "ı i".upper()
+show "lower:", "ΑΒΓ".lower(), "ПРИВЕТ".lower(), "ÇÀÉ".lower(), "İ".lower(), len("İ".lower())
+show "ascii kept:", "Hello, World! 123".upper(), "Hello, World! 123".lower()
+show "no case:", "日本 😀 123".upper() == "日本 😀 123"
+
+# Bytes.
+show "byte_len:", "é".byte_len(), "😀".byte_len(), "abc".byte_len(), "".byte_len()
+show "bytes:", "aé😀".bytes()
+show "chr/ord:", ord("é"), ord("😀"), chr(233), chr(128512), chr(233) == "é"
+
+# Regular expressions match whole characters and report character positions.
+let m = re.find("w.rld", s)
+show "re find:", m.text, m.start, m.stop
+show "re dot:", re.findall(".", "a😀é"), re.findall("[é-ë]+", "café élève ëx"), re.findall("[^a]", "aéa😀")
+show "re repeat:", re.findall("é+", "éééxé"), re.findall("\\W", "a é!"), re.findall("😀{2}", "😀😀😀")
+show "re spans:", re.finditer("o", "ö o öo").map(lambda(mm): mm.span)
+show "re replace:", re.replace("ö", "wörld wöw", "o"), re.split("✓", "a✓b✓c")
+
+# Libraries that need bytes use them: URLs are percent-encoded byte by byte.
+import "http_client"
+show "url:", url_encode("héllo wörld/😀")

@@ -1,0 +1,25 @@
+len: 16 bytes: 23
+index: h é ✓ 😀 ! 😀
+slice: héllo | wörld |  😀! |  😀! |  |
+slice syntax: héllo | wörld ✓ 😀! | hé | 😀!
+find: 7 14 15 -1 0
+split: [a, b, 😀, c] [α, β, γ] 2
+for each: [a, ñ, 😀, z] 4
+pairs: [[0, ñ], [1, 😀]]
+contains: true true true true
+count/replace: 3 NANANA
+index error: String index out of range (index 16, length 16)
+upper: STRASSE Ǆ FI Ϊ́
+upper: αβγ δ ΑΒΓ Δ ПРИВЕТ ÇÀÉ I I
+lower: αβγ привет çàé i̇ 2
+ascii kept: HELLO, WORLD! 123 hello, world! 123
+no case: true
+byte_len: 2 4 3 0
+bytes: [97, 195, 169, 240, 159, 152, 128]
+chr/ord: 233 128512 é 😀 true
+re find: wörld 6 11
+re dot: [a, 😀, é] [é, é, ë] [é, 😀]
+re repeat: [ééé, é] [ , é, !] [😀😀]
+re spans: [[2, 3], [5, 6]]
+re replace: world wow [a, b, c]
+url: h%C3%A9llo%20w%C3%B6rld%2F%F0%9F%98%80

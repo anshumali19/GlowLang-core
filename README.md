@@ -25,7 +25,7 @@
 | **Database** | SQLite bindings (`sqlite.open`, `sqlite.exec`, `sqlite.query`, `sqlite.close`) |
 | **Tensors** | `tensor.zeros/ones/add/dot/matmul`; AVX2+FMA kernels chosen at run time when the CPU has them, scalar code otherwise |
 | **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`), BLAKE3 |
-| **Text** | f-strings with any expression, string methods (`upper`, `replace`, `trim`, `split`, `join`, ...), regular expressions, JSON |
+| **Text** | Unicode strings (lengths, indexes and slices count characters; full Unicode `upper`/`lower`), f-strings with any expression, string methods (`upper`, `replace`, `trim`, `split`, `join`, ...), regular expressions, JSON |
 | **Collections** | Lists and dicts compared by contents; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`; out-of-range indexes raise errors |
 | **Functions** | Closures (lambdas and nested functions); recursion to about 61,000 calls in compiled code and 65,000 in the interpreter, then a clear "Maximum recursion depth exceeded" error |
 | **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir`, `fs.remove` |
