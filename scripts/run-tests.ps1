@@ -51,9 +51,11 @@ function Normalize([string]$text) {
 }
 
 function Test-Line([string]$want, [string]$got) {
-    if ($want -notmatch '\{\{ANY\}\}') { return $want -eq $got }
+    # -ceq / -cmatch: PowerShell's -eq and -match ignore case, which let wrong
+    # output pass (a lowercase letter where an uppercase one was expected).
+    if ($want -notmatch '\{\{ANY\}\}') { return $want -ceq $got }
     $pattern = '^' + (($want -split '\{\{ANY\}\}' | ForEach-Object { [regex]::Escape($_) }) -join '.*') + '$'
-    return $got -match $pattern
+    return $got -cmatch $pattern
 }
 
 $pass = 0; $fail = 0; $failures = @()
@@ -93,7 +95,7 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
         } elseif (Test-Path $expFile) {
             $wl = @((Normalize ([IO.File]::ReadAllText($expFile))) -split "`n")
             $ol = @($out -split "`n")
-            if ($mode -eq 'unordered') { $wl = @($wl | Sort-Object); $ol = @($ol | Sort-Object) }
+            if ($mode -eq 'unordered') { $wl = @($wl | Sort-Object -CaseSensitive); $ol = @($ol | Sort-Object -CaseSensitive) }
             $n = [Math]::Max($wl.Count, $ol.Count)
             for ($i = 0; $i -lt $n; $i++) {
                 $w = if ($i -lt $wl.Count) { $wl[$i] } else { $null }

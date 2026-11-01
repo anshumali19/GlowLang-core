@@ -56,7 +56,8 @@ show "abc".split(","), "a,,b,".split(","), ",".split(",")
 show "1,2,3,4,5,6,7,8,9,10".split(",")
 show "a--b--c".split("--"), len("x y  z".split(" "))
 
-# upper / lower: ASCII letters change, everything else is kept byte for byte.
+# upper / lower: letters change case in every script (Unicode), digits and
+# punctuation stay.
 show "MiXeD 123 _!".upper(), "MiXeD 123 _!".lower()
 show "héllo wörld".upper(), "ÀÉÎ".lower(), "".upper()
 
