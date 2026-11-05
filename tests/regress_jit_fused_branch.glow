@@ -1,0 +1,171 @@
+# A comparison followed by the jump of an if / while compiles to one
+# compare-and-branch when the boolean is not needed afterwards. These
+# loops run hot enough to be compiled; every answer must be the
+# interpreter's, including `and` / `or` (where the first comparison's value
+# is the result when the jump is taken), NaN, mixed ints and floats, big
+# ints, the 48-bit edge, and comparisons that raise.
+
+let nan = 1e300 * 1e300 - 1e300 * 1e300
+let values = [0, 1, -1, 2.5, -2.5, 3, 3.0, nan, 140737488355327, -140737488355328, 2 ** 60, 1e300, true]
+
+func branches(a, b):
+    let r = 0
+    if a < b:
+        r = r + 1
+    end
+    if a <= b:
+        r = r + 2
+    end
+    if a > b:
+        r = r + 4
+    end
+    if a >= b:
+        r = r + 8
+    end
+    if a == b:
+        r = r + 16
+    end
+    if a != b:
+        r = r + 32
+    end
+    if not (a < b):
+        r = r + 64
+    end
+    return r
+end
+
+func logic(a, b):
+    let r = []
+    r.push(a < b and b < 100)
+    r.push(a < b or b < 0)
+    r.push(a > b and a > 0 and b > -10)
+    let x = a <= b or a == 3
+    r.push(x)
+    if a < b and b > 2:
+        r.push("both")
+    else:
+        r.push("not both")
+    end
+    if a > 2 or b > 2:
+        r.push("either")
+    end
+    return r
+end
+
+func run(record):
+    let out = []
+    for each a in values:
+        for each b in values:
+            let r1 = branches(a, b)
+            let r2 = logic(a, b)
+            if record:
+                out.push(str(a) + " " + str(b) + " " + str(r1) + " " + str(r2))
+            end
+        end
+    end
+    return out
+end
+let w = 0
+while w < 30:
+    run(false)
+    w = w + 1
+end
+for each line in run(true):
+    show line
+end
+
+# Loops whose conditions fuse, with counters crossing the 48-bit edge and
+# floats, and a mandelbrot-style compound condition.
+func count_down(n):
+    let c = 0
+    let i = n
+    while i > n - 1000:
+        c = c + 1
+        i = i - 1
+    end
+    return [c, i]
+end
+show "edge:", count_down(140737488355327), count_down(-140737488354327)
+
+# Counters that cross the 48-bit edge: past it, + and - give exact floats.
+func cross(start, step):
+    let i = start
+    let c = 0
+    let seen = []
+    while c < 1000:
+        i = i + step
+        i = i - step * 2
+        i = i + step * 2
+        c = c + 1
+        if c % 250 == 0:
+            seen.push(type(i) + ":" + str(i))
+        end
+    end
+    return seen
+end
+show "cross up:", cross(140737488355327 - 500, 1)
+show "cross down:", cross(-140737488355328 + 500, -1)
+show "mul edge:", cross(11863283, 11863283)
+
+func float_steps(limit):
+    let x = 0.0
+    let n = 0
+    while x < limit:
+        x = x + 0.1
+        n = n + 1
+    end
+    return [n, x >= limit]
+end
+show "floats:", float_steps(50.0), float_steps(0.0), float_steps(nan)
+
+func escape(cr, ci):
+    let zr = 0.0
+    let zi = 0.0
+    let n = 0
+    while n < 50 and zr * zr + zi * zi <= 4.0:
+        let t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        n = n + 1
+    end
+    return n
+end
+let total = 0
+let y = -1.0
+while y < 1.0:
+    let x = -2.0
+    while x < 0.5:
+        total = total + escape(x, y)
+        x = x + 0.125
+    end
+    y = y + 0.125
+end
+show "escape total:", total
+
+# Big ints and comparisons that raise, after the loop is compiled.
+func count_below(xs, limit):
+    let c = 0
+    for each v in xs:
+        if v < limit:
+            c = c + 1
+        end
+    end
+    return c
+end
+let nums = []
+let k = 0
+while k < 500:
+    nums.push(k * 3)
+    k = k + 1
+end
+show "below:", count_below(nums, 700), count_below(nums, 2 ** 70), count_below(nums, 0.5)
+try:
+    show count_below(nums, "x")
+catch e:
+    show "error:", e
+end
+try:
+    show count_below([1, 2, none], 5)
+catch e:
+    show "error:", e
+end
