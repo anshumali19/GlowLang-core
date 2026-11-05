@@ -803,16 +803,36 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
-#ifdef GLOW_JIT_WIN64
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
-#else
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc7); // mov rdi, rax
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xce); // mov rsi, rcx
-#endif
-    emit_mov_rax_imm64(buf, slow_fn);
-    emit_call_rax(buf);
+    /* Ints and doubles compare as doubles: every 48-bit int converts
+       exactly, so this matches value_cmp. NaN is unordered, which makes
+       every comparison false, as in the interpreter. Anything else (big
+       ints, bools, strings, ...) goes to the helper. */
+    JumpList helper = {0};
+    emit_load_number_xmm(buf, r1, 0, 0, &helper);
+    emit_load_number_xmm(buf, r2, 1, 0, &helper);
+    /* a < b is b > a and a <= b is b >= a: "above" conditions are false
+       when the operands are unordered. */
+    if (op == OP_LT_INT || op == OP_LTE_INT) {
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc8); // ucomisd xmm1, xmm0
+    } else {
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc1); // ucomisd xmm0, xmm1
+    }
+    if (op == OP_EQ_INT) {
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x94); jit_emit_byte(buf, 0xc0); // sete al
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9b); jit_emit_byte(buf, 0xc1); // setnp cl
+        jit_emit_byte(buf, 0x20); jit_emit_byte(buf, 0xc8);                         // and al, cl
+    } else {
+        unsigned char cc = (op == OP_LT_INT || op == OP_GT_INT) ? 0x97 : 0x93;     // seta / setae
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, cc); jit_emit_byte(buf, 0xc0); // setcc al
+    }
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc0); // movzx eax, al
+    emit_mov_rdx_imm64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48));
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
+    uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &helper, buf->size);
+    emit_call_binop_helper(buf, r1, r2, slow_fn);
     emit_deopt_check(buf, i); /* incomparable operands: the interpreter raises */
+    *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(buf->size - (jmp_done2 + 5));
     uint32_t done_pos = buf->size;
     emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
@@ -2032,9 +2052,24 @@ static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow
     a64_emit(a, a64_orr(0, 0, 2));
     uint32_t done = a64_b_fwd(a);
     a64_jumps_link_here(a, &slow);
+    /* Ints and doubles compare as doubles (exact for 48-bit ints). After
+       fcmp an unordered (NaN) result sets NZCV to 0011, which makes MI, LS,
+       GT, GE and EQ all false, as the interpreter's comparisons are. */
+    A64Jumps helper = {0};
+    a64_load_number(a, r1, 0, 0, &helper);
+    a64_load_number(a, r2, 1, 0, &helper);
+    a64_emit(a, a64_fcmp(0, 1));
+    int fcond = op == OP_LT_INT ? A64_MI : op == OP_GT_INT ? A64_GT :
+                op == OP_LTE_INT ? A64_LS : op == OP_GTE_INT ? A64_GE : A64_EQ;
+    a64_emit(a, a64_cset(2, fcond));
+    a64_mov_imm(a, 0, value_bool(0));
+    a64_emit(a, a64_orr(0, 0, 2));
+    uint32_t done2 = a64_b_fwd(a);
+    a64_jumps_link_here(a, &helper);
     a64_call_binop(a, r1, r2, slow_fn);
     a64_deopt_check(a, i);   /* incomparable operands: the interpreter raises */
     a64_link_here(a, done);
+    a64_link_here(a, done2);
     a64_store_reg(a, 0, r0);
 }
 

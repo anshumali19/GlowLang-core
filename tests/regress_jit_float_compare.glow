@@ -1,0 +1,75 @@
+# Compiled comparisons on floats (and ints mixed with floats) are done in
+# machine code now. Each function runs hot enough to be compiled; every
+# answer must match the interpreter's, including NaN, infinities, -0.0, the
+# 48-bit int edge, big ints and bools (which still go to the helper).
+
+func f_cmp(a, b):
+    return [a < b, a <= b, a > b, a >= b, a == b, a != b]
+end
+
+let nan = 1e300 * 1e300 - 1e300 * 1e300
+let inf = 1e300 * 1e300
+let values = [0, 1, -1, 0.0, -0.0, 0.5, -0.5, 2.5, 3, 3.0, 1e300, -1e300, inf, -inf, nan,
+              140737488355327, -140737488355328, 140737488355327.5, 9007199254740993.0,
+              2 ** 60, 2 ** 60 + 0.0, true, false]
+
+func run(record):
+    let out = []
+    for each a in values:
+        for each b in values:
+            let r = f_cmp(a, b)
+            if record:
+                out.push(str(a) + " ? " + str(b) + " " + str(r))
+            end
+        end
+    end
+    return out
+end
+let w = 0
+while w < 30:
+    run(false)
+    w = w + 1
+end
+for each line in run(true):
+    show line
+end
+
+# A float loop guard, the shape mandelbrot uses.
+func escape(cr, ci):
+    let zr = 0.0
+    let zi = 0.0
+    let n = 0
+    while n < 50 and zr * zr + zi * zi <= 4.0:
+        let t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        n = n + 1
+    end
+    return n
+end
+let total = 0
+let y = -1.0
+while y < 1.0:
+    let x = -2.0
+    while x < 0.5:
+        total = total + escape(x, y)
+        x = x + 0.0625
+    end
+    y = y + 0.0625
+end
+show "escape total:", total
+
+# Comparisons that must still raise.
+for each pr in [[none, 1.5], ["a", 2.5], [2.5, [1]]]:
+    let i = 0
+    let r = none
+    while i < 300:
+        try:
+            r = pr[0] < pr[1]
+        catch e:
+            r = "error: " + str(e)
+        end
+        i = i + 1
+    end
+    show r
+end
