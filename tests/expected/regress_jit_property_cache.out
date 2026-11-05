@@ -1,0 +1,10 @@
+mixed order: 44990000
+mixed classes: 22527000
+many fields: 20038000
+methods: [4, 4, hi from loose, method]
+values: [2002.5, s9]
+dicts: [3, [a, b]]
+missing: [200, Loose has no property or method 'x']
+not an object: int has no property 'x'
+none: cannot read property 'x' of none
+counter: [20000, 59998]

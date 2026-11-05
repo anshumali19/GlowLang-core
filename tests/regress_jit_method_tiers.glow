@@ -1,0 +1,161 @@
+# Methods called from compiled code reach the optimizing tier now (they
+# used to stay at the baseline tier, or run in the interpreter). Each call
+# site below is hot; the results must be the interpreter's.
+
+blueprint Counter:
+    action init():
+        self.value = 0
+        self.log = []
+    end
+    action add(k):
+        self.value = self.value + k
+        return self.value
+    end
+    action add_twice(k):
+        self.add(k)
+        return self.add(k)
+    end
+    action chain(k):
+        self.value = self.value + k
+        return self
+    end
+    action note(x):
+        self.log.push(x)
+        return len(self.log)
+    end
+end
+
+blueprint Shape:
+    action init(n):
+        self.n = n
+    end
+    action area():
+        return 0
+    end
+    action describe():
+        return type(self) + " " + str(self.area())
+    end
+end
+blueprint Square extends Shape:
+    action area():
+        return self.n * self.n
+    end
+end
+blueprint Circle extends Shape:
+    action area():
+        return 3 * self.n * self.n
+    end
+end
+blueprint Blob extends Shape:
+end
+
+blueprint Tree:
+    action init(d):
+        self.d = d
+        self.kids = []
+        if d > 0:
+            self.kids.push(Tree(d - 1))
+            self.kids.push(Tree(d - 1))
+        end
+    end
+    action size():
+        let s = 1
+        for each k in self.kids:
+            s = s + k.size()
+        end
+        return s
+    end
+end
+
+blueprint Mixed:
+    action init():
+        self.total = 0
+    end
+    action take(x):
+        self.total = self.total + x
+        return self.total
+    end
+    action fail_on(x):
+        if x == 13:
+            throw "unlucky " + str(x)
+        end
+        return x
+    end
+end
+
+func run_counter(n):
+    let c = Counter()
+    let s = 0
+    let i = 0
+    while i < n:
+        s = s + c.add(i % 3) % 2
+        s = s + c.add_twice(1)
+        c.chain(1).chain(2)
+        if i % 100 == 0:
+            c.note(i)
+        end
+        i = i + 1
+    end
+    return [s, c.value, len(c.log), c.log[len(c.log) - 1]]
+end
+show "counter:", run_counter(20000)
+
+# One call site, several classes (inherited, overridden, default).
+func run_shapes(n):
+    let shapes = [Square(2), Circle(3), Blob(4), Shape(5), Square(6)]
+    let total = 0
+    let i = 0
+    while i < n:
+        total = total + shapes[i % 5].area()
+        i = i + 1
+    end
+    let out = []
+    for each s in shapes:
+        out.push(s.describe())
+    end
+    return [total, out]
+end
+show "shapes:", run_shapes(20000)
+
+func run_trees(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        total = total + Tree(i % 6).size()
+        i = i + 1
+    end
+    return total
+end
+show "trees:", run_trees(400)
+
+# Argument types change after the method is compiled: ints, then floats,
+# then strings (an error), then ints again.
+func run_mixed(n):
+    let m = Mixed()
+    let i = 0
+    while i < n:
+        m.take(i)
+        i = i + 1
+    end
+    let a = m.take(0.5)
+    let err = ""
+    try:
+        m.take("x")
+    catch e:
+        err = str(e)
+    end
+    let b = m.take(1)
+    let caught = 0
+    let j = 0
+    while j < 200:
+        try:
+            m.fail_on(j % 20)
+        catch e:
+            caught = caught + 1
+            err = err + "|" + str(e)
+        end
+        j = j + 1
+    end
+    return [a, b, caught, err.slice(0, 60)]
+end
+show "mixed:", run_mixed(5000)

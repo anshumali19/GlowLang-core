@@ -296,8 +296,12 @@ const char *compiling_file = NULL;
          int saved_top = vm_stack_top;
          vm_stack_top = needed;
 
-         TypeSignature sig = compute_signature(&vm_stack[new_base], fe->param_count);
-         void *jit = func_get_specialization(fe, sig);
+         /* Only functions with type specializations need the argument types;
+         the rest run their one compiled body, so skip the signature (and the
+         interpreter's call cache, which only ever holds specializations). */
+         int has_sig = fe->spec_count > 0;
+         TypeSignature sig = has_sig ? compute_signature(&vm_stack[new_base], fe->param_count) : 0;
+         void *jit = has_sig ? func_get_specialization(fe, sig) : NULL;
          typedef Value (*JITFunc)(Value *R, int *pc_idx);
          Value res;
          if (jit && jit != (void*)1) {
@@ -308,14 +312,14 @@ const char *compiling_file = NULL;
               call_stack_pop();
               if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
          } else if (fe->body->jit_code) {
-             if (pc) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->jit_code; }
+             if (pc && has_sig) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->jit_code; }
              int deopt_pc = 0;
              call_stack_push(fe, NULL);
              res = ((JITFunc)fe->body->jit_code)(&vm_stack[new_base], &deopt_pc);
              call_stack_pop();
              if (IS_DEOPT(res)) res = run_bytecode(fe->body, &fe->body->code[deopt_pc], NULL, new_base);
          } else if (fe->body->baseline_jit_code) {
-             if (pc) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->baseline_jit_code; }
+             if (pc && has_sig) { pc->cache[0].key = (void*)sig; pc->cache[0].val = (intptr_t)fe->body->baseline_jit_code; }
              int deopt_pc = 0;
              call_stack_push(fe, NULL);
              res = ((JITFunc)fe->body->baseline_jit_code)(&vm_stack[new_base], &deopt_pc);
@@ -380,16 +384,79 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     return jit_call_helper_val(v, argc, args, pc);
  }
 
+/* Klass(args...) from compiled code, as the interpreter's OP_CALL does it:
+   a new instance, then `init` (if the class has one) with self in register 0
+   and the arguments after it, missing ones none and extra ones dropped. The
+   result is the instance. An init that is not a compiled-language method
+   (a native or a value stored as init) is left to the interpreter: this
+   returns the deopt sentinel before doing anything. An exception raised by
+   init stays pending, and the compiled caller leaves at the call. */
+extern void func_maybe_tier_up(FuncEntry *fe);
+static Value jit_construct(Class *k, int argc, Value *args, Instruction *pc) {
+    typedef Value (*JITFunc)(Value *R, int *pc_idx);
+    Value init = class_init_method(k);
+    FuncEntry *ife = NULL;
+    if (GET_TYPE(init) == VAL_OBJECT && (init & MASK_PAYLOAD)) {
+        if (GET_OBJ_TYPE(init) != OBJ_BOUND_METHOD) return VAL_DEOPT_SENTINEL;
+        ife = AS_BOUND_METHOD(init)->method;
+        if (!ife || !ife->body || AS_BOUND_METHOD(init)->native_method) return VAL_DEOPT_SENTINEL;
+    }
+    if (!ife) return value_instance(instance_new(k));
+
+    Bytecode *body = ife->body;
+    int new_base = vm_stack_top;
+    int frame = body->local_count > ife->param_count + 1 ? body->local_count : ife->param_count + 1;
+    int needed = new_base + frame + 16;
+    if (glow_stack_low() || call_depth >= 65500 || needed + 512 >= vm_stack_size) {
+        pending_exception = value_string_copy("Maximum recursion depth exceeded");
+        has_exception = 1;
+        return value_none();
+    }
+    /* The arguments live in the caller's frame, below new_base. The new
+       instance goes straight into the callee frame, where the GC sees it,
+       before anything else can allocate. */
+    Value inst = value_instance(instance_new(k));
+    vm_stack[new_base] = inst;
+    for (int i = 0; i < ife->param_count; i++) vm_stack[new_base + 1 + i] = i < argc ? args[i] : value_none();
+    for (int i = ife->param_count + 1; i < frame; i++) vm_stack[new_base + i] = value_none();
+    int saved_top = vm_stack_top;
+    vm_stack_top = needed;
+
+    static int self_slot = -1;
+    if (self_slot < 0) self_slot = global_get_slot("self");
+    Value old_self = global_table.values[self_slot];
+    global_table.values[self_slot] = inst;
+    global_mark_declared(self_slot);
+
+    func_maybe_tier_up(ife);
+    void *code = body->jit_code ? body->jit_code : body->baseline_jit_code;
+    if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
+    if (code && !glow_nojitexec) {
+        int deopt_pc = 0;
+        call_stack_push(ife, NULL);
+        call_depth++;
+        Value res = ((JITFunc)code)(&vm_stack[new_base], &deopt_pc);
+        call_depth--;
+        call_stack_pop();
+        if (IS_DEOPT(res)) run_bytecode(body, &body->code[deopt_pc], NULL, new_base);
+    } else {
+        run_bytecode(body, NULL, NULL, new_base);
+    }
+    global_table.values[self_slot] = old_self;
+    vm_stack_top = saved_top;
+    return inst;
+}
+
 Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     /* Anything this helper cannot complete exactly like the interpreter
-       (constructing an instance runs `init`; calling a non-callable raises)
-       returns the deopt sentinel before doing any work, and the compiled
+       (calling a non-callable raises; see also jit_construct) returns the
+       deopt sentinel before doing any work, and the compiled
        code then lets the interpreter execute the call instruction. */
     if (!(GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD))) return VAL_DEOPT_SENTINEL;
     if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
         ObjType ot = GET_OBJ_TYPE(callee);
-        if (ot == OBJ_CLASS) return VAL_DEOPT_SENTINEL;
+        if (ot == OBJ_CLASS) return jit_construct(AS_CLASS(callee), argc, args, pc);
         if (ot == OBJ_BOUND_METHOD) {
              BoundMethod *bm = AS_BOUND_METHOD(callee);
              if (glow_calldbg) { fprintf(stderr, "[CALLVAL] bm=%p bm->method=%p bm->native=%p argc=%d args=%p callee=%lx ot=%d\n", (void*)bm, (void*)bm->method, (void*)bm->native_method, argc, (void*)args, (unsigned long)callee, (int)ot); fflush(stderr); }
@@ -450,25 +517,7 @@ Value jit_get_property_helper(Value o, const char *n, Instruction *pc) {
 
 Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) {
     if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) {
-        Instance *inst = AS_INSTANCE(o);
-        Dict *d = inst->properties;
-        intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
-        if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
-            d->values[idx] = v;
-            gc_write_barrier((GCObject*)inst, v);
-        } else {
-            int new_idx = dict_get_idx(d, n);
-            if (new_idx != -1) {
-                if (pc) {
-                    pc->cache[0].val = new_idx + 1;
-                    pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
-                }
-                d->values[new_idx] = v;
-                gc_write_barrier((GCObject*)inst, v);
-            } else {
-                instance_set(inst, n, v);
-            }
-        }
+        instance_set_cached(AS_INSTANCE(o), n, v, pc);
     } else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
     return v;
 }
@@ -502,6 +551,13 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
                 if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
                 FuncEntry *cached_fe = (FuncEntry*)pc->cache[0].val;
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
+                /* A method cached at its baseline tier keeps counting
+                   towards the optimizing tier, and switches to it once it
+                   exists. */
+                if (pc->cache[1].val == (intptr_t)cached_fe->body->baseline_jit_code) {
+                    if (!cached_fe->body->jit_code) func_maybe_tier_up(cached_fe);
+                    if (cached_fe->body->jit_code) pc->cache[1].val = (intptr_t)cached_fe->body->jit_code;
+                }
                 JITFunc cached_jit = (JITFunc)pc->cache[1].val;
                 int deopt_pc = 0;
                 call_stack_push(cached_fe, NULL);
@@ -559,6 +615,13 @@ Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, In
         if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = obj;
         TypeSignature sig = compute_signature(args, fe->param_count);
         void *jit = func_get_specialization(fe, sig);
+        if (!(jit && jit != (void*)1)) {
+            /* No specialization: run the method's own compiled body, the
+               optimizing tier once it exists (this used to fall back to the
+               interpreter whenever the method had one). */
+            func_maybe_tier_up(fe);
+            jit = fe->body->jit_code ? fe->body->jit_code : NULL;
+        }
         if (jit && jit != (void*)1) {
             typedef Value (*JITFunc)(Value *R, int *pc_idx);
             int deopt_pc = 0;
@@ -1321,6 +1384,46 @@ void dict_set(Dict *d, const char *key, Value val) {
     d->values[e] = val;
     d->size++;
     dict_index_insert(d, e, h);
+}
+
+/* inst.n = v for OP_SET_PROPERTY, shared by the interpreter and compiled
+   code. pc->cache[0] remembers the entry number the field had last time
+   (fields of one class usually sit at the same entry in every instance);
+   pc->cache[1].key holds the interned name, looked up once, so adding a
+   field to a new object hashes nothing. */
+void instance_set_cached(Instance *inst, const char *n, Value v, Instruction *pc) {
+    Dict *d = inst->properties;
+    intptr_t idx = pc ? pc->cache[0].val - 1 : -1;
+    if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING &&
+        pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
+        d->values[idx] = v;
+        gc_write_barrier((GCObject*)inst, v);
+        return;
+    }
+    if (!pc || !n) { instance_set(inst, n, v); return; }
+    if (!pc->cache[1].key || pc->cache[1].val != (intptr_t)n) {
+        pc->cache[1].key = (void*)intern_string(n);
+        pc->cache[1].val = (intptr_t)n;
+    }
+    const char *k = (const char*)pc->cache[1].key;
+    uint32_t h = intern_cached_hash(k);
+    int s = d->capacity ? dict_find_slot(d, k, h) : -1;
+    int e;
+    if (s >= 0) {
+        e = d->index[s];
+        d->values[e] = v;
+    } else {
+        if (d->used >= d->capacity) dict_grow(d);
+        e = d->used++;
+        d->keys[e] = make_value(VAL_STRING, (uintptr_t)k);
+        d->values[e] = v;
+        d->size++;
+        dict_index_insert(d, e, h);
+        if (d->size > inst->klass->field_hint) inst->klass->field_hint = d->size;
+    }
+    pc->cache[0].val = e + 1;
+    pc->cache[0].key = (void*)k;
+    gc_write_barrier((GCObject*)inst, v);
 }
 
 Value dict_get(Dict *d, const char *key) {
