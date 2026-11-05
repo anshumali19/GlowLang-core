@@ -968,7 +968,19 @@ static void emit_jit_int_mod(JITBuffer *buf, int r0, int r1, int r2, int i) {
    e = m*d - 2^(64+sh) is below d <= 2^(sh+1), and n' * e < 2^(64+sh) for
    every n' < 2^63. Then n' - q*d is in [0, d): the floor modulo, whose
    sign is the divisor's, as GlowLang's % is. */
-#if defined(__SIZEOF_INT128__)
+/* ceil(2^(64+sh) / d) for 2 <= d < 2^31 and 2^sh < d, in 64-bit
+   arithmetic only (a 128-bit division needs a runtime routine that the
+   Windows build does not link). 2^64 = d*q + r with 0 <= r < d, so
+   2^(64+sh) = d*(q << sh) + (r << sh), and r << sh < 2^61 divides
+   directly. */
+static uint64_t jit_mod_reciprocal(uint64_t d, int sh) {
+    uint64_t q = UINT64_MAX / d, r = UINT64_MAX % d + 1;   /* 2^64 = d*q + r */
+    if (r == d) { q++; r = 0; }
+    uint64_t rs = r << sh;
+    uint64_t m = (q << sh) + rs / d;
+    return m + (rs % d != 0);
+}
+
 static int jit_mod_const_divisor(const Bytecode *bc, int i, const unsigned char *targets, int64_t *d_out) {
     if (i < 1 || !targets || targets[i]) return 0;
     const Instruction *c = &bc->code[i - 1], *p = &bc->code[i];
@@ -982,8 +994,7 @@ static int jit_mod_const_divisor(const Bytecode *bc, int i, const unsigned char 
 static void emit_jit_int_mod_const(JITBuffer *buf, int r0, int r1, int r2, int64_t d, int i) {
     int sh = 0;
     while (((uint64_t)1 << (sh + 1)) <= (uint64_t)(d - 1)) sh++;
-    unsigned __int128 p2 = (unsigned __int128)1 << (64 + sh);
-    uint64_t m = (uint64_t)((p2 + (uint64_t)d - 1) / (uint64_t)d);
+    uint64_t m = jit_mod_reciprocal((uint64_t)d, sh);
     uint64_t off = (uint64_t)d * ((((uint64_t)1) << 47) / (uint64_t)d + 1);
 
     emit_mov_rax_reg(buf, r1);
@@ -1016,9 +1027,6 @@ static void emit_jit_int_mod_const(JITBuffer *buf, int r0, int r1, int r2, int64
         if (jit_mod_const_divisor(bc, (i_), targets, &d_)) emit_jit_int_mod_const(&buf, (pc_)->r0, (pc_)->r1, (pc_)->r2, d_, (i_)); \
         else emit_jit_int_mod(&buf, (pc_)->r0, (pc_)->r1, (pc_)->r2, (i_)); \
     } while (0)
-#else
-#define EMIT_MOD(pc_, i_) emit_jit_int_mod(&buf, (pc_)->r0, (pc_)->r1, (pc_)->r2, (i_))
-#endif
 
 /* Inline double division; the helper handles big ints and declines
    division by zero so the interpreter raises the error. */
