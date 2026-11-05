@@ -249,8 +249,18 @@ raised exception also leaves compiled code this way.
   in a C local of a native function stays alive.
 - **Trigger:** when allocated bytes exceed max(32 MB, 2 x the live size after the previous collection).
   `GLOWLANG_GC_STRESS=1` collects every 64 KB and `GLOW_FORCEFULL=1` on every allocation (testing only).
-- **Generational mode** (`GLOW_GC_GENERATIONAL=1`) is experimental: a minor collection still walks the
-  whole object list, so it saves little.
+- **Bitmap sweep:** each block keeps three bitmaps, one bit per 8-byte granule: object starts, objects
+  marked by the current collection, and objects that own memory outside the heap (`finals`). The dead
+  objects of a block are `starts & ~marks`; the sweep reads only those that also have a `finals` bit
+  (to free their storage) and drops the rest by clearing bits. A list, dict or instance gets its
+  `finals` bit when its storage outgrows the inline slots (`gc_note_external_storage`); closures,
+  classes, tensors, string builders, natives and SQLite handles get it when allocated. Under
+  `GLOWLANG_GC_STRESS=1` the sweep also checks that every dead object it skips owned nothing.
+- **Marking** stores the collection's number in each live object's `marked` byte, so live objects
+  never need unmarking. Blocks left with nothing live are kept (up to 32) and reused.
+- `GLOW_GC_STATS=1` prints, at exit, the number of collections and the time spent marking and sweeping.
+- The opt-in generational mode (`GLOW_GC_GENERATIONAL`) was removed: not every store went through the
+  write barrier, and it was slower than full collections.
 - Finalizers release native resources (SQLite connections and statements, tensor buffers).
 
 ### Guard pages

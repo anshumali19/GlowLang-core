@@ -78,7 +78,7 @@ thread's machine stack runs out; both raise a catchable "Maximum recursion depth
   handle exactly (an unsupported operation, a failed type guard, a raised exception) leaves compiled
   code at that instruction and the interpreter continues in the same frame.
 - Integer arithmetic checks for overflow and falls back to the numeric tower.
-- x86-64 only; on other CPUs everything runs in the interpreter.
+- x86-64 and ARM64 (Apple Silicon, ARM Linux); on other CPUs everything runs in the interpreter.
 
 ### Garbage Collector
 
@@ -88,8 +88,11 @@ thread's machine stack runs out; both raise a catchable "Maximum recursion depth
   (precise), plus a conservative scan of every thread's native stack and saved registers, so values
   held only in C locals stay alive.
 - A full collection runs when allocation exceeds max(32 MB, 2 × the live size after the last one).
-- A generational mode exists behind `GLOW_GC_GENERATIONAL=1`. It is experimental: a minor collection
-  still walks the whole object list.
+- Each block has bitmaps of object starts, marks and objects that own memory outside the heap. The
+  sweep works on those bitmaps a word at a time: dead objects are dropped by clearing bits, and only
+  the ones that own memory (a list or dict that outgrew its inline slots, a closure, ...) are read,
+  to free it. Blocks with nothing live are reused.
+- `GLOW_GC_STATS=1` prints the number of collections and their mark and sweep times at exit.
 - Collection is stop-the-world; with the GIL, only one thread mutates the heap at a time.
 
 ### Concurrency

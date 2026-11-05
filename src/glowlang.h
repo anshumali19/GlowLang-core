@@ -83,6 +83,9 @@ typedef struct GCObject {
     unsigned char generation;
     unsigned char in_remembered_set;
     unsigned char is_stack_allocated;
+    /* 1 only in the header of the Dict inside an Instance, which is not a
+       GC object of its own: block_ptr then points at that Instance. */
+    unsigned char embedded;
     void *block_ptr;
     size_t sz;
 } GCObject;
@@ -778,11 +781,15 @@ Node* newCallExprNode(Node *e, Node **as, int c);
 void* gc_alloc(size_t sz, ObjType type);
 void* gc_alloc_stack(size_t sz, ObjType type);
 void gc_free_stack_arena_range(size_t old_used, size_t new_used);
-void gc_write_barrier(GCObject *src, Value target);
+/* Every collection is a full one, so stores need no barrier; the calls
+   stay at the store sites in case a generational collector returns. */
+static inline void gc_write_barrier(GCObject *src, Value target) { (void)src; (void)target; }
 void gc_full_collect(void);
 void gc_minor_collect(void);
 void gc_register_constant_root(Value v);
-extern GCObject *gc_objects;
+/* Call when object o (or the Instance owning an embedded Dict) gets storage
+   of its own outside the GC heap, so the sweep frees it when o dies. */
+void gc_note_external_storage(GCObject *o);
 extern size_t gc_allocated;
 extern size_t gc_threshold;
 extern pthread_mutex_t gc_mutex;

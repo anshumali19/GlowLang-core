@@ -1276,6 +1276,7 @@ static uint32_t hash_string(const char *s) {
 #define DICT_BLOCK_SIZE(cap) ((size_t)(cap) * 2 * sizeof(Value) + (size_t)(cap) * 2 * sizeof(int32_t))
 
 static void dict_set_block(Dict *d, void *block, int cap) {
+    if (block != (void*)(d + 1)) gc_note_external_storage(&d->obj);
     d->keys = (Value*)block;
     d->values = d->keys + cap;
     d->index = (int32_t*)(d->values + cap);
@@ -1475,6 +1476,7 @@ List* list_alloc(int sz, int stack) {
         l = stack ? gc_alloc_stack(sizeof(List), OBJ_LIST) : gc_alloc(sizeof(List), OBJ_LIST);
         l->items = calloc((size_t)sz, sizeof(Value));
         if (!l->items) { fprintf(stderr, "Fatal: out of memory\n"); abort(); }
+        gc_note_external_storage(&l->obj);
         l->capacity = sz;
     }
     l->size = 0;
@@ -1496,6 +1498,7 @@ void list_push(List *l, Value v) {
         if (list_is_inline(l) || !l->items) {
             items = malloc(sizeof(Value) * (size_t)cap);
             if (items && l->size) memcpy(items, l->items, sizeof(Value) * (size_t)l->size);
+            gc_note_external_storage(&l->obj);
         } else {
             items = realloc(l->items, sizeof(Value) * (size_t)cap);
         }
@@ -1706,6 +1709,8 @@ Instance* instance_new(Class *k) {
     i->klass = k;
     i->properties = &i->fields;
     i->fields.obj.type = OBJ_DICT;
+    i->fields.obj.embedded = 1;
+    i->fields.obj.block_ptr = i;
     i->fields.size = 0; i->fields.used = 0;
     dict_set_block(&i->fields, &i->fields + 1, cap);
     k->instances_created++;
