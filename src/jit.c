@@ -53,11 +53,24 @@ extern FuncEntry* func_get(const char *name);
 typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64)
-/* GLOW_JIT_DEBUG=1: report every function compiled, on stderr. */
-static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, size_t bytes) {
-    if (!glow_jit_debug) return;
+/* GLOW_JIT_DEBUG=1: report every function compiled, on stderr.
+   GLOW_JIT_DUMP=<dir>: also write its machine code to <dir>/<name>.<tier>.bin
+   (for `objdump -D -b binary -m i386:x86-64` or `-m aarch64`). */
+static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, const void *code, size_t bytes) {
+    static const char *dump_dir = NULL;
+    static int dump_checked = 0;
+    if (!dump_checked) { dump_checked = 1; dump_dir = getenv("GLOW_JIT_DUMP"); }
+    if (!glow_jit_debug && !dump_dir) return;
     if (!fe) fe = bc->owner;
-    fprintf(stderr, "[jit] %s: %s (%zu bytes)\n", tier, (fe && fe->name) ? fe->name : "<script>", bytes);
+    const char *name = (fe && fe->name) ? fe->name : "script";
+    if (glow_jit_debug) fprintf(stderr, "[jit] %s: %s (%zu bytes)\n", tier, name, bytes);
+    if (dump_dir && code) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/%s.%s.bin", dump_dir, name, tier);
+        for (char *p = path + strlen(dump_dir) + 1; *p; p++) if (*p == ':' || *p == '/' || *p == '\\') *p = '_';
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(code, 1, bytes, f); fclose(f); }
+    }
 }
 /* ... and every function the JIT declines, with the reason. */
 extern const char *op_names[];
@@ -68,6 +81,98 @@ static void jit_debug_skipped(Bytecode *bc, FuncEntry *fe, const char *why, int 
     if (op >= 0) fprintf(stderr, "[jit] skipped: %s (%s %s)\n", name, why, op < 256 ? op_names[op] : "?");
     else fprintf(stderr, "[jit] skipped: %s (%s)\n", name, why);
 }
+
+/* ---- Compare and branch in one ----
+   `while i < n:` compiles to a comparison into a temporary register and a
+   jump on it. When the comparison is the only way to reach the jump and the
+   boolean is dead after it, the pair compiles to cmp + jcc, without making
+   the boolean at all. */
+
+/* For the few simple instructions the scan below understands: the register
+   it writes (or -1) and the ones it reads. Returns 0 for any other op. */
+static int jit_simple_rw(const Instruction *p, int *w, int rd[2], int *nrd) {
+    *w = -1; *nrd = 0;
+    switch (p->op) {
+        case OP_CONST_INT: case OP_CONST_FLOAT: case OP_CONST_BOOL: case OP_CONST_STRING:
+            *w = p->r0; return 1;
+        case OP_MOVE: case OP_NEG:
+            *w = p->r0; rd[0] = p->r1; *nrd = 1; return 1;
+        case OP_LOAD_LOCAL:
+            *w = p->r0; rd[0] = p->arg; *nrd = 1; return 1;
+        case OP_STORE_LOCAL:
+            *w = p->arg; rd[0] = p->r0; *nrd = 1; return 1;
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD: case OP_POW:
+        case OP_ADD_INT: case OP_SUB_INT: case OP_MUL_INT:
+        case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
+        case OP_LT_INT: case OP_GT_INT: case OP_LTE_INT: case OP_GTE_INT: case OP_EQ_INT:
+            *w = p->r0; rd[0] = p->r1; rd[1] = p->r2; *nrd = 2; return 1;
+        case OP_NOP:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Is register x overwritten before anything can read it, on every path
+   from instruction `from`? Follows jumps (a conditional one needs both
+   paths dead) within a budget of steps; anything the scan does not
+   understand (a call, the end of the code, running out of budget) counts
+   as a read. */
+static int jit_reg_dead_walk(const Bytecode *bc, int k, int x, int *budget) {
+    while (k >= 0 && k < bc->count) {
+        if (--*budget < 0) return 0;
+        const Instruction *p = &bc->code[k];
+        switch (p->op) {
+            case OP_RETURN: return p->r0 != x;
+            case OP_JUMP: k = p->arg; continue;
+            case OP_JUMP_IF_FALSE: case OP_JUMP_IF_TRUE:
+                if (p->r0 == x) return 0;
+                if (!jit_reg_dead_walk(bc, p->arg, x, budget)) return 0;
+                k++;
+                continue;
+            default: break;
+        }
+        int w, rd[2], nrd;
+        if (!jit_simple_rw(p, &w, rd, &nrd)) return 0;
+        for (int j = 0; j < nrd; j++) if (rd[j] == x) return 0;
+        if (w == x) return 1;
+        k++;
+    }
+    return 0;
+}
+static int jit_reg_dead_from(const Bytecode *bc, int from, int x) {
+    int budget = 48;
+    return jit_reg_dead_walk(bc, from, x, &budget);
+}
+
+/* Instructions some jump can land on (instruction 0 counts: a tail call
+   jumps back to the start). The caller frees the array. */
+static unsigned char *jit_jump_targets(const Bytecode *bc) {
+    unsigned char *t = calloc((size_t)bc->count + 1, 1);
+    if (!t) return NULL;
+    t[0] = 1;
+    for (int k = 0; k < bc->count; k++) {
+        OpCode op = bc->code[k].op;
+        if (op == OP_JUMP || op == OP_JUMP_IF_FALSE || op == OP_JUMP_IF_TRUE || op == OP_ITER_NEXT) {
+            int a = bc->code[k].arg;
+            if (a >= 0 && a <= bc->count) t[a] = 1;
+        }
+    }
+    return t;
+}
+
+/* Instruction i compares into pc->r0; can it fuse with the jump after it?
+   Returns the jump's sense (0: jump if false, 1: jump if true) or -1. */
+static int jit_fusable_branch(const Bytecode *bc, int i, const unsigned char *targets) {
+    if (!targets || i + 1 >= bc->count) return -1;
+    const Instruction *c = &bc->code[i], *j = &bc->code[i + 1];
+    if (j->op != OP_JUMP_IF_FALSE && j->op != OP_JUMP_IF_TRUE) return -1;
+    if (j->r0 != c->r0 || targets[i + 1]) return -1;
+    if (j->arg <= i + 1 || j->arg > bc->count) return -1;   /* forward jumps only (no GIL poll) */
+    if (!jit_reg_dead_from(bc, i + 2, c->r0) || !jit_reg_dead_from(bc, j->arg, c->r0)) return -1;
+    return j->op == OP_JUMP_IF_TRUE;
+}
+
 #endif
 
 static void jit_emit_byte(JITBuffer *buf, uint8_t b) {
@@ -133,6 +238,40 @@ static void emit_mov_r9_imm64(JITBuffer *buf, uint64_t imm) {
 static void emit_load_cpu_regs(JITBuffer *buf) { (void)buf; }
 static void emit_save_cpu_regs(JITBuffer *buf) { (void)buf; }
 
+/* Set for the function being compiled when it has a loop: its prologue
+   then pins constants that every int operation needs in callee-saved
+   registers (r15 = the int tag, r14 = the 48-bit payload mask, rbx = the
+   bool tag), so helper calls keep them. A function without a loop loads
+   them where they are used instead: that is cheaper than the three loads
+   on every call to, say, a small recursive function. */
+static int x86_pins = 0;
+
+static int jit_has_loop(const Bytecode *bc) {
+    for (int k = 0; k < bc->count; k++) {
+        OpCode op = bc->code[k].op;
+        if ((op == OP_JUMP || op == OP_JUMP_IF_FALSE || op == OP_JUMP_IF_TRUE) && bc->code[k].arg <= k) return 1;
+    }
+    return 0;
+}
+
+static void emit_or_rax_int_tag(JITBuffer *buf) {
+    if (x86_pins) {
+        jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xf8); // or rax, r15
+    } else {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xba); jit_emit_u64(buf, MASK_NAN); // mov rdx, int tag
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0);    // or rax, rdx
+    }
+}
+
+static void emit_or_rax_bool_tag(JITBuffer *buf) {
+    if (x86_pins) {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd8); // or rax, rbx
+    } else {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xba); jit_emit_u64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // mov rdx, bool tag
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0);    // or rax, rdx
+    }
+}
+
 static void emit_prologue(JITBuffer *buf) {
     jit_emit_byte(buf, 0x55); // push rbp
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xe5); // mov rbp, rsp
@@ -161,6 +300,13 @@ static void emit_prologue(JITBuffer *buf) {
     // R13 = pc_idx (from RSI)
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xf5); // mov r13, rsi
 #endif
+    /* See x86_pins. Every entry into compiled code, OSR stubs included,
+       comes through here. */
+    if (x86_pins) {
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbf); jit_emit_u64(buf, MASK_NAN);                             // mov r15, int tag
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbe); jit_emit_u64(buf, MASK_PAYLOAD);                         // mov r14, payload mask
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xbb); jit_emit_u64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // mov rbx, bool tag
+    }
     emit_load_cpu_regs(buf);
 }
 
@@ -546,10 +692,28 @@ static void emit_jit_int_load_and_check(JITBuffer *buf, int r1, int r2,
    tag onto the sign-extended value (as before) turned negative results into
    garbage values. Clobbers rdx. */
 static void emit_box_int_rax(JITBuffer *buf) {
-    emit_mov_rdx_imm64(buf, MASK_PAYLOAD);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xd0); // and rax, rdx
-    emit_mov_rdx_imm64(buf, MASK_NAN);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
+    if (x86_pins) {
+        jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xf0); // and rax, r14 (payload mask)
+    } else {
+        emit_mov_rdx_imm64(buf, MASK_PAYLOAD);
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xd0); // and rax, rdx
+    }
+    emit_or_rax_int_tag(buf);
+}
+
+/* Load the boxed R[r1], R[r2] into rax, rcx and check both are inline
+   ints, without unboxing them; anything else jumps to `slow`. */
+static void emit_int_tags_check(JITBuffer *buf, int r1, int r2, uint32_t *jne_a, uint32_t *jne_b) {
+    emit_mov_rax_reg(buf, r1);
+    emit_mov_rcx_reg(buf, r2);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8
+    *jne_a = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xca); // mov rdx, rcx
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8
+    *jne_b = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
 }
 
 /* Move the boxed operands R[r1], R[r2] into the first two argument
@@ -674,21 +838,35 @@ static void emit_float_binop(JITBuffer *buf, int op, int r1, int r2, JumpList *f
 // inline float arithmetic, then fall back to slow_fn (a jit_int_* helper).
 static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
     uint32_t jne_a, jne_b;
-    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    /* Add the payloads shifted to the top of the register: (a<<16)+(b<<16)
+       overflows 64 bits exactly when a+b leaves the 48-bit range, so the
+       overflow flag is the range check, and shifting back gives the new
+       payload, ready for the tag. */
+    emit_int_tags_check(buf, r1, r2, &jne_a, &jne_b);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
     if (is_sub) {
         jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x29); jit_emit_byte(buf, 0xc8); // sub rax, rcx
     } else {
         jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x01); jit_emit_byte(buf, 0xc8); // add rax, rcx
     }
-    emit_mov_rdx_imm64(buf, INT48_MAX);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
-    uint32_t jg_over = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8f); jit_emit_u32(buf, 0); // jg promote
-    emit_mov_rdx_imm64(buf, INT48_MIN);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
-    uint32_t jl_under = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0); // jl promote
-    emit_box_int_rax(buf);
+    uint32_t jo_over = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x80); jit_emit_u32(buf, 0); // jo promote
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe8); jit_emit_byte(buf, 0x10); // shr rax, 16
+    emit_or_rax_int_tag(buf);
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    /* Past 48 bits: the exact sum as a double (exact for the whole range). */
     uint32_t promote_pos = buf->size;
+    emit_mov_rax_reg(buf, r1);
+    emit_mov_rcx_reg(buf, r2);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x10); // sar rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf9); jit_emit_byte(buf, 0x10); // sar rcx, 16
+    if (is_sub) {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x29); jit_emit_byte(buf, 0xc8); // sub rax, rcx
+    } else {
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x01); jit_emit_byte(buf, 0xc8); // add rax, rcx
+    }
     jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, 0xc0); // cvtsi2sd xmm0, rax
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x7e); jit_emit_byte(buf, 0xc0); // movq rax, xmm0
     uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
@@ -703,8 +881,7 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
     emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
     *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
-    *(uint32_t*)(buf->code + jg_over + 2) = (uint32_t)(promote_pos - (jg_over + 6));
-    *(uint32_t*)(buf->code + jl_under + 2) = (uint32_t)(promote_pos - (jl_under + 6));
+    *(uint32_t*)(buf->code + jo_over + 2) = (uint32_t)(promote_pos - (jo_over + 6));
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
     *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(done_pos - (jmp_done2 + 5));
     *(uint32_t*)(buf->code + jmp_done3 + 1) = (uint32_t)(done_pos - (jmp_done3 + 5));
@@ -715,16 +892,16 @@ static void emit_jit_int_arith(JITBuffer *buf, int is_sub, int r0, int r1, int r
    which promotes exactly like the interpreter does. */
 static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
     uint32_t jne_a, jne_b;
-    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    /* (a<<16) * b overflows 64 bits exactly when a*b leaves the 48-bit
+       range; shifting back gives the new payload. */
+    emit_int_tags_check(buf, r1, r2, &jne_a, &jne_b);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf9); jit_emit_byte(buf, 0x10); // sar rcx, 16
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xaf); jit_emit_byte(buf, 0xc1); // imul rax, rcx
     uint32_t jo = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x80); jit_emit_u32(buf, 0); // jo slow
-    emit_mov_rdx_imm64(buf, INT48_MAX);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
-    uint32_t jg = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8f); jit_emit_u32(buf, 0); // jg slow
-    emit_mov_rdx_imm64(buf, INT48_MIN);
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
-    uint32_t jl = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0); // jl slow
-    emit_box_int_rax(buf);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe8); jit_emit_byte(buf, 0x10); // shr rax, 16
+    emit_or_rax_int_tag(buf);
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t float_pos = buf->size;
     JumpList helper = {0};
@@ -740,8 +917,6 @@ static void emit_jit_int_mul(JITBuffer *buf, int r0, int r1, int r2, int i) {
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(float_pos - (jne_a + 6));
     *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(float_pos - (jne_b + 6));
     *(uint32_t*)(buf->code + jo + 2) = (uint32_t)(slow_pos - (jo + 6));
-    *(uint32_t*)(buf->code + jg + 2) = (uint32_t)(slow_pos - (jg + 6));
-    *(uint32_t*)(buf->code + jl + 2) = (uint32_t)(slow_pos - (jl + 6));
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
 }
 
@@ -793,23 +968,37 @@ static void emit_jit_div(JITBuffer *buf, int r0, int r1, int r2, int i) {
     emit_mov_reg_rax(buf, r0);
 }
 
+typedef struct { int instr_idx; uint32_t patch_pos; } X86Jump;
+
+static void emit_jcc_to_instr(JITBuffer *buf, unsigned char cc, int target, X86Jump *jumps, int *njumps) {
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, cc);
+    jumps[*njumps].instr_idx = target; jumps[*njumps].patch_pos = buf->size; (*njumps)++;
+    jit_emit_u32(buf, 0);
+}
+
 // Inline integer ordered comparisons; produces a bool value. Mixed types fall
-// back to slow_fn (a jit_int_* helper).
-static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
+// back to slow_fn (a jit_int_* helper). With sense >= 0 it is fused with the
+// following conditional jump (see jit_fusable_branch): it jumps to `target`
+// when the comparison is true (sense 1) or false (sense 0), and produces no
+// boolean at all.
+static void emit_jit_int_cmp_ex(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn, int i,
+                                int sense, int target, X86Jump *jumps, int *njumps) {
     uint32_t jne_a, jne_b;
-    emit_jit_int_load_and_check(buf, r1, r2, &jne_a, &jne_b);
+    /* Shifted payloads keep their signed order, so they compare as they are. */
+    emit_int_tags_check(buf, r1, r2, &jne_a, &jne_b);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xc8); // cmp rax, rcx
-    switch (op) {
-        case OP_LT_INT:  jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9c); break; // setl cl
-        case OP_GT_INT:  jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9f); break; // setg cl
-        case OP_LTE_INT: jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9e); break; // setle cl
-        case OP_GTE_INT: jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9d); break; // setge cl
-        default:         jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x94); break; // sete cl
+    /* setcc / jcc condition codes for "true": l, g, le, ge, e */
+    unsigned char cc_true = op == OP_LT_INT ? 0x0c : op == OP_GT_INT ? 0x0f : op == OP_LTE_INT ? 0x0e :
+                            op == OP_GTE_INT ? 0x0d : 0x04;
+    if (sense >= 0) {
+        emit_jcc_to_instr(buf, (unsigned char)(0x80 | (sense ? cc_true : (cc_true ^ 1))), target, jumps, njumps);
+    } else {
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, (unsigned char)(0x90 | cc_true)); jit_emit_byte(buf, 0xc1); // setcc cl
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc1); // movzx eax, cl
+        emit_or_rax_bool_tag(buf);
     }
-    jit_emit_byte(buf, 0xc1); // modrm: cl
-    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc1); // movzx eax, cl
-    emit_mov_rdx_imm64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // bool tag 0x7FFA...
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t slow_pos = buf->size;
     /* Ints and doubles compare as doubles: every 48-bit int converts
@@ -826,27 +1015,64 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     } else {
         jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc1); // ucomisd xmm0, xmm1
     }
-    if (op == OP_EQ_INT) {
-        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x94); jit_emit_byte(buf, 0xc0); // sete al
-        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9b); jit_emit_byte(buf, 0xc1); // setnp cl
-        jit_emit_byte(buf, 0x20); jit_emit_byte(buf, 0xc8);                         // and al, cl
+    /* "true" is ZF=1 and PF=0 for ==, "above" / "above or equal" otherwise;
+       an unordered result (NaN) is false either way. */
+    unsigned char fcc_true = (op == OP_LT_INT || op == OP_GT_INT) ? 0x07 : 0x03;   /* a / ae */
+    if (sense < 0) {
+        if (op == OP_EQ_INT) {
+            jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x94); jit_emit_byte(buf, 0xc0); // sete al
+            jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9b); jit_emit_byte(buf, 0xc1); // setnp cl
+            jit_emit_byte(buf, 0x20); jit_emit_byte(buf, 0xc8);                         // and al, cl
+        } else {
+            jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, (unsigned char)(0x90 | fcc_true)); jit_emit_byte(buf, 0xc0); // seta / setae al
+        }
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc0); // movzx eax, al
+        emit_or_rax_bool_tag(buf);
+    } else if (op == OP_EQ_INT) {
+        if (sense) {
+            jit_emit_byte(buf, 0x7a); jit_emit_byte(buf, 0x06);                       // jp +6 (unordered: not equal)
+            emit_jcc_to_instr(buf, 0x84, target, jumps, njumps);                    // je target
+        } else {
+            emit_jcc_to_instr(buf, 0x8a, target, jumps, njumps);                    // jp target
+            emit_jcc_to_instr(buf, 0x85, target, jumps, njumps);                    // jne target
+        }
     } else {
-        unsigned char cc = (op == OP_LT_INT || op == OP_GT_INT) ? 0x97 : 0x93;     // seta / setae
-        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, cc); jit_emit_byte(buf, 0xc0); // setcc al
+        /* false is "below or equal" / "below", which unordered also sets */
+        emit_jcc_to_instr(buf, (unsigned char)(0x80 | (sense ? fcc_true : (fcc_true ^ 1))), target, jumps, njumps);
     }
-    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0xb6); jit_emit_byte(buf, 0xc0); // movzx eax, al
-    emit_mov_rdx_imm64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48));
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x09); jit_emit_byte(buf, 0xd0); // or rax, rdx
     uint32_t jmp_done2 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     jump_list_patch(buf, &helper, buf->size);
     emit_call_binop_helper(buf, r1, r2, slow_fn);
     emit_deopt_check(buf, i); /* incomparable operands: the interpreter raises */
+    if (sense >= 0) {
+        jit_emit_byte(buf, 0xa8); jit_emit_byte(buf, 0x01);                           // test al, 1
+        emit_jcc_to_instr(buf, sense ? 0x85 : 0x84, target, jumps, njumps);         // jnz / jz target
+    }
     *(uint32_t*)(buf->code + jmp_done2 + 1) = (uint32_t)(buf->size - (jmp_done2 + 5));
     uint32_t done_pos = buf->size;
-    emit_mov_reg_rax(buf, r0);
+    if (sense < 0) emit_mov_reg_rax(buf, r0);
     *(uint32_t*)(buf->code + jne_a + 2) = (uint32_t)(slow_pos - (jne_a + 6));
     *(uint32_t*)(buf->code + jne_b + 2) = (uint32_t)(slow_pos - (jne_b + 6));
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
+}
+
+/* In the x86 compile loops: the comparison at i, fused with the jump at
+   i + 1 when jit_fusable_branch allows it (the jump is then done, so the
+   loop moves past it). Uses the loop's buf, pc, i, offsets, jumps,
+   jump_count, targets and cmp_fn. */
+#define EMIT_CMP_MAYBE_FUSED(cmp_op) do { \
+        int sense_ = jit_fusable_branch(bc, i, targets); \
+        if (sense_ >= 0) { \
+            emit_jit_int_cmp_ex(&buf, (cmp_op), pc->r0, pc->r1, pc->r2, cmp_fn, i, sense_, bc->code[i + 1].arg, jumps, &jump_count); \
+            i++; \
+            offsets[i] = buf.size; \
+        } else { \
+            emit_jit_int_cmp(&buf, (cmp_op), pc->r0, pc->r1, pc->r2, cmp_fn, i); \
+        } \
+    } while (0)
+
+static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uintptr_t slow_fn, int i) {
+    emit_jit_int_cmp_ex(buf, op, r0, r1, r2, slow_fn, i, -1, 0, NULL, NULL);
 }
 
 static void emit_disp32(JITBuffer *buf, size_t off) { jit_emit_u32(buf, (uint32_t)off); }
@@ -958,13 +1184,15 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
     JITBuffer buf = {code, 0, size};
 
     // Prologue
+    x86_pins = jit_has_loop(bc);
     emit_prologue(&buf);
     emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
 
     uint32_t *offsets = calloc(bc->count + 1, sizeof(uint32_t));
-    struct { int instr_idx; uint32_t patch_pos; } *jumps = calloc(bc->count + 1, sizeof(*jumps));
+    X86Jump *jumps = calloc((size_t)bc->count * 4 + 4, sizeof(*jumps)); /* a fused compare-and-branch adds up to four */
+    unsigned char *targets = jit_jump_targets(bc);
     int jump_count = 0;
 
     for (int i = 0; i < bc->count; i++) {
@@ -1042,7 +1270,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                     default:     int_op = -1; break;
                 }
                 if (int_op >= 0) {
-                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
+                    EMIT_CMP_MAYBE_FUSED(int_op);
                 } else {
                     emit_mov_arg1_reg(&buf, pc->r1);
                     emit_mov_arg2_reg(&buf, pc->r2);
@@ -1178,7 +1406,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
+                EMIT_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
             case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
@@ -1230,11 +1458,11 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_epilogue(&buf);
                 break;
             }
-            default: bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return;
+            default: bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); free(targets); return;
         }
     }
     offsets[bc->count] = buf.size;
-    if (buf.size + 64 >= buf.capacity) { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return; }
+    if (buf.size + 64 >= buf.capacity) { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); free(targets); return; }
     for (int i = 0; i < jump_count; i++) {
         uint32_t target_offset = (jumps[i].instr_idx == -1) ? body_start : offsets[jumps[i].instr_idx];
         uint32_t patch_pos = jumps[i].patch_pos;
@@ -1243,8 +1471,8 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
     }
     mprotect(code, size, PROT_READ | PROT_EXEC);
     bc->jit_code = code; bc->jit_size = size;
-    jit_debug_compiled(bc, fe, "optimizing", buf.size);
-    free(offsets); free(jumps);
+    jit_debug_compiled(bc, fe, "optimizing", code, buf.size);
+    free(offsets); free(jumps); free(targets);
 }
 
 void jit_compile(Bytecode *bc) { jit_compile_ext(bc, NULL, 0); }
@@ -1335,13 +1563,15 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
     if (code == MAP_FAILED) { if (osr_mode) bc->osr_failed = 1; else bc->jit_failed = 1; return; }
     JITBuffer buf = {code, 0, size};
 
+    x86_pins = jit_has_loop(bc);
     jit_baseline_emit_prologue(&buf);
     if (!osr_mode) emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
 
     uint32_t *offsets = calloc(bc->count + 1, sizeof(uint32_t));
-    struct { int instr_idx; uint32_t patch_pos; } *jumps = calloc(bc->count + 1, sizeof(*jumps));
+    X86Jump *jumps = calloc((size_t)bc->count * 4 + 4, sizeof(*jumps)); /* a fused compare-and-branch adds up to four */
+    unsigned char *targets = jit_jump_targets(bc);
     int jump_count = 0;
 
     for (int i = 0; i < bc->count; i++) {
@@ -1419,7 +1649,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                     default:     int_op = -1; break;
                 }
                 if (int_op >= 0) {
-                    emit_jit_int_cmp(&buf, int_op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
+                    EMIT_CMP_MAYBE_FUSED(int_op);
                 } else {
                     emit_mov_arg1_reg(&buf, pc->r1);
                     emit_mov_arg2_reg(&buf, pc->r2);
@@ -1556,7 +1786,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                     pc->op == OP_GT_INT ? (uintptr_t)jit_int_gt :
                     pc->op == OP_LTE_INT ? (uintptr_t)jit_int_lte :
                     pc->op == OP_GTE_INT ? (uintptr_t)jit_int_gte : (uintptr_t)jit_int_eq;
-                emit_jit_int_cmp(&buf, pc->op, pc->r0, pc->r1, pc->r2, cmp_fn, i);
+                EMIT_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
             case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
@@ -1610,7 +1840,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             }
             default:
                 if (osr_mode) { emit_side_exit(&buf, i); break; }
-                bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); return;
+                bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); free(targets); return;
         }
     }
     offsets[bc->count] = buf.size;
@@ -1637,7 +1867,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         /* Ran out of code space: the emitter drops bytes once full, so the
            buffer cannot be trusted. Give up on this function. */
         if (osr_mode) bc->osr_failed = 1; else bc->jit_failed = 1;
-        munmap(code, size); free(offsets); free(jumps); free(osr_offsets);
+        munmap(code, size); free(offsets); free(jumps); free(targets); free(osr_offsets);
         return;
     }
     for (int i = 0; i < jump_count; i++) {
@@ -1654,12 +1884,12 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         free(offsets);
         bc->osr_code = code; bc->osr_code_size = size;
         bc->osr_entries = entries;
-        jit_debug_compiled(bc, fe, "osr", buf.size);
+        jit_debug_compiled(bc, fe, "osr", code, buf.size);
     } else {
         bc->baseline_jit_code = code; bc->baseline_jit_size = size; bc->baseline_jit_offsets = offsets; bc->jit_tier = JIT_TIER_BASELINE;
-        jit_debug_compiled(bc, fe, "baseline", buf.size);
+        jit_debug_compiled(bc, fe, "baseline", code, buf.size);
     }
-    free(jumps);
+    free(jumps); free(targets);
 }
 
 void jit_compile_baseline_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
@@ -2150,15 +2380,34 @@ static void a64_get_property(A64 *a, Instruction *pc, Instruction *orig_pc, int 
     a64_store_reg(a, 0, pc->r0);
 }
 
-static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i) {
+/* A jump to an instruction, patched once the code is laid out. */
+typedef struct { int target; uint32_t at; } A64InstrJump;
+
+/* Branch to instruction `target` when `cond` holds: b.cond only reaches
+   1MB, so skip an unconditional b (which reaches the whole buffer). */
+static void a64_branch_to_instr_if(A64 *a, int cond, int target, A64InstrJump *jumps, int *njumps) {
+    a64_emit(a, a64_b_cond(cond ^ 1, 8));
+    jumps[*njumps].target = target; jumps[*njumps].at = a64_b_fwd(a); (*njumps)++;
+}
+
+/* As the x86 emit_jit_int_cmp_ex: with sense >= 0 the comparison is fused
+   with the conditional jump after it (see jit_fusable_branch). Inverting
+   an A64 condition flips its low bit; for the float conditions below the
+   inverse also holds when the result is unordered, so NaN is "false". */
+static void a64_int_cmp_ex(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i,
+                           int sense, int target, A64InstrJump *jumps, int *njumps) {
     A64Jumps slow = {0};
     a64_load_ints(a, r1, r2, &slow);
     a64_emit(a, a64_cmp(0, 1));
     int cond = op == OP_LT_INT ? A64_LT : op == OP_GT_INT ? A64_GT :
                op == OP_LTE_INT ? A64_LE : op == OP_GTE_INT ? A64_GE : A64_EQ;
-    a64_emit(a, a64_cset(2, cond));
-    a64_mov_imm(a, 0, value_bool(0));
-    a64_emit(a, a64_orr(0, 0, 2));
+    if (sense >= 0) {
+        a64_branch_to_instr_if(a, sense ? cond : (cond ^ 1), target, jumps, njumps);
+    } else {
+        a64_emit(a, a64_cset(2, cond));
+        a64_mov_imm(a, 0, value_bool(0));
+        a64_emit(a, a64_orr(0, 0, 2));
+    }
     uint32_t done = a64_b_fwd(a);
     a64_jumps_link_here(a, &slow);
     /* Ints and doubles compare as doubles (exact for 48-bit ints). After
@@ -2170,17 +2419,43 @@ static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow
     a64_emit(a, a64_fcmp(0, 1));
     int fcond = op == OP_LT_INT ? A64_MI : op == OP_GT_INT ? A64_GT :
                 op == OP_LTE_INT ? A64_LS : op == OP_GTE_INT ? A64_GE : A64_EQ;
-    a64_emit(a, a64_cset(2, fcond));
-    a64_mov_imm(a, 0, value_bool(0));
-    a64_emit(a, a64_orr(0, 0, 2));
+    if (sense >= 0) {
+        a64_branch_to_instr_if(a, sense ? fcond : (fcond ^ 1), target, jumps, njumps);
+    } else {
+        a64_emit(a, a64_cset(2, fcond));
+        a64_mov_imm(a, 0, value_bool(0));
+        a64_emit(a, a64_orr(0, 0, 2));
+    }
     uint32_t done2 = a64_b_fwd(a);
     a64_jumps_link_here(a, &helper);
     a64_call_binop(a, r1, r2, slow_fn);
     a64_deopt_check(a, i);   /* incomparable operands: the interpreter raises */
+    if (sense >= 0) {
+        /* the helper's boolean: its low bit decides */
+        a64_emit(a, sense ? a64_tbz(0, 0, 8) : a64_tbnz(0, 0, 8));
+        jumps[*njumps].target = target; jumps[*njumps].at = a64_b_fwd(a); (*njumps)++;
+    }
     a64_link_here(a, done);
     a64_link_here(a, done2);
-    a64_store_reg(a, 0, r0);
+    if (sense < 0) a64_store_reg(a, 0, r0);
 }
+
+static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i) {
+    a64_int_cmp_ex(a, op, r0, r1, r2, slow_fn, i, -1, 0, NULL, NULL);
+}
+
+/* The x86 EMIT_CMP_MAYBE_FUSED for a64_compile's loop (A, bc, pc, i, fn,
+   offsets, jumps, njumps, targets). */
+#define A64_CMP_MAYBE_FUSED(cmp_op) do { \
+        int sense_ = jit_fusable_branch(bc, i, targets); \
+        if (sense_ >= 0) { \
+            a64_int_cmp_ex(A, (cmp_op), pc->r0, pc->r1, pc->r2, fn, i, sense_, bc->code[i + 1].arg, jumps, &njumps); \
+            i++; \
+            offsets[i] = a64_here(A); \
+        } else { \
+            a64_int_cmp(A, (cmp_op), pc->r0, pc->r1, pc->r2, fn, i); \
+        } \
+    } while (0)
 
 static int a64_supported(OpCode op) {
     switch (op) {
@@ -2239,8 +2514,9 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
     uint32_t body_start = a64_here(A);
 
     uint32_t *offsets = calloc((size_t)bc->count + 1, sizeof(uint32_t));
-    struct { int target; uint32_t at; } *jumps = calloc((size_t)bc->count + 1, sizeof(*jumps));
+    A64InstrJump *jumps = calloc((size_t)bc->count * 4 + 4, sizeof(*jumps)); /* a fused compare-and-branch adds up to three */
     int njumps = 0;
+    unsigned char *targets = jit_jump_targets(bc);
 
     for (int i = 0; i < bc->count; i++) {
         offsets[i] = a64_here(A);
@@ -2287,7 +2563,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                                  (const void*)jit_val_eq;
                 int int_op = pc->op == OP_LT ? OP_LT_INT : pc->op == OP_GT ? OP_GT_INT :
                              pc->op == OP_LTE ? OP_LTE_INT : pc->op == OP_GTE ? OP_GTE_INT : OP_EQ_INT;
-                a64_int_cmp(A, int_op, pc->r0, pc->r1, pc->r2, fn, i);
+                A64_CMP_MAYBE_FUSED(int_op);
                 break;
             }
             case OP_NEQ:
@@ -2299,7 +2575,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                 const void *fn = pc->op == OP_LT_INT ? (const void*)jit_int_lt : pc->op == OP_GT_INT ? (const void*)jit_int_gt :
                                  pc->op == OP_LTE_INT ? (const void*)jit_int_lte : pc->op == OP_GTE_INT ? (const void*)jit_int_gte :
                                  (const void*)jit_int_eq;
-                a64_int_cmp(A, pc->op, pc->r0, pc->r1, pc->r2, fn, i);
+                A64_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
             case OP_JUMP:
@@ -2442,7 +2718,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
             default:
                 if (osr) { a64_side_exit(A, i); break; }
                 bc->jit_failed = 1;
-                a64_code_discard(code, size); free(offsets); free(jumps);
+                a64_code_discard(code, size); free(offsets); free(jumps); free(targets);
                 return;
         }
     }
@@ -2469,12 +2745,12 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
         /* A branch did not reach, or the buffer filled up (the emitter drops
            words once full): the code cannot be trusted. */
         if (osr) bc->osr_failed = 1; else bc->jit_failed = 1;
-        a64_code_discard(code, size); free(offsets); free(jumps); free(osr_offsets);
+        a64_code_discard(code, size); free(offsets); free(jumps); free(targets); free(osr_offsets);
         return;
     }
     a64_code_finish(code, size);
-    jit_debug_compiled(bc, fe, osr ? "osr" : mode == A64_BASELINE ? "baseline" : "optimizing", a.buf.size);
-    free(jumps);
+    jit_debug_compiled(bc, fe, osr ? "osr" : mode == A64_BASELINE ? "baseline" : "optimizing", code, a.buf.size);
+    free(jumps); free(targets);
     if (osr) {
         void **entries = calloc((size_t)bc->count, sizeof(void*));
         for (int i = 0; i < bc->count; i++) if (osr_offsets[i]) entries[i] = code + osr_offsets[i];
