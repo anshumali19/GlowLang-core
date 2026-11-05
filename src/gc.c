@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <setjmp.h>
+#include <time.h>
 #ifdef _WIN32
 #include "win_pthread.h"
 #else
@@ -26,10 +27,21 @@
  *  Collection only runs on the thread that holds the GIL; every other thread
  *  is parked with its stack bounds and registers recorded (see vm.c).
  *
- *  A generational mode (minor collections of young objects through a
- *  remembered set) is available with GLOW_GC_GENERATIONAL=1. It is off by
- *  default because it is only correct when every store of a young object into
- *  an old one goes through gc_write_barrier, and not every store site does.
+ *  Small objects live in 1MB blocks, and the sweep works on each block's
+ *  bitmaps rather than on the objects: marking sets a bit per live object,
+ *  so the dead objects of a block are `starts & ~marks`, found a word at a
+ *  time. A dead object is only read when its `finals` bit says it owns
+ *  memory outside the heap (a list or dict that grew out of its inline
+ *  storage, a closure's captures, ...), so freeing garbage mostly costs
+ *  nothing per object; a block with nothing live goes back to a pool.
+ *  Large objects are kept on a list (gc_large_objects) and swept one by one.
+ *
+ *  An object's `marked` byte holds the number of the collection that last
+ *  marked it (gc_epoch), so live objects never need unmarking.
+ *
+ *  (The opt-in generational mode, GLOW_GC_GENERATIONAL, is gone: it was
+ *  incomplete, because not every store goes through gc_write_barrier, and
+ *  slower than full collections. gc_write_barrier is now a no-op.)
  * ================================================================ */
 
 #if defined(__clang__) || defined(__GNUC__)
@@ -45,22 +57,42 @@
 
 static void gc_mark_value(Value v);
 
-GCObject *gc_objects = NULL;
+static GCObject *gc_large_objects = NULL;  /* objects too big for a block */
 size_t gc_allocated = 0;
 #define GC_MIN_THRESHOLD ((size_t)32 * 1024 * 1024)
 size_t gc_threshold = GC_MIN_THRESHOLD;
 size_t gc_allocated_at_last_gc = 0;
 
 static int gc_stress = 0;          /* GLOWLANG_GC_STRESS=1: collect very often */
-static int gc_generational = 0;    /* GLOW_GC_GENERATIONAL=1: enable minor GCs */
 static int gc_in_collection = 0;
+static unsigned char gc_epoch = 1; /* number (1..254) of the current collection */
+static size_t gc_live_bytes = 0;   /* bytes marked by the current collection */
 
 extern void gc_mark_pending_spawn_roots(void (*mark)(Value));
 
+/* GLOW_GC_STATS=1: at exit, print how many collections ran and where their
+   time went, on stderr. */
+static int gc_stats = 0;
+static struct { long full; double roots, mark, sweep; long long freed, kept; } gc_st;
+static double gc_now(void) {
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static void gc_print_stats(void) {
+    fprintf(stderr, "[gc] %ld collections: roots %.3fs, mark %.3fs, sweep %.3fs; "
+            "%lld objects freed, %lld kept (summed over collections); %zu bytes live\n",
+            gc_st.full, gc_st.roots, gc_st.mark, gc_st.sweep, gc_st.freed, gc_st.kept, gc_allocated);
+}
+
 /* ---- Heap blocks -------------------------------------------------------
-   Small objects are bump-allocated from 1MB blocks. Each block keeps a bitmap
-   with one bit per 8-byte granule marking where an object starts, so the
-   conservative scanner can map any address to the object containing it. */
+   Small objects are bump-allocated from 1MB blocks. Each block keeps three
+   bitmaps with one bit per 8-byte granule:
+     starts - where an object starts (so the conservative scanner can map any
+              address to the object containing it);
+     marks  - objects the current collection found live;
+     finals - objects that own memory outside the heap, which the sweep has
+              to free (see gc_note_external_storage). */
 #define GC_BLOCK_BYTES ((size_t)1 << 20)
 #define GC_GRANULE 8
 #define GC_BITMAP_WORDS (GC_BLOCK_BYTES / GC_GRANULE / 64)
@@ -71,6 +103,8 @@ typedef struct GCBlock {
     size_t used;
     size_t live_count;
     uint64_t starts[GC_BITMAP_WORDS];
+    uint64_t marks[GC_BITMAP_WORDS];
+    uint64_t finals[GC_BITMAP_WORDS];
     char data[];  /* 16-byte aligned: the header above is a multiple of 16 */
 } GCBlock;
 
@@ -123,14 +157,32 @@ static inline int gc_highest_bit(uint64_t x) {
 #endif
 }
 
+static inline int gc_lowest_bit(uint64_t x) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    unsigned long idx;
+    _BitScanForward64(&idx, x);
+    return (int)idx;
+#else
+    return __builtin_ctzll(x);
+#endif
+}
+
+static inline int gc_popcount(uint64_t x) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return (int)__popcnt64(x);
+#else
+    return __builtin_popcountll(x);
+#endif
+}
+
 static inline void gc_block_set_start(GCBlock *b, void *obj) {
     size_t g = (size_t)((char*)obj - b->data) / GC_GRANULE;
     b->starts[g / 64] |= (uint64_t)1 << (g % 64);
 }
 
-static inline void gc_block_clear_start(GCBlock *b, void *obj) {
+static inline void gc_block_set_final(GCBlock *b, void *obj) {
     size_t g = (size_t)((char*)obj - b->data) / GC_GRANULE;
-    b->starts[g / 64] &= ~((uint64_t)1 << (g % 64));
+    b->finals[g / 64] |= (uint64_t)1 << (g % 64);
 }
 
 static uintptr_t gc_heap_lo = 0, gc_heap_hi = 0;
@@ -182,12 +234,6 @@ GC_NO_SANITIZE static GCObject *gc_find_object(uintptr_t p) {
     return NULL;
 }
 
-typedef struct RememberedSet {
-    GCObject *obj;
-    struct RememberedSet *next;
-} RememberedSet;
-static RememberedSet *gc_remembered_set = NULL;
-
 /* Frozen string literals produced by OP_CONST_STRING are allocated once and
    shared (see vm_get_const_string in vm.c). They are kept alive for the life
    of the process by being registered here as permanent GC roots, so the
@@ -207,19 +253,6 @@ void gc_register_constant_root(Value v) {
     pthread_mutex_unlock(&gc_mutex);
 }
 
-void gc_write_barrier(GCObject *src, Value target) {
-    if (!gc_generational) return;
-    if (!src || src->generation == 0) return;
-    if (GET_TYPE(target) != VAL_OBJECT && GET_TYPE(target) != VAL_LIST && GET_TYPE(target) != VAL_DICT && GET_TYPE(target) != VAL_STRING) return;
-    if (!(target & MASK_PAYLOAD)) return;
-    GCObject *to = (GCObject*)(uintptr_t)(target & MASK_PAYLOAD);
-    if (to->generation == 1) return;
-    if (src->in_remembered_set) return;
-    RememberedSet *rs = malloc(sizeof(RememberedSet));
-    rs->obj = src; rs->next = gc_remembered_set; gc_remembered_set = rs;
-    src->in_remembered_set = 1;
-}
-
 static GCBlock* gc_block_new(void) {
     GCBlock *b = malloc(GC_BLOCK_BYTES);
     if (!b) { fprintf(stderr, "Fatal: out of memory allocating GC block\n"); abort(); }
@@ -227,6 +260,8 @@ static GCBlock* gc_block_new(void) {
     b->used = 0;
     b->live_count = 0;
     memset(b->starts, 0, sizeof(b->starts));
+    memset(b->marks, 0, sizeof(b->marks));
+    memset(b->finals, 0, sizeof(b->finals));
     b->next = gc_block_list;
     gc_block_list = b;
     addr_index_insert(&gc_block_index, (uintptr_t)b);
@@ -242,15 +277,21 @@ static GCBlock* gc_block_find_fit(size_t sz) {
     return NULL;
 }
 
-/* Free every block whose live_count has dropped to zero. Called at the end of
-   a collection, after the object sweep has unlinked every dead object from
-   gc_objects, so no live object can still reference a freed block. */
+/* Blocks with nothing live after a sweep (their bitmaps are all clear by
+   then). Up to GC_KEEP_EMPTY_BLOCKS of them are kept and bump-allocated
+   from again, which saves giving the memory back to the system and
+   faulting it in again moments later; the rest are freed. */
+#define GC_KEEP_EMPTY_BLOCKS 32
 static void gc_reclaim_empty_blocks(void) {
     GCBlock **pp = &gc_block_list;
-    int changed = 0;
+    int changed = 0, kept = 0;
     while (*pp) {
         GCBlock *b = *pp;
-        if (b->live_count == 0) {
+        if (b->live_count == 0 && kept < GC_KEEP_EMPTY_BLOCKS) {
+            b->used = 0;
+            kept++;
+            pp = &b->next;
+        } else if (b->live_count == 0) {
             if (b == gc_current_block) gc_current_block = NULL;
             *pp = b->next;
             addr_index_remove(&gc_block_index, (uintptr_t)b);
@@ -276,19 +317,39 @@ static void grey_push_raw(GCObject *obj) {
     grey_stack[grey_count++] = obj;
 }
 
-static void push_grey(GCObject *obj) {
-    if (!obj || obj->marked) return;
-    obj->marked = 1;
+/* Mark obj live in this collection and queue it for tracing. A block
+   object also gets its bit in the block's marks bitmap, which is what the
+   sweep reads. (The bounds check only guards against a stray pointer: a
+   real block is always inside the heap.) */
+static inline void push_grey(GCObject *obj) {
+    if (!obj || obj->marked == gc_epoch) return;
+    obj->marked = gc_epoch;
+    gc_live_bytes += obj->sz;
+    if (obj->is_block_allocated) {
+        GCBlock *b = (GCBlock*)obj->block_ptr;
+        if ((uintptr_t)b >= gc_heap_lo && (uintptr_t)b < gc_heap_hi) {
+            size_t g = (size_t)((char*)obj - b->data) / GC_GRANULE;
+            if (g < GC_BITMAP_WORDS * 64) b->marks[g / 64] |= (uint64_t)1 << (g % 64);
+        }
+    }
     grey_push_raw(obj);
 }
+static void push_grey_fn(GCObject *obj) { push_grey(obj); }
 
 static inline int value_is_heap_ref(Value v) {
     ValueType t = GET_TYPE(v);
     return (t == VAL_OBJECT || t == VAL_LIST || t == VAL_DICT || t == VAL_STRING) && (v & MASK_PAYLOAD);
 }
 
-static void gc_mark_value(Value v) {
+static inline void gc_mark_value(Value v) {
     if (value_is_heap_ref(v)) push_grey((GCObject*)(uintptr_t)(v & MASK_PAYLOAD));
+}
+
+/* A live dict's (or instance's) keys stay interned; intern_sweep frees the
+   dict keys nothing uses any more. */
+static inline void gc_mark_dict_keys(Dict *d) {
+    for (int i = 0; i < d->used; i++)
+        if (GET_TYPE(d->keys[i]) == VAL_STRING) intern_mark((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD));
 }
 
 /* Root slots (VM registers, globals) can hold stale or non-heap payloads, so
@@ -300,11 +361,18 @@ static void gc_mark_root_checked(Value v) {
     if (o && (uintptr_t)o == p) push_grey(o);
 }
 
-static void gc_trace_object(GCObject *obj, void (*mark_value)(Value), void (*mark_obj)(GCObject*)) {
+#define mark_value gc_mark_value
+#define mark_obj push_grey
+static void gc_trace_object(GCObject *obj) {
     switch (obj->type) {
         case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) mark_value(l->items[i]); break; }
         case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; mark_value(it->iterable); break; }
-        case OBJ_DICT: { Dict *d = (Dict*)obj; for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { mark_value(d->values[i]); } } break; }
+        case OBJ_DICT: {
+            Dict *d = (Dict*)obj;
+            for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { mark_value(d->values[i]); } }
+            gc_mark_dict_keys(d);
+            break;
+        }
         case OBJ_SQLITE_ITER: break;
         case OBJ_SQLITE_HANDLE: break;
         case OBJ_BIGINT: break;
@@ -332,6 +400,7 @@ static void gc_trace_object(GCObject *obj, void (*mark_value)(Value), void (*mar
             mark_obj((GCObject*)ins->klass);
             Dict *d = &ins->fields;
             for (int i = 0; i < d->used; i++) if (GET_TYPE(d->keys[i]) != VAL_NONE) mark_value(d->values[i]);
+            gc_mark_dict_keys(d);
             break;
         }
         case OBJ_BOUND_METHOD: { BoundMethod *bm = (BoundMethod*)obj; mark_value(bm->instance); break; }
@@ -358,11 +427,13 @@ static void gc_trace_object(GCObject *obj, void (*mark_value)(Value), void (*mar
         default: break;
     }
 }
+#undef mark_value
+#undef mark_obj
 
 static void process_grey_stack(void) {
     while (grey_count > 0) {
         GCObject *obj = grey_stack[--grey_count];
-        gc_trace_object(obj, gc_mark_value, push_grey);
+        gc_trace_object(obj);
     }
 }
 
@@ -385,18 +456,99 @@ static void gc_free_object_payload(GCObject *unmarked) {
     }
 }
 
-/* Release one dead object's memory and its address-index entry. */
-static void gc_release_object(GCObject *obj) {
-    gc_free_object_payload(obj);
-    if (gc_allocated >= obj->sz) gc_allocated -= obj->sz; else gc_allocated = 0;
-    if (obj->is_block_allocated && obj->block_ptr) {
-        GCBlock *b = (GCBlock*)obj->block_ptr;
-        gc_block_clear_start(b, obj);
-        if (b->live_count > 0) b->live_count--;
-    } else {
-        addr_index_remove(&gc_large_index, (uintptr_t)obj);
-        free(obj);
+/* Types whose objects always own memory outside the heap. Lists, dicts and
+   instances only do once their storage outgrows the inline slots, which
+   gc_note_external_storage records. */
+static inline int gc_type_always_final(ObjType t) {
+    switch (t) {
+        case OBJ_CLASS: case OBJ_TRAIT: case OBJ_PACKED_ARRAY: case OBJ_STRING_BUILDER:
+        case OBJ_NATIVE_FUNC: case OBJ_CLOSURE: case OBJ_SQLITE_ITER: case OBJ_SQLITE_HANDLE:
+            return 1;
+        default:
+            return 0;
     }
+}
+
+void gc_note_external_storage(GCObject *o) {
+    if (o && o->embedded) o = (GCObject*)o->block_ptr;
+    if (!o || !o->is_block_allocated) return;  /* large objects are always swept one by one */
+    GCBlock *b = (GCBlock*)o->block_ptr;
+    if ((uintptr_t)b < gc_heap_lo || (uintptr_t)b >= gc_heap_hi) return;
+    gc_block_set_final(b, o);
+}
+
+/* GLOWLANG_GC_STRESS: every dead object the sweep skips must really own
+   nothing outside the heap (a missed gc_note_external_storage call would
+   leak memory). */
+static void gc_check_skipped(GCObject *o) {
+    int owns = 0;
+    switch (o->type) {
+        case OBJ_LIST: { List *l = (List*)o; owns = l->items && (void*)l->items != (void*)(l + 1); break; }
+        case OBJ_DICT: { Dict *d = (Dict*)o; owns = d->keys && (void*)d->keys != (void*)(d + 1); break; }
+        case OBJ_INSTANCE: { Dict *d = &((Instance*)o)->fields; owns = d->keys && (void*)d->keys != (void*)(d + 1); break; }
+        default: owns = gc_type_always_final((ObjType)o->type); break;
+    }
+    if (owns) {
+        fprintf(stderr, "GC: a dead object (type %d) owns memory the sweep would not free\n", o->type);
+        abort();
+    }
+}
+
+/* Sweep every block by its bitmaps: dead = started & not marked. Only dead
+   objects with a finals bit are read (to free what they own); the rest of
+   the garbage is dropped by clearing bits. */
+static void gc_sweep_blocks(void) {
+    for (GCBlock *b = gc_block_list; b; b = b->next) {
+        size_t words = (b->used / GC_GRANULE + 63) / 64;
+        size_t live = 0;
+        for (size_t w = 0; w < words; w++) {
+            uint64_t m = b->marks[w];
+            uint64_t dead = b->starts[w] & ~m;
+            if (dead) {
+                uint64_t fin = dead & b->finals[w];
+                while (fin) {
+                    int bit = gc_lowest_bit(fin);
+                    fin &= fin - 1;
+                    gc_free_object_payload((GCObject*)(b->data + (w * 64 + (size_t)bit) * GC_GRANULE));
+                }
+                if (gc_stress) {
+                    uint64_t rest = dead & ~b->finals[w];
+                    while (rest) {
+                        int bit = gc_lowest_bit(rest);
+                        rest &= rest - 1;
+                        gc_check_skipped((GCObject*)(b->data + (w * 64 + (size_t)bit) * GC_GRANULE));
+                    }
+                }
+                b->starts[w] &= m;
+                b->finals[w] &= m;
+                if (gc_stats) gc_st.freed += gc_popcount(dead);
+            }
+            if (m) {
+                live += (size_t)gc_popcount(m);
+                b->marks[w] = 0;
+            }
+        }
+        b->live_count = live;
+        if (gc_stats) gc_st.kept += (long long)live;
+    }
+}
+
+static void gc_sweep_large(void) {
+    GCObject **p = &gc_large_objects;
+    while (*p) {
+        GCObject *obj = *p;
+        if (obj->marked != gc_epoch) {
+            *p = obj->next;
+            gc_free_object_payload(obj);
+            addr_index_remove(&gc_large_index, (uintptr_t)obj);
+            free(obj);
+            if (gc_stats) gc_st.freed++;
+        } else {
+            if (gc_stats) gc_st.kept++;
+            p = &obj->next;
+        }
+    }
+    gc_update_heap_bounds();
 }
 
 /* ---- Conservative native-stack scanning ---- */
@@ -443,15 +595,6 @@ static void gc_mark_precise_roots(void (*mark_root)(Value)) {
     }
 }
 
-static void gc_clear_remembered_set(void) {
-    while (gc_remembered_set) {
-        RememberedSet *next = gc_remembered_set->next;
-        gc_remembered_set->obj->in_remembered_set = 0;
-        free(gc_remembered_set);
-        gc_remembered_set = next;
-    }
-}
-
 static void gc_set_next_threshold(void) {
     gc_allocated_at_last_gc = gc_allocated;
     if (gc_stress) { gc_threshold = gc_allocated + 64 * 1024; return; }
@@ -461,35 +604,29 @@ static void gc_set_next_threshold(void) {
 }
 
 GC_NOINLINE static void gc_full_collect_impl(void) {
+    double t0 = gc_stats ? gc_now() : 0, t1 = 0, t2 = 0;
+    /* A new number for this collection: whatever the last one marked now
+       reads as unmarked, without touching it. */
+    gc_epoch = gc_epoch >= 254 ? 1 : (unsigned char)(gc_epoch + 1);
+    gc_live_bytes = 0;
     char *stack_marker = GLOW_STACK_POS();
     gc_mark_precise_roots(gc_mark_root_checked);
-    gc_scan_native_stacks(stack_marker, push_grey);
+    gc_scan_native_stacks(stack_marker, push_grey_fn);
+    if (gc_stats) t1 = gc_now();
     process_grey_stack();
+    if (gc_stats) t2 = gc_now();
 
-    GCObject **p = &gc_objects;
-    while (*p) {
-        GCObject *obj = *p;
-        if (!obj->marked) {
-            *p = obj->next;
-            gc_release_object(obj);
-        } else {
-            /* Keys of surviving dicts stay interned; intern_sweep frees
-               the dict keys nothing uses any more. */
-            if (obj->type == OBJ_DICT || obj->type == OBJ_INSTANCE) {
-                Dict *d = obj->type == OBJ_DICT ? (Dict*)obj : &((Instance*)obj)->fields;
-                for (int i = 0; i < d->used; i++)
-                    if (GET_TYPE(d->keys[i]) == VAL_STRING) intern_mark((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD));
-            }
-            obj->marked = 0;
-            obj->generation = 1;
-            p = &obj->next;
-        }
-    }
+    gc_sweep_blocks();
+    gc_sweep_large();
     intern_sweep();
     glow_str_cursor_reset();
-    gc_clear_remembered_set();
     gc_reclaim_empty_blocks();
+    gc_allocated = gc_live_bytes;
     gc_set_next_threshold();
+    if (gc_stats) {
+        double t3 = gc_now();
+        gc_st.full++; gc_st.roots += t1 - t0; gc_st.mark += t2 - t1; gc_st.sweep += t3 - t2;
+    }
 }
 
 void gc_full_collect(void) {
@@ -505,67 +642,8 @@ void gc_full_collect(void) {
     gc_in_collection = 0;
 }
 
-/* ---- Generational (minor) collection, opt-in ---- */
-static void push_grey_minor(GCObject *obj) {
-    if (!obj || obj->marked || obj->generation != 0) return;
-    obj->marked = 1;
-    grey_push_raw(obj);
-}
-
-static void gc_mark_value_minor(Value v) {
-    if (value_is_heap_ref(v)) push_grey_minor((GCObject*)(uintptr_t)(v & MASK_PAYLOAD));
-}
-
-static void gc_mark_root_checked_minor(Value v) {
-    if (!value_is_heap_ref(v)) return;
-    uintptr_t p = (uintptr_t)(v & MASK_PAYLOAD);
-    GCObject *o = gc_find_object(p);
-    if (o && (uintptr_t)o == p) push_grey_minor(o);
-}
-
-GC_NOINLINE static void gc_minor_collect_impl(void) {
-    char *stack_marker = GLOW_STACK_POS();
-    gc_mark_precise_roots(gc_mark_root_checked_minor);
-    gc_scan_native_stacks(stack_marker, push_grey_minor);
-    for (RememberedSet *rs = gc_remembered_set; rs; rs = rs->next) {
-        if (rs->obj) gc_trace_object(rs->obj, gc_mark_value_minor, push_grey_minor);
-    }
-    while (grey_count > 0) {
-        GCObject *obj = grey_stack[--grey_count];
-        gc_trace_object(obj, gc_mark_value_minor, push_grey_minor);
-    }
-
-    GCObject **p = &gc_objects;
-    while (*p) {
-        GCObject *obj = *p;
-        if (obj->generation == 0) {
-            if (!obj->marked) {
-                *p = obj->next;
-                gc_release_object(obj);
-                continue;
-            }
-            obj->marked = 0;
-            obj->generation = 1;
-        }
-        p = &obj->next;
-    }
-    glow_str_cursor_reset();
-    gc_clear_remembered_set();
-    gc_reclaim_empty_blocks();
-    gc_allocated_at_last_gc = gc_allocated;
-}
-
-void gc_minor_collect(void) {
-    if (!gc_generational) { gc_full_collect(); return; }
-    if (gc_in_collection) return;
-    gc_in_collection = 1;
-    jmp_buf regs;
-    setjmp(regs);
-    gc_minor_collect_impl();
-    if (((volatile char*)&regs)[0] == 0x7f && gc_in_collection == 2) abort();
-    gc_in_collection = 0;
-    if (gc_allocated > gc_threshold) gc_full_collect();
-}
+/* Kept for callers: there is only one kind of collection now. */
+void gc_minor_collect(void) { gc_full_collect(); }
 
 void* gc_alloc(size_t sz, ObjType type) {
     static int gc_env_checked = 0, gc_nogc = 0, gc_forcefull = 0;
@@ -573,17 +651,13 @@ void* gc_alloc(size_t sz, ObjType type) {
         gc_env_checked = 1;
         const char *stress = getenv("GLOWLANG_GC_STRESS");
         if (stress && strcmp(stress, "1") == 0) { gc_stress = 1; gc_threshold = 64 * 1024; }
-        gc_generational = getenv("GLOW_GC_GENERATIONAL") != NULL;
         gc_nogc = getenv("GLOW_NOGC") != NULL;
         gc_forcefull = getenv("GLOW_FORCEFULL") != NULL;
+        gc_stats = getenv("GLOW_GC_STATS") != NULL;
+        if (gc_stats) atexit(gc_print_stats);
     }
     if (!gc_nogc && !gc_in_collection) {
-        if (gc_forcefull || gc_allocated > gc_threshold) {
-            gc_full_collect();
-        } else if (gc_generational) {
-            size_t since = (gc_allocated >= gc_allocated_at_last_gc) ? (gc_allocated - gc_allocated_at_last_gc) : 0;
-            if (since >= 2 * 1024 * 1024) gc_minor_collect();
-        }
+        if (gc_forcefull || gc_allocated > gc_threshold) gc_full_collect();
     }
 
     sz = (sz + (GC_GRANULE - 1)) & ~(size_t)(GC_GRANULE - 1);
@@ -602,18 +676,19 @@ void* gc_alloc(size_t sz, ObjType type) {
         obj->is_block_allocated = 1;
         obj->block_ptr = gc_current_block;
         gc_block_set_start(gc_current_block, obj);
+        if (gc_type_always_final(type)) gc_block_set_final(gc_current_block, obj);
     } else {
         obj = calloc(1, sz);
         if (!obj) { fprintf(stderr, "Fatal: out of memory (%zu bytes)\n", sz); abort(); }
         obj->is_block_allocated = 0;
         obj->block_ptr = NULL;
         obj->sz = sz;
+        obj->next = gc_large_objects;
+        gc_large_objects = obj;
         addr_index_insert(&gc_large_index, (uintptr_t)obj);
         gc_update_heap_bounds();
     }
-    obj->generation = 0;
-    obj->is_stack_allocated = 0;
-    obj->type = type; obj->sz = sz; obj->next = gc_objects; gc_objects = obj; gc_allocated += sz;
+    obj->type = type; obj->sz = sz; gc_allocated += sz;
     return obj;
 }
 
@@ -633,11 +708,30 @@ void gc_free_stack_arena_range(size_t old_used, size_t new_used) {
 }
 
 
+static void gc_verify_one(GCObject *curr);
+
+/* verify_gc(): check every object in the heap for impossible states. */
 Value native_verify_gc(int argc, Value *args) {
     (void)argc; (void)args;
     pthread_mutex_lock(&gc_mutex);
-    GCObject *curr = gc_objects;
-    while (curr) {
+    for (GCBlock *b = gc_block_list; b; b = b->next) {
+        size_t words = (b->used / GC_GRANULE + 63) / 64;
+        for (size_t w = 0; w < words; w++) {
+            uint64_t bits = b->starts[w];
+            while (bits) {
+                int bit = gc_lowest_bit(bits);
+                bits &= bits - 1;
+                gc_verify_one((GCObject*)(b->data + (w * 64 + (size_t)bit) * GC_GRANULE));
+            }
+        }
+    }
+    for (GCObject *o = gc_large_objects; o; o = o->next) gc_verify_one(o);
+    pthread_mutex_unlock(&gc_mutex);
+    return value_bool(1);
+}
+
+static void gc_verify_one(GCObject *curr) {
+    {
         if (curr->type > OBJ_SQLITE_HANDLE) {
             fprintf(stderr, "Heap Corruption Detected: Invalid object type %d at %p\n", curr->type, (void*)curr);
             abort();
@@ -730,10 +824,7 @@ Value native_verify_gc(int argc, Value *args) {
             default:
                 break;
         }
-        curr = curr->next;
     }
-    pthread_mutex_unlock(&gc_mutex);
-    return value_bool(1);
 }
 
 

@@ -1,0 +1,4 @@
+survivors ok: true 300
+heap ok: true
+after second churn: true 30 150
+heap ok: true

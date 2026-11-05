@@ -1,0 +1,128 @@
+# The collector sweeps each heap block by its bitmaps and only reads a
+# dead object when it owns memory outside the heap. Survivors of every
+# kind must keep their exact contents through many collections, including
+# lists, dicts and objects that grew out of their inline storage, while
+# the garbage around them is freed. (Under GLOWLANG_GC_STRESS the collector
+# also checks every dead object it skips really owned nothing.)
+
+blueprint Wide:
+    action init(n):
+        self.n = n
+        self.a = n + 1
+        self.b = n + 2
+        self.c = n + 3
+        self.d = n + 4
+        self.e = n + 5
+        self.f = [n, n * 2, n * 3, n * 4, n * 5, n * 6]
+    end
+    action total():
+        return self.n + self.a + self.b + self.c + self.d + self.e + self.f[5]
+    end
+end
+
+blueprint Small:
+    action init(v):
+        self.v = v
+    end
+end
+
+func make_closure(k):
+    return lambda(x): x * k + 1
+end
+
+func churn(rounds):
+    let keep = []
+    let r = 0
+    while r < rounds:
+        # Garbage of every kind.
+        let g = 0
+        while g < 400:
+            let big = []
+            let i = 0
+            while i < 9:
+                big.push(i * g)
+                i = i + 1
+            end
+            let d = {"a": g, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5}
+            let w = Wide(g)
+            let s = Small(g)
+            let f = make_closure(g)
+            let t = "s" + str(g) + "-" + str(r)
+            g = g + 1
+        end
+        # One survivor of each kind per round.
+        let lst = []
+        let i = 0
+        while i < 10 + r % 7:
+            lst.push(r * 100 + i)
+            i = i + 1
+        end
+        let dct = {}
+        let j = 0
+        while j < 6 + r % 5:
+            dct["k" + str(j)] = r + j
+            j = j + 1
+        end
+        keep.push([lst, dct, Wide(r), Small(r), make_closure(r), "kept-" + str(r), [Small(r + 1), {"x": [r]}]])
+        r = r + 1
+    end
+    return keep
+end
+
+let keep = churn(300)
+
+# Check every survivor exactly.
+let ok = true
+let r = 0
+while r < len(keep):
+    let k = keep[r]
+    let lst = k[0]
+    if len(lst) != 10 + r % 7 or lst[0] != r * 100 or lst[len(lst) - 1] != r * 100 + len(lst) - 1:
+        ok = false
+        show "bad list", r, lst
+    end
+    let dct = k[1]
+    if len(dct) != 6 + r % 5 or dct["k0"] != r or dct["k5"] != r + 5:
+        ok = false
+        show "bad dict", r, dct
+    end
+    if k[2].total() != r * 6 + 15 + r * 6:
+        ok = false
+        show "bad wide", r, k[2].total()
+    end
+    if k[3].v != r or k[4](2) != 2 * r + 1 or k[5] != "kept-" + str(r):
+        ok = false
+        show "bad small/closure/string", r
+    end
+    if k[6][0].v != r + 1 or k[6][1]["x"][0] != r:
+        ok = false
+        show "bad nested", r
+    end
+    r = r + 1
+end
+show "survivors ok:", ok, len(keep)
+show "heap ok:", os.verify_gc()
+
+# Drop most survivors, churn again, and check the rest still hold.
+let half = []
+let h = 0
+while h < len(keep):
+    if h % 10 == 0:
+        half.push(keep[h])
+    end
+    h = h + 1
+end
+keep = none
+let more = churn(150)
+let ok2 = true
+let q = 0
+while q < len(half):
+    let k = half[q]
+    let rr = q * 10
+    if k[0][0] != rr * 100 or k[1]["k0"] != rr or k[2].n != rr or k[4](3) != 3 * rr + 1:
+        ok2 = false
+    end
+    q = q + 1
+end
+show "after second churn:", ok2, len(half), len(more)
+show "heap ok:", os.verify_gc()
