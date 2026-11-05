@@ -1,0 +1,8 @@
+points: 5335333000
+misc: [bare, [1, none, none], [1, 2, 3], [1, 2, 3], instance, 499]
+animals: [cat makes a sound, robin sings, 6]
+lines: 666666000
+by value: 400 399 798 0
+checked: [600, 400, negative: -1]
+factory: [1000000, 1000]
+chains: 79960000

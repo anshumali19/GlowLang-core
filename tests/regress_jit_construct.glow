@@ -1,0 +1,223 @@
+# Compiled code now creates objects itself (Klass(args) used to send the
+# rest of the function to the interpreter), and hot constructors compile.
+# Each function runs hot enough to be compiled; the results must be the
+# interpreter's.
+
+blueprint Point:
+    action init(x, y):
+        self.x = x
+        self.y = y
+    end
+    action len2():
+        return self.x * self.x + self.y * self.y
+    end
+end
+
+blueprint Bare:
+    action hello():
+        return "bare"
+    end
+end
+
+blueprint Defaults:
+    action init(a, b, c):
+        self.a = a
+        self.b = b
+        self.c = c
+    end
+end
+
+blueprint Animal:
+    action init(name):
+        self.name = name
+        self.legs = 4
+    end
+    action speak():
+        return self.name + " makes a sound"
+    end
+end
+blueprint Bird extends Animal:
+    action init(name):
+        self.name = name
+        self.legs = 2
+    end
+    action speak():
+        return self.name + " sings"
+    end
+end
+
+# init that returns a value: the call still gives the instance.
+blueprint Returns:
+    action init(v):
+        self.v = v
+        return 99
+    end
+end
+
+# init that builds other objects and calls methods on self.
+blueprint Line:
+    action init(x1, y1, x2, y2):
+        self.a = Point(x1, y1)
+        self.b = Point(x2, y2)
+        self.n = self.a.len2() + self.b.len2()
+    end
+end
+
+# init that raises for bad input.
+blueprint Checked:
+    action init(v):
+        if v < 0:
+            throw "negative: " + str(v)
+        end
+        self.v = v
+    end
+end
+
+func make_points(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        let p = Point(i, i + 1)
+        total = total + p.len2() + p.x
+        i = i + 1
+    end
+    return total
+end
+show "points:", make_points(2000)
+
+func make_misc(n):
+    let out = []
+    let i = 0
+    while i < n:
+        let b = Bare()
+        let d1 = Defaults(1)
+        let d3 = Defaults(1, 2, 3)
+        let d4 = Defaults(1, 2, 3, 4)
+        let r = Returns(i)
+        if i == n - 1:
+            out.push(b.hello())
+            out.push([d1.a, d1.b, d1.c])
+            out.push([d3.a, d3.b, d3.c])
+            out.push([d4.a, d4.b, d4.c])
+            out.push(type(r))
+            out.push(r.v)
+        end
+        i = i + 1
+    end
+    return out
+end
+show "misc:", make_misc(500)
+
+func make_animals(n):
+    let out = []
+    let i = 0
+    while i < n:
+        let a = Animal("cat")
+        let b = Bird("robin")
+        if i == n - 1:
+            out.push(a.speak())
+            out.push(b.speak())
+            out.push(a.legs + b.legs)
+        end
+        i = i + 1
+    end
+    return out
+end
+show "animals:", make_animals(500)
+
+func make_lines(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        let l = Line(i, 0, 0, i)
+        total = total + l.n + l.a.x + l.b.y
+        i = i + 1
+    end
+    return total
+end
+show "lines:", make_lines(1000)
+
+# A class passed around as a value.
+func build_with(k, n):
+    let out = []
+    let i = 0
+    while i < n:
+        out.push(k(i, i * 2))
+        i = i + 1
+    end
+    return out
+end
+let ps = build_with(Point, 400)
+show "by value:", len(ps), ps[399].x, ps[399].y, ps[0].len2()
+
+# Errors from init are caught, and the caller carries on correctly.
+func try_checked(n):
+    let ok = 0
+    let bad = 0
+    let msg = ""
+    let i = 0
+    while i < n:
+        try:
+            let c = Checked(i % 5 - 2)
+            ok = ok + c.v
+        catch e:
+            bad = bad + 1
+            msg = str(e)
+        end
+        i = i + 1
+    end
+    return [ok, bad, msg]
+end
+show "checked:", try_checked(1000)
+
+# self is restored after constructing inside a method.
+blueprint Factory:
+    action init():
+        self.made = 0
+    end
+    action make(i):
+        let p = Point(i, i)
+        self.made = self.made + 1
+        return p.x + self.made
+    end
+end
+func use_factory(n):
+    let f = Factory()
+    let s = 0
+    let i = 0
+    while i < n:
+        s = s + f.make(i)
+        i = i + 1
+    end
+    return [s, f.made]
+end
+show "factory:", use_factory(1000)
+
+# Lots of short-lived objects (the garbage collector runs many times).
+blueprint Cell:
+    action init(v, next):
+        self.v = v
+        self.next = next
+    end
+end
+func chain(n):
+    let head = none
+    let i = 0
+    while i < n:
+        head = Cell(i, head)
+        i = i + 1
+    end
+    let s = 0
+    while head != none:
+        s = s + head.v
+        head = head.next
+    end
+    return s
+end
+let k = 0
+let sums = 0
+while k < 40:
+    sums = sums + chain(2000)
+    k = k + 1
+end
+show "chains:", sums

@@ -1,0 +1,206 @@
+# Compiled code reads obj.field straight from the entry where the field
+# was found last time. These cases must still give the interpreter's
+# answers: fields added in different orders, objects that outgrow their
+# inline storage, methods and bound methods read as values, dicts, other
+# values, and missing fields.
+
+blueprint Box:
+    action init(a, b):
+        self.a = a
+        self.b = b
+    end
+    action get_a():
+        return self.a
+    end
+end
+
+blueprint Loose:
+    action hello():
+        return "hi from loose"
+    end
+end
+
+func read_ab(o):
+    return o.a * 10 + o.b
+end
+
+# Same class, fields set in a different order on some objects.
+func mixed_order(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        let o = Loose()
+        if i % 3 == 0:
+            o.a = i
+            o.b = 1
+        else:
+            o.b = 2
+            o.a = i
+        end
+        total = total + read_ab(o)
+        i = i + 1
+    end
+    return total
+end
+show "mixed order:", mixed_order(3000)
+
+# Objects of different classes through one read.
+func mixed_classes(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        let o = Box(i, 3)
+        if i % 2 == 0:
+            o = Loose()
+            o.b = 5
+            o.a = 1
+        end
+        total = total + read_ab(o)
+        i = i + 1
+    end
+    return total
+end
+show "mixed classes:", mixed_classes(3000)
+
+# Many fields: the object's storage grows and entries are rebuilt.
+func many_fields(n):
+    let total = 0
+    let i = 0
+    while i < n:
+        let o = Loose()
+        o.f0 = 0
+        o.f1 = 1
+        o.f2 = 2
+        o.f3 = 3
+        o.f4 = 4
+        o.f5 = 5
+        o.f6 = 6
+        o.f7 = 7
+        o.f8 = 8
+        o.f9 = 9
+        o.f10 = 10
+        o.f11 = 11
+        o.a = i
+        o.b = 7
+        total = total + read_ab(o) + o.f0 + o.f11 + o.f6
+        i = i + 1
+    end
+    return total
+end
+show "many fields:", many_fields(2000)
+
+# Methods read as values, and bound methods stored in fields.
+func methods(n):
+    let out = []
+    let i = 0
+    let b = Box(4, 2)
+    let l = Loose()
+    l.cb = b.get_a
+    while i < n:
+        let m = b.get_a
+        let r1 = m()
+        let r2 = l.cb()
+        let r3 = l.hello()
+        if i == n - 1:
+            out.push(r1)
+            out.push(r2)
+            out.push(r3)
+            out.push(type(m))
+        end
+        i = i + 1
+    end
+    return out
+end
+show "methods:", methods(500)
+
+# Fields holding objects, lists, dicts, strings, none, floats.
+func values_in_fields(n):
+    let out = []
+    let i = 0
+    let inner = Box(1, 2)
+    while i < n:
+        let o = Loose()
+        o.obj = inner
+        o.lst = [i, i + 1]
+        o.dct = {"k": i}
+        o.str = "s" + str(i % 10)
+        o.nothing = none
+        o.flt = i * 0.5
+        let s = o.obj.a + o.lst[1] + o.dct["k"] + len(o.str) + o.flt
+        if o.nothing == none:
+            s = s + 1
+        end
+        if i == n - 1:
+            out.push(s)
+            out.push(o.str)
+        end
+        i = i + 1
+    end
+    return out
+end
+show "values:", values_in_fields(800)
+
+# Reading fields of things that are not instances.
+func not_instances(n):
+    let out = []
+    let i = 0
+    while i < n:
+        let d = {"a": 1, "b": 2}
+        let r = d.a + d.b
+        if i == n - 1:
+            out.push(r)
+            out.push(d.keys())
+        end
+        i = i + 1
+    end
+    return out
+end
+show "dicts:", not_instances(500)
+
+# A missing field raises, after the cache was warmed on other objects.
+func read_x(o):
+    return o.x
+end
+func missing(n):
+    let caught = 0
+    let msg = ""
+    let i = 0
+    while i < n:
+        let o = Loose()
+        if i % 4 != 0:
+            o.x = i
+        end
+        try:
+            read_x(o)
+        catch e:
+            caught = caught + 1
+            msg = str(e)
+        end
+        i = i + 1
+    end
+    return [caught, msg]
+end
+show "missing:", missing(800)
+try:
+    show read_x(5)
+catch e:
+    show "not an object:", e
+end
+try:
+    show read_x(none)
+catch e:
+    show "none:", e
+end
+
+# A field overwritten many times, read in a hot loop.
+func counter(n):
+    let c = Box(0, 0)
+    let i = 0
+    while i < n:
+        c.a = c.a + 1
+        c.b = c.b + c.a % 7
+        i = i + 1
+    end
+    return [c.a, c.b]
+end
+show "counter:", counter(20000)

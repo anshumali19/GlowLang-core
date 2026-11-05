@@ -59,6 +59,15 @@ static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, si
     if (!fe) fe = bc->owner;
     fprintf(stderr, "[jit] %s: %s (%zu bytes)\n", tier, (fe && fe->name) ? fe->name : "<script>", bytes);
 }
+/* ... and every function the JIT declines, with the reason. */
+extern const char *op_names[];
+static void jit_debug_skipped(Bytecode *bc, FuncEntry *fe, const char *why, int op) {
+    if (!glow_jit_debug) return;
+    if (!fe) fe = bc->owner;
+    const char *name = (fe && fe->name) ? fe->name : "<script>";
+    if (op >= 0) fprintf(stderr, "[jit] skipped: %s (%s %s)\n", name, why, op < 256 ? op_names[op] : "?");
+    else fprintf(stderr, "[jit] skipped: %s (%s)\n", name, why);
+}
 #endif
 
 static void jit_emit_byte(JITBuffer *buf, uint8_t b) {
@@ -840,6 +849,74 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done_pos - (jmp_done + 5));
 }
 
+static void emit_disp32(JITBuffer *buf, size_t off) { jit_emit_u32(buf, (uint32_t)off); }
+
+/* R[r0] = R[r1].name. Fast path in machine code for an instance whose
+   field sits where this instruction found it last time: cache[0] of the
+   instruction holds that entry number + 1 and the interned key, both
+   written by glow_get_property. The entry still holding that exact key
+   means it is that field (keys are unique), so the check needs no class
+   or layout of its own. A miss, a non-instance, or a field holding a bound
+   method (which glow_get_property may rebind) goes to the helper.
+   Uses rax, rcx, rdx, r10, r11. */
+static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig_pc, int i) {
+    JumpList slow = {0};
+    emit_mov_rax_reg(buf, pc->r1);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2);                          // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xfe); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FFE (object)
+    emit_jcc_to(buf, 0x85, &slow);
+    emit_mov_r11_imm64(buf, MASK_PAYLOAD);
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xd8);                          // and rax, r11
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xc0);                          // test rax, rax
+    emit_jcc_to(buf, 0x84, &slow);
+    jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0xb8); emit_disp32(buf, offsetof(GCObject, type)); jit_emit_byte(buf, OBJ_INSTANCE); // cmp byte [rax+type], OBJ_INSTANCE
+    emit_jcc_to(buf, 0x85, &slow);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x80); emit_disp32(buf, offsetof(Instance, properties)); // mov rax, [rax+properties]
+    emit_mov_r10_imm64(buf, (uintptr_t)&orig_pc->cache[0]);
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x8a); emit_disp32(buf, offsetof(CacheEntry, val)); // mov rcx, [r10+val]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0xe9); jit_emit_byte(buf, 0x01); // sub rcx, 1
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0x90); emit_disp32(buf, offsetof(Dict, capacity)); // movsxd rdx, dword [rax+capacity]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd1);                          // cmp rcx, rdx
+    emit_jcc_to(buf, 0x83, &slow);                                                                          // jae: no entry cached (-1) or past the end
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x90); emit_disp32(buf, offsetof(Dict, keys)); // mov rdx, [rax+keys]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x14); jit_emit_byte(buf, 0xca); // mov rdx, [rdx+rcx*8]
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd2);                          // mov r10, rdx  (r10 reloaded below)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr r10, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xfb); jit_emit_byte(buf, 0x7f); // cmp r10w, 0x7FFB (string)
+    emit_jcc_to(buf, 0x85, &slow);
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xda);                          // and rdx, r11
+    emit_mov_r10_imm64(buf, (uintptr_t)&orig_pc->cache[0]);
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x92); emit_disp32(buf, offsetof(CacheEntry, key)); // cmp rdx, [r10+key]
+    emit_jcc_to(buf, 0x85, &slow);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x90); emit_disp32(buf, offsetof(Dict, values)); // mov rdx, [rax+values]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x04); jit_emit_byte(buf, 0xca); // mov rax, [rdx+rcx*8]
+    /* A bound method in a field takes the helper (it may rebind it). */
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2);                          // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xfe); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FFE
+    uint32_t not_obj = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2);                          // mov rdx, rax
+    jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x21); jit_emit_byte(buf, 0xda);                          // and rdx, r11
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xd2);                          // test rdx, rdx
+    uint32_t null_obj = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0xba); emit_disp32(buf, offsetof(GCObject, type)); jit_emit_byte(buf, OBJ_BOUND_METHOD); // cmp byte [rdx+type], OBJ_BOUND_METHOD
+    emit_jcc_to(buf, 0x84, &slow);
+    uint32_t fast_done = buf->size;
+    *(uint32_t*)(buf->code + not_obj + 2) = (uint32_t)(fast_done - (not_obj + 6));
+    *(uint32_t*)(buf->code + null_obj + 2) = (uint32_t)(fast_done - (null_obj + 6));
+    uint32_t jmp_store = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    jump_list_patch(buf, &slow, buf->size);
+    emit_mov_arg1_reg(buf, pc->r1);
+    emit_mov_arg2_imm64(buf, (uintptr_t)pc->ptr);
+    emit_mov_arg3_imm64(buf, (uintptr_t)orig_pc);
+    emit_mov_rax_imm64(buf, (uintptr_t)jit_get_property_helper);
+    emit_call_rax(buf);
+    emit_deopt_check(buf, i);
+    *(uint32_t*)(buf->code + jmp_store + 1) = (uint32_t)(buf->size - (jmp_store + 5));
+    emit_mov_reg_rax(buf, pc->r0);
+}
+
  void jit_compile_ext(Bytecode *bc, FuncEntry *fe, TypeSignature current_sig) {
     (void)current_sig;
     if (!fe) fe = bc->owner;
@@ -864,24 +941,16 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
                 break;
-            default: bc->jit_failed = 1; return;
+            default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
     }
 
-    // Reject self-recursive functions with complex bodies (array mutation or
-    // calls to other functions). The fast self-call JIT path is only proven
-    // correct for pure scalar recursion (e.g. fib); complex bodies (e.g. a
-    // mergesort that mutates arrays and calls a helper) must run through the
-    // interpreter/specialization path to avoid miscompilation.
-    {
-        int has_self = 0, has_complex = 0;
-        for (int i = 0; i < bc->count; i++) {
-            OpCode op = bc->code[i].op;
-            if (op == OP_CALL_SELF_FAST) has_self = 1;
-            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
-        }
-        if (has_self && has_complex) { bc->jit_failed = 1; return; }
-    }
+    /* Recursive functions that also call other functions or store into
+       lists used to be kept out of compiled code: the self-call path once
+       reused the caller's register window. jit_self_call_direct now gives
+       every call a fresh frame above vm_stack_top (as the interpreter's
+       DO_CALL does), so they compile like any other function
+       (tests/regress_jit_recursive_calls.glow). */
 
     size_t size = jit_buffer_size(bc);
     uint8_t *code = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -946,16 +1015,7 @@ static void emit_jit_int_cmp(JITBuffer *buf, int op, int r0, int r1, int r2, uin
                 }
                 break;
             }
-            case OP_GET_PROPERTY: {
-                emit_mov_arg1_reg(&buf, pc->r1);
-                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
-                emit_call_rax(&buf);
-                emit_deopt_check(&buf, i);
-                emit_mov_reg_rax(&buf, pc->r0);
-                break;
-            }
+            case OP_GET_PROPERTY: emit_get_property(&buf, pc, orig_pc, i); break;
             case OP_SET_PROPERTY: {
                 emit_mov_arg1_reg(&buf, pc->r0);
                 emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
@@ -1265,20 +1325,10 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
                 break;
-            default: bc->jit_failed = 1; return;
+            default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
     }
 
-    // See jit_compile_ext: reject complex self-recursive bodies from the fast path.
-    if (!osr_mode) {
-        int has_self = 0, has_complex = 0;
-        for (int i = 0; i < bc->count; i++) {
-            OpCode op = bc->code[i].op;
-            if (op == OP_CALL_SELF_FAST) has_self = 1;
-            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
-        }
-        if (has_self && has_complex) { bc->jit_failed = 1; return; }
-    }
 
     size_t size = jit_buffer_size(bc);
     uint8_t *code = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1342,16 +1392,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 }
                 break;
             }
-            case OP_GET_PROPERTY: {
-                emit_mov_arg1_reg(&buf, pc->r1);
-                emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
-                emit_mov_arg3_imm64(&buf, (uintptr_t)orig_pc);
-                emit_mov_rax_imm64(&buf, (uintptr_t)jit_get_property_helper);
-                emit_call_rax(&buf);
-                emit_deopt_check(&buf, i);
-                emit_mov_reg_rax(&buf, pc->r0);
-                break;
-            }
+            case OP_GET_PROPERTY: emit_get_property(&buf, pc, orig_pc, i); break;
             case OP_SET_PROPERTY: {
                 emit_mov_arg1_reg(&buf, pc->r0);
                 emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
@@ -2041,6 +2082,74 @@ static void a64_int_mod(A64 *a, int r0, int r1, int r2, int i) {
 }
 
 /* Ordered comparison of two ints into a bool; otherwise the helper. */
+/* x<rd> = the low byte of the GCObject type field of the object at x<rn>
+   (a 32-bit load and a bit-field extract: there is no byte load here). */
+static void a64_load_obj_type(A64 *a, int rd, int rn) {
+    size_t off = offsetof(GCObject, type);
+    a64_emit(a, a64_ldr_w(rd, rn, (uint32_t)(off & ~(size_t)3)));
+    a64_emit(a, a64_ubfx(rd, rd, (int)(off & 3) * 8, 8));
+}
+
+/* R[r0] = R[r1].name with the same cached fast path as the x86
+   emit_get_property (see there for why the key check is enough). Uses
+   x0 and x9-x15. */
+static void a64_get_property(A64 *a, Instruction *pc, Instruction *orig_pc, int i) {
+    A64Jumps slow = {0};
+    a64_load_reg(a, 0, pc->r1);
+    a64_emit(a, a64_lsr_imm(9, 0, 48));
+    a64_emit(a, a64_movz_w(10, 0x7FFE));
+    a64_emit(a, a64_cmp(9, 10));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_NE));              /* not an object */
+    a64_emit(a, a64_ubfx(9, 0, 0, 48));
+    a64_jumps_add(&slow, a64_here(a)); a64_emit(a, a64_cbz(9, 0));
+    a64_load_obj_type(a, 10, 9);
+    a64_emit(a, a64_cmp_imm(10, OBJ_INSTANCE));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_NE));
+    a64_emit(a, a64_ldr(9, 9, (uint32_t)offsetof(Instance, properties)));
+    a64_mov_imm(a, 12, (uintptr_t)&orig_pc->cache[0]);
+    a64_emit(a, a64_ldr(11, 12, (uint32_t)offsetof(CacheEntry, val)));
+    a64_emit(a, a64_sub_imm(11, 11, 1));
+    a64_emit(a, a64_ldr_w(10, 9, (uint32_t)offsetof(Dict, capacity)));
+    a64_emit(a, a64_cmp(11, 10));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_HS));              /* nothing cached, or past the end */
+    a64_emit(a, a64_add(14, 11, 11));                            /* x14 = entry * 8 */
+    a64_emit(a, a64_add(14, 14, 14));
+    a64_emit(a, a64_add(14, 14, 14));
+    a64_emit(a, a64_ldr(10, 9, (uint32_t)offsetof(Dict, keys)));
+    a64_emit(a, a64_ldr_reg(10, 10, 14));
+    a64_emit(a, a64_lsr_imm(13, 10, 48));
+    a64_emit(a, a64_movz_w(15, 0x7FFB));
+    a64_emit(a, a64_cmp(13, 15));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_NE));              /* not a string key */
+    a64_emit(a, a64_ubfx(10, 10, 0, 48));
+    a64_emit(a, a64_ldr(13, 12, (uint32_t)offsetof(CacheEntry, key)));
+    a64_emit(a, a64_cmp(10, 13));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_NE));              /* another field */
+    a64_emit(a, a64_ldr(10, 9, (uint32_t)offsetof(Dict, values)));
+    a64_emit(a, a64_ldr_reg(0, 10, 14));
+    /* A bound method in a field takes the helper (it may rebind it). */
+    a64_emit(a, a64_lsr_imm(13, 0, 48));
+    a64_emit(a, a64_movz_w(15, 0x7FFE));
+    a64_emit(a, a64_cmp(13, 15));
+    uint32_t not_obj = a64_bcond_fwd(a, A64_NE);
+    a64_emit(a, a64_ubfx(13, 0, 0, 48));
+    uint32_t null_obj = a64_here(a); a64_emit(a, a64_cbz(13, 0));
+    a64_load_obj_type(a, 15, 13);
+    a64_emit(a, a64_cmp_imm(15, OBJ_BOUND_METHOD));
+    a64_jumps_add(&slow, a64_bcond_fwd(a, A64_EQ));
+    a64_link_here(a, not_obj);
+    a64_link_here(a, null_obj);
+    uint32_t done = a64_b_fwd(a);
+    a64_jumps_link_here(a, &slow);
+    a64_load_reg(a, 0, pc->r1);
+    a64_mov_imm(a, 1, (uintptr_t)pc->ptr);
+    a64_mov_imm(a, 2, (uintptr_t)orig_pc);
+    a64_call(a, (const void*)jit_get_property_helper);
+    a64_deopt_check(a, i);
+    a64_link_here(a, done);
+    a64_store_reg(a, 0, pc->r0);
+}
+
 static void a64_int_cmp(A64 *a, int op, int r0, int r1, int r2, const void *slow_fn, int i) {
     A64Jumps slow = {0};
     a64_load_ints(a, r1, r2, &slow);
@@ -2111,16 +2220,12 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
     else { if (bc->jit_code || bc->jit_failed) return; }
 
     if (!osr) {
-        int has_self = 0, has_complex = 0;
         for (int i = 0; i < bc->count; i++) {
             OpCode op = bc->code[i].op;
-            if (!a64_supported(op)) { bc->jit_failed = 1; return; }
-            if (op == OP_CALL_SELF_FAST) has_self = 1;
-            else if (op == OP_STORE_INDEX || op == OP_CALL || op == OP_CALL_VALUE || op == OP_CALL_METHOD) has_complex = 1;
+            if (!a64_supported(op)) { jit_debug_skipped(bc, fe, "unsupported", op); bc->jit_failed = 1; return; }
         }
-        /* Same rule as x86: the self-call fast path is only for pure
-           scalar recursion. */
-        if (has_self && has_complex) { bc->jit_failed = 1; return; }
+        /* Recursive functions that call others compile too: see the note
+           in jit_compile_ext. */
     }
 
     size_t size = ((size_t)bc->count * 640 + 16384 + 65535) & ~(size_t)65535;
@@ -2210,12 +2315,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                 jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++;
                 break;
             case OP_GET_PROPERTY:
-                a64_load_reg(A, 0, pc->r1);
-                a64_mov_imm(A, 1, (uintptr_t)pc->ptr);
-                a64_mov_imm(A, 2, (uintptr_t)orig_pc);
-                a64_call(A, (const void*)jit_get_property_helper);
-                a64_deopt_check(A, i);
-                a64_store_reg(A, 0, pc->r0);
+                a64_get_property(A, pc, orig_pc, i);
                 break;
             case OP_SET_PROPERTY:
                 a64_load_reg(A, 0, pc->r0);

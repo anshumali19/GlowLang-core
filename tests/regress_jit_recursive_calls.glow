@@ -1,0 +1,216 @@
+# Recursive functions that also call other functions, store into lists,
+# call methods or build objects are compiled now. Each one runs hot
+# enough to be compiled; the results must be the interpreter's.
+
+# Mergesort that mutates lists and calls a helper (the case that used to
+# be kept out of compiled code).
+func merge(a, b):
+    let out = []
+    let i = 0
+    let j = 0
+    while i < len(a) and j < len(b):
+        if a[i] <= b[j]:
+            out.push(a[i])
+            i = i + 1
+        else:
+            out.push(b[j])
+            j = j + 1
+        end
+    end
+    while i < len(a):
+        out.push(a[i])
+        i = i + 1
+    end
+    while j < len(b):
+        out.push(b[j])
+        j = j + 1
+    end
+    return out
+end
+func msort(xs):
+    if len(xs) <= 1:
+        return xs
+    end
+    let mid = floor(len(xs) / 2)
+    return merge(msort(xs[0:mid]), msort(xs[mid:]))
+end
+let seed = 7
+func rnd():
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % 1000
+end
+let k = 0
+let sorted_ok = true
+while k < 60:
+    let xs = []
+    let n = 0
+    while n < 50 + k:
+        xs.push(rnd())
+        n = n + 1
+    end
+    let ys = msort(xs)
+    let m = 1
+    while m < len(ys):
+        if ys[m - 1] > ys[m]:
+            sorted_ok = false
+        end
+        m = m + 1
+    end
+    k = k + 1
+end
+show "mergesort ok:", sorted_ok, msort([5, 3, 9, 1, 1, 0, -4, 2.5])
+
+# In-place quicksort: recursion plus list stores.
+func qsort(a, lo, hi):
+    if lo >= hi:
+        return 0
+    end
+    let p = a[hi]
+    let i = lo
+    let j = lo
+    while j < hi:
+        if a[j] < p:
+            let t = a[i]
+            a[i] = a[j]
+            a[j] = t
+            i = i + 1
+        end
+        j = j + 1
+    end
+    let t = a[i]
+    a[i] = a[hi]
+    a[hi] = t
+    return 1 + qsort(a, lo, i - 1) + qsort(a, i + 1, hi)
+end
+let q = []
+let n = 0
+while n < 3000:
+    q.push(rnd())
+    n = n + 1
+end
+let parts = qsort(q, 0, len(q) - 1)
+show "quicksort:", q[0:8], q[2992:], parts
+
+# Trees of objects, built and walked recursively.
+blueprint Node:
+    action init(l, r, v):
+        self.l = l
+        self.r = r
+        self.v = v
+    end
+    action total():
+        let s = self.v
+        if self.l != none:
+            s = s + self.l.total()
+        end
+        if self.r != none:
+            s = s + self.r.total()
+        end
+        return s
+    end
+end
+func build(d, v):
+    if d == 0:
+        return Node(none, none, v)
+    end
+    return Node(build(d - 1, v * 2), build(d - 1, v * 2 + 1), v)
+end
+func depth(t):
+    if t == none:
+        return 0
+    end
+    let a = depth(t.l)
+    let b = depth(t.r)
+    if a > b:
+        return a + 1
+    end
+    return b + 1
+end
+let sums = []
+let d = 0
+while d < 12:
+    let t = build(d, 1)
+    sums.push(t.total())
+    sums.push(depth(t))
+    d = d + 1
+end
+show "trees:", sums
+
+# Mutual recursion through another function.
+func is_even(n):
+    if n == 0:
+        return true
+    end
+    return is_odd(n - 1)
+end
+func is_odd(n):
+    if n == 0:
+        return false
+    end
+    return is_even(n - 1)
+end
+func count_even(n):
+    if n < 0:
+        return 0
+    end
+    let e = 0
+    if is_even(n % 37):
+        e = 1
+    end
+    return e + count_even(n - 1)
+end
+show "mutual:", count_even(800)
+
+# Recursion with closures and a dict accumulator.
+func walk(n, seen, f):
+    if n <= 1:
+        return seen
+    end
+    seen[str(n)] = f(n)
+    if n % 2 == 0:
+        return walk(n / 2, seen, f)
+    end
+    return walk(3 * n + 1, seen, f)
+end
+let total = 0
+let s = 1
+while s < 300:
+    let seen = walk(s, {}, lambda(x): x * x)
+    total = total + len(seen)
+    s = s + 1
+end
+show "collatz steps:", total
+
+# An error raised deep inside a recursive function that calls others is
+# caught at the top, with nothing left half-done.
+func explode(n):
+    if n == 0:
+        let bad = none
+        return bad + 1
+    end
+    let xs = [n]
+    xs.push(n)
+    return explode(n - 1) + len(xs)
+end
+let caught = 0
+let r = 0
+while r < 200:
+    try:
+        explode(30)
+    catch e:
+        caught = caught + 1
+    end
+    r = r + 1
+end
+show "caught:", caught
+
+# Deep recursion still reports the recursion limit instead of crashing.
+func deep(n):
+    let xs = [n]
+    return deep(n + 1) + len(xs)
+end
+try:
+    deep(0)
+catch e:
+    show "deep:", e
+end

@@ -2575,23 +2575,7 @@ Value jit_iter_next(Value vit) {
     l_OP_SET_PROPERTY: {
         const char *n = (const char*)pc->ptr; Value o = R(pc->r0); Value v = R(pc->r1);
         if(GET_TYPE(o)==VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o)==OBJ_INSTANCE) {
-            Instance *inst = AS_INSTANCE(o);
-            Dict *d = inst->properties;
-            intptr_t idx = pc->cache[0].val - 1;
-            if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
-                d->values[idx] = v;
-                gc_write_barrier((GCObject*)inst, v);
-            } else {
-                int new_idx = dict_get_idx(d, n);
-                if (new_idx != -1) {
-                    pc->cache[0].val = new_idx + 1;
-                    pc->cache[0].key = (void*)(uintptr_t)(d->keys[new_idx] & MASK_PAYLOAD);
-                    d->values[new_idx] = v;
-                    gc_write_barrier((GCObject*)inst, v);
-                } else {
-                    instance_set(inst, n, v);
-                }
-            }
+            instance_set_cached(AS_INSTANCE(o), n, v, pc);
         }
         else if(GET_TYPE(o)==VAL_DICT) dict_set(AS_DICT(o), n, v);
         pc++; goto l_DISPATCH;

@@ -964,6 +964,7 @@ Value class_init_method(Class *k);
 Instance* instance_new(Class *c);
 Value instance_get(Instance *inst, const char *name);
 void instance_set(Instance *inst, const char *name, Value val);
+void instance_set_cached(Instance *inst, const char *n, Value v, Instruction *pc);
 Trait* trait_new(const char *name);
 Value bound_method_new(Value inst, FuncEntry *fe);
 Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
