@@ -785,16 +785,27 @@ typedef struct { uint32_t at[8]; int n; } JumpList;
 /* roundsd (SSE4.1) truncates a double in one instruction; every x86-64 CPU
    from the last fifteen years has it, and without it the longer
    convert-and-compare sequences are used. GLOW_JIT_NO_SSE41 forces those,
-   so both can be tested on one machine. */
+   so both can be tested on one machine. The CPUID instruction is asked
+   directly (leaf 1, ECX bit 19): __builtin_cpu_supports needs a runtime
+   library that the Windows build does not link. */
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
 static int jit_sse41(void) {
     static int cached = -1;
     if (cached < 0) {
-#if defined(__GNUC__) || defined(__clang__)
-        __builtin_cpu_init();
-        cached = __builtin_cpu_supports("sse4.1") && !getenv("GLOW_JIT_NO_SSE41");
+        unsigned int ecx = 0;
+#if defined(_MSC_VER)
+        int r[4];
+        __cpuid(r, 1);
+        ecx = (unsigned int)r[2];
 #else
-        cached = 0;
+        unsigned int eax, ebx, edx;
+        if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) ecx = 0;
 #endif
+        cached = ((ecx >> 19) & 1) && !getenv("GLOW_JIT_NO_SSE41");
     }
     return cached;
 }
