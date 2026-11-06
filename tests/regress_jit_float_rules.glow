@@ -1,0 +1,97 @@
+# Compiled + - * / follow the interpreter's number rules exactly: doubles
+# only when an operand is not an exact integer (a fraction, NaN or
+# infinity), and a whole result that fits in 48 bits becomes an int. The
+# same answers come out with and without SSE4.1 (GLOW_JIT_NO_SSE41=1).
+
+func ops(a, b):
+    return [a + b, a - b, a * b, a / b]
+end
+func describe(v):
+    return str(v) + ":" + type(v)
+end
+
+# Values built at run time: halves, a fraction just under the 48-bit edge,
+# huge whole doubles, infinity and NaN.
+let inf = 1.5
+while inf * 2.5 != inf:
+    inf = inf * 2.5
+end
+let nan = inf - inf
+let huge = 1.5
+let h = 0
+while h < 120:
+    huge = huge * 2.0
+    h = h + 1
+end
+let edge = 140737488355327
+let vals = [0, 1, -1, 3, 0.5, -0.5, 2.5, 0.25, 1.75, 4.0, -0.0,
+            edge, -edge - 1, edge + 0.5, 70368744177663.5, -70368744177664.5,
+            huge, -huge, inf, -inf, nan]
+
+func run(record):
+    let out = []
+    for each a in vals:
+        for each b in vals:
+            let line = "error"
+            try:
+                let r = ops(a, b)
+                line = describe(r[0]) + " " + describe(r[1]) + " " + describe(r[2]) + " " + describe(r[3])
+            catch e:
+                line = "error: " + str(e)
+            end
+            if record:
+                out.push(str(a) + " " + str(b) + " -> " + line)
+            end
+        end
+    end
+    return out
+end
+let w = 0
+while w < 30:
+    run(false)
+    w = w + 1
+end
+for each line in run(true):
+    show line
+end
+
+# A loop like mandelbrot's: fractions that sometimes land on whole numbers.
+func walk(n):
+    let x = 0.0
+    let ints = 0
+    let i = 0
+    while i < n:
+        x = x * 0.5 + 0.75
+        let y = x * 4.0
+        if type(y) == "int":
+            ints = ints + 1
+        end
+        i = i + 1
+    end
+    return [x, ints]
+end
+show walk(100000)
+
+# A whole double past 48 bits times an int is exact (a big integer), even
+# when the same compiled multiply has seen fractions and huge doubles.
+func m(a, b):
+    return a * b
+end
+let mixed = [-3, 4503599627370497.0, 1.5, 0.5, huge]
+let q = 0
+while q < 300:
+    for each a in mixed:
+        for each b in mixed:
+            m(a, b)
+        end
+    end
+    q = q + 1
+end
+show m(-3, 4503599627370497.0), m(4503599627370497.0, 3), m(huge, -3)
+let p3 = 1
+let t3 = 0
+while t3 < 60:
+    p3 = p3 * 3
+    t3 = t3 + 1
+end
+show "3^60:", p3
