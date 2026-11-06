@@ -28,6 +28,14 @@ if(MSVC)
     endif()
 endif()
 
+if(APPLE)
+    # The same reason as /STACK above: macOS gives the main thread 8 MB,
+    # which deep recursion (tests/regress_recursion.glow, depth 50,000) used
+    # up on Intel Macs before the 65,500-call limit. Reserve 64 MB, which is
+    # within macOS's default hard stack limit.
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-stack_size,0x4000000")
+endif()
+
 # Set common compiler flags like in Makefile (clang-cl keeps MSVC's flags)
 if((CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang") AND NOT MSVC)
     # Enable optimization by default for release
