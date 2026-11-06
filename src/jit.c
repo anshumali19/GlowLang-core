@@ -955,6 +955,79 @@ static void emit_jit_int_mod(JITBuffer *buf, int r0, int r1, int r2, int i) {
     *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(done - (jmp_done + 5));
 }
 
+/* x % d for a constant d, without a divide (which costs most of a loop
+   like `t + (i % 7) * (i % 13)`): the division by d becomes a multiply by a
+   precomputed reciprocal, as C compilers do.
+
+   The CONST_INT just before the % must have put d in its divisor register,
+   with nothing jumping in between, and 2 <= d < 2^31. For an inline int n
+   (|n| <= 2^47) add off, a multiple of d above 2^47, so n' = n + off is
+   positive and below 2^63 and n' mod d == n mod d. With sh = floor(log2(d -
+   1)) (so 2^sh < d) and m = ceil(2^(64+sh) / d), which fits 64 bits,
+   q = (n' * m) >> (64 + sh) is exactly n' / d: the rounding error
+   e = m*d - 2^(64+sh) is below d <= 2^(sh+1), and n' * e < 2^(64+sh) for
+   every n' < 2^63. Then n' - q*d is in [0, d): the floor modulo, whose
+   sign is the divisor's, as GlowLang's % is. */
+/* ceil(2^(64+sh) / d) for 2 <= d < 2^31 and 2^sh < d, in 64-bit
+   arithmetic only (a 128-bit division needs a runtime routine that the
+   Windows build does not link). 2^64 = d*q + r with 0 <= r < d, so
+   2^(64+sh) = d*(q << sh) + (r << sh), and r << sh < 2^61 divides
+   directly. */
+static uint64_t jit_mod_reciprocal(uint64_t d, int sh) {
+    uint64_t q = UINT64_MAX / d, r = UINT64_MAX % d + 1;   /* 2^64 = d*q + r */
+    if (r == d) { q++; r = 0; }
+    uint64_t rs = r << sh;
+    uint64_t m = (q << sh) + rs / d;
+    return m + (rs % d != 0);
+}
+
+static int jit_mod_const_divisor(const Bytecode *bc, int i, const unsigned char *targets, int64_t *d_out) {
+    if (i < 1 || !targets || targets[i]) return 0;
+    const Instruction *c = &bc->code[i - 1], *p = &bc->code[i];
+    if (c->op != OP_CONST_INT || c->r0 != p->r2 || p->r1 == p->r2) return 0;
+    int64_t d = c->arg;
+    if (d < 2 || d > 0x7fffffff) return 0;
+    *d_out = d;
+    return 1;
+}
+
+static void emit_jit_int_mod_const(JITBuffer *buf, int r0, int r1, int r2, int64_t d, int i) {
+    int sh = 0;
+    while (((uint64_t)1 << (sh + 1)) <= (uint64_t)(d - 1)) sh++;
+    uint64_t m = jit_mod_reciprocal((uint64_t)d, sh);
+    uint64_t off = (uint64_t)d * ((((uint64_t)1) << 47) / (uint64_t)d + 1);
+
+    emit_mov_rax_reg(buf, r1);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2);                          // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7FF8
+    uint32_t jne_slow = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x10); // sar rax, 16  (n)
+    emit_mov_rdx_imm64(buf, off);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x01); jit_emit_byte(buf, 0xd0);                          // add rax, rdx (n')
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1);                          // mov rcx, rax
+    emit_mov_rdx_imm64(buf, m);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xf7); jit_emit_byte(buf, 0xe2);                          // mul rdx (rdx:rax = n' * m)
+    if (sh) { jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, (uint8_t)sh); } // shr rdx, sh (q)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x69); jit_emit_byte(buf, 0xd2); jit_emit_u32(buf, (uint32_t)d); // imul rdx, rdx, d
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x29); jit_emit_byte(buf, 0xd1);                          // sub rcx, rdx (n' - q*d)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc8);                          // mov rax, rcx
+    emit_box_int_rax(buf);
+    uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    *(uint32_t*)(buf->code + jne_slow + 2) = (uint32_t)(buf->size - (jne_slow + 6));
+    /* Not an inline int (a float, a big int, ...): the helper, as before. */
+    emit_call_binop_helper(buf, r1, r2, (uintptr_t)jit_mod_helper);
+    emit_deopt_check(buf, i);
+    *(uint32_t*)(buf->code + jmp_done + 1) = (uint32_t)(buf->size - (jmp_done + 5));
+    emit_mov_reg_rax(buf, r0);
+}
+#define EMIT_MOD(pc_, i_) do { \
+        int64_t d_; \
+        if (jit_mod_const_divisor(bc, (i_), targets, &d_)) emit_jit_int_mod_const(&buf, (pc_)->r0, (pc_)->r1, (pc_)->r2, d_, (i_)); \
+        else emit_jit_int_mod(&buf, (pc_)->r0, (pc_)->r1, (pc_)->r2, (i_)); \
+    } while (0)
+
 /* Inline double division; the helper handles big ints and declines
    division by zero so the interpreter raises the error. */
 static void emit_jit_div(JITBuffer *buf, int r0, int r1, int r2, int i) {
@@ -1409,7 +1482,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 EMIT_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
-            case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_MOD: EMIT_MOD(pc, i); break;
             case OP_POW:
                 emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_pow_helper);
                 emit_deopt_check(&buf, i);
@@ -1789,7 +1862,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 EMIT_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
-            case OP_MOD: emit_jit_int_mod(&buf, pc->r0, pc->r1, pc->r2, i); break;
+            case OP_MOD: EMIT_MOD(pc, i); break;
             case OP_POW:
                 emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_pow_helper);
                 emit_deopt_check(&buf, i);

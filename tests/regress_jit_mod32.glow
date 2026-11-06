@@ -1,0 +1,97 @@
+# Compiled % uses a 32-bit divide when both sides fit in 32 bits, and the
+# 64-bit one otherwise. Every answer must be the interpreter's: values on
+# both sides of the 32-bit edge, -2^31 % -1 (a 32-bit divide would trap),
+# every sign combination (the result takes the divisor's sign), the 48-bit
+# edge, floats and division by zero.
+
+func f_mod(a, b):
+    return a % b
+end
+
+let edge = 2147483648
+let vals = [0, 1, -1, 2, -2, 7, -7, 13, -13, 1000003, -1000003,
+            edge - 1, -edge, edge, -edge - 1, edge + 5, -edge + 1,
+            4294967296, -4294967296, 140737488355327, -140737488355328, 2.5, -0.5]
+
+func run(record):
+    let out = []
+    for each a in vals:
+        for each b in vals:
+            let r = "error"
+            try:
+                r = str(f_mod(a, b))
+            catch e:
+                r = "error: " + str(e)
+            end
+            if record:
+                out.push(str(a) + " % " + str(b) + " = " + r)
+            end
+        end
+    end
+    return out
+end
+let w = 0
+while w < 30:
+    run(false)
+    w = w + 1
+end
+for each line in run(true):
+    show line
+end
+
+# Constant divisors: these compile to a multiply by a reciprocal (2 up to
+# 2^31 - 1); 1, negative ones and 0 keep the ordinary path.
+func const_mods(x):
+    return [x % 2, x % 7, x % 13, x % 1000003, x % 2147483647, x % 1, x % -3]
+end
+func run_const(record):
+    let out = []
+    for each a in vals:
+        let r = "error"
+        try:
+            r = str(const_mods(a))
+        catch e:
+            r = "error: " + str(e)
+        end
+        if record:
+            out.push(str(a) + " -> " + r)
+        end
+    end
+    return out
+end
+let w2 = 0
+while w2 < 40:
+    run_const(false)
+    w2 = w2 + 1
+end
+for each line in run_const(true):
+    show line
+end
+func by_zero(x):
+    return x % 0
+end
+let zi = 0
+while zi < 300:
+    try:
+        by_zero(zi)
+    catch e:
+        if zi == 299:
+            show "const zero:", e
+        end
+    end
+    zi = zi + 1
+end
+
+# A hot loop like the benchmark's, crossing the 32-bit edge partway.
+func mod_sum(start, n):
+    let t = 0
+    let i = start
+    while i < start + n:
+        t = t + (i % 7) * (i % 13) + i % -5
+        i = i + 1
+    end
+    return t
+end
+show "sum below the edge:", mod_sum(0, 100000)
+show "sum across the edge:", mod_sum(edge - 50000, 100000)
+show "sum of negatives:", mod_sum(-edge - 50000, 100000)
