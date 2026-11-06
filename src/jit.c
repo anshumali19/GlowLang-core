@@ -595,12 +595,15 @@ static void emit_fast_index(JITBuffer *buf, Instruction *pc, int i) {
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7ff8 (VAL_INT)
     uint32_t jne_int = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
 
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0xc8); // movsxd rcx, eax (signed 32-bit idx)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf9); jit_emit_byte(buf, 0x10); // sar rcx, 16 (the whole 48-bit idx)
     emit_mov_rax_reg(buf, pc->r1); // reload coll into RAX
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe8); jit_emit_byte(buf, 0x10); // shr rax, 16 (List*)
 
-    jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x24); // cmp ecx, [rax + 36] (size)
+    jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, 0x24); // mov edx, [rax + 36] (size)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd1); // cmp rcx, rdx (negative or >= size: slow path)
     uint32_t jae_bounds = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);
 
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, 0x30); // mov rdx, [rax + 48] (items)
@@ -637,12 +640,15 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7ff8 (VAL_INT)
     uint32_t jne_int = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
 
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0xc8); // movsxd rcx, eax (signed 32-bit idx)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc1); // mov rcx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe1); jit_emit_byte(buf, 0x10); // shl rcx, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf9); jit_emit_byte(buf, 0x10); // sar rcx, 16 (the whole 48-bit idx)
     emit_mov_rax_reg(buf, pc->r0); // reload coll into RAX
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe8); jit_emit_byte(buf, 0x10); // shr rax, 16 (List*)
 
-    jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x24); // cmp ecx, [rax + 36] (size)
+    jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, 0x24); // mov edx, [rax + 36] (size)
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd1); // cmp rcx, rdx (negative or >= size: slow path)
     uint32_t jae_bounds = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);
 
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, 0x30); // mov rdx, [rax + 48] (items)
@@ -663,6 +669,40 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
 
     uint32_t done_pos = buf->size;
     *(uint32_t*)&buf->code[jmp_done + 1] = done_pos - (jmp_done + 5);
+}
+
+/* list.push(v) / append / add with one argument: on a list, those names
+   always mean the built-in append (lists have no user methods), which
+   returns the list. While there is spare capacity the item is stored here;
+   anything else (not a list, a full list that must grow) jumps to the
+   ordinary method call the caller emits at the returned patch position. */
+static int jit_is_list_append(Instruction *pc) {
+    const char *n = (const char*)pc->ptr;
+    return pc->op == OP_CALL_METHOD && pc->arg == 1 && n &&
+           (strcmp(n, "push") == 0 || strcmp(n, "append") == 0 || strcmp(n, "add") == 0);
+}
+static void emit_list_append_fast(JITBuffer *buf, Instruction *pc, uint32_t *jne_list, uint32_t *jae_full, uint32_t *jmp_done) {
+    int val_reg = pc->r2 + (pc->is_method ? 1 : 0);
+    emit_mov_rax_reg(buf, pc->r1); // RAX = receiver
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xea); jit_emit_byte(buf, 0x30); // shr rdx, 48
+    jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0xfc); jit_emit_byte(buf, 0x7f); // cmp dx, 0x7ffc (VAL_LIST)
+    *jne_list = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe8); jit_emit_byte(buf, 0x10); // shr rax, 16 (List*)
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov r10, rax
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4a); jit_emit_byte(buf, 0x24); // mov ecx, [r10 + 36] (size)
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x4a); jit_emit_byte(buf, 0x28); // cmp ecx, [r10 + 40] (capacity)
+    *jae_full = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x52); jit_emit_byte(buf, 0x30); // mov rdx, [r10 + 48] (items)
+    emit_mov_rax_reg(buf, val_reg);
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x04); jit_emit_byte(buf, 0xca); // mov [rdx + rcx*8], rax
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x42); jit_emit_byte(buf, 0x24); // inc dword [r10 + 36]
+    emit_mov_rax_reg(buf, pc->r1);
+    emit_mov_reg_rax(buf, pc->r0); // append returns the list
+    *jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
+    *(uint32_t*)&buf->code[*jne_list + 2] = buf->size - (*jne_list + 6);
+    *(uint32_t*)&buf->code[*jae_full + 2] = buf->size - (*jae_full + 6);
 }
 
 // ---- Inline fast path for integer arithmetic / comparison ----
@@ -1393,6 +1433,9 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 break;
             }
             case OP_CALL_METHOD: {
+                uint32_t ap_list = 0, ap_full = 0, ap_done = 0;
+                int ap = jit_is_list_append(pc);
+                if (ap) emit_list_append_fast(&buf, pc, &ap_list, &ap_full, &ap_done);
                 emit_mov_arg1_reg(&buf, pc->r1);
                 emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
                 emit_mov_arg3_imm64(&buf, (uint64_t)pc->arg);
@@ -1405,6 +1448,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 emit_exception_check(&buf, i);
+                if (ap) *(uint32_t*)&buf.code[ap_done + 1] = buf.size - (ap_done + 5);
                 break;
             }
             case OP_TAIL_CALL: {
@@ -1772,6 +1816,9 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 break;
             }
             case OP_CALL_METHOD: {
+                uint32_t ap_list = 0, ap_full = 0, ap_done = 0;
+                int ap = jit_is_list_append(pc);
+                if (ap) emit_list_append_fast(&buf, pc, &ap_list, &ap_full, &ap_done);
                 emit_mov_arg1_reg(&buf, pc->r1);
                 emit_mov_arg2_imm64(&buf, (uintptr_t)pc->ptr);
                 emit_mov_arg3_imm64(&buf, (uint64_t)pc->arg);
@@ -1784,6 +1831,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 emit_exception_check(&buf, i);
+                if (ap) *(uint32_t*)&buf.code[ap_done + 1] = buf.size - (ap_done + 5);
                 break;
             }
             case OP_TAIL_CALL: {
