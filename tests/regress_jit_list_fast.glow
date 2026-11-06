@@ -1,0 +1,91 @@
+# Compiled list.push / append / add store straight into the list while it
+# has room, and compiled a[i] / a[i] = v check the whole index. Every answer
+# must be the interpreter's: growth past the capacity, the returned list,
+# receivers that are not lists, a class with its own push, and indexes that
+# only look small in their low 32 bits.
+
+func fill(n):
+    let a = []
+    let i = 0
+    while i < n:
+        a.push(i)
+        a.append(i * 2)
+        let r = a.add(-i)
+        if i == n - 1 and n == 1000:
+            show "push returns the list:", len(r) == len(a)
+        end
+        i = i + 1
+    end
+    return a
+end
+let k = 0
+while k < 50:
+    fill(10)
+    k = k + 1
+end
+let filled = fill(1000)
+show len(filled), filled[0], filled[1], filled[2], filled[2997], filled[2998], filled[2999]
+
+class Stack:
+    func init():
+        self.items = []
+        self.pushed = 0
+    end
+    func push(v):
+        self.items.push(v)
+        self.pushed = self.pushed + 1
+        return self.pushed
+    end
+end
+
+func push_any(x, v):
+    return x.push(v)
+end
+let s = Stack()
+let w = 0
+while w < 300:
+    push_any([1], w)
+    push_any(s, w)
+    w = w + 1
+end
+show "class push:", push_any(s, 7), len(s.items)
+show "list push:", push_any([1, 2], 3)
+try:
+    show push_any("text", 1)
+catch e:
+    show "string push:", e
+end
+let d = {"push": lambda(v): v * 10}
+try:
+    show "dict push:", push_any(d, 4)
+catch e:
+    show "dict push error:", e
+end
+
+func get(a, i):
+    return a[i]
+end
+func put(a, i, v):
+    a[i] = v
+    return a
+end
+let a = [10, 20, 30]
+let g = 0
+while g < 2000:
+    get(a, 1)
+    put([1, 2, 3], 1, 5)
+    g = g + 1
+end
+show get(a, -1), get(a, 2), put([1, 2, 3], -3, 0)
+for each big in [4294967297, 4294967296, -4294967295, 140737488355327, 3, -4]:
+    try:
+        show "read", big, get(a, big)
+    catch e:
+        show "read error:", e
+    end
+    try:
+        show "write", big, put([1, 2, 3], big, 99)
+    catch e:
+        show "write error:", e
+    end
+end
