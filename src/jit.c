@@ -742,6 +742,23 @@ static void emit_call_binop_helper(JITBuffer *buf, int r1, int r2, uintptr_t fn)
 
 typedef struct { uint32_t at[8]; int n; } JumpList;
 
+/* roundsd (SSE4.1) truncates a double in one instruction; every x86-64 CPU
+   from the last fifteen years has it, and without it the longer
+   convert-and-compare sequences are used. GLOW_JIT_NO_SSE41 forces those,
+   so both can be tested on one machine. */
+static int jit_sse41(void) {
+    static int cached = -1;
+    if (cached < 0) {
+#if defined(__GNUC__) || defined(__clang__)
+        __builtin_cpu_init();
+        cached = __builtin_cpu_supports("sse4.1") && !getenv("GLOW_JIT_NO_SSE41");
+#else
+        cached = 0;
+#endif
+    }
+    return cached;
+}
+
 static void jump_list_add(JumpList *l, uint32_t pos) { if (l->n < 8) l->at[l->n++] = pos; }
 
 static void jump_list_patch(JITBuffer *buf, JumpList *l, uint32_t target) {
@@ -766,6 +783,7 @@ static void emit_load_number_xmm(JITBuffer *buf, int r, int x, int check_frac, J
     uint32_t jne_not_int = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x10); // shl rax, 16
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xf8); jit_emit_byte(buf, 0x10); // sar rax, 16
+    jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x57); jit_emit_byte(buf, (unsigned char)(0xc0 | (x << 3) | x)); // xorps xmmX, xmmX (cvtsi2sd keeps the upper half: a false dependency)
     jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, (unsigned char)(0xc0 | (x << 3))); // cvtsi2sd xmmX, rax
     uint32_t jmp_next = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     uint32_t not_int = buf->size;
@@ -774,7 +792,20 @@ static void emit_load_number_xmm(JITBuffer *buf, int r, int x, int check_frac, J
     jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xfa); jit_emit_u32(buf, 0x7ff8); // cmp edx, 0x7FF8
     emit_jcc_to(buf, 0x84, fail); // je fail
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x6e); jit_emit_byte(buf, (unsigned char)(0xc0 | (x << 3))); // movq xmmX, rax
-    if (check_frac) {
+    if (check_frac && jit_sse41()) {
+        /* r11 |= "d is not an exact integer": it differs from its truncation
+           (a fraction) or is NaN. An infinite or huge whole double sets
+           nothing; if neither operand sets r11 the helper decides, and if
+           the other one does, doubles are what the interpreter uses too. */
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x57); jit_emit_byte(buf, 0xd2); // xorps xmm2, xmm2 (roundsd keeps xmm2's upper half: a false dependency)
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x3a); jit_emit_byte(buf, 0x0b); jit_emit_byte(buf, (unsigned char)(0xd0 | x)); jit_emit_byte(buf, 0x03); // roundsd xmm2, xmmX, 3 (truncate)
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, (unsigned char)(0xc2 | (x << 3))); // ucomisd xmmX, xmm2
+        /* Both flags are read before any `or`, which would overwrite PF. */
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x95); jit_emit_byte(buf, 0xc2); // setne dl
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x9a); jit_emit_byte(buf, 0xc6); // setp dh (NaN)
+        jit_emit_byte(buf, 0x08); jit_emit_byte(buf, 0xf2); // or dl, dh
+        jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x08); jit_emit_byte(buf, 0xd3); // or r11b, dl
+    } else if (check_frac) {
         jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2c); jit_emit_byte(buf, (unsigned char)(0xd0 | x)); // cvttsd2si rdx, xmmX
         emit_mov_r10_imm64(buf, 0x8000000000000000ULL); // "integer indefinite": NaN, inf or out of range
         jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd2); // cmp rdx, r10
@@ -811,6 +842,21 @@ static void emit_float_binop(JITBuffer *buf, int op, int r1, int r2, JumpList *f
     JumpList as_float = {0}, is_nan = {0};
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc0); // ucomisd xmm0, xmm0
     emit_jcc_to(buf, 0x8a, &is_nan); // jp nan
+    if (jit_sse41()) {
+        /* Usually the result has a fraction: that is two instructions. A
+           whole one becomes an int when it fits in 48 bits (infinity and
+           huge values convert to 0x8000000000000000, which does not). */
+        jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x57); jit_emit_byte(buf, 0xd2); // xorps xmm2, xmm2 (roundsd keeps xmm2's upper half: a false dependency)
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x3a); jit_emit_byte(buf, 0x0b); jit_emit_byte(buf, 0xd0); jit_emit_byte(buf, 0x03); // roundsd xmm2, xmm0, 3
+        jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc2); // ucomisd xmm0, xmm2
+        emit_jcc_to(buf, 0x85, &as_float); // jne: has a fraction
+        jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2c); jit_emit_byte(buf, 0xc0); // cvttsd2si rax, xmm0
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe2); jit_emit_byte(buf, 0x10); // shl rdx, 16
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xfa); jit_emit_byte(buf, 0x10); // sar rdx, 16
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xc2); // cmp rdx, rax
+        emit_jcc_to(buf, 0x85, &as_float); // jne: outside 48 bits
+    } else {
     jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2c); jit_emit_byte(buf, 0xc0); // cvttsd2si rax, xmm0
     emit_mov_rdx_imm64(buf, INT48_MAX);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0xc2); // cmp rax, rdx
@@ -821,6 +867,7 @@ static void emit_float_binop(JITBuffer *buf, int op, int r1, int r2, JumpList *f
     jit_emit_byte(buf, 0xf2); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2a); jit_emit_byte(buf, 0xd0); // cvtsi2sd xmm2, rax
     jit_emit_byte(buf, 0x66); jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x2e); jit_emit_byte(buf, 0xc2); // ucomisd xmm0, xmm2
     emit_jcc_to(buf, 0x85, &as_float); // jne: has a fraction
+    }
     emit_box_int_rax(buf);
     uint32_t jmp_end1 = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     jump_list_patch(buf, &as_float, buf->size);
