@@ -297,6 +297,16 @@ void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
 void call_stack_pop(void);
 
 extern TypeSignature compute_signature(Value *regs, int count);
+extern Value glow_not(Value v);
+extern Value glow_in(Value elem, Value coll);
+extern Value glow_slice(Value obj, Value startV, Value endV);
+/* GCC turns small copy loops into "rep movs", whose start-up cost made a
+   compiled call with arguments three times slower; keep them as loops. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define GLOW_PLAIN_LOOPS __attribute__((optimize("no-tree-loop-distribute-patterns")))
+#else
+#define GLOW_PLAIN_LOOPS
+#endif
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
 extern Value jit_self_call_direct(struct FuncEntry *fe, Value *args);

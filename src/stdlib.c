@@ -262,7 +262,7 @@ FuncEntry main_fe;
 
 const char *compiling_file = NULL;
 
-  Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
+GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
       (void)argc;
       if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
       if (glow_stack_low()) {
@@ -447,7 +447,7 @@ static Value jit_construct(Class *k, int argc, Value *args, Instruction *pc) {
     return inst;
 }
 
-Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
+GLOW_PLAIN_LOOPS Value jit_call_helper_val(Value callee, int argc, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     /* Anything this helper cannot complete exactly like the interpreter
        (calling a non-callable raises; see also jit_construct) returns the
@@ -522,7 +522,7 @@ Value jit_set_property_helper(Value o, const char *n, Value v, Instruction *pc) 
     return v;
 }
 
-Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
+GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, Instruction *pc) {
     extern THREAD_LOCAL Bytecode *g_dbg_bc;
     extern THREAD_LOCAL Instruction *g_dbg_pc;
     extern THREAD_LOCAL int vm_stack_top;
@@ -1869,6 +1869,16 @@ char *value_to_new_cstring(Value v) {
 /* Render any value as a GlowLang string value. */
 Value value_to_string_value(Value v) {
     if (GET_TYPE(v) == VAL_STRING && (v & MASK_PAYLOAD)) return v;
+    if (GET_TYPE(v) == VAL_INT) {
+        /* str(i) is common enough (keys, labels, f-strings) to skip the
+           general formatter and its two allocations. */
+        char buf[24], *p = buf + sizeof(buf);
+        int64_t i = AS_INT(v);
+        uint64_t u = i < 0 ? 0 - (uint64_t)i : (uint64_t)i;
+        do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
+        if (i < 0) *--p = '-';
+        return value_string_copy_len(p, (size_t)(buf + sizeof(buf) - p));
+    }
     char *s = value_to_new_cstring(v);
     Value r = value_string_copy(s);
     free(s);

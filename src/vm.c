@@ -1368,6 +1368,63 @@ Value jit_iter_next(Value vit) {
     return JIT_ITER_DONE;
 }
 
+/* `not`, `in` and slicing, shared by the interpreter and compiled code. */
+Value glow_not(Value v) { return value_bool(!value_truthy(v)); }
+
+Value glow_in(Value elem, Value coll) {
+    int found = 0;
+    if (GET_TYPE(coll) == VAL_LIST) {
+        List *l = AS_LIST(coll);
+        for (int i = 0; i < l->size; i++) {
+            if (val_eq(l->items[i], elem)) { found = 1; break; }
+        }
+    } else if (GET_TYPE(coll) == VAL_DICT) {
+        if (GET_TYPE(elem) == VAL_STRING) {
+            Value val = dict_get(AS_DICT(coll), AS_STRING(elem));
+            if (GET_TYPE(val) != VAL_NONE) found = 1;
+        }
+    } else if (GET_TYPE(coll) == VAL_STRING) {
+        if (GET_TYPE(elem) == VAL_STRING && strstr(AS_STRING(coll), AS_STRING(elem)) != NULL) found = 1;
+    }
+    return value_bool(found);
+}
+
+Value glow_slice(Value obj, Value startV, Value endV) {
+    int slen = 0;
+    if (GET_TYPE(obj) == VAL_STRING) {
+        slen = (int)glow_str_len(obj);   /* characters */
+    } else if (GET_TYPE(obj) == VAL_LIST) {
+        slen = AS_LIST(obj)->size;
+    }
+    int s = 0;
+    if (GET_TYPE(startV) == VAL_INT) {
+        int val = (int)AS_INT(startV);
+        if (val == -999999) s = 0;
+        else if (val < 0) s = val + slen;
+        else s = val;
+    }
+    int e = slen;
+    if (GET_TYPE(endV) == VAL_INT) {
+        int val = (int)AS_INT(endV);
+        if (val == -999999) e = slen;
+        else if (val < 0) e = val + slen;
+        else e = val;
+    }
+    if (s < 0) s = 0;
+    if (e > slen) e = slen;
+    if (s > e) s = e;
+    if (GET_TYPE(obj) == VAL_STRING) {
+        size_t a = glow_str_byte_offset(obj, s), b = glow_str_byte_offset(obj, e);
+        return value_string_copy_len(AS_STRING(obj) + a, b - a);
+    }
+    if (GET_TYPE(obj) == VAL_LIST) {
+        List *rl = list_new(e - s);
+        for (int i = s; i < e; i++) list_push(rl, AS_LIST(obj)->items[i]);
+        return value_list(rl);
+    }
+    return value_none();
+}
+
  Value run_bytecode(Bytecode *bc, Instruction *start_pc, Closure *current_closure, int base_reg) {
      #ifdef _WIN32
      glow_ensure_veh();
@@ -3021,47 +3078,7 @@ Value jit_iter_next(Value vit) {
         }
         R(pc->r0) = value_dict(d); pc++; goto l_DISPATCH;
     }
-    l_OP_SLICE: {
-        Value obj = R(pc->r1);
-        Value startV = R(pc->r2);
-        Value endV = R(pc->r2 + 1);
-        int slen = 0;
-        if (GET_TYPE(obj) == VAL_STRING) {
-            slen = (int)glow_str_len(obj);   /* characters */
-        } else if (GET_TYPE(obj) == VAL_LIST) {
-            slen = AS_LIST(obj)->size;
-        }
-        int s = 0;
-        if (GET_TYPE(startV) == VAL_INT) {
-            int val = (int)AS_INT(startV);
-            if (val == -999999) s = 0;
-            else if (val < 0) s = val + slen;
-            else s = val;
-        }
-        int e = slen;
-        if (GET_TYPE(endV) == VAL_INT) {
-            int val = (int)AS_INT(endV);
-            if (val == -999999) e = slen;
-            else if (val < 0) e = val + slen;
-            else e = val;
-        }
-        if (s < 0) s = 0;
-        if (e > slen) e = slen;
-        if (s > e) s = e;
-        if (GET_TYPE(obj) == VAL_STRING) {
-            size_t a = glow_str_byte_offset(obj, s), b = glow_str_byte_offset(obj, e);
-            R(pc->r0) = value_string_copy_len(AS_STRING(obj) + a, b - a);
-        } else if (GET_TYPE(obj) == VAL_LIST) {
-            List *rl = list_new(e - s);
-            for (int i = s; i < e; i++) {
-                list_push(rl, AS_LIST(obj)->items[i]);
-            }
-            R(pc->r0) = value_list(rl);
-        } else {
-            R(pc->r0) = value_none();
-        }
-        pc++; goto l_DISPATCH;
-    }
+    l_OP_SLICE: R(pc->r0) = glow_slice(R(pc->r1), R(pc->r2), R(pc->r2 + 1)); pc++; goto l_DISPATCH;
     l_OP_FOR_EACH: pc++; goto l_DISPATCH;
     l_OP_FOR_EACH_PAIR: pc++; goto l_DISPATCH;
     l_OP_PUSH_SCOPE: pc++; goto l_DISPATCH;
@@ -3323,37 +3340,7 @@ Value jit_iter_next(Value vit) {
         if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
         pc = bc->code + pc->arg; DISPATCH();
     }
-    l_OP_IN: {
-        Value elem = R(pc->r1);
-        Value coll = R(pc->r2);
-        int found = 0;
-        if (GET_TYPE(coll) == VAL_LIST) {
-            List *l = AS_LIST(coll);
-            for (int i = 0; i < l->size; i++) {
-                if (val_eq(l->items[i], elem)) {
-                    found = 1;
-                    break;
-                }
-            }
-        } else if (GET_TYPE(coll) == VAL_DICT) {
-            if (GET_TYPE(elem) == VAL_STRING) {
-                Value val = dict_get(AS_DICT(coll), AS_STRING(elem));
-                if (GET_TYPE(val) != VAL_NONE) {
-                    found = 1;
-                }
-            }
-        } else if (GET_TYPE(coll) == VAL_STRING) {
-            if (GET_TYPE(elem) == VAL_STRING) {
-                const char *s = AS_STRING(coll);
-                const char *sub = AS_STRING(elem);
-                if (strstr(s, sub) != NULL) {
-                    found = 1;
-                }
-            }
-        }
-        R(pc->r0) = value_bool(found);
-        pc++; goto l_DISPATCH;
-    }
+    l_OP_IN: R(pc->r0) = glow_in(R(pc->r1), R(pc->r2)); pc++; goto l_DISPATCH;
 
     l_OP_ADD_INT: {
         Value a = R(pc->r1), b = R(pc->r2);
