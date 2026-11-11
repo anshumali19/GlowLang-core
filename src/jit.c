@@ -95,7 +95,7 @@ static int jit_simple_rw(const Instruction *p, int *w, int rd[2], int *nrd) {
     switch (p->op) {
         case OP_CONST_INT: case OP_CONST_FLOAT: case OP_CONST_BOOL: case OP_CONST_STRING:
             *w = p->r0; return 1;
-        case OP_MOVE: case OP_NEG:
+        case OP_MOVE: case OP_NEG: case OP_NOT:
             *w = p->r0; rd[0] = p->r1; *nrd = 1; return 1;
         case OP_LOAD_LOCAL:
             *w = p->r0; rd[0] = p->arg; *nrd = 1; return 1;
@@ -153,7 +153,8 @@ static unsigned char *jit_jump_targets(const Bytecode *bc) {
     t[0] = 1;
     for (int k = 0; k < bc->count; k++) {
         OpCode op = bc->code[k].op;
-        if (op == OP_JUMP || op == OP_JUMP_IF_FALSE || op == OP_JUMP_IF_TRUE || op == OP_ITER_NEXT) {
+        if (op == OP_JUMP || op == OP_JUMP_IF_FALSE || op == OP_JUMP_IF_TRUE || op == OP_ITER_NEXT ||
+            ((op == OP_SKIP || op == OP_STOP) && bc->code[k].arg > 0)) {
             int a = bc->code[k].arg;
             if (a >= 0 && a <= bc->count) t[a] = 1;
         }
@@ -1337,6 +1338,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
             case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
+            case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -1452,6 +1454,30 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 }
                 break;
             }
+            /* not, in and slices call the interpreter's own routines; skip
+               and stop are jumps (a stop outside any loop ends the code, which
+               the interpreter does). Without these a loop containing one left
+               compiled code on every pass. */
+            case OP_NOT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_not);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_IN:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)glow_in);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_SLICE:
+                emit_mov_arg1_reg(&buf, pc->r1); emit_mov_arg2_reg(&buf, pc->r2); emit_mov_arg3_reg(&buf, pc->r2 + 1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_slice);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_SKIP: case OP_STOP:
+                if (pc->arg > 0) { if (pc->arg <= i) emit_gil_poll(&buf); jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; }
+                else if (pc->op == OP_STOP) emit_side_exit(&buf, i);
+                break;
             case OP_JUMP: { if (pc->arg <= i) emit_gil_poll(&buf); jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_FALSE: { if (pc->arg <= i) emit_gil_poll(&buf); emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_TRUE: { if (pc->arg <= i) emit_gil_poll(&buf); emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
@@ -1727,6 +1753,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
+            case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -1835,6 +1862,30 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 }
                 break;
             }
+            /* not, in and slices call the interpreter's own routines; skip
+               and stop are jumps (a stop outside any loop ends the code, which
+               the interpreter does). Without these a loop containing one left
+               compiled code on every pass. */
+            case OP_NOT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_not);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_IN:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)glow_in);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_SLICE:
+                emit_mov_arg1_reg(&buf, pc->r1); emit_mov_arg2_reg(&buf, pc->r2); emit_mov_arg3_reg(&buf, pc->r2 + 1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)glow_slice);
+                emit_call_rax(&buf);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_SKIP: case OP_STOP:
+                if (pc->arg > 0) { if (pc->arg <= i) emit_gil_poll(&buf); jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; }
+                else if (pc->op == OP_STOP) emit_side_exit(&buf, i);
+                break;
             case OP_JUMP: { if (pc->arg <= i) emit_gil_poll(&buf); jit_emit_byte(&buf, 0xe9); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_FALSE: { if (pc->arg <= i) emit_gil_poll(&buf); emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
             case OP_JUMP_IF_TRUE: { if (pc->arg <= i) emit_gil_poll(&buf); emit_mov_rax_reg(&buf, pc->r0); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x83); jit_emit_byte(&buf, 0xe0); jit_emit_byte(&buf, 0x01); jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x85); jit_emit_byte(&buf, 0xc0); jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x85); jumps[jump_count].instr_idx = pc->arg; jumps[jump_count].patch_pos = buf.size; jit_emit_u32(&buf, 0); jump_count++; break; }
@@ -2653,6 +2704,7 @@ static int a64_supported(OpCode op) {
         case OP_LT: case OP_GT: case OP_LTE: case OP_GTE: case OP_EQ: case OP_NEQ:
         case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
         case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
+        case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP:
             return 1;
         default:
             return 0;
@@ -2757,6 +2809,24 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                 A64_CMP_MAYBE_FUSED(pc->op);
                 break;
             }
+            case OP_NOT:
+                a64_load_reg(A, 0, pc->r1);
+                a64_call(A, (const void*)glow_not);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_IN:
+                a64_call_binop(A, pc->r1, pc->r2, (const void*)glow_in);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_SLICE:
+                a64_load_reg(A, 0, pc->r1); a64_load_reg(A, 1, pc->r2); a64_load_reg(A, 2, pc->r2 + 1);
+                a64_call(A, (const void*)glow_slice);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_SKIP: case OP_STOP:
+                if (pc->arg > 0) { if (pc->arg <= i) a64_gil_poll(A); jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++; }
+                else if (pc->op == OP_STOP) a64_side_exit(A, i);
+                break;
             case OP_JUMP:
                 if (pc->arg <= i) a64_gil_poll(A);
                 jumps[njumps].target = pc->arg; jumps[njumps].at = a64_b_fwd(A); njumps++;

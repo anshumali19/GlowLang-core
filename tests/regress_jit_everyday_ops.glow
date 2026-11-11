@@ -1,0 +1,131 @@
+# not, in, slices, skip and stop are compiled (a loop containing one used to
+# leave compiled code on every pass), and str() of an integer takes a short
+# path. Every answer must be the interpreter's.
+
+func count_not(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        if not (i % 3 == 0):
+            t = t + 1
+        end
+        if not t:
+            t = t + 100
+        end
+        i = i + 1
+    end
+    return t
+end
+show "not:", count_not(5000), not 0, not "", not "x", not [], not [0], not none, not 0.0, not 2.5
+
+func count_in(n):
+    let xs = [1, 2, 3, 5, 8, 13, "a", 2.5]
+    let d = {"k": 1, "z": none}
+    let hits = 0
+    let i = 0
+    while i < n:
+        if i % 20 in xs:
+            hits = hits + 1
+        end
+        if i % 20 not in xs:
+            hits = hits + 1000
+        end
+        if "k" in d:
+            hits = hits + 1
+        end
+        if "ell" in "hello" and "z" not in "hello":
+            hits = hits + 1
+        end
+        i = i + 1
+    end
+    return hits
+end
+show "in:", count_in(4000), 2.5 in [1, 2.5], 3.0 in [3], "a" in ["b"], "z" in {"z": none}, 1 in 5
+
+func slices(n):
+    let s = "héllo wörld"
+    let xs = [10, 20, 30, 40, 50]
+    let total = 0
+    let last = ""
+    let i = 0
+    while i < n:
+        last = s[i % 4:i % 7 + 3]
+        total = total + len(last) + len(xs[i % 3:]) + len(xs[:i % 5]) + len(s[-3:])
+        i = i + 1
+    end
+    return [total, last, xs[1:3], xs[-2:], xs[4:1], s[:5], s[6:], s[20:30], xs[:-10]]
+end
+show "slices:", slices(3000)
+
+func skips(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        i = i + 1
+        if i % 2 == 0:
+            skip
+        end
+        if i > 4001:
+            stop
+        end
+        t = t + i
+    end
+    let u = 0
+    for each x in [1, 2, 3, 4, 5, 6, 7, 8]:
+        if x == 3:
+            skip
+        end
+        let k = 0
+        while true:
+            k = k + 1
+            if k > x:
+                stop
+            end
+            if k % 2 == 1:
+                continue
+            end
+            u = u + k
+        end
+        if x == 7:
+            break
+        end
+    end
+    return [t, i, u]
+end
+show "skip/stop:", skips(100000), skips(10)
+
+func texts(n):
+    let out = []
+    let total = 0
+    let i = 0 - n
+    while i < n:
+        let s = str(i * 70368744177)
+        total = total + len(s) + len(f"n={i}") + len("k" + str(i))
+        if i % 997 == 0:
+            out.push(s)
+        end
+        i = i + 1
+    end
+    return [total, out]
+end
+show "str:", texts(2500)
+show "str edges:", str(0), str(-1), str(140737488355327), str(-140737488355328), str(140737488355328), str(2.0), str(-0.5), str(true), str(none), str([1, -2])
+
+func add5(a, b, c, d, e):
+    return a + b * 2 + c * 3 + d * 4 + e * 5
+end
+func greet(name, count):
+    return name + "-" + str(count)
+end
+func calls(n):
+    let t = 0
+    let s = ""
+    let i = 0
+    while i < n:
+        t = t + add5(i, 1, 2, 3, 4) + add5(1.5, i, 0, 0, 0)
+        s = greet("hi", i % 3)
+        i = i + 1
+    end
+    return [t, s]
+end
+show "calls:", calls(5000)

@@ -13,9 +13,19 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install dependencies
+        # The runner's Ubuntu mirrors sometimes cannot be reached (DNS failures
+        # for *.ubuntu.com). Fail fast, then try again from another mirror.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc
+          APT="sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+          install_deps() {
+            $APT update &&
+            $APT install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc
+          }
+          if ! install_deps; then
+            echo "::warning::Default Ubuntu mirrors failed; retrying from mirrors.edge.kernel.org"
+            echo "https://mirrors.edge.kernel.org/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
+            install_deps
+          fi
 
       - name: Build GlowLang
         run: make clean && make
