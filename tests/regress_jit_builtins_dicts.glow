@@ -1,0 +1,219 @@
+# d["name"] with a literal key, len(list), f-strings and `for each a, b in x`
+# take short paths in compiled code. Every answer must be the interpreter's.
+
+func dict_keys(n):
+    let d = {"x": 1, "y": 2}
+    let t = 0
+    let i = 0
+    while i < n:
+        d["x"] = d["x"] + 1
+        d["z"] = i
+        t = t + d["x"] + d["y"] + d["z"]
+        i = i + 1
+    end
+    return [t, d["x"], d["z"], d["missing"], len(d)]
+end
+show "dict:", dict_keys(4000)
+
+func dict_odd(n):
+    let d = {"a": none, "keys": 7}
+    let out = []
+    let i = 0
+    while i < n:
+        let v = d["a"]
+        let w = d["keys"]
+        if i == n - 1:
+            out.push(v)
+            out.push(w)
+            out.push(len(d["values"]()))
+        end
+        i = i + 1
+    end
+    return out
+end
+show "dict odd:", dict_odd(3000)
+
+func not_a_dict(coll, n):
+    let t = 0
+    let i = 0
+    while i < n:
+        try:
+            let v = coll["x"]
+            t = t + 1
+        catch e:
+            t = t + 1000
+        end
+        i = i + 1
+    end
+    return t
+end
+show "not a dict:", not_a_dict({"x": 5}, 3000), not_a_dict([1, 2], 300), not_a_dict("text", 300), not_a_dict(5, 300)
+
+func store_not_a_dict(coll, n):
+    let t = 0
+    let i = 0
+    while i < n:
+        try:
+            coll["x"] = i
+            t = t + 1
+        catch e:
+            t = t + 1000
+        end
+        i = i + 1
+    end
+    return t
+end
+show "store:", store_not_a_dict({}, 3000), store_not_a_dict([1, 2], 300)
+
+func many_keys(n):
+    let d = {}
+    let i = 0
+    while i < n:
+        d["k" + str(i % 50)] = i
+        d["fixed"] = i
+        i = i + 1
+    end
+    return [len(d), d["fixed"], d["k7"], d["k49"]]
+end
+show "many keys:", many_keys(5000)
+
+func lens(xs, n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + len(xs)
+        i = i + 1
+    end
+    return t
+end
+show "len:", lens([1, 2, 3], 5000), lens("héllo", 5000), lens({"a": 1}, 5000), lens([], 5000), lens(7, 5000)
+
+func growing(n):
+    let xs = []
+    let t = 0
+    while len(xs) < n:
+        xs.push(len(xs))
+        t = t + len(xs)
+    end
+    return [t, len(xs)]
+end
+show "growing:", growing(5000)
+
+func texts(n):
+    let out = []
+    let total = 0
+    let i = 0 - 3
+    while i < n:
+        let a = f"item {i}"
+        let b = f"{i} of {n}"
+        let c = f"{i}{i}"
+        let d = f"plain"
+        let e = f""
+        let g = f"{i * 2.5}!"
+        let h = f"{{braces}} {i}\t{true} {none} {[i, i]}"
+        total = total + len(a) + len(b) + len(c) + len(d) + len(e) + len(g) + len(h)
+        if i % 1500 == 0:
+            out.push([a, b, c, d, e, g, h])
+        end
+        i = i + 1
+    end
+    return [total, out]
+end
+let top_none = none
+let top_text = "only"
+show "f-strings:", texts(3001)
+show f"{1}", f"{1 + 2}{top_none}", f"a" + f"b", f"{2.0}", f"{top_text}"
+
+func pair_loops(n):
+    let total = 0
+    let last = none
+    let d = {}
+    let i = 0
+    while i < n:
+        d["k" + str(i)] = i
+        i = i + 1
+    end
+    repeat 3 times:
+        for each k, v in d:
+            total = total + v + len(k)
+            last = k
+        end
+    end
+    let xs = [10, 20, 30, 40]
+    for each idx, x in xs:
+        total = total + idx * x
+        if idx == 0:
+            skip
+        end
+        if idx == 2:
+            stop
+        end
+        xs.push(x)
+        total = total + 1
+    end
+    let chars = []
+    for each pos, ch in "héy":
+        chars.push(f"{pos}:{ch}")
+    end
+    for each a, b in []:
+        total = total + 100000
+    end
+    for each a, b in {}:
+        total = total + 100000
+    end
+    let grid = 0
+    for each r, row in [[1, 2], [3, 4]]:
+        for each c, cell in row:
+            grid = grid + r * 10 + c + cell
+        end
+    end
+    return [total, last, xs, chars, grid]
+end
+show "pairs:", pair_loops(2000)
+
+func changing(n):
+    let d = {"a": 1, "b": 2, "c": 3}
+    let seen = []
+    for each k, v in d:
+        seen.push(k)
+        d[k + k] = v
+        d.remove("c")
+    end
+    return [seen, len(d)]
+end
+show "changing:", changing(1)
+
+let top_total = 0
+for each name, score in {"ann": 3, "bo": 4}:
+    top_total = top_total + score + len(name)
+end
+for each i, x in [5, 6, 7]:
+    top_total = top_total + i * x
+end
+show "top level:", top_total, pairs([8, 9]), pairs({"k": 1})
+
+func bad_pairs():
+    try:
+        for each a, b in 5:
+            show "never"
+        end
+    catch e:
+        return e
+    end
+    return "no error"
+end
+show "bad:", bad_pairs()
+
+func literals(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        let s = "abc"
+        if s == "abc" and "abc" + "d" == "abcd":
+            t = t + len("héllo")
+        end
+        i = i + 1
+    end
+    return t
+end
+show "literals:", literals(4000)

@@ -297,6 +297,8 @@ void call_stack_push(struct FuncEntry *fe, struct Instruction *pc);
 void call_stack_pop(void);
 
 extern TypeSignature compute_signature(Value *regs, int count);
+extern Value jit_iter_pair_first(Value vit);
+extern Value jit_iter_pair_second(Value vit);
 extern Value glow_not(Value v);
 extern Value glow_in(Value elem, Value coll);
 extern Value glow_slice(Value obj, Value startV, Value endV);
@@ -318,6 +320,8 @@ extern Value packed_array_get_jit(Value v_pa, Value v_idx);
 extern void packed_array_set_jit(Value v_pa, Value v_idx, Value v_val);
 extern Value glow_index_jit(Value coll, Value v_idx);
 extern Value glow_store_index_jit(Value coll, Value v_idx, Value v_val);
+extern Value glow_index_key_jit(Value coll, Value v_idx, const char *ikey);
+extern Value glow_store_index_key_jit(Value coll, Value v_idx, Value v_val, const char *ikey);
 /* Wide-integer helpers used by the JIT so integer arithmetic matches the
    interpreter (promote to double on overflow / cross-type compare). */
 extern Value jit_int_add(Value a, Value b);
@@ -467,7 +471,8 @@ typedef enum {
     OP_LTE_INT,
     OP_GTE_INT,
     OP_EQ_INT,
-    OP_CALL_METHOD
+    OP_CALL_METHOD,
+    OP_ITER_NEXT2
 } OpCode;
 
 typedef struct {

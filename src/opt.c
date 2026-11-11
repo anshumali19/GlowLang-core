@@ -151,6 +151,8 @@ void optimize_bytecode(Bytecode *bc) {
             if (inst->r0 < nregs) {
                 is_const[inst->r0] = 0;
             }
+            /* The two-value loop step also writes r2. */
+            if (inst->op == OP_ITER_NEXT2 && inst->r2 < nregs) { is_const[inst->r2] = 0; reg_types[inst->r0] = 0; reg_types[inst->r2] = 0; }
         }
     }
     }

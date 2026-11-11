@@ -1,0 +1,14 @@
+dict: [16012000, 4001, 3999, none, 3]
+dict odd: [none, 7, 2]
+not a dict: 3000 300000 300 300
+store: 3000 300000
+many keys: [51, 4999, 4957, 4999]
+len: 15000 25000 5000 0 0
+growing: [12502500, 5000]
+f-strings: [220042, [[item 0, 0 of 3001, 00, plain, , 0!, {braces} 0	true none [0, 0]], [item 1500, 1500 of 3001, 15001500, plain, , 3750!, {braces} 1500	true none [1500, 1500]], [item 3000, 3000 of 3001, 30003000, plain, , 7500!, {braces} 3000	true none [3000, 3000]]]]
+1 3none ab 2 only
+pairs: [6023751, k1999, [10, 20, 30, 40, 20], [0:h, 1:é, 2:y], 32]
+changing: [[a, b, c], 5]
+top level: 32 [[0, 8], [1, 9]] [[k, 1]]
+bad: pairs() needs a list, dict or string
+literals: 20000

@@ -67,16 +67,19 @@ Node* newBinOp(NodeType t, Node *l, Node *r) { Node *n = node_new(t); n->left = 
 Node* newPairLoopNode(const char *a, const char *b, Node *coll, Node *body) {
     static int pair_count = 0;
     char buf[48];
-    snprintf(buf, sizeof(buf), "__pair_%d", pair_count++);
+    snprintf(buf, sizeof(buf), "__pair_%d", pair_count);
     const char *pv = intern_string(buf);
+    snprintf(buf, sizeof(buf), "__pair_%d_b", pair_count++);
+    const char *pv2 = intern_string(buf);
     Node **args = malloc(sizeof(Node*));
     args[0] = coll;
+    /* A for-each with two hidden loop variables (second_name set): each
+       pass takes two values from the flat list __pairs_flat(coll) built. */
     Node *loop = node_new(NODE_FOR_EACH);
     loop->name = pv;
-    loop->left = newCallExprNode(newVarNode(intern_string("pairs")), args, 1);
-    Node *first = node_new(NODE_INDEX); first->left = newVarNode(pv); first->right = newIntNode(0);
-    Node *second = node_new(NODE_INDEX); second->left = newVarNode(pv); second->right = newIntNode(1);
-    loop->right = newSeqNode(newAssignNode(a, first), newSeqNode(newAssignNode(b, second), body));
+    loop->second_name = pv2;
+    loop->left = newCallExprNode(newVarNode(intern_string("__pairs_flat")), args, 1);
+    loop->right = newSeqNode(newAssignNode(a, newVarNode(pv)), newSeqNode(newAssignNode(b, newVarNode(pv2)), body));
     return loop;
 }
 Node* newSeqNode(Node *l, Node *r) { if(!l) return r; if(!r) return l; Node *n = node_new(NODE_SEQ); n->left = l; n->right = r; return n; }
@@ -428,6 +431,7 @@ static void hoist_locals(FuncEntry *fe, Node *n) {
         case NODE_COMPOUND_DIV: case NODE_COMPOUND_MOD: case NODE_FOR_EACH: case NODE_FOR_RANGE:
         case NODE_TRY_CATCH:
             if (n->name && get_local_reg(n->name) == -1 && !global_is_declared(n->name) && !is_outer_local(n->name)) func_add_local(fe, n->name);
+            if (n->type == NODE_FOR_EACH && n->second_name && get_local_reg(n->second_name) == -1) func_add_local(fe, n->second_name);
             break;
         case NODE_LIST_COMP:
             if (n->comp_var && get_local_reg(n->comp_var) == -1) func_add_local(fe, n->comp_var);
@@ -815,6 +819,15 @@ static void compile_stmt(Node *n) {
                 next_free_reg++;
             }
             int var_reg = get_local_reg(n->name);
+            /* `for each a, b in x`: a second loop variable. */
+            int var2_reg = -1;
+            if (n->second_name) {
+                if (compiling_func && get_local_reg(n->second_name) == -1) {
+                    func_add_local(compiling_func, n->second_name);
+                    next_free_reg++;
+                }
+                var2_reg = get_local_reg(n->second_name);
+            }
 
             // 2. Allocate internal iterator state register
             int iter_reg = next_free_reg++;
@@ -830,12 +843,18 @@ static void compile_stmt(Node *n) {
 
             // 3. Directly load the next value into the loop variable's register
             int val_reg = var_reg != -1 ? var_reg : next_free_reg++;
-            int jf_idx = bc_emit_reg(compiling_bc, OP_ITER_NEXT, val_reg, iter_reg, 0);
+            int val2_reg = !n->second_name ? 0 : var2_reg != -1 ? var2_reg : next_free_reg++;
+            int jf_idx = bc_emit_reg(compiling_bc, n->second_name ? OP_ITER_NEXT2 : OP_ITER_NEXT, val_reg, iter_reg, val2_reg);
 
             if (var_reg == -1) {
                 int g_slot = global_get_slot(n->name);
                 int s_idx = bc_emit(compiling_bc, OP_STORE_VAR, g_slot, 0);
                 compiling_bc->code[s_idx].r0 = val_reg;
+            }
+            if (n->second_name && var2_reg == -1) {
+                int g_slot = global_get_slot(n->second_name);
+                int s_idx = bc_emit(compiling_bc, OP_STORE_VAR, g_slot, 0);
+                compiling_bc->code[s_idx].r0 = val2_reg;
             }
 
             compile_stmt(n->right);
@@ -1388,7 +1407,10 @@ static int compile_expr(Node *n, int target_reg) {
             size_t len = strlen(str);
             char *lit = malloc(len + 1);
             size_t lit_len = 0;
-            int acc = compile_expr(newStringNode(intern_string("")), -1);
+            /* acc is the text so far; -1 until the first piece. A leading
+               literal is the start itself; a leading expression is added
+               to "" so that it becomes text. */
+            int acc = -1;
             size_t i = 0;
             while (i <= len) {
                 int flush = (i == len);
@@ -1404,9 +1426,14 @@ static int compile_expr(Node *n, int target_reg) {
                 /* A literal run ends here. */
                 if (lit_len > 0) {
                     lit[lit_len] = '\0';
-                    int lr = compile_expr(newStringNode(intern_string(lit)), -1);
-                    int idx = bc_emit_reg(compiling_bc, OP_ADD, acc, acc, lr);
-                    (void)idx;
+                    if (acc < 0) {
+                        /* A register of its own: later pieces are added into it. */
+                        acc = next_free_reg++;
+                        compile_expr(newStringNode(intern_string(lit)), acc);
+                    } else {
+                        int lr = compile_expr(newStringNode(intern_string(lit)), -1);
+                        bc_emit_reg(compiling_bc, OP_ADD, acc, acc, lr);
+                    }
                     lit_len = 0;
                 }
                 if (flush) break;
@@ -1425,9 +1452,11 @@ static int compile_expr(Node *n, int target_reg) {
                 Node *e = parse_fstring_expr(src);
                 free(src);
                 if (i < len) i++; /* skip '}' */
+                if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
                 int er = compile_expr(e ? e : newVarNode(intern_string("none")), -1);
                 bc_emit_reg(compiling_bc, OP_ADD, acc, acc, er);
             }
+            if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
             free(lit);
             bc_emit_reg(compiling_bc, OP_MOVE, reg, acc, 0);
             break;
