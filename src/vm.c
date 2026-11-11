@@ -1368,6 +1368,27 @@ Value jit_iter_next(Value vit) {
     return JIT_ITER_DONE;
 }
 
+/* `for each a, b in x` walks a flat list [a0, b0, a1, b1, ...] that
+   __pairs_flat(x) built (OP_ITER_NEXT2). The first half of a step returns
+   the next `a`, or JIT_ITER_DONE; the second half returns its `b` and moves
+   on. Nothing else can reach that list, so it cannot change under the loop. */
+Value jit_iter_pair_first(Value vit) {
+    if (GET_TYPE(vit) != VAL_OBJECT || !(vit & MASK_PAYLOAD)) return JIT_ITER_DONE;
+    GCObject *obj = (GCObject*)(uintptr_t)(vit & MASK_PAYLOAD);
+    if (obj->type != OBJ_ITERATOR) return JIT_ITER_DONE;
+    Iterator *it = (Iterator*)obj;
+    if (GET_TYPE(it->iterable) != VAL_LIST) return JIT_ITER_DONE;
+    List *l = AS_LIST(it->iterable);
+    return it->index + 1 < l->size ? l->items[it->index] : JIT_ITER_DONE;
+}
+
+Value jit_iter_pair_second(Value vit) {
+    Iterator *it = (Iterator*)(uintptr_t)(vit & MASK_PAYLOAD);
+    Value v = AS_LIST(it->iterable)->items[it->index + 1];
+    it->index += 2;
+    return v;
+}
+
 /* `not`, `in` and slicing, shared by the interpreter and compiled code. */
 Value glow_not(Value v) { return value_bool(!value_truthy(v)); }
 
@@ -1703,7 +1724,8 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         &&l_OP_IN,
         &&l_OP_ADD_INT, &&l_OP_SUB_INT, &&l_OP_MUL_INT,
         &&l_OP_LT_INT, &&l_OP_GT_INT, &&l_OP_LTE_INT, &&l_OP_GTE_INT, &&l_OP_EQ_INT,
-        &&l_OP_CALL_METHOD
+        &&l_OP_CALL_METHOD,
+        &&l_OP_ITER_NEXT2
     };
 #endif
 
@@ -1859,6 +1881,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         case OP_GTE_INT: goto l_OP_GTE_INT; \
         case OP_EQ_INT: goto l_OP_EQ_INT; \
         case OP_CALL_METHOD: goto l_OP_CALL_METHOD; \
+        case OP_ITER_NEXT2: goto l_OP_ITER_NEXT2; \
     }
 
 #define DISPATCH() { \
@@ -3337,6 +3360,16 @@ Value glow_slice(Value obj, Value startV, Value endV) {
     l_OP_ITER_NEXT: {
         Value next = jit_iter_next(R(pc->r1));
         if (next != JIT_ITER_DONE) { R(pc->r0) = next; pc++; goto l_DISPATCH; }
+        if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
+        pc = bc->code + pc->arg; DISPATCH();
+    }
+    l_OP_ITER_NEXT2: {
+        Value first = jit_iter_pair_first(R(pc->r1));
+        if (first != JIT_ITER_DONE) {
+            R(pc->r0) = first;
+            R(pc->r2) = jit_iter_pair_second(R(pc->r1));
+            pc++; goto l_DISPATCH;
+        }
         if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
         pc = bc->code + pc->arg; DISPATCH();
     }

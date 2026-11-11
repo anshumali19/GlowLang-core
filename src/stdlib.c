@@ -1372,10 +1372,15 @@ static void dict_grow(Dict *d) {
     for (int e=0; e<n; e++) dict_index_insert(d, e, intern_cached_hash(DICT_KEY_PTR(d, e)));
 }
 
+static void dict_set_interned(Dict *d, const char *interned, uint32_t h, Value val);
 void dict_set(Dict *d, const char *key, Value val) {
     if (!key) return;
     uint32_t h;
     const char *interned = intern_string_hash(key, &h);
+    dict_set_interned(d, interned, h, val);
+}
+
+static void dict_set_interned(Dict *d, const char *interned, uint32_t h, Value val) {
     gc_write_barrier((GCObject*)d, val);
     int s = dict_find_slot(d, interned, h);
     if (s >= 0) { d->values[d->index[s]] = val; return; }
@@ -1425,6 +1430,29 @@ void instance_set_cached(Instance *inst, const char *n, Value v, Instruction *pc
     pc->cache[0].val = e + 1;
     pc->cache[0].key = (void*)k;
     gc_write_barrier((GCObject*)inst, v);
+}
+
+/* coll["name"] and coll["name"] = v from compiled code, where the key is a
+   string literal: ikey is that literal, interned when the code was compiled,
+   so nothing is hashed or compared here. Anything that is not a dict, and a
+   missing key, goes the general way. */
+Value glow_index_key_jit(Value coll, Value v_idx, const char *ikey) {
+    if (GET_TYPE(coll) != VAL_DICT) return glow_index_jit(coll, v_idx);
+    Dict *d = AS_DICT(coll);
+    if (d->capacity) {
+        int s = dict_find_slot(d, ikey, intern_cached_hash(ikey));
+        if (s >= 0) {
+            Value v = d->values[d->index[s]];
+            if (GET_TYPE(v) != VAL_NONE) return v;
+        }
+    }
+    return VAL_DEOPT_SENTINEL;
+}
+
+Value glow_store_index_key_jit(Value coll, Value v_idx, Value v_val, const char *ikey) {
+    if (GET_TYPE(coll) != VAL_DICT) return glow_store_index_jit(coll, v_idx, v_val);
+    dict_set_interned(AS_DICT(coll), ikey, intern_cached_hash(ikey), v_val);
+    return value_none();
 }
 
 Value dict_get(Dict *d, const char *key) {
@@ -1926,6 +1954,51 @@ static Value native_pairs(int argc, Value *args) {
         return value_none();
     }
     return out_v;
+}
+
+/* What `for each a, b in coll` walks: the same pairs as pairs(coll), laid
+   out flat in one list, [a0, b0, a1, b1, ...], so a pass of the loop builds
+   no list of its own. Like pairs(), it is a snapshot of coll. */
+static Value native_pairs_flat(int argc, Value *args) {
+    if (argc < 1) return value_list(list_new(0));
+    Value coll = args[0];
+    if (GET_TYPE(coll) == VAL_LIST) {
+        List *l = AS_LIST(coll);
+        List *out = list_new(l->size * 2 + 2);
+        for (int i = 0; i < l->size; i++) { list_push(out, value_int(i)); list_push(out, l->items[i]); }
+        return value_list(out);
+    }
+    if (GET_TYPE(coll) == VAL_DICT) {
+        Dict *d = AS_DICT(coll);
+        List *out = list_new(d->size * 2 + 2);
+        Value out_v = value_list(out);
+        for (int i = 0; i < d->capacity; i++) {
+            if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+            Value k = value_string_copy((const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD));
+            list_push(out, k);
+            list_push(out, d->values[i]);
+        }
+        return out_v;
+    }
+    if (GET_TYPE(coll) == VAL_STRING) {
+        List *out = list_new(8);
+        Value out_v = value_list(out);
+        const char *s = AS_STRING(coll);
+        size_t n = rope_length(coll);
+        int64_t ci = 0;
+        for (size_t i = 0; i < n; ci++) {
+            size_t next = glow_utf8_step(s, i, n);
+            Value ch = value_string_copy_len(s + i, next - i);
+            list_push(out, value_int(ci));
+            list_push(out, ch);
+            i = next;
+            s = AS_STRING(coll);
+        }
+        return out_v;
+    }
+    pending_exception = value_string_copy("pairs() needs a list, dict or string");
+    has_exception = 1;
+    return value_none();
 }
 
 /* input(prompt) / ask(prompt): print the prompt, read one line from stdin
@@ -4976,6 +5049,7 @@ void std_init(void) {
     var_set("none", value_none());
     var_set("pass", value_none());
     var_set("pairs", native_func_new("pairs", native_pairs));
+    var_set("__pairs_flat", native_func_new("__pairs_flat", native_pairs_flat));
     var_set("input", native_func_new("input", native_input));
     var_set("ask", native_func_new("ask", native_input));
 
