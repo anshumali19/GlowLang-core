@@ -312,6 +312,22 @@ extern Value glow_slice(Value obj, Value startV, Value endV);
 extern Value jit_call_helper(struct FuncEntry *fe, int argc, Value *args, struct Instruction *pc);
 extern Value jit_call_helper_val(Value callee, int argc, Value *args, struct Instruction *pc);
 extern Value jit_self_call_direct(struct FuncEntry *fe, Value *args);
+/* What a direct call between compiled functions needs from the running
+   thread, behind one pointer (compiled code cannot name thread-local
+   variables). The field offsets are written into machine code: keep
+   jit.c's JTS_* numbers in step with this layout. */
+typedef struct JitThreadState {
+    Value *stack;            /*  0: vm_stack */
+    int *top;                /*  8: &vm_stack_top */
+    int64_t size;            /* 16: vm_stack_size */
+    int *depth;              /* 24: &call_depth */
+    int *frames_len;         /* 32: &call_stack_ptr */
+    struct CallFrame *frames;/* 40: call_stack */
+    int *has_exception;      /* 48: &has_exception */
+    char *machine_limit;     /* 56: the machine stack must stay above this */
+} JitThreadState;
+extern JitThreadState *jit_thread_state(void);
+extern Value jit_direct_finish(struct FuncEntry *fe, int new_base, int *pc_idx);
 extern Value vm_call_jit_direct(Value (*f)(Value *, int *), struct FuncEntry *fe, int callee_base, int *deopt_pc, int *frame_base);
 extern Value jit_call_method_helper(Value obj, const char *n, int argc, Value *args, struct Instruction *pc);
 extern Value jit_get_property_helper(Value o, const char *n, struct Instruction *pc);
@@ -547,6 +563,9 @@ struct Bytecode {
     size_t osr_code_size;
     int osr_failed;
     uint32_t loop_iterations;
+    /* Where compiled code enters this function's best compiled code for a
+       direct call (see emit_self_call_direct); NULL until there is one. */
+    void *direct_entry;
 };
 
 /* ================================================================

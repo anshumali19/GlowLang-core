@@ -1,0 +1,14 @@
+fib: 46368 1 0
+ack: 9 253
+lists: [6, 5, 4, 3, 2, 1] 300
+strings: 098765432109876543210987654321 1 55
+floats: 11
+many: [46, 46, 23, 3]
+deep: 20000 500 610
+throw: caught bottom caught bottom caught bottom
+mid: 1007 1000 1023 1693
+runtime error: index error index error index error
+tree: 512 1 46 17
+quicksort: true 0 496 999
+objects: 502
+loop: 58000

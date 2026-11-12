@@ -376,6 +376,31 @@ Value jit_self_call_direct(FuncEntry *fe, Value *args) {
     return has_exception ? VAL_DEOPT_SENTINEL : res;
 }
 
+/* Direct calls (emit_self_call_direct in jit.c). Compiled code asks for this
+   once on entry and passes it down to the functions it calls directly. */
+static THREAD_LOCAL JitThreadState jit_ts;
+JitThreadState *jit_thread_state(void) {
+    jit_ts.stack = vm_stack;
+    jit_ts.top = &vm_stack_top;
+    jit_ts.size = vm_stack_size;
+    jit_ts.depth = &call_depth;
+    jit_ts.frames_len = &call_stack_ptr;
+    jit_ts.frames = call_stack;
+    jit_ts.has_exception = &has_exception;
+    jit_ts.machine_limit = (char*)glow_thread_ctx.stack_limit;
+    return &jit_ts;
+}
+
+/* A directly called function left compiled code part-way (its frame starts
+   at vm_stack[new_base], the instruction to resume at is *pc_idx): finish
+   it in the interpreter and drop its frame, as jit_self_call_direct does. */
+Value jit_direct_finish(FuncEntry *fe, int new_base, int *pc_idx) {
+    Bytecode *body = fe->body;
+    Value res = run_bytecode(body, &body->code[*pc_idx], NULL, new_base);
+    vm_stack_top = new_base;
+    return res;
+}
+
  Value jit_call_helper_name(const char *name, int argc, Value *args, Instruction *pc) {
     if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
     FuncEntry *fe = func_get(name);
