@@ -1,0 +1,291 @@
+# Compiled code calls other compiled functions without going through the
+# runtime. Every answer and error must be what the helper path gave.
+
+func add3(a, b, c):
+    return a + b + c
+end
+func twice(x):
+    return x * 2
+end
+func none_of_it():
+    return 7
+end
+
+# A hot loop in a function calling other functions.
+func sums(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = add3(t, twice(i), none_of_it())
+        i = i + 1
+    end
+    return t
+end
+show "loop:", sums(5000), sums(10)
+
+# The same at top level.
+let top = 0
+let ti = 0
+while ti < 5000:
+    top = add3(top, twice(ti), 1)
+    ti = ti + 1
+end
+show "top level:", top
+
+# Entered once and running long: the loop switches to compiled code mid-call.
+func long_run(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + twice(i) - add3(i, 1, 1)
+        i = i + 1
+    end
+    return t
+end
+show "one long call:", long_run(60000)
+
+# A callee with loops called from a function without any, and the reverse.
+func count_up(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + i
+        i = i + 1
+    end
+    return t
+end
+func no_loop(n):
+    return count_up(n) + count_up(n + 1) + twice(n)
+end
+func outer_loop(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + no_loop(i % 7)
+        i = i + 1
+    end
+    return t
+end
+show "pins:", no_loop(10), outer_loop(3000)
+
+# Values of every kind through the same compiled call.
+func pass(x):
+    return x
+end
+func pair(a, b):
+    return [a, b]
+end
+func kinds(n):
+    let out = []
+    let i = 0
+    while i < n:
+        out = [pass(i), pass(2.5), pass("s"), pass(none), pass(true), pass([i]), pair(i, "x")]
+        i = i + 1
+    end
+    return out
+end
+show "kinds:", kinds(3000)
+
+# Mutual recursion.
+func is_even(n):
+    if n == 0:
+        return true
+    end
+    return is_odd(n - 1)
+end
+func is_odd(n):
+    if n == 0:
+        return false
+    end
+    return is_even(n - 1)
+end
+func ping(n, acc):
+    if n == 0:
+        return acc
+    end
+    let r = pong(n - 1, acc + 1)
+    return r
+end
+func pong(n, acc):
+    if n == 0:
+        return acc
+    end
+    let r = ping(n - 1, acc + 2)
+    return r
+end
+func mutual(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        if is_even(i % 9):
+            t = t + 1
+        end
+        t = t + ping(i % 20, 0)
+        i = i + 1
+    end
+    return t
+end
+show "mutual:", mutual(3000), ping(300, 0), is_even(101)
+
+# Fewer and more arguments than parameters, and default values.
+func three(a, b, c):
+    return [a, b, c]
+end
+func greet(name, greeting = "Hello"):
+    return greeting + ", " + name
+end
+func arg_counts(n):
+    let out = []
+    let i = 0
+    while i < n:
+        out = [three(i, 2), three(i), three(), three(i, 2, 3, 4), greet("Ana"), greet("Ana", "Hi")]
+        i = i + 1
+    end
+    return out
+end
+show "argument counts:", arg_counts(3000)
+
+# A callee that throws, one that hits a runtime error, and one that works
+# only for some values.
+func risky(i):
+    if i % 100 == 99:
+        throw "bad " + str(i)
+    end
+    return i
+end
+func index_at(xs, i):
+    return xs[i]
+end
+func errors(n):
+    let t = 0
+    let caught = 0
+    let i = 0
+    while i < n:
+        try:
+            t = t + risky(i)
+            t = t + index_at([1, 2, 3], i % 5)
+        catch e:
+            caught = caught + 1
+        end
+        i = i + 1
+    end
+    return [t, caught]
+end
+show "errors:", errors(4000)
+
+func thrower(n):
+    if n == 0:
+        throw "bottom"
+    end
+    let r = thrower_b(n - 1)
+    return r + 1
+end
+func thrower_b(n):
+    let r = thrower(n)
+    return r + 1
+end
+func catch_deep(n):
+    try:
+        return thrower(n)
+    catch e:
+        return "caught " + e
+    end
+end
+show "deep throw:", catch_deep(0), catch_deep(50), catch_deep(2000)
+
+# The callee meets values its compiled code hands back to the interpreter.
+func big(x):
+    return x * 70368744177664
+end
+func mixed(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + big(i % 5) % 1000 + len(pass("abc"))
+        i = i + 1
+    end
+    return [t, big(3), big(1.5), big(140737488355327)]
+end
+show "mixed:", mixed(3000)
+
+# A function defined more than once: the last definition is the one called.
+func changing(x):
+    return x + 1
+end
+func uses_changing(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + changing(i)
+        i = i + 1
+    end
+    return t
+end
+show "before:", uses_changing(3000)
+func changing(x):
+    return x + 100
+end
+show "after:", uses_changing(3000)
+func changing(x, y):
+    return 5
+end
+show "after again:", uses_changing(3000)
+
+# Methods, closures and built-ins beside direct calls.
+blueprint Acc:
+    action init():
+        self.total = 0
+    end
+    action add(v):
+        self.total = self.total + twice(v)
+        return self.total
+    end
+end
+func make_adder(k):
+    return lambda(a): add3(a, k, 0)
+end
+func others(n):
+    let acc = Acc()
+    let plus5 = make_adder(5)
+    let t = 0
+    let i = 0
+    while i < n:
+        t = t + acc.add(i) % 7 + plus5(i) + len(str(twice(i)))
+        i = i + 1
+    end
+    return [t, acc.total]
+end
+show "others:", others(3000)
+
+# Calls nested as arguments, and results used at once.
+func nested(n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = add3(twice(twice(i)), add3(i, twice(i), 1), t) % 1000003
+        i = i + 1
+    end
+    return t
+end
+show "nested:", nested(5000)
+
+# Threads share the compiled code; each has its own stack.
+let results = []
+func worker(id, n):
+    let t = 0
+    let i = 0
+    while i < n:
+        t = add3(t, twice(i), id)
+        i = i + 1
+    end
+    results.push(t)
+end
+spawn worker(1, 20000)
+spawn worker(2, 20000)
+spawn worker(3, 20000)
+threads.join_all()
+let checksum = 0
+for each r in results:
+    checksum = checksum + r
+end
+show "threads:", len(results), checksum

@@ -1,0 +1,16 @@
+loop: 25030000 160
+top level: 25000000
+one long call: 1799850000
+pins: 120 56950
+kinds: [2999, 2.5, s, none, true, [2999], [2999, x]]
+mutual: 43667 450 false
+argument counts: [[2999, 2, none], [2999, none, none], [none, none, none], [2999, 2, 3], Hello, Ana, Hi, Ana]
+errors: [7920840, 1600]
+deep throw: caught bottom caught bottom caught bottom
+mixed: [1593000, 211106232532992, 105553116266496, 9903520314282971830448816128]
+before: 15000
+after: 15000
+after again: 15000
+others: [4533946, 8997000]
+nested: 487239
+threads: 3 1200060000
