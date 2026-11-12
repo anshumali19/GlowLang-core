@@ -1,0 +1,212 @@
+# A compiled function calling itself jumps straight into its own compiled
+# code. Every answer, error and limit must be what the helper path gave.
+
+func fib(n):
+    if n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+show "fib:", fib(24), fib(1), fib(0)
+
+func ack(m, n):
+    if m == 0:
+        return n + 1
+    end
+    if n == 0:
+        return ack(m - 1, 1)
+    end
+    return ack(m - 1, ack(m, n - 1))
+end
+show "ack:", ack(2, 3), ack(3, 5)
+
+# Arguments of other kinds through the same compiled code.
+func build(n, acc):
+    if n == 0:
+        return acc
+    end
+    acc.push(n)
+    return build(n - 1, acc)
+end
+show "lists:", build(6, []), len(build(300, []))
+
+func join(n, s):
+    if n == 0:
+        return s
+    end
+    return join(n - 1, s + str(n % 10))
+end
+show "strings:", join(30, ""), fib(2.0), fib(10.0)
+
+func halves(x, depth):
+    if x < 1.0:
+        return depth
+    end
+    return halves(x / 2.0 + 0.25, depth + 1)
+end
+show "floats:", halves(1000.5, 0)
+
+# Fewer arguments than parameters, and a function with many locals.
+func many(a, b, c):
+    let p = a + 1
+    let q = p * 2
+    let r = q - a
+    let xs = [p, q, r]
+    if a > 40:
+        return [a, b, c, len(xs)]
+    end
+    return many(a + r, q, xs[0])
+end
+show "many:", many(1, 2, 3)
+
+# Deep, but within the limit (tests/regress_recursion.glow covers going
+# past it).
+func down(n):
+    if n == 0:
+        return 0
+    end
+    return 1 + down(n - 1)
+end
+show "deep:", down(20000), down(500), fib(15)
+
+# An error raised many frames down is caught at the top, or part-way.
+func fail_at(n):
+    if n == 0:
+        throw "bottom"
+    end
+    return fail_at(n - 1) + 1
+end
+func catch_top(n):
+    try:
+        let got = fail_at(n)
+        return got
+    catch e:
+        return "caught " + e
+    end
+end
+show "throw:", catch_top(1), catch_top(40), catch_top(3000)
+
+func catch_mid(n):
+    if n == 0:
+        throw "x"
+    end
+    if n % 7 == 0:
+        try:
+            let got = catch_mid(n - 1) + 1
+            return got
+        catch e:
+            return 1000
+        end
+    end
+    return catch_mid(n - 1) + 1
+end
+show "mid:", catch_mid(14), catch_mid(7), catch_mid(30), catch_mid(700)
+
+# A runtime error (not a throw) deep in the recursion.
+func bad_index(n, xs):
+    if n == 0:
+        return xs[99]
+    end
+    return bad_index(n - 1, xs) + 1
+end
+func catch_index(n):
+    try:
+        let got = bad_index(n, [1, 2, 3])
+        return got
+    catch e:
+        return "index error"
+    end
+end
+show "runtime error:", catch_index(0), catch_index(25), catch_index(900)
+
+# Recursion that calls other functions, allocates, and loops.
+func leaf(x):
+    return x * 2 + 1
+end
+func tree(d):
+    if d == 0:
+        return [leaf(d)]
+    end
+    let out = tree(d - 1)
+    let more = tree(d - 1)
+    for each v in more:
+        out.push(v + d)
+    end
+    return out
+end
+let t = tree(9)
+show "tree:", len(t), t[0], t[511], t[100]
+
+func qs(a, lo, hi):
+    while lo < hi:
+        let p = a[floor((lo + hi) / 2)]
+        let i = lo
+        let j = hi
+        while i <= j:
+            while a[i] < p:
+                i = i + 1
+            end
+            while a[j] > p:
+                j = j - 1
+            end
+            if i <= j:
+                let tmp = a[i]
+                a[i] = a[j]
+                a[j] = tmp
+                i = i + 1
+                j = j - 1
+            end
+        end
+        if j - lo < hi - i:
+            qs(a, lo, j)
+            lo = i
+        else:
+            qs(a, i, hi)
+            hi = j
+        end
+    end
+end
+let arr = []
+let seed = 42
+repeat 3000 times:
+    seed = seed * 16807 % 2147483647
+    arr.push(seed % 1000)
+end
+qs(arr, 0, len(arr) - 1)
+let sorted = true
+for k from 1 to len(arr) - 1:
+    if arr[k - 1] > arr[k]:
+        sorted = false
+    end
+end
+show "quicksort:", sorted, arr[0], arr[1500], arr[2999]
+
+# A recursive method and a recursive closure-free helper inside a loop.
+blueprint Node:
+    action init(v):
+        self.v = v
+        self.kids = []
+    end
+    action total():
+        let s = self.v
+        for each k in self.kids:
+            s = s + k.total()
+        end
+        return s
+    end
+end
+func grow(d):
+    let n = Node(d)
+    if d > 0:
+        n.kids.push(grow(d - 1))
+        n.kids.push(grow(d - 1))
+    end
+    return n
+end
+show "objects:", grow(8).total()
+
+let sum = 0
+for k from 1 to 3000:
+    sum = sum + fib(k % 12)
+end
+show "loop:", sum
