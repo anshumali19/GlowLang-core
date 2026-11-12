@@ -291,7 +291,9 @@ GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Ins
               temp_args[_i] = args[_i];
           for (int _i = 0; _i < copy_count; _i++)
               vm_stack[new_base + _i] = temp_args[_i];
-          for (int _i = fe->param_count; _i < fe->body->local_count; _i++)
+          /* Parameters the call gave no argument for are none (the callee
+             fills in its defaults), like every other local. */
+          for (int _i = copy_count; _i < fe->body->local_count; _i++)
               vm_stack[new_base + _i] = value_none();
          int saved_top = vm_stack_top;
          vm_stack_top = needed;

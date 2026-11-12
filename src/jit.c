@@ -282,16 +282,22 @@ static void emit_or_rax_bool_tag(JITBuffer *buf) {
     }
 }
 
-/* Set for the function being compiled when it calls itself directly: its
-   frame then keeps the thread's JitThreadState pointer in a slot at
-   [rbp - JIT_STATE_SLOT], filled on entry. */
+/* Set for the code being compiled when it makes direct calls (to itself or
+   to other compiled functions): its frame then keeps the thread's
+   JitThreadState pointer in a slot at [rbp - JIT_STATE_SLOT], filled on
+   entry. */
 static int x86_direct = 0;
-/* Where a self-call goes. x86_direct_at is the direct entry's offset in the
-   code being emitted. x86_direct_cell, when set, is a memory cell holding
-   the entry to call instead: baseline code calls through the function's
-   cell, so that it moves to the optimizing tier's code once that exists. */
-static uint32_t x86_direct_at = 0;
+/* Where a self-call goes. The code being emitted gets its direct entry at
+   its very end (x86_has_entry), so a self-call is emitted with its target
+   blank and recorded in x86_self_calls for emit_direct_entry to fill in.
+   x86_direct_cell, when set, is a memory cell holding the entry to call
+   instead: baseline code calls through the function's cell, so that it
+   moves to the optimizing tier's code once that exists. */
+static int x86_has_entry = 0;
 static void **x86_direct_cell = NULL;
+#define X86_MAX_SELF_CALLS 64
+static uint32_t x86_self_calls[X86_MAX_SELF_CALLS];
+static int x86_self_call_count = 0;
 #ifdef GLOW_JIT_WIN64
 #define JIT_STATE_SLOT 64   /* above the shadow space and the 5th/6th argument slots */
 #else
@@ -329,6 +335,13 @@ static void emit_frame_push(JITBuffer *buf) {
 #endif
 }
 
+static void emit_pins(JITBuffer *buf) {
+    if (!x86_pins) return;
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbf); jit_emit_u64(buf, MASK_NAN);                             // mov r15, int tag
+    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbe); jit_emit_u64(buf, MASK_PAYLOAD);                         // mov r14, payload mask
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xbb); jit_emit_u64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // mov rbx, bool tag
+}
+
 static void emit_call_rax(JITBuffer *buf);
 static void emit_prologue(JITBuffer *buf) {
     emit_frame_push(buf);
@@ -349,12 +362,8 @@ static void emit_prologue(JITBuffer *buf) {
         jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x45); jit_emit_byte(buf, (uint8_t)(0x100 - JIT_STATE_SLOT)); // mov [rbp - slot], rax
     }
     /* See x86_pins. Every entry into compiled code, OSR stubs included,
-       comes through here. */
-    if (x86_pins) {
-        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbf); jit_emit_u64(buf, MASK_NAN);                             // mov r15, int tag
-        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0xbe); jit_emit_u64(buf, MASK_PAYLOAD);                         // mov r14, payload mask
-        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xbb); jit_emit_u64(buf, MASK_NAN | ((uint64_t)VAL_BOOL << 48)); // mov rbx, bool tag
-    }
+       comes through here or through emit_direct_entry. */
+    emit_pins(buf);
     emit_load_cpu_regs(buf);
 }
 
@@ -630,35 +639,68 @@ static void emit_self_call_slow(JITBuffer *buf, FuncEntry *fe, Instruction *pc, 
     emit_mov_reg_rax(buf, pc->r0);
 }
 
-/* A function calling itself, without leaving compiled code: the same steps
-   as jit_self_call_direct (a fresh frame above vm_stack_top, a call-stack
-   entry, the depth count), done inline, then a call to the function's
-   direct entry (emit_direct_entry). When a limit is near the helper makes
-   the call instead, and it is the one that raises the recursion error. If the callee leaves compiled code
-   part-way, jit_direct_finish completes it in the interpreter.
-   r11 = thread state, rdx = the new frame's index. */
-static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc, int i) {
+/* A call that stays in compiled code. `self` is a function calling itself
+   (OP_CALL_SELF_FAST); otherwise the callee is another function, known when
+   this code is compiled. The steps are those of the helper that used to
+   make the call (jit_self_call_direct or jit_call_helper), done inline: a
+   fresh frame above vm_stack_top with the arguments copied in, a call-stack
+   entry, the depth count (self only, as in the helpers), then a call to the
+   callee's direct entry (emit_direct_entry). Afterwards the frame is
+   dropped; if the callee left compiled code part-way, jit_direct_finish
+   completes it in the interpreter.
+
+   Whenever something is not as expected (a limit is near, the callee has
+   no direct entry, or it has been redefined since) the code jumps to the
+   slow path, which the caller emits right after this returns: the helper
+   call, which is also the one that raises errors. Returns the position of
+   the jump over that slow path, for the caller to patch.
+   r11 = thread state, rdx = the new frame's index, r8 = the callee's entry. */
+static uint32_t emit_direct_call(JITBuffer *buf, FuncEntry *fe, Instruction *pc, Instruction *orig_pc, int i, int self) {
     Bytecode *body = fe->body;
-    if (!x86_direct || !body) { emit_self_call_slow(buf, fe, pc, i); return; }
-    uint32_t slow[5]; int nslow = 0;
+    uint32_t slow[8]; int nslow = 0;
+    int slack = self ? 4 : 16;
     jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x5d); jit_emit_byte(buf, (uint8_t)(0x100 - JIT_STATE_SLOT)); // mov r11, [rbp - slot]
+    if (!self) {
+        emit_mov_r8_imm64(buf, (uintptr_t)&fe->body);
+        emit_mov_rcx_imm64(buf, (uintptr_t)body);
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0x08);                           // cmp [r8], rcx
+        slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x85); jit_emit_u32(buf, 0);    // jne slow (redefined)
+        emit_mov_r8_imm64(buf, (uintptr_t)&body->direct_entry);
+        jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x00);                           // mov r8, [r8]
+        jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x85); jit_emit_byte(buf, 0xc0);                           // test r8, r8
+        slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);    // jz slow (not compiled yet)
+    }
     jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x53); jit_emit_byte(buf, JTS_TOP);   // mov r10, [r11 + top]
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0x12);                               // movsxd rdx, dword [r10]
-    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8d); jit_emit_byte(buf, 0x82); jit_emit_u32(buf, (uint32_t)(body->local_count + 4)); // lea rax, [rdx + frame]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8d); jit_emit_byte(buf, 0x82); jit_emit_u32(buf, (uint32_t)(body->local_count + slack)); // lea rax, [rdx + frame]
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8d); jit_emit_byte(buf, 0x88); jit_emit_u32(buf, 512);       // lea rcx, [rax + 512]
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_SIZE);  // cmp rcx, [r11 + size]
     slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8d); jit_emit_u32(buf, 0);        // jge slow (VM stack nearly full)
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_DEPTH); // mov rcx, [r11 + depth]
-    jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0x39); jit_emit_u32(buf, 65500);                               // cmp dword [rcx], 65500
-    slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8d); jit_emit_u32(buf, 0);        // jge slow
+    if (self) {
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_DEPTH); // mov rcx, [r11 + depth]
+        jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0x39); jit_emit_u32(buf, 65500);                           // cmp dword [rcx], 65500
+        slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8d); jit_emit_u32(buf, 0);    // jge slow
+    }
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, JTS_MACHINE); // cmp rsp, [r11 + machine_limit]
     slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x82); jit_emit_u32(buf, 0);        // jb slow (machine stack nearly full)
     jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_FRAMES_LEN); // mov r9, [r11 + frames_len]
-    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0x39); jit_emit_u32(buf, 65535);     // cmp dword [r9], 65535
-    slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8d); jit_emit_u32(buf, 0);        // jge slow (call stack full)
+    if (self) {
+        jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0x39); jit_emit_u32(buf, 65535); // cmp dword [r9], 65535
+        slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8d); jit_emit_u32(buf, 0);    // jge slow (call stack full)
+    } else {
+        /* There must be a caller entry to record the call site in, and room
+           for one more: 1 <= length <= 65534. */
+        jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x09);                           // mov ecx, [r9]
+        jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xc9);                                                     // dec ecx
+        jit_emit_byte(buf, 0x81); jit_emit_byte(buf, 0xf9); jit_emit_u32(buf, 65534);                           // cmp ecx, 65534
+        slow[nslow++] = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);    // jae slow
+    }
 
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x02);                               // mov [r10], eax (vm_stack_top = frame end)
-    jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x01);                                                         // inc dword [rcx] (call_depth)
+    if (self) {
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_DEPTH); // mov rcx, [r11 + depth]
+        jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x01);                                                     // inc dword [rcx] (call_depth)
+    }
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x0b);                               // mov rcx, [r11] (vm_stack)
     jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x8d); jit_emit_byte(buf, 0x14); jit_emit_byte(buf, 0xd1);     // lea r10, [rcx + rdx*8] (the new frame)
     for (int k = 0; k < fe->param_count; k++) {
@@ -668,9 +710,13 @@ static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0x01);                               // movsxd rax, dword [r9]
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xc1); jit_emit_byte(buf, 0xe0); jit_emit_byte(buf, 0x04);     // shl rax, 4 (16 bytes a frame)
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x03); jit_emit_byte(buf, 0x43); jit_emit_byte(buf, JTS_FRAMES); // add rax, [r11 + frames]
+    if (!self) {
+        emit_mov_rcx_imm64(buf, (uintptr_t)orig_pc);
+        jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0xf8); // mov [rax - 8], rcx (the caller's entry: its call site)
+    }
     emit_mov_rcx_imm64(buf, (uintptr_t)fe);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x08);                               // mov [rax], rcx (frame.fe)
-    emit_mov_rcx_imm64(buf, (uintptr_t)body->code);
+    emit_mov_rcx_imm64(buf, self ? (uintptr_t)body->code : 0);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x08);     // mov [rax + 8], rcx (frame.pc)
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x01);                               // inc dword [r9]
 
@@ -678,18 +724,23 @@ static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x53);                                                         // push r11
     jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd0);                               // mov rax, r10 (callee's registers)
     jit_emit_byte(buf, 0x4c); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xd9);                               // mov rcx, r11 (thread state)
-    if (x86_direct_cell) {
+    if (!self) {
+        jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0xd0);                           // call r8
+    } else if (x86_direct_cell) {
         emit_mov_r8_imm64(buf, (uintptr_t)x86_direct_cell);
         jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x10);                           // call [r8]
     } else {
-        jit_emit_byte(buf, 0xe8);                                                                               // call the direct entry
-        jit_emit_u32(buf, (uint32_t)((int32_t)x86_direct_at - (int32_t)(buf->size + 4)));
+        jit_emit_byte(buf, 0xe8);                                                                               // call this code's direct entry
+        x86_self_calls[x86_self_call_count++] = buf->size;
+        jit_emit_u32(buf, 0);
     }
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x5b);                                                         // pop r11
     jit_emit_byte(buf, 0x5a);                                                                                   // pop rdx
 
-    jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_DEPTH); // mov rcx, [r11 + depth]
-    jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x09);                                                         // dec dword [rcx]
+    if (self) {
+        jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_DEPTH); // mov rcx, [r11 + depth]
+        jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x09);                                                     // dec dword [rcx]
+    }
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_FRAMES_LEN); // mov rcx, [r11 + frames_len]
     jit_emit_byte(buf, 0xff); jit_emit_byte(buf, 0x09);                                                         // dec dword [rcx]
     emit_mov_rcx_imm64(buf, VAL_DEOPT_SENTINEL);
@@ -711,36 +762,67 @@ static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_TOP);   // mov rcx, [r11 + top]
     jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x11);                                                         // mov [rcx], edx (vm_stack_top = new_base)
     *(uint32_t*)&buf->code[jmp_top_done + 1] = buf->size - (jmp_top_done + 5);
+    /* The helpers differ here, and so does this: a self-call with an error
+       pending leaves without storing a result; a call to another function
+       stores it first. */
+    if (!self) emit_mov_reg_rax(buf, pc->r0);
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4b); jit_emit_byte(buf, JTS_EXC);   // mov rcx, [r11 + has_exception]
     jit_emit_byte(buf, 0x83); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0x00);                               // cmp dword [rcx], 0
     jit_emit_byte(buf, 0x74);                                                                                   // je no exception
     uint32_t pos = buf->size; jit_emit_byte(buf, 0);
     emit_side_exit(buf, i);
     if (pos < buf->size) buf->code[pos] = (uint8_t)(buf->size - (pos + 1));
-    emit_mov_reg_rax(buf, pc->r0);
+    if (self) emit_mov_reg_rax(buf, pc->r0);
     uint32_t jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     for (int k = 0; k < nslow; k++) *(uint32_t*)&buf->code[slow[k] + 2] = buf->size - (slow[k] + 6);
+    return jmp_done;
+}
+
+static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc, int i) {
+    if (!x86_direct || !x86_has_entry || !fe->body || x86_self_call_count >= X86_MAX_SELF_CALLS) { emit_self_call_slow(buf, fe, pc, i); return; }
+    uint32_t jmp_done = emit_direct_call(buf, fe, pc, NULL, i, 1);
     emit_self_call_slow(buf, fe, pc, i);
     *(uint32_t*)&buf->code[jmp_done + 1] = buf->size - (jmp_done + 5);
 }
 
-/* The entry a direct call uses, placed right after the ordinary prologue
-   (which jumps over it): the same frame, with the registers pointer in rax
-   and the thread state in rcx. r13 (where a side exit stores its resume
-   index) and the pinned constants are the caller's, which is this same
-   function. Both entries continue at the code that follows. */
-static void emit_direct_entry(JITBuffer *buf) {
-    jit_emit_byte(buf, 0xeb);                                                                                   // jmp over (the ordinary entry)
-    uint32_t pos = buf->size; jit_emit_byte(buf, 0);
-    x86_direct_at = buf->size;
+/* Can instruction pc (an OP_CALL of the function target) be a direct call?
+   The argument count must be exactly the parameter count: the helper copes
+   with any other, and stays the path for those. */
+static int jit_direct_target(const Instruction *pc, const FuncEntry *target) {
+    return pc->op == OP_CALL && !pc->is_method && target && target->body &&
+           pc->arg == target->param_count && target->param_count <= 16;
+}
+
+/* The entry a direct call uses, placed after the function's code so that
+   the ordinary entry is untouched: the same frame, with the registers
+   pointer in rax and the thread state in rcx. r13 (where a side exit stores
+   its resume index) is the caller's: the caller looks at it as soon as the
+   call returns. Continues at `resume`, the code right after the ordinary
+   prologue. Returns the entry's offset. */
+static uint32_t emit_direct_entry(JITBuffer *buf, uint32_t resume) {
+    uint32_t at = buf->size;
     emit_frame_push(buf);
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc4);                               // mov r12, rax
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x4d); jit_emit_byte(buf, (uint8_t)(0x100 - JIT_STATE_SLOT)); // mov [rbp - slot], rcx
-    if (pos < buf->size) buf->code[pos] = (uint8_t)(buf->size - (pos + 1));
+    emit_pins(buf);
+    jit_emit_byte(buf, 0xe9);
+    jit_emit_u32(buf, (uint32_t)((int32_t)resume - (int32_t)(buf->size + 4)));
+    for (int k = 0; k < x86_self_call_count; k++) {
+        uint32_t p = x86_self_calls[k];
+        if (p + 4 <= buf->size) *(uint32_t*)&buf->code[p] = (uint32_t)((int32_t)at - (int32_t)(p + 4));
+    }
+    return at;
 }
 
-static int jit_has_self_call(const Bytecode *bc) {
-    for (int k = 0; k < bc->count; k++) if (bc->code[k].op == OP_CALL_SELF_FAST) return 1;
+/* Does this code make direct calls, so that its frame needs the thread
+   state? Self-calls count only at function entry (in OSR code they are side
+   exits). */
+static int jit_wants_state(const Bytecode *bc, const FuncEntry *fe, int osr_mode) {
+    for (int k = 0; k < bc->count; k++) {
+        const Instruction *p = &bc->code[k];
+        if (p->op == OP_CALL_SELF_FAST && fe && fe->body && !osr_mode) return 1;
+        if (p->op == OP_CALL && p->ptr && jit_direct_target(p, func_get((const char*)p->ptr))) return 1;
+    }
     return 0;
 }
 
@@ -1560,10 +1642,12 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
 
     // Prologue
     x86_pins = jit_has_loop(bc);
-    x86_direct = fe && fe->body && jit_has_self_call(bc);
+    x86_direct = jit_wants_state(bc, fe, 0);
     x86_direct_cell = NULL;
+    x86_self_call_count = 0;
+    int has_entry = x86_has_entry = fe && fe->body;
     emit_prologue(&buf);
-    if (x86_direct) emit_direct_entry(&buf);
+    uint32_t direct_resume = buf.size;
     emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
@@ -1702,6 +1786,8 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
                 uint32_t len_patch[3];
                 int len_fast = emit_len_fast(&buf, pc, i, targets, len_patch);
+                int direct_fast = x86_direct && jit_direct_target(pc, target_fe);
+                uint32_t direct_done = direct_fast ? emit_direct_call(&buf, target_fe, pc, orig_pc, i, 0) : 0;
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, r2*8
                 emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
@@ -1722,6 +1808,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_mov_reg_rax(&buf, pc->r0);
                 emit_exception_check(&buf, i);
                 if (len_fast) *(uint32_t*)&buf.code[len_patch[2] + 1] = buf.size - (len_patch[2] + 5);
+                if (direct_fast) *(uint32_t*)&buf.code[direct_done + 1] = buf.size - (direct_done + 5);
                 break;
             }
             case OP_CALL_METHOD: {
@@ -1900,6 +1987,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
         }
     }
     offsets[bc->count] = buf.size;
+    uint32_t my_direct_at = has_entry ? emit_direct_entry(&buf, direct_resume) : 0;
     if (buf.size + 64 >= buf.capacity) { bc->jit_failed = 1; munmap(code, size); free(offsets); free(jumps); free(targets); return; }
     for (int i = 0; i < jump_count; i++) {
         uint32_t target_offset = (jumps[i].instr_idx == -1) ? body_start : offsets[jumps[i].instr_idx];
@@ -1909,9 +1997,10 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
     }
     mprotect(code, size, PROT_READ | PROT_EXEC);
     bc->jit_code = code; bc->jit_size = size;
-    /* A type-specialized copy (jit_compile_specialized) is not the function's
-       general code, so it is never the direct entry. */
-    if (x86_direct && bc == fe->body) bc->direct_entry = code + x86_direct_at;
+    /* The function's general code is where direct calls go. A
+       type-specialized copy (jit_compile_specialized) runs any arguments
+       correctly too, so it serves until there is general code. */
+    if (has_entry && (bc == fe->body || !fe->body->direct_entry)) fe->body->direct_entry = code + my_direct_at;
     jit_debug_compiled(bc, fe, "optimizing", code, buf.size);
     free(offsets); free(jumps); free(targets);
 }
@@ -2006,11 +2095,12 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
     JITBuffer buf = {code, 0, size};
 
     x86_pins = jit_has_loop(bc);
-    x86_direct = !osr_mode && fe && fe->body && jit_has_self_call(bc);
-    x86_direct_cell = (x86_direct && bc == fe->body) ? &bc->direct_entry : NULL;
+    x86_direct = jit_wants_state(bc, fe, osr_mode);
+    int has_entry = x86_has_entry = !osr_mode && fe && fe->body;
+    x86_direct_cell = (has_entry && bc == fe->body) ? &bc->direct_entry : NULL;
+    x86_self_call_count = 0;
     jit_baseline_emit_prologue(&buf);
-    if (x86_direct) emit_direct_entry(&buf);
-    uint32_t baseline_direct_at = x86_direct_at;
+    uint32_t direct_resume = buf.size;
     if (!osr_mode) emit_zero_locals(&buf, bc, fe);
 
     uint32_t body_start = buf.size;
@@ -2149,6 +2239,8 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 FuncEntry *target_fe = (pc->op == OP_CALL) ? func_get((const char*)pc->ptr) : NULL;
                 uint32_t len_patch[3];
                 int len_fast = emit_len_fast(&buf, pc, i, targets, len_patch);
+                int direct_fast = x86_direct && jit_direct_target(pc, target_fe);
+                uint32_t direct_done = direct_fast ? emit_direct_call(&buf, target_fe, pc, orig_pc, i, 0) : 0;
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r2 * 8); // add r10, r2*8
                 emit_mov_arg4_imm64(&buf, (uintptr_t)orig_pc);
@@ -2169,6 +2261,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_mov_reg_rax(&buf, pc->r0);
                 emit_exception_check(&buf, i);
                 if (len_fast) *(uint32_t*)&buf.code[len_patch[2] + 1] = buf.size - (len_patch[2] + 5);
+                if (direct_fast) *(uint32_t*)&buf.code[direct_done + 1] = buf.size - (direct_done + 5);
                 break;
             }
             case OP_CALL_METHOD: {
@@ -2369,6 +2462,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         }
     }
 
+    uint32_t baseline_direct_at = has_entry ? emit_direct_entry(&buf, direct_resume) : 0;
     if (buf.size + 64 >= buf.capacity) {
         /* Ran out of code space: the emitter drops bytes once full, so the
            buffer cannot be trusted. Give up on this function. */
@@ -2393,7 +2487,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         jit_debug_compiled(bc, fe, "osr", code, buf.size);
     } else {
         bc->baseline_jit_code = code; bc->baseline_jit_size = size; bc->baseline_jit_offsets = offsets; bc->jit_tier = JIT_TIER_BASELINE;
-        if (x86_direct && bc == fe->body && !bc->jit_code) bc->direct_entry = code + baseline_direct_at;
+        if (has_entry && bc == fe->body && !bc->jit_code) bc->direct_entry = code + baseline_direct_at;
         jit_debug_compiled(bc, fe, "baseline", code, buf.size);
     }
     free(jumps); free(targets);
