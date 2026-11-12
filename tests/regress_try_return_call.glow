@@ -1,0 +1,132 @@
+# `return f()` inside a try body must still be covered by the try: it used
+# to become a tail call, which dropped the handler, so an error raised in
+# f() went uncaught.
+
+func fail(msg):
+    throw msg
+end
+func ok(x):
+    return x * 2
+end
+
+func direct(n):
+    try:
+        return fail("direct " + str(n))
+    catch e:
+        return "caught " + e
+    end
+end
+show direct(1)
+
+func passes(n):
+    try:
+        return ok(n)
+    catch e:
+        return "caught " + e
+    end
+end
+show passes(21)
+
+# The call that ends the try body is a call to the function itself.
+func countdown(n):
+    if n == 0:
+        throw "zero"
+    end
+    try:
+        return countdown(n - 1)
+    catch e:
+        return "caught " + e + " at " + str(n)
+    end
+end
+show countdown(1), countdown(5)
+
+# Nested tries: the inner one catches.
+func nested():
+    try:
+        try:
+            return fail("inner")
+        catch e:
+            return "inner caught " + e
+        end
+    catch e:
+        return "outer caught " + e
+    end
+end
+show nested()
+
+# A return in the handler is outside the try body: its error goes to the
+# caller's try.
+func handler_fails():
+    try:
+        return fail("first")
+    catch e:
+        return fail("second")
+    end
+end
+func outer():
+    try:
+        let v = handler_fails()
+        return v
+    catch e:
+        return "outer caught " + e
+    end
+end
+show outer()
+
+# A runtime error, not a throw.
+func bad_index(xs):
+    return xs[10]
+end
+func guarded(xs):
+    try:
+        return bad_index(xs)
+    catch e:
+        return "index error caught"
+    end
+end
+show guarded([1, 2, 3])
+
+# Methods.
+blueprint Box:
+    action init(v):
+        self.v = v
+    end
+    action explode():
+        throw "boom " + str(self.v)
+    end
+    action safe():
+        try:
+            return self.explode()
+        catch e:
+            return "caught " + e
+        end
+    end
+end
+show Box(7).safe()
+
+# Hot: the same code after it has been compiled.
+func hot(n):
+    let caught = 0
+    let i = 0
+    while i < n:
+        if direct(i) == "caught direct " + str(i):
+            caught = caught + 1
+        end
+        if countdown(3) == "caught zero at 1":
+            caught = caught + 1
+        end
+        i = i + 1
+    end
+    return caught
+end
+show hot(3000)
+
+# Outside a try, `return f()` is still a tail call: this depth would
+# overflow the stack otherwise.
+func loop_down(n, acc):
+    if n == 0:
+        return acc
+    end
+    return loop_down(n - 1, acc + 1)
+end
+show loop_down(300000, 0)

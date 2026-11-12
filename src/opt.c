@@ -3,6 +3,15 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Is instruction i inside the body of a try? A call there must stay an
+   ordinary call: a tail call replaces this function's frame, and with it
+   the handler that should catch what the callee raises. */
+static int opt_in_try(const Bytecode *bc, int i) {
+    for (int k = 0; k < bc->exception_count; k++)
+        if (i >= bc->exception_table[k].start_pc && i < bc->exception_table[k].end_pc) return 1;
+    return 0;
+}
+
 void optimize_bytecode(Bytecode *bc) {
     if (!bc || bc->count == 0) return;
 
@@ -288,7 +297,7 @@ void optimize_bytecode(Bytecode *bc) {
                     FuncEntry *fe = func_get((const char*)pc->ptr);
                     if (fe && fe->body) tco_safe = 1;
                 }
-                if (tco_safe) {
+                if (tco_safe && !opt_in_try(bc, i)) {
                     pc->op = OP_TAIL_CALL;
                     bc->code[next_idx].op = OP_NOP;
                     continue;
@@ -305,7 +314,7 @@ void optimize_bytecode(Bytecode *bc) {
                  // Re-check for TCO after patching to SELF_FAST
                  int next_idx = i + 1;
                  while (next_idx < bc->count && bc->code[next_idx].op == OP_NOP) next_idx++;
-                 if (next_idx < bc->count && bc->code[next_idx].op == OP_RETURN && pc->r0 == bc->code[next_idx].r0) {
+                 if (next_idx < bc->count && bc->code[next_idx].op == OP_RETURN && pc->r0 == bc->code[next_idx].r0 && !opt_in_try(bc, i)) {
                      pc->op = OP_TAIL_CALL;
                      bc->code[next_idx].op = OP_NOP;
                  }
