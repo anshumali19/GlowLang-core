@@ -280,5 +280,5 @@ GlowLang is licensed under the **Apache License 2.0 with the Commons Clause** an
 ---
 
 <p align="center">
-  Built with ❤️ by <a href="https://github.com/AnshuMishra1122003">Anshumali</a>
+  Built with ❤️ by <a href="https://github.com/anshumali19">Anshumali & <a href="https://github.com/Anamika-codes"> Anamika</a></a>
 </p>
