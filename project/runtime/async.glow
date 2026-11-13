@@ -1,59 +1,78 @@
 # GlowNet Async Task Infrastructure
-# Handles promises and deferred execution
+# Promises and deferred execution.
 
 blueprint Promise:
     action init():
         self.state = "pending"
-        self.value = nil
+        self.value = none
         self.callbacks = []
     end
 
     action resolve(val):
-        when self.state == "pending":
+        if self.state == "pending":
             self.state = "fulfilled"
             self.value = val
-            every each cb in self.callbacks:
+            for each cb in self.callbacks:
                 cb(val)
             end
         end
     end
 
     action then(cb):
-        when self.state == "fulfilled":
+        if self.state == "fulfilled":
             cb(self.value)
-        otherwise:
-            self.callbacks = self.callbacks + [cb]
+        else:
+            self.callbacks.push(cb)
         end
         return self
     end
 end
 
+func delay_worker(p, seconds):
+    # os.sleep counts milliseconds.
+    os.sleep(seconds * 1000)
+    p.resolve(true)
+end
+
+# A promise that resolves to true after `seconds`, on another thread.
 func delay(seconds):
     let p = Promise()
-    p.init()
-    spawn lambda():
-        os.sleep(seconds)
-        p.resolve(true)
-    end
+    spawn delay_worker(p, seconds)
     return p
 end
 
+func async_all_store(p, st, index, count, val):
+    st["results"][index] = val
+    st["done"] = st["done"] + 1
+    if st["done"] == count:
+        p.resolve(st["results"])
+    end
+end
+
+func async_all_slot(p, st, index, count):
+    return lambda(val): async_all_store(p, st, index, count, val)
+end
+
+# A promise for the list of every promise's value, in order.
+# A lambda cannot assign to a variable of the function around it, so the
+# running state is kept in a dict, which it can change.
 func async_all(promises):
     let p = Promise()
-    p.init()
-    let count = promises.len()
-    let results = []
-    let completed = 0
-    
-    every each i in range(0, count):
-        let cb = lambda(val):
-            results = results + [val]
-            completed = completed + 1
-            when completed == count:
-                p.resolve(results)
-            end
-        end
-        promises[i].then(cb)
+    let count = len(promises)
+    let st = {"done": 0, "results": []}
+    let i = 0
+    while i < count:
+        st["results"].push(none)
+        i = i + 1
+    end
+    if count == 0:
+        p.resolve([])
+        return p
+    end
+    i = 0
+    while i < count:
+        promises[i].then(async_all_slot(p, st, i, count))
+        i = i + 1
     end
     return p
 end

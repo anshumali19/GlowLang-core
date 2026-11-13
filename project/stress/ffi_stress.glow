@@ -1,0 +1,42 @@
+# GlowNet FFI Stress Test
+# Calls C library functions many times and checks nothing drifts.
+
+# Returns [sum of abs(-i), sum of strlen("x" * (i % 10))] for i in 0 .. n-1.
+func run_ffi_stress(n):
+    let libc = ffi.open(ffi.libc())
+    let c_abs = libc.function("abs", ["int"], "int")
+    let c_strlen = libc.function("strlen", ["string"], "size_t")
+    let words = []
+    let text = ""
+    let k = 0
+    while k < 10:
+        words.push(text)
+        text = text + "x"
+        k = k + 1
+    end
+    let abs_sum = 0
+    let len_sum = 0
+    let i = 0
+    while i < n:
+        abs_sum = abs_sum + c_abs(0 - i)
+        len_sum = len_sum + c_strlen(words[i % 10])
+        i = i + 1
+    end
+    return [abs_sum, len_sum]
+end
+
+# C memory: allocate, store, load and free `rounds` times.
+func run_ffi_memory_stress(rounds):
+    let ok = 0
+    let i = 0
+    while i < rounds:
+        let p = ffi.alloc(ffi.sizeof("int64"))
+        ffi.store(p, "int64", i * 3)
+        if ffi.load(p, "int64") == i * 3:
+            ok = ok + 1
+        end
+        ffi.free(p)
+        i = i + 1
+    end
+    return ok
+end

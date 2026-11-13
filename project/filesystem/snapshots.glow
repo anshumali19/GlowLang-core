@@ -1,0 +1,53 @@
+# GlowNet Snapshots
+# Numbered JSON snapshots of a value (a dict or list), kept in a Storage.
+
+use "storage.glow"
+
+func snapshot_name(n):
+    let digits = str(n)
+    while len(digits) < 4:
+        digits = "0" + digits
+    end
+    return "snap_" + digits
+end
+
+blueprint SnapshotStore:
+    action init(dir):
+        self.store = Storage(dir)
+        self.count = len(self.store.keys())
+    end
+
+    # Saves a snapshot and returns its name.
+    action save(data):
+        self.count = self.count + 1
+        let name = snapshot_name(self.count)
+        self.store.put(name, json.stringify(data))
+        return name
+    end
+
+    # The value saved under a name, or none.
+    action load(name):
+        let text = self.store.get(name)
+        if text == none:
+            return none
+        end
+        return json.parse(text)
+    end
+
+    action names():
+        return self.store.keys()
+    end
+
+    # The most recent snapshot's value, or none when there are none.
+    action latest():
+        let all = self.names()
+        if len(all) == 0:
+            return none
+        end
+        return self.load(all[len(all) - 1])
+    end
+
+    action destroy():
+        return self.store.destroy()
+    end
+end

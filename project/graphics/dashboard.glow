@@ -1,0 +1,45 @@
+# GlowNet Dashboard
+# A titled text dashboard made of single-number metrics and bar charts.
+
+use "charts.glow"
+
+blueprint Dashboard:
+    action init(title):
+        self.title = title
+        self.metrics = []
+        self.charts = []
+    end
+
+    action add_metric(name, value):
+        self.metrics.push([name, value])
+        return self
+    end
+
+    action add_chart(title, labels, values):
+        self.charts.push({"title": title, "labels": labels, "values": values})
+        return self
+    end
+
+    # The dashboard as a list of lines.
+    action render():
+        let lines = []
+        lines.push("=== " + self.title + " ===")
+        for each m in self.metrics:
+            lines.push(m[0] + ": " + str(m[1]))
+        end
+        for each c in self.charts:
+            lines.push("")
+            lines.push("[" + c["title"] + "]")
+            for each line in bar_chart(c["labels"], c["values"], 20):
+                lines.push(line)
+            end
+        end
+        return lines
+    end
+
+    action show_all():
+        for each line in self.render():
+            show line
+        end
+    end
+end
