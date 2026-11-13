@@ -1,0 +1,4 @@
+no body: 0
+small: [true, c<END>]
+100 KB: [true, 9<END>]
+UTF-8 split across reads: [true, é<END>]

@@ -1,0 +1,43 @@
+# http.read returns the whole request (headers and Content-Length bytes of
+# body). It used to return one read of at most 4095 bytes.
+
+let port = 19000 + os.pid() % 1000
+
+func serve(count):
+    let listener = http.listen(port)
+    let n = 0
+    while n < count:
+        let c = http.accept(listener)
+        let raw = http.read(c)
+        let split = raw.find("\r\n\r\n")
+        let body = raw[split + 4:]
+        let reply = json.stringify({"bytes": raw.byte_len(), "body_chars": len(body), "tail": body[len(body) - 6:]})
+        http.send(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(reply.byte_len()) + "\r\nConnection: close\r\n\r\n" + reply)
+        http.close(c)
+        n = n + 1
+    end
+    http.close(listener)
+end
+
+spawn serve(4)
+os.sleep(200)
+let base = "http://127.0.0.1:" + str(port)
+
+func post(size, piece):
+    let text = ""
+    let i = 0
+    while i < size:
+        text = text + piece
+        i = i + 1
+    end
+    text = text + "<END>"
+    let r = http.request("POST", base + "/upload", {"body": text, "headers": {"Content-Type": "text/plain"}})
+    let got = json.parse(r["body"])
+    return [got["body_chars"] == len(text), got["tail"]]
+end
+
+show "no body:", json.parse(http.request("GET", base + "/x", {})["body"])["body_chars"]
+show "small:", post(10, "abc")
+show "100 KB:", post(10000, "0123456789")
+show "UTF-8 split across reads:", post(30000, "é")
+threads.join_all()

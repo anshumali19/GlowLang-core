@@ -1,0 +1,32 @@
+# A key whose value is none (JSON null) is still in the dict: has() and
+# `in` used to say it was missing, although keys() listed it.
+
+let d = {"a": none, "b": 1}
+show d.has("a"), "a" in d, d.has("b"), "b" in d, d.has("c"), "c" in d
+show d.keys(), len(d)
+
+let j = json.parse("{\"clear\": null, \"keep\": 2}")
+show j.has("clear"), "clear" in j, j.has("missing"), "missing" not in j
+
+d["c"] = none
+show d.has("c"), "c" in d
+d.remove("a")
+show d.has("a"), "a" in d, d.keys()
+
+func count_present(dict, keys, n):
+    let hits = 0
+    let i = 0
+    while i < n:
+        for each k in keys:
+            if dict.has(k):
+                hits = hits + 1
+            end
+            if k in dict:
+                hits = hits + 1000
+            end
+        end
+        i = i + 1
+    end
+    return hits
+end
+show count_present({"x": none, "y": 0, "z": false}, ["x", "y", "z", "w"], 2000)
