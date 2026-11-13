@@ -1,0 +1,6 @@
+let x = 2
+if x == 1:
+    show "one"
+elif x == 2:
+    show "two"
+end

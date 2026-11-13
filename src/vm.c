@@ -1400,10 +1400,8 @@ Value glow_in(Value elem, Value coll) {
             if (val_eq(l->items[i], elem)) { found = 1; break; }
         }
     } else if (GET_TYPE(coll) == VAL_DICT) {
-        if (GET_TYPE(elem) == VAL_STRING) {
-            Value val = dict_get(AS_DICT(coll), AS_STRING(elem));
-            if (GET_TYPE(val) != VAL_NONE) found = 1;
-        }
+        /* A key whose value is none (JSON null) is still in the dict. */
+        if (GET_TYPE(elem) == VAL_STRING && dict_get_idx(AS_DICT(coll), AS_STRING(elem)) >= 0) found = 1;
     } else if (GET_TYPE(coll) == VAL_STRING) {
         if (GET_TYPE(elem) == VAL_STRING && strstr(AS_STRING(coll), AS_STRING(elem)) != NULL) found = 1;
     }
