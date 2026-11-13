@@ -1,0 +1,57 @@
+# GlowNet Storage
+# A small key -> text store: every key is one file in a directory.
+
+blueprint Storage:
+    action init(dir):
+        self.dir = dir
+        if not fs.exists(dir):
+            fs.mkdir(dir)
+        end
+    end
+
+    action path_of(key):
+        return self.dir + "/" + key + ".txt"
+    end
+
+    action put(key, text):
+        return fs.write(self.path_of(key), text)
+    end
+
+    # The stored text, or none when there is no such key.
+    action get(key):
+        if not fs.exists(self.path_of(key)):
+            return none
+        end
+        return fs.read(self.path_of(key))
+    end
+
+    action has(key):
+        return fs.exists(self.path_of(key))
+    end
+
+    action remove(key):
+        if not fs.exists(self.path_of(key)):
+            return false
+        end
+        return fs.remove(self.path_of(key))
+    end
+
+    # Every key, sorted.
+    action keys():
+        let out = []
+        for each name in fs.list(self.dir):
+            if len(name) > 4 and name[-4:] == ".txt":
+                out.push(name[:len(name) - 4])
+            end
+        end
+        return sorted(out)
+    end
+
+    # Removes every key and the directory itself.
+    action destroy():
+        for each key in self.keys():
+            fs.remove(self.path_of(key))
+        end
+        return fs.remove(self.dir)
+    end
+end

@@ -13,7 +13,7 @@ func run_gc_stress():
     let start = os.time()
     
     # 1. Linked List Allocation (High Object Pressure)
-    let head = nil
+    let head = none
     for i from 0 to 100000:
         let next_head = Node(i, head)
         next_head.init(i, head)

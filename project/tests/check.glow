@@ -1,0 +1,58 @@
+# A tiny test helper shared by every file in project/tests.
+#
+# `use` runs a file again each time it is used, so the counters live in one
+# dict that is only created the first time: main.glow can use many test
+# files, each of which uses this one, and the totals still add up.
+func check_state_missing():
+    try:
+        return check_state["passed"] == none
+    catch e:
+        return true
+    end
+end
+if check_state_missing():
+    check_state = {"passed": 0, "failed": 0, "failures": []}
+end
+
+func section(name):
+    show "== " + name
+end
+
+func check(name, cond):
+    if cond:
+        check_state["passed"] = check_state["passed"] + 1
+    else:
+        check_state["failed"] = check_state["failed"] + 1
+        check_state["failures"].push(name)
+        show "  FAIL: " + name
+    end
+end
+
+func check_eq(name, got, want):
+    if got == want:
+        check_state["passed"] = check_state["passed"] + 1
+    else:
+        check_state["failed"] = check_state["failed"] + 1
+        check_state["failures"].push(name)
+        show "  FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+# Two numbers within a small distance of each other.
+func check_near(name, got, want):
+    let diff = got - want
+    if diff < 0:
+        diff = 0 - diff
+    end
+    check(name + " (got " + str(got) + ")", diff < 0.000001)
+end
+
+# Prints the totals and returns the number of failures.
+func check_done():
+    show ""
+    show "passed: " + str(check_state["passed"]) + "   failed: " + str(check_state["failed"])
+    for each name in check_state["failures"]:
+        show "  failed: " + name
+    end
+    return check_state["failed"]
+end

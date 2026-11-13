@@ -1,0 +1,124 @@
+# Integration checks: the server pieces, the database, files and graphics
+# working together.
+
+use "check.glow"
+use "../server/router.glow"
+use "../server/middleware.glow"
+use "../server/http.glow"
+use "../server/websocket.glow"
+use "../database/models.glow"
+use "../database/sqlite.glow"
+use "../database/redis.glow"
+use "../filesystem/logger.glow"
+use "../filesystem/snapshots.glow"
+use "../graphics/dashboard.glow"
+use "../graphics/renderer.glow"
+use "../runtime/profiler.glow"
+use "../ai/predictor.glow"
+use "../ai/training.glow"
+
+section("integration: router and middleware")
+add_route("/health", lambda(req): {"status": 200, "body": "ok"})
+add_route("/echo", lambda(req): {"status": 200, "body": req["body"]})
+check_eq("a known path", dispatch({"method": "GET", "path": "/health"})["body"], "ok")
+check_eq("an unknown path", dispatch({"method": "GET", "path": "/nope"})["status"], 404)
+
+func tag_middleware(req, next):
+    req["body"] = req["body"] + "+tagged"
+    let res = next(req)
+    res["body"] = res["body"] + "+back"
+    return res
+end
+clear_middleware()
+use_middleware(logger_middleware)
+use_middleware(tag_middleware)
+let echoed = execute_chain({"method": "POST", "path": "/echo", "body": "hi"}, dispatch)
+check_eq("middleware wraps the handler, both ways", echoed["body"], "hi+tagged+back")
+check_eq("status passes through", echoed["status"], 200)
+
+section("integration: server objects")
+check_eq("server port", server.port, 8080)
+server.start()
+check("server marks itself running", server.running)
+server.shutdown()
+check("server stops", not server.running)
+let ws = WebSocket("ws://localhost:9000")
+check("websocket starts disconnected", not ws.connected)
+ws.connect()
+ws.send("ping")
+check("websocket connects", ws.connected)
+
+section("integration: database")
+let db = SQLiteDB(":memory:")
+db.execute("CREATE TABLE predictions (id INTEGER PRIMARY KEY, value TEXT, confidence REAL)")
+let model_rows = [Prediction(1, "cat", 0.9), Prediction(2, "dog", 0.4), Prediction(3, "it's a bird", 0.75)]
+for each m in model_rows:
+    let j = m.to_json()
+    sqlite.exec(db.handle, "INSERT INTO predictions (id, value, confidence) VALUES (?, ?, ?)", [j["id"], j["value"], j["confidence"]])
+end
+let confident = db.query("SELECT value FROM predictions WHERE confidence > 0.5 ORDER BY id")
+check_eq("query returns the matching rows", len(confident), 2)
+check_eq("text with a quote survives", confident[1]["value"], "it's a bird")
+let counted = db.query("SELECT COUNT(*) AS n, AVG(confidence) AS avg FROM predictions")
+check_eq("count", counted[0]["n"], 3)
+check_near("average", counted[0]["avg"], (0.9 + 0.4 + 0.75) / 3)
+db.close()
+let cache = RedisClient("127.0.0.1", 6399)
+check("no Redis server: the client holds no connection", cache.handle == none)
+
+section("integration: files")
+main_logger.info("integration test running")
+let snaps = SnapshotStore("glow_project_tmp_snapshots")
+check_eq("no snapshots yet", snaps.latest(), none)
+let first = snaps.save({"step": 1, "scores": [0.5, 0.25]})
+let second = snaps.save({"step": 2, "scores": [0.75]})
+check_eq("names are numbered", [first, second], ["snap_0001", "snap_0002"])
+check_eq("load by name", snaps.load("snap_0001")["scores"], [0.5, 0.25])
+check_eq("latest", snaps.latest()["step"], 2)
+check_eq("a missing snapshot", snaps.load("snap_9999"), none)
+let reopened = SnapshotStore("glow_project_tmp_snapshots")
+check_eq("a reopened store continues the numbering", reopened.save({"step": 3}), "snap_0003")
+check("clean up", reopened.destroy())
+check("the directory is gone", not fs.exists("glow_project_tmp_snapshots"))
+
+section("integration: graphics")
+check_eq("bar chart", bar_chart(["a", "bbb"], [5, 10], 10), ["a   | ##### 5", "bbb | ########## 10"])
+check_eq("sparkline", sparkline([1, 4, 7]), ".=#")
+check_eq("histogram", histogram([1, 2, 3, 9, 10], 3), [3, 0, 2])
+check_eq("empty chart", bar_chart([], [], 10), [])
+let dash = Dashboard("Status")
+dash.add_metric("requests", 120).add_metric("errors", 3)
+dash.add_chart("by route", ["/health", "/echo"], [100, 20])
+let lines = dash.render()
+check_eq("dashboard title", lines[0], "=== Status ===")
+check_eq("dashboard metric", lines[2], "errors: 3")
+check_eq("dashboard chart line", lines[6], "/echo   | #### 20")
+let renderer = Renderer(80, 24)
+check("renderer draws", renderer.render(lines) and renderer.render(lines))
+check_eq("renderer counts frames", renderer.frame, 2)
+
+section("integration: profiler and model")
+let prof = Profiler()
+let model = Predictor()
+let trainer = Trainer(model, 0.5)
+let inputs = [[1.0, 0.0], [0.0, 1.0], [1.0, 0.2], [0.1, 1.0]]
+let targets = [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]]
+let first_loss = prof.time("epoch", lambda(): trainer.run_epoch(inputs, targets))
+let last_loss = first_loss
+let epoch = 0
+while epoch < 200:
+    last_loss = prof.time("epoch", lambda(): trainer.run_epoch(inputs, targets))
+    epoch = epoch + 1
+end
+check("training lowers the loss", last_loss < first_loss / 4)
+let guess = model.predict([1.0, 0.0])
+check("the model learned the pattern", guess[0] > 0.8 and guess[1] < 0.2)
+check_eq("weight updates counted", model.updates, 201 * 4)
+check_eq("profiler counted the calls", prof.calls("epoch"), 201)
+check("profiler measured time", prof.total("epoch") > 0)
+check_eq("slowest", prof.slowest(), "epoch")
+check_eq("matrix product", Matrix(2, 2).fill([[1, 2], [3, 4]]).multiply(Matrix(2, 2).fill([[0, 1], [1, 0]])).data, [2, 1, 4, 3])
+check_eq("shapes that do not fit", Matrix(2, 3).multiply(Matrix(2, 3)), none)
+let ta = Tensor([2, 2], "float64")
+check_eq("tensor size", ta.get_size(), 4)
+check_eq("tensor sum size", ta.add(Tensor([2, 2], "float64")).get_size(), 4)

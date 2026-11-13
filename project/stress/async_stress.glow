@@ -1,0 +1,61 @@
+# GlowNet Async Stress Test
+# Many threads updating shared data, and many promises resolved from threads.
+
+use "../runtime/async.glow"
+
+func async_stress_worker(id, shared, steps):
+    let i = 0
+    while i < steps:
+        shared["total"] = shared["total"] + 1
+        shared["by_worker"][id] = shared["by_worker"][id] + 1
+        i = i + 1
+    end
+    shared["finished"].push(id)
+end
+
+# `workers` threads each add 1 to a shared total `steps` times.
+# Returns the shared dict once every thread has finished.
+func run_async_stress(workers, steps):
+    let shared = {"total": 0, "by_worker": [], "finished": []}
+    let w = 0
+    while w < workers:
+        shared["by_worker"].push(0)
+        w = w + 1
+    end
+    w = 0
+    while w < workers:
+        spawn async_stress_worker(w, shared, steps)
+        w = w + 1
+    end
+    threads.join_all()
+    return shared
+end
+
+func resolve_later(p, value):
+    os.sleep(1)
+    p.resolve(value)
+end
+
+# `count` promises, each resolved by its own thread; returns the list that
+# async_all delivers (the values 0 .. count-1, in order).
+func run_promise_stress(count):
+    let promises = []
+    let i = 0
+    while i < count:
+        promises.push(Promise())
+        i = i + 1
+    end
+    let box = {"values": none}
+    async_all(promises).then(lambda(values): box_store(box, values))
+    i = 0
+    while i < count:
+        spawn resolve_later(promises[i], i)
+        i = i + 1
+    end
+    threads.join_all()
+    return box["values"]
+end
+
+func box_store(box, values):
+    box["values"] = values
+end

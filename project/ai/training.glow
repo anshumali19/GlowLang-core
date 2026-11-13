@@ -1,8 +1,8 @@
 # GlowNet AI Training Engine
-# Handles backpropagation and weights optimization simulation
+# Trains a Predictor by gradient descent on the mean squared error.
 
-use "project/ai/matrix.glow"
-use "project/ai/tensor.glow"
+use "matrix.glow"
+use "tensor.glow"
 
 blueprint Trainer:
     action init(model, learning_rate):
@@ -11,34 +11,29 @@ blueprint Trainer:
         self.history = []
     end
 
-    action train_step(input_batch, target_batch):
-        # Simulate forward pass
-        let prediction = self.model.predict(input_batch)
-        
-        # Simulate loss calculation (MSE)
+    action train_step(input_vec, target_vec):
+        let prediction = self.model.predict(input_vec)
         let loss = 0.0
-        every each i in range(0, prediction.len()):
-            let diff = prediction[i] - target_batch[i]
-            loss = loss + (diff * diff)
+        let i = 0
+        while i < len(prediction):
+            let diff = prediction[i] - target_vec[i]
+            loss = loss + diff * diff
+            i = i + 1
         end
-        loss = loss / prediction.len()
-        
-        # Simulate backward pass (Gradient Descent)
-        self.model.adjust_weights(self.lr, prediction, target_batch)
-        
-        self.history = self.history + [loss]
+        loss = loss / len(prediction)
+        self.model.adjust_weights(self.lr, input_vec, prediction, target_vec)
+        self.history.push(loss)
         return loss
     end
 
-    action run_epoch(dataset, batch_size):
-        let total_loss = 0.0
-        let steps = dataset.len() / batch_size
-        
-        for i from 0 to steps:
-            let loss = self.train_step(dataset[i], dataset[i]) # Auto-encoder sim
-            total_loss = total_loss + loss
+    # One pass over the data; returns the average loss.
+    action run_epoch(inputs, targets):
+        let total = 0.0
+        let i = 0
+        while i < len(inputs):
+            total = total + self.train_step(inputs[i], targets[i])
+            i = i + 1
         end
-        
-        return total_loss / steps
+        return total / len(inputs)
     end
 end

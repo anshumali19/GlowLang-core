@@ -1,0 +1,106 @@
+# GlowNet Charts
+# Text charts: each function returns the lines to print.
+
+func repeat_text(piece, n):
+    let out = ""
+    let i = 0
+    while i < n:
+        out = out + piece
+        i = i + 1
+    end
+    return out
+end
+
+func pad_right(text, width):
+    return text + repeat_text(" ", width - len(text))
+end
+
+func largest(values):
+    let m = values[0]
+    for each v in values:
+        if v > m:
+            m = v
+        end
+    end
+    return m
+end
+
+func smallest(values):
+    let m = values[0]
+    for each v in values:
+        if v < m:
+            m = v
+        end
+    end
+    return m
+end
+
+# One line per label: "name   | ######## 42". The longest bar is `width`.
+func bar_chart(labels, values, width):
+    let lines = []
+    if len(values) == 0:
+        return lines
+    end
+    let top = largest(values)
+    let label_width = 0
+    for each label in labels:
+        if len(label) > label_width:
+            label_width = len(label)
+        end
+    end
+    let i = 0
+    while i < len(values):
+        let size = 0
+        if top > 0:
+            size = floor(values[i] * width / top)
+        end
+        lines.push(pad_right(labels[i], label_width) + " | " + repeat_text("#", size) + " " + str(values[i]))
+        i = i + 1
+    end
+    return lines
+end
+
+# One character per value, from low (.) to high (#).
+func sparkline(values):
+    let levels = [".", ":", "-", "=", "+", "*", "#"]
+    if len(values) == 0:
+        return ""
+    end
+    let low = smallest(values)
+    let span = largest(values) - low
+    let out = ""
+    for each v in values:
+        let level = 0
+        if span > 0:
+            level = floor((v - low) * (len(levels) - 1) / span)
+        end
+        out = out + levels[level]
+    end
+    return out
+end
+
+# How many values fall in each of `buckets` equal ranges.
+func histogram(values, buckets):
+    let counts = []
+    let i = 0
+    while i < buckets:
+        counts.push(0)
+        i = i + 1
+    end
+    if len(values) == 0:
+        return counts
+    end
+    let low = smallest(values)
+    let span = largest(values) - low
+    for each v in values:
+        let b = 0
+        if span > 0:
+            b = floor((v - low) * buckets / span)
+        end
+        if b >= buckets:
+            b = buckets - 1
+        end
+        counts[b] = counts[b] + 1
+    end
+    return counts
+end

@@ -1,13 +1,15 @@
 # Matrix Subsystem
-# Handles basic matrix operations
+# A dense rows x cols matrix of numbers, stored row by row.
 
 blueprint Matrix:
     action init(rows, cols):
         self.rows = rows
         self.cols = cols
         self.data = []
-        for i from 0 to (rows * cols):
-            self.data = self.data + [0.0]
+        let i = 0
+        while i < rows * cols:
+            self.data.push(0.0)
+            i = i + 1
         end
     end
 
@@ -19,15 +21,55 @@ blueprint Matrix:
         self.data[r * self.cols + c] = val
     end
 
-    action multiply(other):
-        when self.cols == other.rows:
-            # Native Vectorized Fast-Path
-            let res_data = matrix_mul(self, other)
-            let res = Matrix(self.rows, other.cols)
-            res.init(self.rows, other.cols)
-            res.data = res_data
-            return res
+    # Fills the matrix from a list of rows, e.g. [[1, 2], [3, 4]].
+    action fill(rows_list):
+        let r = 0
+        while r < self.rows:
+            let c = 0
+            while c < self.cols:
+                self.data[r * self.cols + c] = rows_list[r][c]
+                c = c + 1
+            end
+            r = r + 1
         end
-        return nil
+        return self
+    end
+
+    # The matrix product, or none when the shapes do not fit.
+    action multiply(other):
+        if self.cols != other.rows:
+            return none
+        end
+        let res = Matrix(self.rows, other.cols)
+        let r = 0
+        while r < self.rows:
+            let c = 0
+            while c < other.cols:
+                let sum = 0.0
+                let k = 0
+                while k < self.cols:
+                    sum = sum + self.data[r * self.cols + k] * other.data[k * other.cols + c]
+                    k = k + 1
+                end
+                res.data[r * other.cols + c] = sum
+                c = c + 1
+            end
+            r = r + 1
+        end
+        return res
+    end
+
+    action transpose():
+        let res = Matrix(self.cols, self.rows)
+        let r = 0
+        while r < self.rows:
+            let c = 0
+            while c < self.cols:
+                res.data[c * self.rows + r] = self.data[r * self.cols + c]
+                c = c + 1
+            end
+            r = r + 1
+        end
+        return res
     end
 end

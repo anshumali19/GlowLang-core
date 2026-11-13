@@ -1,0 +1,66 @@
+# Concurrency checks: threads, the worker pool, the scheduler and promises.
+
+use "check.glow"
+use "../runtime/workers.glow"
+use "../runtime/scheduler.glow"
+use "../stress/async_stress.glow"
+
+section("concurrency: threads")
+let shared = run_async_stress(8, 5000)
+check_eq("no lost updates", shared["total"], 40000)
+check_eq("every worker finished", len(shared["finished"]), 8)
+check_eq("each worker did its share", shared["by_worker"], [5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000])
+
+section("concurrency: worker pool")
+let pool = WorkerPool(4)
+let done = []
+func make_job(n):
+    return lambda(): done.push(n * n)
+end
+let j = 1
+while j <= 6:
+    pool.submit(make_job(j))
+    j = j + 1
+end
+threads.join_all()
+check_eq("all jobs ran", sorted(done), [1, 4, 9, 16, 25, 36])
+check_eq("the pool remembers its tasks", len(pool.tasks), 6)
+
+section("concurrency: scheduler")
+let sched = Scheduler()
+let ran = []
+sched.schedule(Task(1, lambda(): ran.push("first")))
+sched.schedule(Task(2, lambda(): ran.push("second")))
+check_eq("pending before the run", sched.tasks[0].status, "pending")
+sched.run_all()
+check_eq("ran in order", ran, ["first", "second"])
+check_eq("completed after the run", sched.tasks[1].status, "completed")
+
+section("concurrency: promises")
+let got = []
+let p1 = Promise()
+p1.then(lambda(v): got.push(v))
+check_eq("nothing before it resolves", got, [])
+p1.resolve(41)
+p1.resolve(99)
+check_eq("resolves once", got, [41])
+p1.then(lambda(v): got.push(v + 1))
+check_eq("a late callback runs at once", got, [41, 42])
+
+let all_values = []
+let pa = Promise()
+let pb = Promise()
+async_all([pa, pb]).then(lambda(values): all_values.push(values))
+pb.resolve("b")
+check_eq("async_all waits for every promise", all_values, [])
+pa.resolve("a")
+check_eq("async_all keeps the order", all_values, [["a", "b"]])
+
+let timer_start = os.time()
+let fired = []
+delay(0.05).then(lambda(v): fired.push(v))
+threads.join_all()
+check_eq("delay resolves to true", fired, [true])
+check("delay waited", os.time() - timer_start >= 0.04)
+
+check_eq("40 promises resolved from 40 threads", run_promise_stress(40), range(40))

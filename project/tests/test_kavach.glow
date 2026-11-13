@@ -1,7 +1,7 @@
 use "kavach.glow"
 
 show "--- Industrial Verification: GlowKavach Cryptographic Shield ---"
-let shield = KavachShield(42)
+let shield = KavachShield(kavach_new_key())
 let seal = shield.forge_seal("Sovereign Enterprise Transaction")
 show "Generated Tamper Seal: ", seal
 

@@ -1,0 +1,53 @@
+# Platform checks: the operating system, files, numbers, text and the FFI.
+
+use "check.glow"
+use "../stress/ffi_stress.glow"
+
+section("platform: os")
+check("os.cwd is text", type(os.cwd()) == "string" and len(os.cwd()) > 0)
+check("PATH is set", os.env("PATH") != none)
+check("a missing variable is none", os.env("GLOW_NO_SUCH_VARIABLE_XYZ") == none)
+let t0 = os.time()
+os.sleep(50)
+let waited = os.time() - t0
+check("sleep(50) waits about 50 milliseconds", waited >= 0.04 and waited < 2.0)
+
+section("platform: files")
+let pdir = "glow_project_tmp_platform"
+if not fs.exists(pdir):
+    fs.mkdir(pdir)
+end
+let pfile = pdir + "/note.txt"
+check("write", fs.write(pfile, "line one\n"))
+check("append", fs.append(pfile, "héllo wörld\n"))
+check_eq("read back", fs.read(pfile), "line one\nhéllo wörld\n")
+check("exists", fs.exists(pfile))
+check_eq("list", fs.list(pdir), ["note.txt"])
+check("remove file", fs.remove(pfile))
+check("gone", not fs.exists(pfile))
+check("remove directory", fs.remove(pdir))
+
+section("platform: numbers")
+check_eq("whole results are integers", type(6 / 2), "int")
+check_eq("fractions stay fractions", 7 / 2, 3.5)
+check_eq("whole floats print as integers", str(2.0 * 3), "6")
+check_eq("big integers are exact", 99999999999 * 99999999999, 9999999999800000000001)
+check_eq("modulo", 17 % 5, 2)
+check_near("square root", math.sqrt(2) * math.sqrt(2), 2)
+check_eq("floor", floor(-2.5), -3)
+check_near("0.1 + 0.2", 0.1 + 0.2, 0.3)
+
+section("platform: text")
+check_eq("length counts characters", len("héllo"), 5)
+check_eq("upper", "glow".upper(), "GLOW")
+check_eq("split", "a,b,c".split(","), ["a", "b", "c"])
+check_eq("slice", "hello world"[6:], "world")
+check_eq("f-string", f"{1 + 2} items", "3 items")
+check("in", "low" in "glow" and not ("x" in "glow"))
+check_eq("json round trip", json.parse(json.stringify({"a": [1, 2.5, "x"], "b": none}))["a"], [1, 2.5, "x"])
+
+section("platform: ffi")
+let ffi_sums = run_ffi_stress(20000)
+check_eq("abs through C", ffi_sums[0], 199990000)
+check_eq("strlen through C", ffi_sums[1], 90000)
+check_eq("C memory", run_ffi_memory_stress(2000), 2000)

@@ -1,0 +1,59 @@
+# GlowNet Profiler
+# Times named pieces of work and keeps totals per name.
+
+blueprint Profiler:
+    action init():
+        self.stats = {}
+        self.order = []
+    end
+
+    # Runs f(), records how long it took under `name`, returns f's result.
+    action time(name, f):
+        let start = os.time()
+        let result = f()
+        let took = os.time() - start
+        if not self.stats.has(name):
+            self.stats[name] = {"calls": 0, "total": 0.0}
+            self.order.push(name)
+        end
+        let s = self.stats[name]
+        s["calls"] = s["calls"] + 1
+        s["total"] = s["total"] + took
+        return result
+    end
+
+    action calls(name):
+        if not self.stats.has(name):
+            return 0
+        end
+        return self.stats[name]["calls"]
+    end
+
+    action total(name):
+        if not self.stats.has(name):
+            return 0.0
+        end
+        return self.stats[name]["total"]
+    end
+
+    # The name with the largest total time, or none.
+    action slowest():
+        let best = none
+        for each name in self.order:
+            if best == none or self.stats[name]["total"] > self.stats[best]["total"]:
+                best = name
+            end
+        end
+        return best
+    end
+
+    # One line per name, in the order first seen.
+    action report():
+        let lines = []
+        for each name in self.order:
+            let s = self.stats[name]
+            lines.push(name + ": " + str(s["calls"]) + " calls, " + str(s["total"]) + "s")
+        end
+        return lines
+    end
+end

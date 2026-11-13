@@ -1,0 +1,71 @@
+# Memory checks: the garbage collector under pressure, and the JIT warm-up
+# code in stress/.
+
+use "check.glow"
+use "../stress/gc_stress.glow"
+use "../stress/jit_stress.glow"
+
+section("memory: garbage collector")
+run_gc_stress()
+
+func churn(rounds):
+    let kept = []
+    let i = 0
+    while i < rounds:
+        let temp = [i, i + 1, i + 2, "text " + str(i)]
+        let d = {"n": i, "list": temp}
+        if i % 1000 == 0:
+            kept.push(d)
+        end
+        i = i + 1
+    end
+    return kept
+end
+let kept = churn(300000)
+check_eq("survivors are intact", len(kept), 300)
+check_eq("first survivor", kept[0]["list"][3], "text 0")
+check_eq("last survivor", kept[299]["n"], 299000)
+let info = os.gc_info()
+check("gc reports its numbers", info["allocated"] >= 0 and info["threshold"] > 0)
+check("garbage was collected (under 400 MB live)", info["allocated"] < 400000000)
+
+func build_chain(n):
+    let head = none
+    let i = 0
+    while i < n:
+        head = Node(i, head)
+        i = i + 1
+    end
+    return head
+end
+func chain_length(node):
+    let n = 0
+    while node != none:
+        n = n + 1
+        node = node.next
+    end
+    return n
+end
+check_eq("a 200000-node chain survives", chain_length(build_chain(200000)), 200000)
+
+let text = ""
+let big = 0
+while big < 20000:
+    text = text + "ab"
+    big = big + 1
+end
+check_eq("a long string built piece by piece", len(text), 40000)
+
+section("memory: jit warm-up")
+check_eq("factorial", factorial(15), 1307674368000)
+check_eq("hot loop", hot_loop(100000), 5000050000)
+let ext_a = ExtA()
+let ext_b = ExtB()
+let poly = 0
+let pi = 0
+while pi < 5000:
+    poly = poly + ext_a.run() + ext_b.run()
+    pi = pi + 1
+end
+check_eq("two subclasses in one loop", poly, 15000)
+run_jit_stress()
