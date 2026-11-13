@@ -10,7 +10,7 @@ end
 
 func dispatch(request):
     let path = request["path"]
-    when routes.contains(path):
+    when routes.has(path):
         let handler = routes[path]
         return handler(request)
     otherwise:

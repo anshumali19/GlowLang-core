@@ -1,4 +1,19 @@
-func main():
-    show "GlowLang Restoration Check"
+# GlowNet project: runs every check in project/tests and reports.
+#
+#   glowlang run main.glow            (from the project folder)
+#   glowlang run project/main.glow    (from the GlowLang folder)
+#
+# Each test file can also be run on its own. The exit code is 1 if any
+# check failed.
+
+use "tests/check.glow"
+show "GlowNet project checks"
+use "tests/platform.glow"
+use "tests/memory.glow"
+use "tests/concurrency.glow"
+use "tests/integration.glow"
+
+if check_done() > 0:
+    os.exit(1)
 end
-main()
+show "all checks passed"
