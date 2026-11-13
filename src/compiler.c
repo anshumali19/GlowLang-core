@@ -1601,7 +1601,39 @@ void compile(Node *n) {
     compile_stmt(n);
 }
 
+/* The word that line `line` of `file` starts with (after indentation),
+   copied into out; empty when the line cannot be read. */
+static void line_first_word(const char *file, int line, char *out, size_t cap) {
+    out[0] = '\0';
+    if (!file || line <= 0) return;
+    FILE *f = fopen(file, "r");
+    if (!f) return;
+    char buf[1024];
+    int curr = 1;
+    while (fgets(buf, sizeof(buf), f)) {
+        if (curr == line) {
+            const char *p = buf;
+            while (*p == ' ' || *p == '\t') p++;
+            size_t n = 0;
+            while (p[n] && ((p[n] >= 'a' && p[n] <= 'z') || (p[n] >= 'A' && p[n] <= 'Z') || p[n] == '_') && n + 1 < cap) n++;
+            memcpy(out, p, n);
+            out[n] = '\0';
+            break;
+        }
+        curr++;
+    }
+    fclose(f);
+}
+
 void yyerror(const char *s) {
+    /* Other languages' spellings of else-if are a common slip; say what
+       GlowLang writes instead of a bare "syntax error". */
+    char word[32], hint[160];
+    line_first_word(compiling_file, line_num, word, sizeof(word));
+    if (strcmp(word, "elif") == 0 || strcmp(word, "elseif") == 0 || strcmp(word, "elsif") == 0) {
+        snprintf(hint, sizeof(hint), "%s: GlowLang writes else-if as 'eif' (not '%s')", s, word);
+        s = hint;
+    }
     /* Recorded too, for the LSP's diagnostics and the REPL (they used to
        see no errors at all). */
     glow_add_error(line_num, s);

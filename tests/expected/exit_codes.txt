@@ -6,3 +6,4 @@ test_jit_div0.glow      1
 test_throw_stack.glow   1
 loop_rec_test.glow      1
 test_import.glow        1
+regress_elif_hint.glow  1

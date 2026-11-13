@@ -2763,10 +2763,8 @@ Value native_dict_has(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT || GET_TYPE(args[1]) != VAL_STRING) {
         return value_bool(0);
     }
-    Dict *d = AS_DICT(args[0]);
-    const char *key = AS_STRING(args[1]);
-    Value val = dict_get(d, key);
-    return value_bool(GET_TYPE(val) != VAL_NONE);
+    /* A key whose value is none (JSON null) is still in the dict. */
+    return value_bool(dict_get_idx(AS_DICT(args[0]), AS_STRING(args[1])) >= 0);
 }
 
 Value native_dict_keys(int argc, Value *args) {
@@ -3735,16 +3733,87 @@ static Value http_accept(int argc, Value *args) {
     glow_gil_acquire();
     return value_int(client_fd);
 }
+/* hdr starts with the lower-case name, in any case. */
+static int http_name_is(const char *hdr, const char *name, size_t len) {
+    for (size_t k = 0; k < len; k++) {
+        char c = hdr[k];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != name[k]) return 0;
+    }
+    return 1;
+}
+
+/* The Content-Length in the header block hdr[0..n), or -1 when there is none. */
+static long long http_content_length(const char *hdr, size_t n) {
+    static const char name[] = "content-length:";
+    size_t len = sizeof(name) - 1;
+    for (size_t i = 0; i + len <= n; i++) {
+        if ((i == 0 || hdr[i - 1] == '\n') && http_name_is(hdr + i, name, len)) {
+            size_t j = i + len;
+            while (j < n && (hdr[j] == ' ' || hdr[j] == '\t')) j++;
+            long long v = 0; int digits = 0;
+            while (j < n && hdr[j] >= '0' && hdr[j] <= '9' && digits < 15) { v = v * 10 + (hdr[j] - '0'); j++; digits++; }
+            return digits ? v : -1;
+        }
+    }
+    return -1;
+}
+
+static const char *http_find_crlf2(const char *p, size_t n) {
+    for (size_t i = 0; i + 3 < n; i++)
+        if (p[i] == '\r' && p[i + 1] == '\n' && p[i + 2] == '\r' && p[i + 3] == '\n') return p + i;
+    return NULL;
+}
+
+/* http.read(client): one whole HTTP request, the headers and the
+   Content-Length bytes of body. It used to return a single recv() of at
+   most 4095 bytes, so anything larger arrived cut short. Data that does not
+   start like an HTTP request is returned as soon as it arrives, as before.
+   Returns none when the connection sends nothing. */
+#define HTTP_READ_MAX_HEADERS (64 * 1024)
+#define HTTP_READ_MAX_TOTAL (64 * 1024 * 1024)
 static Value http_read(int argc, Value *args) {
     if (argc < 1) return value_none();
     int fd = AS_INT(args[0]);
-    char buf[4096];
+    size_t cap = 16384, n = 0;
+    char *buf = malloc(cap);
+    if (!buf) return value_none();
+    long long want = -1;          /* total bytes of the request, once known */
     glow_gil_release();
-    int n = read(fd, buf, 4095);
+    for (;;) {
+        if (n == cap) {
+            size_t ncap = cap * 2;
+            char *nb = realloc(buf, ncap);
+            if (!nb) break;
+            buf = nb; cap = ncap;
+        }
+        int got = read(fd, buf + n, (int)(cap - n));
+        if (got <= 0) break;
+        n += (size_t)got;
+        if (want < 0) {
+            const char *end = http_find_crlf2(buf, n);
+            if (!end) {
+                /* Not HTTP (no "HTTP/" in the first line yet): hand it over. */
+                const char *nl = memchr(buf, '\n', n);
+                size_t first = nl ? (size_t)(nl - buf) : n;
+                int http_like = 0;
+                for (size_t i = 0; i + 5 <= first; i++) if (memcmp(buf + i, "HTTP/", 5) == 0) { http_like = 1; break; }
+                if ((nl && !http_like) || n >= HTTP_READ_MAX_HEADERS) break;
+                continue;
+            }
+            size_t head = (size_t)(end - buf) + 4;
+            long long body = http_content_length(buf, head);
+            if (body < 0) body = 0;
+            want = (long long)head + body;
+            if (want > HTTP_READ_MAX_TOTAL) want = HTTP_READ_MAX_TOTAL;
+        }
+        if ((long long)n >= want) break;
+    }
     glow_gil_acquire();
-    if (n <= 0) return value_none();
-    buf[n] = '\0';
-    return value_string_copy(buf);
+    if (n == 0) { free(buf); return value_none(); }
+    Value r = value_string_copy_len(buf, n);
+    free(buf);
+    return r;
 }
 static Value http_write(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return value_int(-1);
