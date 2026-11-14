@@ -52,6 +52,9 @@ void optimize_bytecode(Bytecode *bc) {
 
     // Pass 2: Type Inference and Constant Folding (Multi-pass dataflow propagation)
     for (int pass = 0; pass < 3; pass++) {
+    /* Each pass starts with no known constants: what a register held at the
+       end of the code says nothing about what it holds at the start. */
+    if (nregs) memset(is_const, 0, nregs * sizeof(*is_const));
     for (int i=0; i < bc->count; i++) {
         Instruction *inst = &bc->code[i];
 
@@ -72,12 +75,17 @@ void optimize_bytecode(Bytecode *bc) {
         }
         else if (inst->op == OP_CONST_FLOAT) {
             if (inst->r0 < nregs) {
+                /* No longer the integer constant it may have held before
+                   (leaving that set folded `1 + 0.5` as if 0.5 were the old
+                   integer). */
+                is_const[inst->r0] = 0;
                 reg_types[inst->r0] = 2;
             }
             inst->type = 2;
         }
         else if (inst->op == OP_CONST_STRING) {
             if (inst->r0 < nregs) {
+                is_const[inst->r0] = 0;
                 reg_types[inst->r0] = 3;
             }
             inst->type = 3;
@@ -94,6 +102,7 @@ void optimize_bytecode(Bytecode *bc) {
             int r0 = inst->r0;
             int r1 = inst->r1;
             int r2 = inst->r2;
+            int folded = 0;
             
             if (r1 < nregs && r2 < nregs) {
                 // Type Inference
@@ -125,6 +134,7 @@ void optimize_bytecode(Bytecode *bc) {
                         if (ok && res >= INT32_MIN && res <= INT32_MAX && fits_int48(res)) {
                             inst->op = OP_CONST_INT;
                             inst->arg = (int)res;
+                            folded = 1;
                             if (r0 < nregs) {
                                 is_const[r0] = 1;
                                 const_vals[r0] = value_int(res);
@@ -135,10 +145,13 @@ void optimize_bytecode(Bytecode *bc) {
                     }
                 }
             }
+            /* A result that was not folded is not a known constant. */
+            if (!folded && r0 < nregs) is_const[r0] = 0;
         }
         else if (inst->op >= OP_LT && inst->op <= OP_EQ) {
             int r1 = inst->r1;
             int r2 = inst->r2;
+            if (inst->r0 < nregs) is_const[inst->r0] = 0;
             if (r1 < nregs && r2 < nregs) {
                 if (reg_types[r1] == 1 && reg_types[r2] == 1) {
                     if (inst->op == OP_LT) inst->op = OP_LT_INT;

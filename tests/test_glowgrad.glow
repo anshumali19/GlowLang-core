@@ -1,0 +1,370 @@
+# glowgrad: automatic differentiation, layers, losses, optimizers, training.
+use "glowgrad"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func near(name, got, want, tol = 1e-9):
+    let d = got - want
+    if d < 0:
+        d = 0 - d
+    end
+    if d <= tol:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func close(name, got, want, tol = 1e-9):
+    if gnum.allclose(got, want, tol):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains("glowgrad:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+# Compares backward() with slopes measured by nudging each input number.
+# build(vars) returns a single-number Var computed from the list of Vars.
+func grad_check(name, build, inputs):
+    let vars = []
+    for each data in inputs:
+        vars.push(Var(data, true))
+    end
+    build(vars).backward()
+    let worst = 0.0
+    let h = 1e-6
+    let k = 0
+    while k < len(vars):
+        let v = vars[k]
+        let i = 0
+        while i < v.rows:
+            let j = 0
+            while j < v.cols:
+                let keep = v.data[i][j]
+                v.data[i][j] = keep + h
+                let up = build(vars).item()
+                v.data[i][j] = keep - h
+                let down = build(vars).item()
+                v.data[i][j] = keep
+                let slope = (up - down) / (2 * h)
+                let got = 0.0
+                if v.grad != none:
+                    got = v.grad[i][j]
+                end
+                let diff = got - slope
+                if diff < 0:
+                    diff = 0 - diff
+                end
+                if diff > worst:
+                    worst = diff
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        k = k + 1
+    end
+    if worst < 1e-5:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: gradient of " + name + " is off by " + str(worst)
+    end
+end
+
+let A = [[0.5, -1.2, 2.0], [1.5, 0.3, -0.7]]
+let B = [[1.1, 0.4, -0.9], [-0.6, 2.2, 0.8]]
+let W = [[0.2, -0.5], [1.3, 0.7], [-0.4, 0.9]]
+let ROW = [[0.3, -0.8, 1.4]]
+
+show "== values"
+let x = Var([[1, 2], [3, 4]])
+ok("shape", x.shape() == [2, 2])
+ok("a vector is one row", Var([1, 2, 3]).shape() == [1, 3])
+ok("a number is 1 x 1", Var(5).shape() == [1, 1] and Var(5).item() == 5)
+close("add", x.add(Var([[10, 20], [30, 40]])).tolist(), [[11, 22], [33, 44]])
+close("add a number", x.add(1).tolist(), [[2, 3], [4, 5]])
+close("add a row", x.add(Var([10, 20])).tolist(), [[11, 22], [13, 24]])
+close("sub", x.sub(1).tolist(), [[0, 1], [2, 3]])
+close("mul", x.mul(x).tolist(), [[1, 4], [9, 16]])
+close("div", x.div(2).tolist(), [[0.5, 1], [1.5, 2]])
+close("matmul", x.matmul(Var([[1], [1]])).tolist(), [[3], [7]])
+close("neg", x.neg().tolist(), [[-1, -2], [-3, -4]])
+close("relu", Var([[-1, 2]]).relu().tolist(), [[0, 2]])
+close("sigmoid", Var([[0]]).sigmoid().tolist(), [[0.5]])
+close("tanh", Var([[0]]).tanh().tolist(), [[0]])
+close("exp log", Var([[1, 2]]).exp().log().tolist(), [[1, 2]])
+close("pow", x.pow(2).tolist(), [[1, 4], [9, 16]])
+near("sum", x.sum().item(), 10)
+near("mean", x.mean().item(), 2.5)
+close("transpose", x.transpose().tolist(), [[1, 3], [2, 4]])
+let copy = x.tolist()
+copy[0][0] = 99
+ok("tolist is a copy", x.data[0][0] == 1)
+let source = [[1, 2]]
+let held = Var(source)
+source[0][0] = 50
+ok("Var copies its data", held.data[0][0] == 1)
+
+show "== simple gradients"
+let a = Var(3, true)
+let b = Var(4, true)
+let c = a.mul(b).add(a)
+c.backward()
+near("d(ab + a)/da", a.grad[0][0], 5)
+near("d(ab + a)/db", b.grad[0][0], 3)
+let s = Var(2, true)
+s.mul(s).mul(s).backward()
+near("d(x^3)/dx at 2", s.grad[0][0], 12)
+let t = Var(5, true)
+t.add(t).backward()
+near("a Var used twice", t.grad[0][0], 2)
+t.add(t).backward()
+near("gradients add up across calls", t.grad[0][0], 4)
+t.zero_grad()
+ok("zero_grad clears", t.grad == none)
+let frozen = Var(2)
+let live = Var(3, true)
+live.mul(frozen).backward()
+ok("no gradient without requires_grad", frozen.grad == none and live.grad[0][0] == 2)
+let leaf = Var(7, true)
+leaf.backward()
+near("a leaf's own gradient is 1", leaf.grad[0][0], 1)
+let big = Var([[1, 2], [3, 4]], true)
+big.mul(2).sum().backward()
+close("gradient has the Var's shape", big.grad, [[2, 2], [2, 2]])
+let shared = Var(2, true)
+let mid = shared.mul(3)
+let total = mid.add(mid.mul(mid))
+total.backward()
+near("shared middle result", shared.grad[0][0], 3 + 2 * 6 * 3)
+total.backward()
+near("second backward on the same graph doubles the leaf only", shared.grad[0][0], 2 * (3 + 36))
+
+show "== gradient checks"
+grad_check("add", lambda(v): v[0].add(v[1]).mul(v[0]).sum(), [A, B])
+grad_check("sub", lambda(v): v[0].sub(v[1]).pow(2).sum(), [A, B])
+grad_check("mul", lambda(v): v[0].mul(v[1]).sum(), [A, B])
+grad_check("div", lambda(v): v[0].div(v[1]).sum(), [A, [[1.1, 0.4, 0.9], [0.6, 2.2, 0.8]]])
+grad_check("matmul", lambda(v): v[0].matmul(v[1]).pow(2).sum(), [A, W])
+grad_check("add a row to every row", lambda(v): v[0].add(v[1]).pow(3).sum(), [A, ROW])
+grad_check("multiply every row by a row", lambda(v): v[0].mul(v[1]).tanh().sum(), [A, ROW])
+grad_check("divide by a single number", lambda(v): v[0].div(v[1]).sum(), [A, 2.5])
+grad_check("number times matrix", lambda(v): v[1].mul(v[0]).exp().mean(), [A, 0.7])
+grad_check("neg", lambda(v): v[0].neg().exp().sum(), [A])
+grad_check("relu", lambda(v): v[0].relu().mul(v[0]).sum(), [A])
+grad_check("tanh", lambda(v): v[0].tanh().sum(), [A])
+grad_check("sigmoid", lambda(v): v[0].sigmoid().mul(v[1]).sum(), [A, B])
+grad_check("exp", lambda(v): v[0].exp().sum(), [A])
+grad_check("log", lambda(v): v[0].mul(v[0]).add(1).log().sum(), [A])
+grad_check("pow 3", lambda(v): v[0].pow(3).sum(), [A])
+grad_check("pow 0.5", lambda(v): v[0].mul(v[0]).add(1).pow(0.5).sum(), [A])
+grad_check("mean", lambda(v): v[0].mul(v[0]).mean(), [A])
+grad_check("transpose", lambda(v): v[0].transpose().matmul(v[1]).sum(), [A, B])
+grad_check("two layers", lambda(v): v[0].matmul(v[1]).add(v[2]).tanh().matmul(v[3]).sum(), [A, W, [[0.1, -0.2]], [[0.5], [-1.5]]])
+grad_check("mse loss", lambda(v): mse_loss(v[0].matmul(v[1]), [[1, 0], [0, 1]]), [A, W])
+grad_check("mse loss with a list target", lambda(v): mse_loss(v[0].matmul(v[1]), [1, 2]), [A, [[0.2], [1.3], [-0.4]]])
+grad_check("cross entropy", lambda(v): cross_entropy_loss(v[0], [2, 0]), [A])
+grad_check("cross entropy after a layer", lambda(v): cross_entropy_loss(v[0].matmul(v[1]).add(v[2]), [1, 0]), [A, W, [[0.3, -0.3]]])
+grad_check("binary cross entropy", lambda(v): bce_loss(v[0].matmul(v[1]), [1, 0]), [A, [[0.2], [1.3], [-0.4]]])
+
+show "== losses"
+near("mse value", mse_loss(Var([[1, 2], [3, 4]]), [[1, 2], [3, 6]]).item(), 1)
+near("mse of a perfect fit", mse_loss(Var([[1], [2]]), [1, 2]).item(), 0)
+near("cross entropy of even odds", cross_entropy_loss(Var([[0, 0], [0, 0]]), [0, 1]).item(), math.log(2))
+ok("cross entropy with huge logits stays finite", cross_entropy_loss(Var([[1000, -1000]]), [1]).item() > 1999)
+near("cross entropy of a sure, right answer", cross_entropy_loss(Var([[1000, -1000]]), [0]).item(), 0)
+near("bce of even odds", bce_loss(Var([[0], [0]]), [0, 1]).item(), math.log(2))
+ok("bce with huge logits stays finite", bce_loss(Var([[1000], [-1000]]), [0, 1]).item() > 999)
+near("bce of sure, right answers", bce_loss(Var([[1000], [-1000]]), [1, 0]).item(), 0)
+
+show "== layers"
+let d1 = Dense(3, 2, 5)
+let d2 = Dense(3, 2, 5)
+ok("same seed, same weights", d1.weight.data == d2.weight.data)
+ok("other seed, other weights", Dense(3, 2, 6).weight.data != d1.weight.data)
+ok("weight and bias shapes", d1.weight.shape() == [3, 2] and d1.bias.shape() == [1, 2])
+close("bias starts at zero", d1.bias.data, [[0, 0]])
+let limit = math.sqrt(6.0 / 5)
+ok("weights start small", gnum.max(gnum.abs(d1.weight.data)) <= limit)
+ok("layer output shape", d1.forward(Var(A)).shape() == [2, 2])
+close("layer output", d1.forward(Var(A)).tolist(), gnum.dot(A, d1.weight.data))
+close("activation relu", Activation("relu").forward(Var([[-2, 3]])).tolist(), [[0, 3]])
+let drop = Dropout(0.5, 1)
+let dropped = drop.forward(Var(gnum.ones([20, 20]))).tolist()
+let zeros = 0
+let twos = 0
+for each v in gnum.flatten(dropped):
+    if v == 0:
+        zeros = zeros + 1
+    eif v == 2:
+        twos = twos + 1
+    end
+end
+ok("dropout zeroes about half and doubles the rest", zeros + twos == 400 and zeros > 150 and zeros < 250)
+drop.set_training(false)
+close("dropout does nothing in evaluation", drop.forward(Var([[1, 2]])).tolist(), [[1, 2]])
+let net = Sequential([Dense(2, 4, 1), Activation("tanh"), Dense(4, 1, 2)])
+ok("parameters", len(net.parameters()) == 4 and net.parameter_count() == 2 * 4 + 4 + 4 + 1)
+ok("forward accepts plain data", net.forward([[1, 2]]).shape() == [1, 1])
+ok("predict returns plain rows", type(net.predict([[1, 2], [3, 4]])) == "list" and len(net.predict([[1, 2], [3, 4]])) == 2)
+
+show "== optimizers"
+# Minimise (w - 3)^2 from w = 0.
+let w1 = Var(0, true)
+let sgd = SGDOptimizer([w1], 0.1)
+every i from 1 to 100:
+    sgd.zero_grad()
+    w1.sub(3).pow(2).backward()
+    sgd.step()
+end
+near("sgd finds the minimum", w1.item(), 3, 1e-6)
+let w2 = Var(0, true)
+let step_once = SGDOptimizer([w2], 0.25)
+w2.sub(3).pow(2).backward()
+step_once.step()
+near("one sgd step", w2.item(), 1.5)
+let w3 = Var(0, true)
+let mom = SGDOptimizer([w3], 0.05, 0.9)
+every i from 1 to 300:
+    mom.zero_grad()
+    w3.sub(3).pow(2).backward()
+    mom.step()
+end
+near("momentum finds the minimum", w3.item(), 3, 1e-4)
+let w4 = Var([[0, 0]], true)
+let adam = AdamOptimizer([w4], 0.1)
+every i from 1 to 400:
+    adam.zero_grad()
+    w4.sub(Var([[3, -2]])).pow(2).sum().backward()
+    adam.step()
+end
+close("adam finds the minimum", w4.tolist(), [[3, -2]], 1e-3)
+let w5 = Var(0, true)
+let adam_once = AdamOptimizer([w5], 0.1)
+w5.sub(3).pow(2).backward()
+adam_once.step()
+near("adam's first step has size lr", w5.item(), 0.1, 1e-6)
+let untouched = Var(1, true)
+SGDOptimizer([untouched], 0.1).step()
+near("a step with no gradient changes nothing", untouched.item(), 1)
+
+show "== training"
+let xor_x = [[0, 0], [0, 1], [1, 0], [1, 1]]
+let xor_y = [0, 1, 1, 0]
+let xor_net = Sequential([Dense(2, 8, 3), Activation("tanh"), Dense(8, 1, 4)])
+let history = train_network(xor_net, xor_x, xor_y, AdamOptimizer(xor_net.parameters(), 0.05), "bce", 400)
+ok("one loss per epoch", len(history) == 400)
+ok("the loss goes down", history[399] < history[0] * 0.1)
+let xor_out = xor_net.predict(xor_x)
+ok("learns xor", xor_out[0][0] < 0 and xor_out[1][0] > 0 and xor_out[2][0] > 0 and xor_out[3][0] < 0)
+
+# A straight line with mse.
+let line_x = [[0], [1], [2], [3], [4]]
+let line_y = [1, 3, 5, 7, 9]
+let line_net = Sequential([Dense(1, 1, 1)])
+let line_hist = train_network(line_net, line_x, line_y, AdamOptimizer(line_net.parameters(), 0.1), "mse", 600)
+near("regression weight", line_net.parameters()[0].item(), 2, 0.01)
+near("regression bias", line_net.parameters()[1].item(), 1, 0.02)
+
+# Three groups of points, cross entropy, mini-batches.
+let rng = RandomState(11)
+let centers = [[0, 0], [5, 5], [0, 6]]
+let cx = []
+let cy = []
+every i from 0 to 89:
+    let k = i % 3
+    cx.push([centers[k][0] + rng.normal(0, 0.7), centers[k][1] + rng.normal(0, 0.7)])
+    cy.push(k)
+end
+let clf = Sequential([Dense(2, 12, 7), Activation("relu"), Dense(12, 3, 8)])
+let clf_hist = train_network(clf, cx, cy, AdamOptimizer(clf.parameters(), 0.02), "cross_entropy", 60, 16, 5)
+let right = 0
+let out_rows = clf.predict(cx)
+every i from 0 to 89:
+    if gnum.argmax(out_rows[i]) == cy[i]:
+        right = right + 1
+    end
+end
+ok("classifies the three groups", right >= 87)
+ok("mini-batch loss goes down", clf_hist[59] < clf_hist[0] * 0.3)
+let clf2 = Sequential([Dense(2, 12, 7), Activation("relu"), Dense(12, 3, 8)])
+let clf2_hist = train_network(clf2, cx, cy, AdamOptimizer(clf2.parameters(), 0.02), "cross_entropy", 60, 16, 5)
+ok("same seeds, same training", clf2_hist == clf_hist)
+
+show "== saving"
+let path = fs.join(os.temp_dir(), "glowgrad_test_weights.json")
+clf.save(path)
+let loaded = Sequential([Dense(2, 12, 100), Activation("relu"), Dense(12, 3, 101)])
+ok("a new model differs before loading", loaded.predict(cx) != out_rows)
+loaded.load(path)
+close("a loaded model predicts the same", loaded.predict(cx), out_rows, 1e-12)
+fs.remove(path)
+let copied = Sequential([Dense(2, 12, 0), Activation("relu"), Dense(12, 3, 0)]).load_state(clf.state())
+close("load_state copies the weights", copied.predict(cx), out_rows, 1e-12)
+let st = clf.state()
+st[0][0][0] = 12345
+ok("state is a copy", clf.parameters()[0].data[0][0] != 12345)
+
+show "== errors"
+fails_with("shapes", lambda(): Var([[1, 2]]).add(Var([[1, 2, 3]])), "do not match")
+fails_with("column against rows", lambda(): Var([[1, 2], [3, 4]]).add(Var([[1], [2], [3]])), "do not match")
+fails_with("matmul shapes", lambda(): Var([[1, 2]]).matmul(Var([[1, 2]])), "do not line up")
+fails_with("ragged data", lambda(): Var([[1, 2], [3]]), "same length")
+fails_with("text data", lambda(): Var("abc"), "needs numbers")
+fails_with("empty data", lambda(): Var([]), "empty")
+fails_with("backward on a matrix", lambda(): Var([[1, 2]], true).backward(), "single number")
+fails_with("backward with nothing to differentiate", lambda(): Var(1).add(2).backward(), "requires_grad")
+fails_with("item of a matrix", lambda(): Var([[1, 2]]).item(), "not a single number")
+fails_with("log of zero", lambda(): Var([[1, 0]]).log(), "not positive")
+fails_with("divide by zero", lambda(): Var(1).div(0), "division by zero")
+fails_with("pow of a Var", lambda(): Var(2).pow(Var(2)), "number as the power")
+fails_with("layer input width", lambda(): Dense(3, 2).forward(Var([[1, 2]])), "expected 3 input column(s), got 2")
+fails_with("unknown activation", lambda(): Activation("swish"), "unknown kind")
+fails_with("dropout range", lambda(): Dropout(1), "p must be")
+fails_with("empty model", lambda(): Sequential([]), "non-empty list of layers")
+fails_with("mse shapes", lambda(): mse_loss(Var([[1, 2]]), [[1, 2, 3]]), "target has (1, 3)")
+fails_with("cross entropy target count", lambda(): cross_entropy_loss(Var([[1, 2]]), [0, 1]), "need 1 targets")
+fails_with("cross entropy class range", lambda(): cross_entropy_loss(Var([[1, 2]]), [2]), "not a class number")
+fails_with("bce target range", lambda(): bce_loss(Var([[1]]), [2]), "from 0 to 1")
+fails_with("optimizer without parameters", lambda(): SGDOptimizer([]), "non-empty list")
+fails_with("optimizer with a frozen Var", lambda(): AdamOptimizer([Var(1)]), "requires_grad = true")
+fails_with("learning rate", lambda(): SGDOptimizer([Var(1, true)], 0), "lr must be positive")
+fails_with("unknown loss", lambda(): train_network(net, [[1, 2]], [1], SGDOptimizer(net.parameters()), "hinge"), "unknown loss")
+fails_with("X and y lengths", lambda(): train_network(net, [[1, 2]], [1, 2], SGDOptimizer(net.parameters())), "same length")
+fails_with("load_state count", lambda(): net.load_state([[[1]]]), "expected 4 weight matrices")
+fails_with("load_state shape", lambda(): net.load_state([[[1]], [[1]], [[1]], [[1]]]), "wrong shape")
+fails_with("load a missing file", lambda(): net.load(fs.join(os.temp_dir(), "glowgrad_no_such_file.json")), "no file")
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

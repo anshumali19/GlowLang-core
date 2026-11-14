@@ -1,0 +1,1033 @@
+# glowgrad.glow
+# Automatic differentiation and neural networks for GlowLang, written in
+# GlowLang.
+#
+#     use "glowgrad"
+#     let model = Sequential([Dense(2, 8, 1), Activation("tanh"), Dense(8, 1, 2)])
+#     let opt = AdamOptimizer(model.parameters(), 0.05)
+#     every step from 1 to 300:
+#         let loss = mse_loss(model.forward(Var(X)), y)
+#         opt.zero_grad()
+#         loss.backward()
+#         opt.step()
+#     end
+#
+# A Var holds a matrix (a list of rows) and remembers how it was computed.
+# Calling backward() on a single-number result fills in .grad for every Var
+# created with requires_grad = true: the slope of the result with respect to
+# each of its numbers.
+#
+# Shapes follow the usual rules: same shape, or a single number, or a
+# one-row Var (such as a bias) paired with every row of the other.
+#
+# Mistakes raise an error that starts with "glowgrad:".
+
+use "glownum"
+
+# ---------------------------------------------------------------- helpers
+
+func _gg_fail(msg):
+    throw "glowgrad: " + msg
+end
+
+# Any number, vector or matrix as a matrix (a vector becomes one row).
+func _gg_matrix(data, what):
+    let d = _gn_ndim(data)
+    if d == 0:
+        let t = type(data)
+        if t != "int" and t != "float":
+            _gg_fail(what + " needs numbers, got " + str(data))
+        end
+        return [[data]]
+    end
+    if d == 1:
+        if len(data) == 0:
+            _gg_fail(what + " cannot be empty")
+        end
+        return [data.copy()]
+    end
+    let cols = len(data[0])
+    if cols == 0:
+        _gg_fail(what + " cannot have empty rows")
+    end
+    let out = []
+    for each row in data:
+        if type(row) != "list" or len(row) != cols:
+            _gg_fail(what + ": every row must have the same length")
+        end
+        out.push(row.copy())
+    end
+    return out
+end
+
+func _gg_zeros(rows, cols):
+    let out = []
+    let i = 0
+    while i < rows:
+        let r = []
+        let j = 0
+        while j < cols:
+            r.push(0.0)
+            j = j + 1
+        end
+        out.push(r)
+        i = i + 1
+    end
+    return out
+end
+
+func _gg_shape_text(v):
+    return "(" + str(v.rows) + ", " + str(v.cols) + ")"
+end
+
+# The data of v stretched to rows x cols (see the shape rules above).
+func _gg_expand(v, rows, cols, what):
+    if v.rows == rows and v.cols == cols:
+        return v.data
+    end
+    let out = []
+    if v.rows == 1 and v.cols == 1:
+        let x = v.data[0][0]
+        let i = 0
+        while i < rows:
+            let r = []
+            let j = 0
+            while j < cols:
+                r.push(x)
+                j = j + 1
+            end
+            out.push(r)
+            i = i + 1
+        end
+        return out
+    end
+    if v.rows == 1 and v.cols == cols:
+        let i = 0
+        while i < rows:
+            out.push(v.data[0])
+            i = i + 1
+        end
+        return out
+    end
+    _gg_fail(what + ": shapes do not match")
+end
+
+# Adds the gradient g (shaped like the result) into v.grad, summing over
+# whatever was stretched.
+func _gg_accumulate(v, g):
+    if not v.requires_grad:
+        return none
+    end
+    if v.grad == none:
+        v.grad = _gg_zeros(v.rows, v.cols)
+    end
+    let grad = v.grad
+    let rows = len(g)
+    let cols = len(g[0])
+    if v.rows == rows and v.cols == cols:
+        let i = 0
+        while i < rows:
+            let gr = grad[i]
+            let src = g[i]
+            let j = 0
+            while j < cols:
+                gr[j] = gr[j] + src[j]
+                j = j + 1
+            end
+            i = i + 1
+        end
+        return none
+    end
+    if v.rows == 1 and v.cols == 1:
+        let total = 0.0
+        for each row in g:
+            for each x in row:
+                total = total + x
+            end
+        end
+        grad[0][0] = grad[0][0] + total
+        return none
+    end
+    # One row paired with every row of the result.
+    let gr = grad[0]
+    for each row in g:
+        let j = 0
+        while j < cols:
+            gr[j] = gr[j] + row[j]
+            j = j + 1
+        end
+    end
+    return none
+end
+
+func _gg_wrap(x, what):
+    if type(x) == "instance":
+        return x
+    end
+    return Var(x)
+end
+
+# The shape two operands stretch to, as [rows, cols].
+func _gg_common_shape(a, b, what):
+    let rows = a.rows
+    if b.rows > rows:
+        rows = b.rows
+    end
+    let cols = a.cols
+    if b.cols > cols:
+        cols = b.cols
+    end
+    let ok_a = (a.rows == rows and a.cols == cols) or (a.rows == 1 and a.cols == 1) or (a.rows == 1 and a.cols == cols)
+    let ok_b = (b.rows == rows and b.cols == cols) or (b.rows == 1 and b.cols == 1) or (b.rows == 1 and b.cols == cols)
+    if not ok_a or not ok_b:
+        _gg_fail(what + ": shapes " + _gg_shape_text(a) + " and " + _gg_shape_text(b) + " do not match")
+    end
+    return [rows, cols]
+end
+
+func _gg_result(data, parents, op):
+    let out = Var(data)
+    for each p in parents:
+        if p.requires_grad:
+            out.requires_grad = true
+        end
+    end
+    if out.requires_grad:
+        out.parents = parents
+        out.op = op
+    end
+    return out
+end
+
+# op: 0 add, 1 subtract, 2 multiply, 3 divide
+func _gg_binary(a, b, op, name):
+    b = _gg_wrap(b, name)
+    let shape = _gg_common_shape(a, b, name)
+    let da = _gg_expand(a, shape[0], shape[1], name)
+    let db = _gg_expand(b, shape[0], shape[1], name)
+    let data = []
+    let i = 0
+    while i < shape[0]:
+        let ra = da[i]
+        let rb = db[i]
+        let r = []
+        let j = 0
+        while j < shape[1]:
+            if op == 0:
+                r.push(ra[j] + rb[j])
+            eif op == 1:
+                r.push(ra[j] - rb[j])
+            eif op == 2:
+                r.push(ra[j] * rb[j])
+            else:
+                if rb[j] == 0:
+                    _gg_fail("div: division by zero")
+                end
+                r.push(ra[j] / rb[j])
+            end
+            j = j + 1
+        end
+        data.push(r)
+        i = i + 1
+    end
+    return _gg_result(data, [a, b], name)
+end
+
+# fn: the same numbers as glownum's _gn_fn (0 exp, 1 log, 4 sigmoid, 5 tanh,
+# 6 relu, 7 negate).
+func _gg_unary(a, fn, name):
+    return _gg_result(_gn_unary(fn, a.data), [a], name)
+end
+
+# g times f, element by element (f is a matrix or a number).
+func _gg_scale(g, f):
+    return _gn_binary(2, g, f)
+end
+
+# Sends node.grad on to node's parents.
+func _gg_backward_node(node):
+    let op = node.op
+    let g = node.grad
+    let p = node.parents
+    if op == "add":
+        _gg_accumulate(p[0], g)
+        _gg_accumulate(p[1], g)
+    eif op == "sub":
+        _gg_accumulate(p[0], g)
+        _gg_accumulate(p[1], _gn_unary(7, g))
+    eif op == "mul":
+        _gg_accumulate(p[0], _gg_scale(g, _gg_expand(p[1], node.rows, node.cols, "mul")))
+        _gg_accumulate(p[1], _gg_scale(g, _gg_expand(p[0], node.rows, node.cols, "mul")))
+    eif op == "div":
+        let b = _gg_expand(p[1], node.rows, node.cols, "div")
+        _gg_accumulate(p[0], _gn_binary(3, g, b))
+        # d(a/b)/db = -(a/b)/b, and a/b is this node's data.
+        _gg_accumulate(p[1], _gn_unary(7, _gn_binary(3, _gg_scale(g, node.data), b)))
+    eif op == "matmul":
+        if p[0].requires_grad:
+            _gg_accumulate(p[0], _gn_matmul(g, _gn_transpose(p[1].data)))
+        end
+        if p[1].requires_grad:
+            _gg_accumulate(p[1], _gn_matmul(_gn_transpose(p[0].data), g))
+        end
+    eif op == "neg":
+        _gg_accumulate(p[0], _gn_unary(7, g))
+    eif op == "relu":
+        let out = []
+        let i = 0
+        while i < node.rows:
+            let r = []
+            let j = 0
+            while j < node.cols:
+                if node.data[i][j] > 0:
+                    r.push(g[i][j])
+                else:
+                    r.push(0.0)
+                end
+                j = j + 1
+            end
+            out.push(r)
+            i = i + 1
+        end
+        _gg_accumulate(p[0], out)
+    eif op == "tanh":
+        # 1 - tanh^2
+        _gg_accumulate(p[0], _gg_scale(g, _gn_binary(1, 1.0, _gn_unary(8, node.data))))
+    eif op == "sigmoid":
+        # s (1 - s)
+        _gg_accumulate(p[0], _gg_scale(g, _gg_scale(node.data, _gn_binary(1, 1.0, node.data))))
+    eif op == "exp":
+        _gg_accumulate(p[0], _gg_scale(g, node.data))
+    eif op == "log":
+        _gg_accumulate(p[0], _gn_binary(3, g, p[0].data))
+    eif op == "pow":
+        # d(x^k) = k x^(k-1)
+        let k = node.aux
+        _gg_accumulate(p[0], _gg_scale(g, _gg_scale(_gn_binary(4, p[0].data, k - 1), k)))
+    eif op == "sum":
+        _gg_accumulate(p[0], _gn_binary(0, _gg_zeros(p[0].rows, p[0].cols), g[0][0]))
+    eif op == "mean":
+        let share = g[0][0] / (p[0].rows * p[0].cols * 1.0)
+        _gg_accumulate(p[0], _gn_binary(0, _gg_zeros(p[0].rows, p[0].cols), share))
+    eif op == "transpose":
+        _gg_accumulate(p[0], _gn_transpose(g))
+    eif op == "mse":
+        # aux is the target; d = 2 (pred - target) / count
+        let count = p[0].rows * p[0].cols * 1.0
+        let diff = _gn_binary(1, p[0].data, node.aux)
+        _gg_accumulate(p[0], _gg_scale(diff, 2.0 * g[0][0] / count))
+    eif op == "softmax_ce":
+        # aux is [probabilities, target class numbers]; d = (probs - onehot) / rows
+        let probs = node.aux[0]
+        let targets = node.aux[1]
+        let scale = g[0][0] / (p[0].rows * 1.0)
+        let out = []
+        let i = 0
+        while i < p[0].rows:
+            let r = []
+            let j = 0
+            while j < p[0].cols:
+                let d = probs[i][j]
+                if j == targets[i]:
+                    d = d - 1.0
+                end
+                r.push(d * scale)
+                j = j + 1
+            end
+            out.push(r)
+            i = i + 1
+        end
+        _gg_accumulate(p[0], out)
+    eif op == "bce_logits":
+        # aux is [sigmoid(logits), targets]; d = (s - y) / count
+        let count = p[0].rows * p[0].cols * 1.0
+        _gg_accumulate(p[0], _gg_scale(_gn_binary(1, node.aux[0], node.aux[1]), g[0][0] / count))
+    else:
+        _gg_fail("backward: unknown operation " + str(op))
+    end
+    return none
+end
+
+# Every Var the result depends on, each after everything it depends on.
+func _gg_order(root):
+    let order = []
+    let stack = [[root, 0]]
+    root.mark = true
+    while len(stack) > 0:
+        let frame = stack[len(stack) - 1]
+        let node = frame[0]
+        if frame[1] < len(node.parents):
+            let parent = node.parents[frame[1]]
+            frame[1] = frame[1] + 1
+            if not parent.mark and parent.requires_grad:
+                parent.mark = true
+                stack.push([parent, 0])
+            end
+        else:
+            order.push(node)
+            stack.pop()
+        end
+    end
+    for each node in order:
+        node.mark = false
+    end
+    return order
+end
+
+# ---------------------------------------------------------------- Var
+
+blueprint Var:
+    action init(data, requires_grad = false):
+        self.data = _gg_matrix(data, "Var")
+        self.rows = len(self.data)
+        self.cols = len(self.data[0])
+        self.requires_grad = requires_grad == true
+        self.grad = none
+        self.parents = []
+        self.op = ""
+        self.aux = none
+        self.mark = false
+    end
+
+    action shape():
+        return [self.rows, self.cols]
+    end
+
+    # The single number of a 1 x 1 Var.
+    action item():
+        if self.rows != 1 or self.cols != 1:
+            _gg_fail("item: the Var has shape " + _gg_shape_text(self) + ", not a single number")
+        end
+        return self.data[0][0]
+    end
+
+    # A copy of the numbers as a list of rows.
+    action tolist():
+        return _gn_copy(self.data)
+    end
+
+    action add(other):
+        return _gg_binary(self, other, 0, "add")
+    end
+
+    action sub(other):
+        return _gg_binary(self, other, 1, "sub")
+    end
+
+    action mul(other):
+        return _gg_binary(self, other, 2, "mul")
+    end
+
+    action div(other):
+        return _gg_binary(self, other, 3, "div")
+    end
+
+    # Matrix product.
+    action matmul(other):
+        other = _gg_wrap(other, "matmul")
+        if self.cols != other.rows:
+            _gg_fail("matmul: shapes " + _gg_shape_text(self) + " and " + _gg_shape_text(other) + " do not line up")
+        end
+        return _gg_result(_gn_matmul(self.data, other.data), [self, other], "matmul")
+    end
+
+    action neg():
+        return _gg_unary(self, 7, "neg")
+    end
+
+    action relu():
+        return _gg_unary(self, 6, "relu")
+    end
+
+    action tanh():
+        return _gg_unary(self, 5, "tanh")
+    end
+
+    action sigmoid():
+        return _gg_unary(self, 4, "sigmoid")
+    end
+
+    action exp():
+        return _gg_unary(self, 0, "exp")
+    end
+
+    action log():
+        for each row in self.data:
+            for each x in row:
+                if x <= 0:
+                    _gg_fail("log of a number that is not positive (" + str(x) + ")")
+                end
+            end
+        end
+        return _gg_unary(self, 1, "log")
+    end
+
+    # Every number raised to the fixed power k.
+    action pow(k):
+        let t = type(k)
+        if t != "int" and t != "float":
+            _gg_fail("pow needs a number as the power")
+        end
+        let out = _gg_result(_gn_binary(4, self.data, k), [self], "pow")
+        out.aux = k
+        return out
+    end
+
+    # The total of every number, as a 1 x 1 Var.
+    action sum():
+        return _gg_result(_gn_vsum(_gn_flat(self.data)), [self], "sum")
+    end
+
+    action mean():
+        return _gg_result(_gn_vsum(_gn_flat(self.data)) / (self.rows * self.cols * 1.0), [self], "mean")
+    end
+
+    action transpose():
+        return _gg_result(_gn_transpose(self.data), [self], "transpose")
+    end
+
+    # Fills in .grad for everything this single number was computed from.
+    # Gradients add up across calls; clear them with zero_grad().
+    action backward():
+        if self.rows != 1 or self.cols != 1:
+            _gg_fail("backward needs a single number; this Var has shape " + _gg_shape_text(self) + " (call sum() or mean() first)")
+        end
+        if not self.requires_grad:
+            _gg_fail("backward: nothing here was created with requires_grad = true")
+        end
+        let order = _gg_order(self)
+        # Results in between start from zero each time; only the Vars the
+        # user created (which have no parents) keep adding up.
+        for each node in order:
+            if len(node.parents) > 0:
+                node.grad = none
+            end
+        end
+        self.grad = [[1.0]]
+        let i = len(order) - 1
+        while i >= 0:
+            let node = order[i]
+            if len(node.parents) > 0 and node.grad != none:
+                _gg_backward_node(node)
+            end
+            i = i - 1
+        end
+        return none
+    end
+
+    action zero_grad():
+        self.grad = none
+    end
+end
+
+# ---------------------------------------------------------------- losses
+
+# Mean squared error between a prediction and a target of the same shape.
+func mse_loss(pred, target):
+    if type(target) == "instance":
+        target = target.data
+    end
+    let t = _gg_matrix(target, "mse_loss target")
+    # A plain list of n targets pairs with an n x 1 prediction.
+    if len(t) == 1 and pred.rows > 1 and pred.cols == 1 and len(t[0]) == pred.rows:
+        t = _gn_transpose(t)
+    end
+    if len(t) != pred.rows or len(t[0]) != pred.cols:
+        _gg_fail("mse_loss: the prediction has shape " + _gg_shape_text(pred) + " but the target has (" + str(len(t)) + ", " + str(len(t[0])) + ")")
+    end
+    let total = 0.0
+    let i = 0
+    while i < pred.rows:
+        let j = 0
+        while j < pred.cols:
+            let d = pred.data[i][j] - t[i][j]
+            total = total + d * d
+            j = j + 1
+        end
+        i = i + 1
+    end
+    let out = _gg_result(total / (pred.rows * pred.cols * 1.0), [pred], "mse")
+    out.aux = t
+    return out
+end
+
+# Softmax then cross entropy. logits has one row per sample and one column
+# per class; targets is a list of class numbers (0, 1, 2, ...).
+func cross_entropy_loss(logits, targets):
+    if type(targets) != "list" or len(targets) != logits.rows:
+        _gg_fail("cross_entropy_loss: " + str(logits.rows) + " rows of logits need " + str(logits.rows) + " targets")
+    end
+    let probs = []
+    let total = 0.0
+    let i = 0
+    while i < logits.rows:
+        let t = targets[i]
+        if type(t) != "int" or t < 0 or t >= logits.cols:
+            _gg_fail("cross_entropy_loss: target " + str(t) + " is not a class number from 0 to " + str(logits.cols - 1))
+        end
+        let row = logits.data[i]
+        let top = _gn_vmax(row)
+        let sum_exp = 0.0
+        for each x in row:
+            sum_exp = sum_exp + math.exp(x - top)
+        end
+        let p = []
+        for each x in row:
+            p.push(math.exp(x - top) / sum_exp)
+        end
+        probs.push(p)
+        # -log(softmax) written so it cannot overflow.
+        total = total + math.log(sum_exp) + top - row[t]
+        i = i + 1
+    end
+    let out = _gg_result(total / (logits.rows * 1.0), [logits], "softmax_ce")
+    out.aux = [probs, targets]
+    return out
+end
+
+# Sigmoid then binary cross entropy. targets are 0 or 1 (or any share in
+# between), with the same shape as logits.
+func bce_loss(logits, targets):
+    if type(targets) == "instance":
+        targets = targets.data
+    end
+    let t = _gg_matrix(targets, "bce_loss targets")
+    if len(t) == 1 and logits.rows > 1 and logits.cols == 1 and len(t[0]) == logits.rows:
+        t = _gn_transpose(t)
+    end
+    if len(t) != logits.rows or len(t[0]) != logits.cols:
+        _gg_fail("bce_loss: the logits have shape " + _gg_shape_text(logits) + " but the targets have (" + str(len(t)) + ", " + str(len(t[0])) + ")")
+    end
+    let total = 0.0
+    let i = 0
+    while i < logits.rows:
+        let j = 0
+        while j < logits.cols:
+            let z = logits.data[i][j]
+            let y = t[i][j]
+            if y < 0 or y > 1:
+                _gg_fail("bce_loss: targets must be from 0 to 1, got " + str(y))
+            end
+            # max(z, 0) - z y + log(1 + exp(-|z|)), which cannot overflow.
+            let az = z
+            if az < 0:
+                az = 0 - az
+            end
+            let pos = z
+            if pos < 0:
+                pos = 0.0
+            end
+            total = total + pos - z * y + math.log(1.0 + math.exp(0 - az))
+            j = j + 1
+        end
+        i = i + 1
+    end
+    let out = _gg_result(total / (logits.rows * logits.cols * 1.0), [logits], "bce_logits")
+    out.aux = [_gn_unary(4, logits.data), t]
+    return out
+end
+
+# ---------------------------------------------------------------- layers
+
+# A fully connected layer: output = input . weight + bias.
+blueprint Dense:
+    action init(n_in, n_out, seed = 0):
+        if n_in < 1 or n_out < 1:
+            _gg_fail("Dense needs at least 1 input and 1 output")
+        end
+        self.n_in = n_in
+        self.n_out = n_out
+        # Glorot initialisation: small enough that tanh and sigmoid start
+        # in their sensitive range.
+        let rng = RandomState(seed)
+        let limit = math.sqrt(6.0 / (n_in + n_out))
+        let w = []
+        let i = 0
+        while i < n_in:
+            let row = []
+            let j = 0
+            while j < n_out:
+                row.push(rng.uniform(0 - limit, limit))
+                j = j + 1
+            end
+            w.push(row)
+            i = i + 1
+        end
+        self.weight = Var(w, true)
+        self.bias = Var(_gg_zeros(1, n_out), true)
+    end
+
+    action forward(x):
+        if x.cols != self.n_in:
+            _gg_fail("Dense: expected " + str(self.n_in) + " input column(s), got " + str(x.cols))
+        end
+        return x.matmul(self.weight).add(self.bias)
+    end
+
+    action parameters():
+        return [self.weight, self.bias]
+    end
+
+    action set_training(flag):
+        return none
+    end
+end
+
+# "relu", "tanh" or "sigmoid".
+blueprint Activation:
+    action init(kind):
+        if kind != "relu" and kind != "tanh" and kind != "sigmoid":
+            _gg_fail("Activation: unknown kind '" + str(kind) + "' (use relu, tanh or sigmoid)")
+        end
+        self.kind = kind
+    end
+
+    action forward(x):
+        if self.kind == "relu":
+            return x.relu()
+        end
+        if self.kind == "tanh":
+            return x.tanh()
+        end
+        return x.sigmoid()
+    end
+
+    action parameters():
+        return []
+    end
+
+    action set_training(flag):
+        return none
+    end
+end
+
+# While training, sets each number to 0 with probability p and scales the
+# rest up, so no single input can be relied on. Does nothing otherwise.
+blueprint Dropout:
+    action init(p = 0.5, seed = 0):
+        if p < 0 or p >= 1:
+            _gg_fail("Dropout: p must be from 0 up to (not including) 1")
+        end
+        self.p = p
+        self.rng = RandomState(seed)
+        self.training = true
+    end
+
+    action forward(x):
+        if not self.training or self.p == 0:
+            return x
+        end
+        let keep = 1.0 - self.p
+        let mask = []
+        let i = 0
+        while i < x.rows:
+            let row = []
+            let j = 0
+            while j < x.cols:
+                if self.rng.random() < keep:
+                    row.push(1.0 / keep)
+                else:
+                    row.push(0.0)
+                end
+                j = j + 1
+            end
+            mask.push(row)
+            i = i + 1
+        end
+        return x.mul(Var(mask))
+    end
+
+    action parameters():
+        return []
+    end
+
+    action set_training(flag):
+        self.training = flag
+        return none
+    end
+end
+
+# Layers applied one after another.
+blueprint Sequential:
+    action init(layers):
+        if type(layers) != "list" or len(layers) == 0:
+            _gg_fail("Sequential needs a non-empty list of layers")
+        end
+        self.layers = layers
+    end
+
+    action forward(x):
+        if type(x) != "instance":
+            x = Var(x)
+        end
+        for each layer in self.layers:
+            x = layer.forward(x)
+        end
+        return x
+    end
+
+    # The output for plain data, as a list of rows, with dropout off.
+    action predict(X):
+        self.set_training(false)
+        let out = self.forward(Var(X)).tolist()
+        self.set_training(true)
+        return out
+    end
+
+    action parameters():
+        let out = []
+        for each layer in self.layers:
+            for each p in layer.parameters():
+                out.push(p)
+            end
+        end
+        return out
+    end
+
+    # true while training (dropout active), false for evaluation.
+    action set_training(flag):
+        for each layer in self.layers:
+            layer.set_training(flag)
+        end
+        return none
+    end
+
+    action parameter_count():
+        let total = 0
+        for each p in self.parameters():
+            total = total + p.rows * p.cols
+        end
+        return total
+    end
+
+    # The weights as plain lists, in the order of parameters().
+    action state():
+        let out = []
+        for each p in self.parameters():
+            out.push(p.tolist())
+        end
+        return out
+    end
+
+    action load_state(state):
+        let params = self.parameters()
+        if type(state) != "list" or len(state) != len(params):
+            _gg_fail("load_state: expected " + str(len(params)) + " weight matrices")
+        end
+        let i = 0
+        while i < len(params):
+            let m = _gg_matrix(state[i], "load_state")
+            if len(m) != params[i].rows or len(m[0]) != params[i].cols:
+                _gg_fail("load_state: matrix " + str(i) + " has the wrong shape for this model")
+            end
+            params[i].data = m
+            params[i].grad = none
+            i = i + 1
+        end
+        return self
+    end
+
+    # Writes the weights to a JSON file.
+    action save(path):
+        fs.write(path, json.stringify({"format": "glowgrad-1", "weights": self.state()}))
+        return none
+    end
+
+    # Reads weights written by save into this model (same layer sizes).
+    action load(path):
+        if not fs.exists(path):
+            _gg_fail("load: no file at " + str(path))
+        end
+        let doc = json.parse(fs.read(path))
+        if type(doc) != "dict" or doc["format"] != "glowgrad-1":
+            _gg_fail("load: " + str(path) + " is not a glowgrad weights file")
+        end
+        return self.load_state(doc["weights"])
+    end
+end
+
+# ---------------------------------------------------------------- optimizers
+
+func _gg_check_params(params, what):
+    if type(params) != "list" or len(params) == 0:
+        _gg_fail(what + " needs a non-empty list of Vars (such as model.parameters())")
+    end
+    for each p in params:
+        if type(p) != "instance" or not p.requires_grad:
+            _gg_fail(what + ": every parameter must be a Var created with requires_grad = true")
+        end
+    end
+end
+
+# Gradient descent, optionally with momentum.
+blueprint SGDOptimizer:
+    action init(params, lr = 0.01, momentum = 0.0):
+        _gg_check_params(params, "SGDOptimizer")
+        if lr <= 0:
+            _gg_fail("SGDOptimizer: lr must be positive")
+        end
+        if momentum < 0 or momentum >= 1:
+            _gg_fail("SGDOptimizer: momentum must be from 0 up to (not including) 1")
+        end
+        self.params = params
+        self.lr = lr
+        self.momentum = momentum
+        self.velocity = []
+        for each p in params:
+            self.velocity.push(_gg_zeros(p.rows, p.cols))
+        end
+    end
+
+    action zero_grad():
+        for each p in self.params:
+            p.grad = none
+        end
+    end
+
+    action step():
+        let k = 0
+        while k < len(self.params):
+            let p = self.params[k]
+            if p.grad != none:
+                let vel = self.velocity[k]
+                let i = 0
+                while i < p.rows:
+                    let row = p.data[i]
+                    let g = p.grad[i]
+                    let v = vel[i]
+                    let j = 0
+                    while j < p.cols:
+                        v[j] = self.momentum * v[j] + g[j]
+                        row[j] = row[j] - self.lr * v[j]
+                        j = j + 1
+                    end
+                    i = i + 1
+                end
+            end
+            k = k + 1
+        end
+    end
+end
+
+# Adam: a step size per number, from running averages of the gradient and
+# its square.
+blueprint AdamOptimizer:
+    action init(params, lr = 0.001, beta1 = 0.9, beta2 = 0.999, eps = 1e-8):
+        _gg_check_params(params, "AdamOptimizer")
+        if lr <= 0:
+            _gg_fail("AdamOptimizer: lr must be positive")
+        end
+        if beta1 < 0 or beta1 >= 1 or beta2 < 0 or beta2 >= 1:
+            _gg_fail("AdamOptimizer: beta1 and beta2 must be from 0 up to (not including) 1")
+        end
+        self.params = params
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.steps = 0
+        self.m = []
+        self.v = []
+        for each p in params:
+            self.m.push(_gg_zeros(p.rows, p.cols))
+            self.v.push(_gg_zeros(p.rows, p.cols))
+        end
+    end
+
+    action zero_grad():
+        for each p in self.params:
+            p.grad = none
+        end
+    end
+
+    action step():
+        self.steps = self.steps + 1
+        let fix1 = 1.0 - math.pow(self.beta1, self.steps)
+        let fix2 = 1.0 - math.pow(self.beta2, self.steps)
+        let k = 0
+        while k < len(self.params):
+            let p = self.params[k]
+            if p.grad != none:
+                let i = 0
+                while i < p.rows:
+                    let row = p.data[i]
+                    let g = p.grad[i]
+                    let m = self.m[k][i]
+                    let v = self.v[k][i]
+                    let j = 0
+                    while j < p.cols:
+                        m[j] = self.beta1 * m[j] + (1.0 - self.beta1) * g[j]
+                        v[j] = self.beta2 * v[j] + (1.0 - self.beta2) * g[j] * g[j]
+                        row[j] = row[j] - self.lr * (m[j] / fix1) / (math.sqrt(v[j] / fix2) + self.eps)
+                        j = j + 1
+                    end
+                    i = i + 1
+                end
+            end
+            k = k + 1
+        end
+    end
+end
+
+# ---------------------------------------------------------------- training
+
+# Trains model on X (a list of rows) and y, and returns the average loss of
+# each epoch. loss is "mse" (y: numbers or rows of numbers), "cross_entropy"
+# (y: class numbers) or "bce" (y: 0s and 1s). batch_size none uses every
+# row at once; otherwise the rows are reshuffled each epoch.
+func train_network(model, X, y, optimizer, loss = "mse", epochs = 100, batch_size = none, seed = 0):
+    if loss != "mse" and loss != "cross_entropy" and loss != "bce":
+        _gg_fail("train_network: unknown loss '" + str(loss) + "' (use mse, cross_entropy or bce)")
+    end
+    if type(X) != "list" or type(y) != "list" or len(X) == 0 or len(X) != len(y):
+        _gg_fail("train_network: X and y must be non-empty lists of the same length")
+    end
+    if epochs < 1:
+        _gg_fail("train_network: epochs must be at least 1")
+    end
+    let n = len(X)
+    if batch_size == none or batch_size > n:
+        batch_size = n
+    end
+    if batch_size < 1:
+        _gg_fail("train_network: batch_size must be at least 1")
+    end
+    let rng = RandomState(seed)
+    let history = []
+    model.set_training(true)
+    let epoch = 0
+    while epoch < epochs:
+        let order = range(n)
+        if batch_size < n:
+            order = rng.permutation(n)
+        end
+        let total = 0.0
+        let start = 0
+        while start < n:
+            let idx = order[start:start + batch_size]
+            let bx = []
+            let by = []
+            for each i in idx:
+                bx.push(X[i])
+                by.push(y[i])
+            end
+            let out = model.forward(Var(bx))
+            let l = none
+            if loss == "mse":
+                l = mse_loss(out, by)
+            eif loss == "cross_entropy":
+                l = cross_entropy_loss(out, by)
+            else:
+                l = bce_loss(out, by)
+            end
+            optimizer.zero_grad()
+            l.backward()
+            optimizer.step()
+            total = total + l.item() * len(idx)
+            start = start + batch_size
+        end
+        history.push(total / n)
+        epoch = epoch + 1
+    end
+    return history
+end
