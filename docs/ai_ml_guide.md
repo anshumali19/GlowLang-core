@@ -32,7 +32,7 @@ while i < 5:
     t[i] = i * 1.0
     i = i + 1
 end
-show "Tensor:", t    # [0.0, 1.0, 2.0, 3.0, 4.0]
+show "Tensor:", t    # [0, 1, 2, 3, 4]  (whole numbers print without .0)
 ```
 
 ### Tensor Indexing
@@ -42,8 +42,8 @@ a[0] = 1.0
 a[1] = 2.0
 a[2] = 3.0
 
-show "Element 0:", a[0]   # 1.0
-show "Element 2:", a[2]   # 3.0
+show "Element 0:", a[0]   # 1
+show "Element 2:", a[2]   # 3
 ```
 
 ---
@@ -278,8 +278,8 @@ let x_squared = x.mul(x)
 let three_x = three.mul(x)
 let result = x_squared.add(three_x)
 
-show "f(2) =", result.val      # 10.0 (2^2 + 3*2)
-show "f'(2) =", result.grad    # 7.0  (2*2 + 3)
+show "f(2) =", result.val      # 10  (2^2 + 3*2)
+show "f'(2) =", result.grad    # 7  (2*2 + 3)
 ```
 
 ---
@@ -366,8 +366,8 @@ values[2] = 6.0
 values[3] = 8.0
 values[4] = 10.0
 
-show "Mean:", tensor_mean(values, 5)          # 6.0
-show "Variance:", tensor_variance(values, 5)  # 8.0
+show "Mean:", tensor_mean(values, 5)          # 6
+show "Variance:", tensor_variance(values, 5)  # 8
 ```
 
 ---

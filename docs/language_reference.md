@@ -79,6 +79,13 @@ GlowLang is dynamically typed with the following value types:
 | Lambda | `lambda(x): x * 2` | Anonymous function |
 | Object | `MyClass()` | Class instance |
 
+**Whole numbers are integers.** A calculation whose result is a whole number
+gives an integer, even from floats: `2.5 * 2` is `5`, `type(2.5 * 2)` is
+`"int"`, and `3.0` prints as `3`. `7 / 2` is `3.5` and `6 / 3` is `2`.
+Arithmetic, comparisons and `==` treat `1` and `1.0` as the same number, so
+this only shows in `type()` and in printed text. To always show decimal
+places, format the number: `format(3, ".1f")` is `"3.0"`.
+
 ### Type Checking
 ```glow
 let t = type(value)   # "int", "float", "string", "list", "dict", "instance" (an object) ...
