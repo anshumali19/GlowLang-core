@@ -456,6 +456,20 @@ static void hoist_locals(FuncEntry *fe, Node *n) {
    parser (wrapped as an assignment), so any expression works there. */
 extern Node *root;
 int yyparse(void);
+/* While parsing an f-string's {expression}, a syntax error is not
+   reported here: the f-string raises a clear error when it runs instead. */
+static int quiet_parse = 0;
+
+/* Falling off the end of a function returns none. (It used to return
+   register 0: the first parameter, self, or the first local.) */
+static int compile_expr(Node *n, int target_reg);
+static void emit_implicit_return(void) {
+    int r = next_free_reg++;
+    compile_expr(newVarNode(intern_string("none")), r);
+    int idx = bc_emit(compiling_bc, OP_RETURN, 0, 0);
+    compiling_bc->code[idx].r0 = r;
+}
+
 static Node *parse_fstring_expr(const char *src) {
     size_t n = strlen(src);
     char *code = malloc(n + 32);
@@ -465,7 +479,9 @@ static Node *parse_fstring_expr(const char *src) {
     YY_BUFFER_STATE old = get_current_buffer();
     YY_BUFFER_STATE b = yy_scan_string(code);
     root = NULL;
+    quiet_parse = 1;
     int rc = yyparse();
+    quiet_parse = 0;
     yy_delete_buffer(b);
     if (old) yy_switch_to_buffer(old);
     Node *r = root;
@@ -949,9 +965,9 @@ static void compile_stmt(Node *n) {
             in_method_body = saved_in_method;
             compiling_class_name = saved_class_name; compiling_trait_name = saved_trait_name;
             last_compiling_class = saved_class; last_compiling_trait = saved_trait;
+            emit_implicit_return();
             note_reg_peak();
             fe->body->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
-            bc_emit(compiling_bc, OP_RETURN, 0, 0);
             optimize_bytecode(compiling_bc);
             analyze_escapes(compiling_bc);
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
@@ -1486,11 +1502,47 @@ static int compile_expr(Node *n, int target_reg) {
                 char *src = malloc(elen + 1);
                 memcpy(src, str + start, elen);
                 src[elen] = '\0';
+                /* {expr:spec}: the last ':' outside brackets, followed by a
+                   valid format spec, splits off the spec (a lambda's ':' is
+                   followed by code, so it is not taken for one). */
+                char *spec = NULL;
+                {
+                    int d = 0, cut = -1;
+                    for (size_t k = 0; k < elen; k++) {
+                        char ch = src[k];
+                        if (ch == '(' || ch == '[' || ch == '{') d++;
+                        else if (ch == ')' || ch == ']' || ch == '}') d--;
+                        else if (ch == ':' && d == 0) cut = (int)k;
+                    }
+                    if (cut >= 0) {
+                        const char *sp = src + cut + 1;
+                        int ok = 1;
+                        for (const char *q = sp; *q; q++)
+                            if (!strchr("<>^=+- 0123456789,_.dfFeEgG%xXobs*#", *q) || *q == '*' || *q == '#') { ok = 0; break; }
+                        /* A fill character may be anything when an align follows it. */
+                        if (!ok && sp[0] && sp[1] && strchr("<>^=", sp[1])) {
+                            ok = 1;
+                            for (const char *q = sp + 2; *q; q++) if (!strchr("+- 0123456789,_.dfFeEgG%xXobs", *q)) { ok = 0; break; }
+                        }
+                        if (ok) { spec = strdup(sp); src[cut] = '\0'; }
+                    }
+                }
                 Node *e = parse_fstring_expr(src);
+                if (!e) {
+                    Node **ea = malloc(sizeof(Node*));
+                    ea[0] = newStringNode(intern_string(src));
+                    e = node_new(NODE_CALL); e->name = intern_string("__glow_fstring_error"); e->call_args = ea; e->call_arg_count = 1; e->line = n->line;
+                } else if (spec) {
+                    Node **fa = malloc(sizeof(Node*) * 2);
+                    fa[0] = e; fa[1] = newStringNode(intern_string(spec));
+                    Node *fc = node_new(NODE_CALL); fc->name = intern_string("__glow_format"); fc->call_args = fa; fc->call_arg_count = 2; fc->line = n->line;
+                    e = fc;
+                }
+                free(spec);
                 free(src);
                 if (i < len) i++; /* skip '}' */
                 if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
-                int er = compile_expr(e ? e : newVarNode(intern_string("none")), -1);
+                int er = compile_expr(e, -1);
                 bc_emit_reg(compiling_bc, OP_ADD, acc, acc, er);
             }
             if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
@@ -1618,7 +1670,7 @@ static int compile_expr(Node *n, int target_reg) {
             next_free_reg = fe->local_count;
             int saved_peak = reg_peak; reg_peak = next_free_reg;
             compile_stmt(n->left);
-            bc_emit(compiling_bc, OP_RETURN, 0, 0);
+            emit_implicit_return();
             note_reg_peak();
             compiling_bc->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
@@ -1663,6 +1715,7 @@ static void line_first_word(const char *file, int line, char *out, size_t cap) {
 }
 
 void yyerror(const char *s) {
+    if (quiet_parse) return;
     /* Other languages' spellings of else-if are a common slip; say what
        GlowLang writes instead of a bare "syntax error". */
     char word[32], hint[160];
