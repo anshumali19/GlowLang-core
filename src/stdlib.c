@@ -3402,6 +3402,723 @@ static Value http_request_native(int argc, Value *args) {
     return value_dict(result);
 }
 
+/* ---- PostgreSQL client: pg.connect / pg.query / pg.script / pg.close ----
+ *
+ * A native client for the PostgreSQL frontend/backend protocol (version 3),
+ * so no libpq is needed. TLS uses the same OpenSSL setup as http.request.
+ * Logins: SCRAM-SHA-256, MD5 and cleartext passwords, and trust.
+ *
+ * pg.query always uses the extended protocol with $1, $2 ... parameters
+ * sent apart from the SQL text, so a value can never change the statement.
+ * Network waits run without the GIL. The wire work is done into plain C
+ * buffers and only turned into GlowLang values once the GIL is held again.
+ *
+ * lib/postgres.glow is the friendly layer on top of these.
+ */
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+
+#define PG_MAX_CONNS 256
+#define PG_MAX_MESSAGE (512u * 1024u * 1024u)
+
+typedef struct {
+    http_sock_t s;
+    SSL *ssl;
+    int busy;          /* a call on another thread is using it */
+    int broken;        /* the connection failed; only close() is allowed */
+    char tx;           /* last ReadyForQuery status: I, T or E */
+    int server_version;
+    double timeout;    /* seconds per wait for the server; 0 = no limit */
+} PgConn;
+
+static PgConn *pg_conns[PG_MAX_CONNS];
+
+static Value pg_fail(const char *msg) {
+    char buf[1200];
+    snprintf(buf, sizeof(buf), "postgres: %s", msg);
+    pending_exception = value_string_copy(buf);
+    has_exception = 1;
+    return value_none();
+}
+
+/* Big-endian helpers. */
+static void pg_put32(HttpBuf *b, int32_t v) {
+    unsigned char x[4] = { (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8), (unsigned char)v };
+    hb_add(b, (const char*)x, 4);
+}
+static void pg_put16(HttpBuf *b, int16_t v) {
+    unsigned char x[2] = { (unsigned char)(v >> 8), (unsigned char)v };
+    hb_add(b, (const char*)x, 2);
+}
+static int32_t pg_get32(const unsigned char *p) {
+    return (int32_t)(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]);
+}
+static int16_t pg_get16(const unsigned char *p) { return (int16_t)(((unsigned)p[0] << 8) | (unsigned)p[1]); }
+
+/* Starts a message: type byte (0 for the startup message) and a length
+   placeholder. pg_end fills the length in. */
+static size_t pg_begin(HttpBuf *b, char type) {
+    if (type) hb_add(b, &type, 1);
+    size_t at = b->n;
+    pg_put32(b, 0);
+    return at;
+}
+static void pg_end(HttpBuf *b, size_t at) {
+    int32_t len = (int32_t)(b->n - at);
+    unsigned char *p = (unsigned char*)b->p + at;
+    p[0] = (unsigned char)(len >> 24); p[1] = (unsigned char)(len >> 16); p[2] = (unsigned char)(len >> 8); p[3] = (unsigned char)len;
+}
+static void pg_cstr(HttpBuf *b, const char *s) { hb_add(b, s, strlen(s) + 1); }
+
+static int pg_send(PgConn *c, const char *p, size_t n) {
+    size_t sent = 0;
+    while (sent < n) {
+        int chunk = (int)((n - sent) > (1u << 30) ? (1u << 30) : (n - sent));
+        int w = c->ssl ? SSL_write(c->ssl, p + sent, chunk) : send(c->s, p + sent, chunk, 0);
+        if (w <= 0) return 0;
+        sent += (size_t)w;
+    }
+    return 1;
+}
+static int pg_recv(PgConn *c, unsigned char *p, size_t n) {
+    size_t got = 0;
+    while (got < n) {
+        int chunk = (int)((n - got) > (1u << 30) ? (1u << 30) : (n - got));
+        int r = c->ssl ? SSL_read(c->ssl, p + got, chunk) : recv(c->s, (char*)p + got, chunk, 0);
+        if (r <= 0) return 0;
+        got += (size_t)r;
+    }
+    return 1;
+}
+
+/* Reads one backend message. body is malloc'd (may be empty). */
+static int pg_read_msg(PgConn *c, char *type, unsigned char **body, size_t *len, char *err, size_t errsz) {
+    unsigned char hdr[5];
+    if (!pg_recv(c, hdr, 5)) { snprintf(err, errsz, "the connection to the server was lost"); return 0; }
+    int32_t l = pg_get32(hdr + 1);
+    if (l < 4 || (uint32_t)l > PG_MAX_MESSAGE) { snprintf(err, errsz, "the server sent a malformed message"); return 0; }
+    *type = (char)hdr[0];
+    *len = (size_t)l - 4;
+    *body = malloc(*len + 1);
+    if (!*body) { snprintf(err, errsz, "out of memory"); return 0; }
+    if (*len && !pg_recv(c, *body, *len)) { free(*body); *body = NULL; snprintf(err, errsz, "the connection to the server was lost"); return 0; }
+    (*body)[*len] = 0;
+    return 1;
+}
+
+/* "message [SQLSTATE]" plus detail and hint, from an ErrorResponse body. */
+static void pg_error_text(const unsigned char *b, size_t n, char *out, size_t outsz) {
+    const char *msg = "unknown error", *code = "", *detail = NULL, *hint = NULL;
+    size_t i = 0;
+    while (i < n && b[i]) {
+        char f = (char)b[i++];
+        const char *v = (const char*)b + i;
+        size_t vl = strnlen(v, n - i);
+        if (f == 'M') msg = v; else if (f == 'C') code = v; else if (f == 'D') detail = v; else if (f == 'H') hint = v;
+        i += vl + 1;
+    }
+    int k = snprintf(out, outsz, "%s [%s]", msg, code);
+    if (detail && k > 0 && (size_t)k < outsz) k += snprintf(out + k, outsz - (size_t)k, "\nDETAIL: %s", detail);
+    if (hint && k > 0 && (size_t)k < outsz) snprintf(out + k, outsz - (size_t)k, "\nHINT: %s", hint);
+}
+
+static void pg_b64(const unsigned char *in, int n, char *out) { EVP_EncodeBlock((unsigned char*)out, in, n); }
+static int pg_unb64(const char *in, unsigned char *out, int outmax) {
+    int n = (int)strlen(in);
+    if (n % 4 || n / 4 * 3 > outmax) return -1;
+    int r = EVP_DecodeBlock(out, (const unsigned char*)in, n);
+    if (r < 0) return -1;
+    if (n >= 1 && in[n - 1] == '=') r--;
+    if (n >= 2 && in[n - 2] == '=') r--;
+    return r;
+}
+static void pg_hmac(const unsigned char *key, int keylen, const char *msg, size_t msglen, unsigned char out[32]) {
+    unsigned int ol = 32;
+    HMAC(EVP_sha256(), key, keylen, (const unsigned char*)msg, msglen, out, &ol);
+}
+/* The value of "k=" in a SCRAM message, copied into out. */
+static int pg_scram_attr(const char *msg, char k, char *out, size_t outsz) {
+    const char *p = msg;
+    while (p && *p) {
+        if (p[0] == k && p[1] == '=') {
+            const char *e = strchr(p, ',');
+            size_t n = e ? (size_t)(e - p - 2) : strlen(p + 2);
+            if (n >= outsz) return 0;
+            memcpy(out, p + 2, n); out[n] = 0;
+            return 1;
+        }
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    return 0;
+}
+
+typedef struct {
+    char host[256];
+    int port;
+    char *user, *password, *database, *appname;
+    int sslmode;       /* 0 disable, 1 prefer, 2 require, 3 verify-full */
+    double connect_timeout, timeout;
+} PgOpts;
+
+/* Logs in. Runs without the GIL. On success the connection is ready. */
+static int pg_open(PgConn *c, const PgOpts *o, char *err, size_t errsz) {
+    c->s = http_connect(o->host, o->port, o->connect_timeout, err, errsz);
+    if (c->s == HTTP_BAD_SOCK) return 0;
+    http_set_timeouts(c->s, o->connect_timeout);
+    if (o->sslmode > 0) {
+        HttpBuf b = { NULL, 0, 0 };
+        pg_put32(&b, 8); pg_put32(&b, 80877103);   /* SSLRequest */
+        int ok = pg_send(c, b.p, b.n);
+        free(b.p);
+        unsigned char answer;
+        if (!ok || !pg_recv(c, &answer, 1)) { snprintf(err, errsz, "the server closed the connection during TLS negotiation"); return 0; }
+        if (answer == 'S') {
+            SSL_CTX *ctx = http_get_ssl_ctx();
+            if (!ctx || !(c->ssl = SSL_new(ctx))) { snprintf(err, errsz, "cannot start TLS"); return 0; }
+            SSL_set_fd(c->ssl, (int)c->s);
+            SSL_set_tlsext_host_name(c->ssl, o->host);
+            if (o->sslmode == 3) { SSL_set_verify(c->ssl, SSL_VERIFY_PEER, NULL); SSL_set1_host(c->ssl, o->host); }
+            else SSL_set_verify(c->ssl, SSL_VERIFY_NONE, NULL);
+            if (SSL_connect(c->ssl) <= 0) {
+                long vr = SSL_get_verify_result(c->ssl);
+                if (o->sslmode == 3 && vr != X509_V_OK) snprintf(err, errsz, "TLS certificate of %s not trusted: %s", o->host, X509_verify_cert_error_string(vr));
+                else snprintf(err, errsz, "TLS handshake with %s failed", o->host);
+                return 0;
+            }
+        } else if (answer == 'N') {
+            if (o->sslmode >= 2) { snprintf(err, errsz, "the server does not support TLS, but sslmode requires it"); return 0; }
+        } else { snprintf(err, errsz, "the server did not answer the TLS request properly"); return 0; }
+    }
+
+    HttpBuf b = { NULL, 0, 0 };
+    size_t at = pg_begin(&b, 0);
+    pg_put32(&b, 196608);   /* protocol 3.0 */
+    pg_cstr(&b, "user"); pg_cstr(&b, o->user);
+    pg_cstr(&b, "database"); pg_cstr(&b, o->database);
+    pg_cstr(&b, "application_name"); pg_cstr(&b, o->appname);
+    pg_cstr(&b, "client_encoding"); pg_cstr(&b, "UTF8");
+    pg_cstr(&b, "DateStyle"); pg_cstr(&b, "ISO");
+    hb_add(&b, "\0", 1);
+    pg_end(&b, at);
+    int ok = pg_send(c, b.p, b.n);
+    free(b.p);
+    if (!ok) { snprintf(err, errsz, "sending the login to the server failed"); return 0; }
+
+    char client_first_bare[128] = "", nonce[64] = "", server_first[1024] = "";
+    unsigned char salted[32];
+    char auth_message[2048] = "";
+    int scram_done = 0;
+    for (;;) {
+        char type; unsigned char *body; size_t len;
+        if (!pg_read_msg(c, &type, &body, &len, err, errsz)) return 0;
+        if (type == 'E') { pg_error_text(body, len, err, errsz); free(body); return 0; }
+        if (type == 'Z') { c->tx = len ? (char)body[0] : 'I'; free(body); break; }
+        if (type == 'S' && len) {
+            if (strcmp((char*)body, "server_version") == 0) {   /* "17.2 (Debian ...)" -> 170002; "9.6.24" -> 90624 */
+                const char *v = (char*)body + strlen((char*)body) + 1;
+                int major = 0, minor = 0, patch = 0;
+                int k = sscanf(v, "%d.%d.%d", &major, &minor, &patch);
+                c->server_version = major >= 10 ? major * 10000 + (k >= 2 ? minor : 0) : major * 10000 + minor * 100 + (k >= 3 ? patch : 0);
+            }
+            free(body); continue;
+        }
+        if (type != 'R') { free(body); continue; }   /* BackendKeyData, notices ... */
+        if (len < 4) { free(body); snprintf(err, errsz, "malformed login message"); return 0; }
+        int32_t code = pg_get32(body);
+        HttpBuf out = { NULL, 0, 0 };
+        if (code == 0) { free(body); continue; }   /* AuthenticationOk */
+        if (code == 3) {   /* cleartext password */
+            size_t a = pg_begin(&out, 'p'); pg_cstr(&out, o->password); pg_end(&out, a);
+        } else if (code == 5) {   /* MD5 */
+            if (len < 8) { free(body); snprintf(err, errsz, "malformed MD5 request"); return 0; }
+            unsigned char d[16]; char hex1[33], hex2[33];
+            size_t pl = strlen(o->password), ul = strlen(o->user);
+            char *pu = malloc(pl + ul + 1); memcpy(pu, o->password, pl); memcpy(pu + pl, o->user, ul);
+            EVP_Digest(pu, pl + ul, d, NULL, EVP_md5(), NULL); free(pu);
+            for (int i = 0; i < 16; i++) snprintf(hex1 + 2 * i, 3, "%02x", d[i]);
+            unsigned char salt_in[36]; memcpy(salt_in, hex1, 32); memcpy(salt_in + 32, body + 4, 4);
+            EVP_Digest(salt_in, 36, d, NULL, EVP_md5(), NULL);
+            for (int i = 0; i < 16; i++) snprintf(hex2 + 2 * i, 3, "%02x", d[i]);
+            char resp[40]; snprintf(resp, sizeof(resp), "md5%s", hex2);
+            size_t a = pg_begin(&out, 'p'); pg_cstr(&out, resp); pg_end(&out, a);
+        } else if (code == 10) {   /* SASL: pick SCRAM-SHA-256 */
+            int has = 0;
+            for (size_t i = 4; i < len && body[i]; ) { if (strcmp((char*)body + i, "SCRAM-SHA-256") == 0) has = 1; i += strlen((char*)body + i) + 1; }
+            if (!has) { free(body); snprintf(err, errsz, "the server asks for a login method GlowLang does not support (SCRAM channel binding)"); return 0; }
+            unsigned char rnd[18];
+            if (RAND_bytes(rnd, sizeof(rnd)) != 1) { free(body); snprintf(err, errsz, "no secure random numbers available"); return 0; }
+            pg_b64(rnd, sizeof(rnd), nonce);
+            snprintf(client_first_bare, sizeof(client_first_bare), "n=,r=%s", nonce);
+            char first[160]; snprintf(first, sizeof(first), "n,,%s", client_first_bare);
+            size_t a = pg_begin(&out, 'p');
+            pg_cstr(&out, "SCRAM-SHA-256");
+            pg_put32(&out, (int32_t)strlen(first));
+            hb_add(&out, first, strlen(first));
+            pg_end(&out, a);
+        } else if (code == 11) {   /* SASLContinue: server-first */
+            size_t sl = len - 4;
+            if (!client_first_bare[0] || sl >= sizeof(server_first)) { free(body); snprintf(err, errsz, "unexpected SCRAM message"); return 0; }
+            memcpy(server_first, body + 4, sl); server_first[sl] = 0;
+            char rnonce[256], salt64[256], iters[32];
+            if (!pg_scram_attr(server_first, 'r', rnonce, sizeof(rnonce)) || !pg_scram_attr(server_first, 's', salt64, sizeof(salt64)) ||
+                !pg_scram_attr(server_first, 'i', iters, sizeof(iters)) || strncmp(rnonce, nonce, strlen(nonce)) != 0) {
+                free(body); snprintf(err, errsz, "the server's SCRAM reply is invalid"); return 0;
+            }
+            unsigned char salt[192];
+            int saltlen = pg_unb64(salt64, salt, sizeof(salt));
+            long iter = strtol(iters, NULL, 10);
+            if (saltlen <= 0 || iter < 1 || iter > 10000000) { free(body); snprintf(err, errsz, "the server's SCRAM reply is invalid"); return 0; }
+            PKCS5_PBKDF2_HMAC(o->password, (int)strlen(o->password), salt, saltlen, (int)iter, EVP_sha256(), 32, salted);
+            unsigned char client_key[32], stored_key[32], sig[32], proof[32];
+            pg_hmac(salted, 32, "Client Key", 10, client_key);
+            SHA256(client_key, 32, stored_key);
+            char without_proof[300];
+            snprintf(without_proof, sizeof(without_proof), "c=biws,r=%s", rnonce);
+            snprintf(auth_message, sizeof(auth_message), "%s,%s,%s", client_first_bare, server_first, without_proof);
+            pg_hmac(stored_key, 32, auth_message, strlen(auth_message), sig);
+            for (int i = 0; i < 32; i++) proof[i] = client_key[i] ^ sig[i];
+            char proof64[64]; pg_b64(proof, 32, proof64);
+            char final_msg[400]; snprintf(final_msg, sizeof(final_msg), "%s,p=%s", without_proof, proof64);
+            size_t a = pg_begin(&out, 'p'); hb_add(&out, final_msg, strlen(final_msg)); pg_end(&out, a);
+        } else if (code == 12) {   /* SASLFinal: check the server knows the password too */
+            char v64[128]; unsigned char v[64], server_key[32], expect[32];
+            char *sf = malloc(len - 4 + 1); memcpy(sf, body + 4, len - 4); sf[len - 4] = 0;
+            int got = pg_scram_attr(sf, 'v', v64, sizeof(v64));
+            free(sf);
+            if (!got || pg_unb64(v64, v, sizeof(v)) != 32 || !auth_message[0]) { free(body); snprintf(err, errsz, "the server's SCRAM signature is missing"); return 0; }
+            pg_hmac(salted, 32, "Server Key", 10, server_key);
+            pg_hmac(server_key, 32, auth_message, strlen(auth_message), expect);
+            if (CRYPTO_memcmp(v, expect, 32) != 0) { free(body); snprintf(err, errsz, "the server's SCRAM signature is wrong; it may not be the real server"); return 0; }
+            scram_done = 1;
+            free(body); continue;
+        } else {
+            free(body);
+            snprintf(err, errsz, "the server asks for a login method GlowLang does not support (code %d)", (int)code);
+            return 0;
+        }
+        free(body);
+        int sent = pg_send(c, out.p, out.n);
+        free(out.p);
+        if (!sent) { snprintf(err, errsz, "the connection to the server was lost during login"); return 0; }
+    }
+    (void)scram_done;
+    http_set_timeouts(c->s, o->timeout);
+    c->timeout = o->timeout;
+    return 1;
+}
+
+static void pg_shutdown(PgConn *c) {
+    if (c->ssl) { SSL_free(c->ssl); c->ssl = NULL; }
+    if (c->s != HTTP_BAD_SOCK) { http_closesock(c->s); c->s = HTTP_BAD_SOCK; }
+}
+
+static char *pg_opt_str(Dict *o, const char *key, const char *dflt) {
+    Value v = dict_get(o, key);
+    if (GET_TYPE(v) == VAL_NONE) return strdup(dflt);
+    return value_to_new_cstring(v);
+}
+
+/* pg.connect({host, port, user, password, database, sslmode,
+               connect_timeout, timeout, application_name}) -> handle */
+static Value pg_connect_native(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_DICT) return pg_fail("pg.connect needs a dict of options");
+    Dict *d = AS_DICT(args[0]);
+    PgOpts o;
+    memset(&o, 0, sizeof(o));
+    char *host = pg_opt_str(d, "host", "localhost");
+    snprintf(o.host, sizeof(o.host), "%s", host);
+    free(host);
+    Value v = dict_get(d, "port");
+    o.port = GET_TYPE(v) == VAL_INT ? (int)AS_INT(v) : 5432;
+    if (o.port <= 0 || o.port > 65535) return pg_fail("port must be between 1 and 65535");
+    o.user = pg_opt_str(d, "user", "postgres");
+    o.password = pg_opt_str(d, "password", "");
+    o.database = pg_opt_str(d, "database", o.user);
+    o.appname = pg_opt_str(d, "application_name", "glowlang");
+    char *mode = pg_opt_str(d, "sslmode", "prefer");
+    if (strcmp(mode, "disable") == 0) o.sslmode = 0;
+    else if (strcmp(mode, "prefer") == 0 || strcmp(mode, "allow") == 0) o.sslmode = 1;
+    else if (strcmp(mode, "require") == 0) o.sslmode = 2;
+    else if (strcmp(mode, "verify-full") == 0 || strcmp(mode, "verify-ca") == 0) o.sslmode = 3;
+    else o.sslmode = -1;
+    free(mode);
+    v = dict_get(d, "connect_timeout");
+    o.connect_timeout = (GET_TYPE(v) == VAL_INT || GET_TYPE(v) == VAL_FLOAT) ? val_to_double(v) : 10;
+    if (o.connect_timeout <= 0) o.connect_timeout = 10;
+    v = dict_get(d, "timeout");
+    o.timeout = (GET_TYPE(v) == VAL_INT || GET_TYPE(v) == VAL_FLOAT) ? val_to_double(v) : 0;
+    if (o.timeout < 0) o.timeout = 0;
+    Value result = value_none();
+    if (o.sslmode < 0) { result = pg_fail("sslmode must be disable, prefer, require or verify-full"); goto done; }
+    int slot = -1;
+    for (int i = 1; i < PG_MAX_CONNS; i++) if (!pg_conns[i]) { slot = i; break; }
+    if (slot < 0) { result = pg_fail("too many open connections"); goto done; }
+    PgConn *c = calloc(1, sizeof(PgConn));
+    c->s = HTTP_BAD_SOCK;
+    c->busy = 1;
+    pg_conns[slot] = c;   /* reserve the slot before letting other threads run */
+    char err[1024] = "";
+    glow_gil_release();
+    int ok = pg_open(c, &o, err, sizeof(err));
+    glow_gil_acquire();
+    if (!ok) {
+        pg_shutdown(c);
+        free(c);
+        pg_conns[slot] = NULL;
+        char msg[1200];
+        if (strncmp(err, "cannot connect", 14) == 0 || strncmp(err, "cannot resolve", 14) == 0) snprintf(msg, sizeof(msg), "%s", err);
+        else snprintf(msg, sizeof(msg), "cannot connect to %s:%d: %s", o.host, o.port, err);
+        result = pg_fail(msg);
+        goto done;
+    }
+    c->busy = 0;
+    result = value_int(slot);
+done:
+    free(o.user); free(o.password); free(o.database); free(o.appname);
+    return result;
+}
+
+static PgConn *pg_take(Value h, Value *errv) {
+    if (GET_TYPE(h) != VAL_INT || AS_INT(h) <= 0 || AS_INT(h) >= PG_MAX_CONNS || !pg_conns[AS_INT(h)]) { *errv = pg_fail("the connection is closed"); return NULL; }
+    PgConn *c = pg_conns[AS_INT(h)];
+    if (c->broken) { *errv = pg_fail("the connection was lost; open a new one"); return NULL; }
+    if (c->busy) { *errv = pg_fail("the connection is in use by another thread; give each thread its own connection"); return NULL; }
+    c->busy = 1;
+    return c;
+}
+
+/* Sends req and reads every message up to ReadyForQuery into raw, as
+   [type][int32 length][body] records. Runs without the GIL. */
+static int pg_roundtrip(PgConn *c, const HttpBuf *req, HttpBuf *raw, char *err, size_t errsz) {
+    if (!pg_send(c, req->p, req->n)) { snprintf(err, errsz, "the connection to the server was lost"); return 0; }
+    char last_error[600] = "";
+    for (;;) {
+        char type; unsigned char *body; size_t len;
+        double waited_from = http_now();
+        if (!pg_read_msg(c, &type, &body, &len, err, errsz)) {
+            if (c->timeout > 0 && http_now() - waited_from >= c->timeout * 0.95)
+                snprintf(err, errsz, "the server did not answer within %g second%s; the connection is closed", c->timeout, c->timeout == 1 ? "" : "s");
+            else if (last_error[0])   /* the server said why before closing, e.g. an admin ended the session */
+                snprintf(err, errsz, "the connection to the server was lost: %s", last_error);
+            return 0;
+        }
+        if (type == 'E') pg_error_text(body, len, last_error, sizeof(last_error));
+        if (type == 'N' || type == 'A' || type == 'S') { free(body); continue; }   /* notices, notifications, settings */
+        hb_add(raw, &type, 1);
+        HttpBuf tmp = { NULL, 0, 0 };
+        pg_put32(&tmp, (int32_t)(len + 4));
+        hb_add(raw, tmp.p, 4);
+        free(tmp.p);
+        if (len) hb_add(raw, (const char*)body, len);
+        int ready = type == 'Z';
+        if (ready) c->tx = len ? (char)body[0] : 'I';
+        free(body);
+        if (ready) return 1;
+    }
+}
+
+/* Text of one parameter value, or NULL for SQL NULL. Arrays use the
+   PostgreSQL array literal; dicts become JSON. */
+static void pg_param_text(Value v, HttpBuf *b, int in_array);
+static void pg_array_elem(Value v, HttpBuf *b) {
+    int t = GET_TYPE(v);
+    if (t == VAL_NONE) { hb_add(b, "NULL", 4); return; }
+    if (t == VAL_LIST) { pg_param_text(v, b, 1); return; }
+    HttpBuf s = { NULL, 0, 0 };
+    pg_param_text(v, &s, 1);
+    hb_add(b, "\"", 1);
+    for (size_t i = 0; i < s.n; i++) { if (s.p[i] == '"' || s.p[i] == '\\') hb_add(b, "\\", 1); hb_add(b, s.p + i, 1); }
+    hb_add(b, "\"", 1);
+    free(s.p);
+}
+static void pg_param_text(Value v, HttpBuf *b, int in_array) {
+    int t = GET_TYPE(v);
+    if (t == VAL_BOOL) { hb_add(b, AS_BOOL(v) ? "true" : "false", AS_BOOL(v) ? 4 : 5); return; }
+    if (t == VAL_FLOAT) {
+        double d = AS_FLOAT(v);
+        char num[40];
+        if (d != d) snprintf(num, sizeof(num), "NaN");
+        else if (isinf(d)) snprintf(num, sizeof(num), d > 0 ? "Infinity" : "-Infinity");
+        else snprintf(num, sizeof(num), "%.17g", d);
+        hb_add(b, num, strlen(num));
+        return;
+    }
+    if (t == VAL_STRING) { hb_add(b, AS_STRING(v), rope_length(v)); return; }
+    if (t == VAL_LIST) {
+        List *l = AS_LIST(v);
+        hb_add(b, "{", 1);
+        for (int i = 0; i < l->size; i++) { if (i) hb_add(b, ",", 1); pg_array_elem(l->items[i], b); }
+        hb_add(b, "}", 1);
+        return;
+    }
+    if (t == VAL_DICT) {
+        JsonBuf jb = { 0 };
+        jb_add(&jb, "", 0);
+        json_write(v, &jb, 0);
+        hb_add(b, jb.p ? jb.p : "null", jb.p ? jb.n : 4);
+        free(jb.p);
+        return;
+    }
+    (void)in_array;
+    char *s = value_to_new_cstring(v);   /* ints, big ints and anything else */
+    if (s) { hb_add(b, s, strlen(s)); free(s); }
+}
+
+/* An int column value, exact even past 48 bits. */
+static Value pg_int_value(const char *s) {
+    errno = 0;
+    char *end;
+    long long i = strtoll(s, &end, 10);
+    if (errno || *end) return value_bigint(bigint_from_string(s));
+    if (fits_int48(i)) return value_int(i);
+    return value_bigint(bigint_from_int64(i));
+}
+
+static Value pg_scalar(uint32_t oid, const char *s, size_t n);
+
+/* A one-dimensional text-format array: {1,2,NULL,"a b"}. Returns 0 if the
+   text is not one (for example a multi-dimensional array). */
+static int pg_parse_array(uint32_t elem, const char *s, size_t n, Value *out) {
+    if (n < 2 || s[0] != '{' || s[n - 1] != '}') return 0;
+    List *l = list_new(0);
+    Value result = value_list(l);
+    size_t i = 1;
+    char *buf = malloc(n + 1);
+    while (i < n - 1) {
+        size_t k = 0;
+        int quoted = 0;
+        if (s[i] == '{') { free(buf); return 0; }
+        if (s[i] == '"') {
+            quoted = 1; i++;
+            while (i < n - 1 && s[i] != '"') { if (s[i] == '\\' && i + 1 < n - 1) i++; buf[k++] = s[i++]; }
+            i++;
+        } else {
+            while (i < n - 1 && s[i] != ',') buf[k++] = s[i++];
+        }
+        buf[k] = 0;
+        if (!quoted && k == 4 && strcmp(buf, "NULL") == 0) list_push(l, value_none());
+        else list_push(l, pg_scalar(elem, buf, k));
+        if (i < n - 1 && s[i] == ',') i++;
+    }
+    free(buf);
+    *out = result;
+    return 1;
+}
+
+static uint32_t pg_array_elem_oid(uint32_t oid) {
+    switch (oid) {
+        case 1000: return 16;   case 1005: return 21;  case 1007: return 23;  case 1016: return 20;
+        case 1021: return 700;  case 1022: return 701; case 1009: return 25;  case 1015: return 1043;
+        case 1231: return 1700; case 199: return 114;  case 3807: return 3802; case 2951: return 2950;
+        default: return 0;
+    }
+}
+
+static Value pg_scalar(uint32_t oid, const char *s, size_t n) {
+    switch (oid) {
+        case 16: return value_bool(n > 0 && s[0] == 't');
+        case 20: case 21: case 23: case 26: return pg_int_value(s);
+        case 700: case 701:
+            if (strcmp(s, "NaN") == 0) return value_float(NAN);
+            if (strcmp(s, "Infinity") == 0) return value_float(INFINITY);
+            if (strcmp(s, "-Infinity") == 0) return value_float(-INFINITY);
+            return value_from_double(strtod(s, NULL));
+        case 114: case 3802: {
+            Value str = value_string_copy_len(s, n);
+            Value parsed = native_json_parse(1, &str);
+            if (has_exception) { has_exception = 0; pending_exception = value_none(); return str; }
+            return parsed;
+        }
+        default: {
+            uint32_t elem = pg_array_elem_oid(oid);
+            Value arr;
+            if (elem && pg_parse_array(elem, s, n, &arr)) return arr;
+            return value_string_copy_len(s, n);
+        }
+    }
+}
+
+/* Turns the raw messages of one exchange into a result dict, or raises. */
+static Value pg_build_result(PgConn *c, HttpBuf *raw) {
+    List *columns = list_new(0);
+    Value columns_v = value_list(columns);
+    List *rows = list_new(0);
+    Value rows_v = value_list(rows);
+    uint32_t oids[1600];
+    int ncols = 0;
+    char command[128] = "";
+    int64_t affected = -1;
+    char errtext[1100] = "";
+    const unsigned char *p = (const unsigned char*)raw->p, *end = p + raw->n;
+    (void)c;
+    int malformed = 0;
+    while (p + 5 <= end && !malformed) {
+        char type = (char)p[0];
+        size_t len = (size_t)pg_get32(p + 1) - 4;
+        const unsigned char *b = p + 5;
+        p = b + len;
+        const unsigned char *msg_end = p;   /* every read below stays before this */
+        if (type == 'E' && !errtext[0]) pg_error_text(b, len, errtext, sizeof(errtext));
+        else if (type == 'T') {
+            if (len < 2) { malformed = 1; break; }
+            ncols = pg_get16(b);
+            if (ncols < 0 || ncols > 1600) { malformed = 1; break; }
+            const unsigned char *q = b + 2;
+            columns->size = 0;
+            for (int i = 0; i < ncols; i++) {
+                const char *name = (const char*)q;
+                size_t nl = strnlen(name, (size_t)(msg_end - q));
+                if (q + nl + 1 + 18 > msg_end) { malformed = 1; break; }
+                q += nl + 1;
+                oids[i] = (uint32_t)pg_get32(q + 6);
+                q += 18;
+                list_push(columns, value_string_copy(name));
+            }
+        } else if (type == 'D') {
+            if (len < 2) { malformed = 1; break; }
+            int nf = pg_get16(b);
+            const unsigned char *q = b + 2;
+            List *row = list_new(0);
+            Value row_v = value_list(row);
+            list_push(rows, row_v);
+            for (int i = 0; i < nf; i++) {
+                if (q + 4 > msg_end) { malformed = 1; break; }
+                int32_t fl = pg_get32(q); q += 4;
+                if (fl < 0) { list_push(row, value_none()); continue; }
+                if ((size_t)fl > (size_t)(msg_end - q)) { malformed = 1; break; }
+                char save = (char)q[fl];
+                ((unsigned char*)q)[fl] = 0;   /* the next record's type byte; restored below */
+                list_push(row, pg_scalar(i < ncols ? oids[i] : 25, (const char*)q, (size_t)fl));
+                ((unsigned char*)q)[fl] = (unsigned char)save;
+                q += fl;
+            }
+        } else if (type == 'C') {
+            snprintf(command, sizeof(command), "%.*s", (int)strnlen((const char*)b, len), (const char*)b);
+            const char *last = strrchr(command, ' ');
+            if (last && isdigit((unsigned char)last[1])) affected = strtoll(last + 1, NULL, 10);
+        }
+    }
+    if (malformed) return pg_fail("the server sent a malformed result");
+    if (errtext[0]) return pg_fail(errtext);
+    Dict *r = dict_new(4);
+    dict_set(r, "columns", columns_v);
+    dict_set(r, "rows", rows_v);
+    dict_set(r, "command", value_string_copy(command));
+    dict_set(r, "affected", value_int(affected));
+    return value_dict(r);
+}
+
+static Value pg_finish(PgConn *c, HttpBuf *req, int ok_build) {
+    if (!ok_build) { free(req->p); c->busy = 0; return value_none(); }
+    HttpBuf raw = { NULL, 0, 0 };
+    char err[512] = "";
+    glow_gil_release();
+    int ok = pg_roundtrip(c, req, &raw, err, sizeof(err));
+    glow_gil_acquire();
+    free(req->p);
+    c->busy = 0;
+    if (!ok) {
+        free(raw.p);
+        c->broken = 1;
+        pg_shutdown(c);
+        return pg_fail(err);
+    }
+    size_t old_gc_thresh = gc_threshold;
+    gc_threshold = (size_t)-1;   /* no collection while the result is half built */
+    Value r = pg_build_result(c, &raw);
+    gc_threshold = old_gc_thresh;
+    free(raw.p);
+    return r;
+}
+
+/* pg.query(handle, sql, params) -> {columns, rows, command, affected} */
+static Value pg_query_native(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return pg_fail("query needs SQL text");
+    Value e;
+    PgConn *c = pg_take(args[0], &e);
+    if (!c) return e;
+    const char *sql = AS_STRING(args[1]);
+    if (strlen(sql) != rope_length(args[1])) { c->busy = 0; return pg_fail("the SQL text contains a NUL character"); }
+    List *params = (argc > 2 && GET_TYPE(args[2]) == VAL_LIST) ? AS_LIST(args[2]) : NULL;
+    if (argc > 2 && GET_TYPE(args[2]) != VAL_LIST && GET_TYPE(args[2]) != VAL_NONE) { c->busy = 0; return pg_fail("parameters must be a list"); }
+    int np = params ? params->size : 0;
+    if (np > 65535) { c->busy = 0; return pg_fail("too many parameters (at most 65535)"); }
+    HttpBuf req = { NULL, 0, 0 };
+    size_t a = pg_begin(&req, 'P');   /* Parse, unnamed statement, types inferred */
+    pg_cstr(&req, ""); pg_cstr(&req, sql); pg_put16(&req, 0);
+    pg_end(&req, a);
+    a = pg_begin(&req, 'B');          /* Bind: all parameters and results in text */
+    pg_cstr(&req, ""); pg_cstr(&req, "");
+    pg_put16(&req, 0);
+    pg_put16(&req, (int16_t)np);
+    for (int i = 0; i < np; i++) {
+        Value v = params->items[i];
+        if (GET_TYPE(v) == VAL_NONE) { pg_put32(&req, -1); continue; }
+        HttpBuf t = { NULL, 0, 0 };
+        hb_add(&t, "", 0);
+        pg_param_text(v, &t, 0);
+        if (memchr(t.p, 0, t.n)) { free(t.p); free(req.p); c->busy = 0; return pg_fail("a parameter contains a NUL character"); }
+        pg_put32(&req, (int32_t)t.n);
+        hb_add(&req, t.p, t.n);
+        free(t.p);
+    }
+    pg_put16(&req, 0);
+    pg_end(&req, a);
+    a = pg_begin(&req, 'D'); hb_add(&req, "P", 1); pg_cstr(&req, ""); pg_end(&req, a);
+    a = pg_begin(&req, 'E'); pg_cstr(&req, ""); pg_put32(&req, 0); pg_end(&req, a);
+    a = pg_begin(&req, 'S'); pg_end(&req, a);
+    return pg_finish(c, &req, 1);
+}
+
+/* pg.script(handle, sql): runs several statements (simple protocol), no
+   parameters. For migrations and setup. */
+static Value pg_script_native(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return pg_fail("script needs SQL text");
+    Value e;
+    PgConn *c = pg_take(args[0], &e);
+    if (!c) return e;
+    if (strlen(AS_STRING(args[1])) != rope_length(args[1])) { c->busy = 0; return pg_fail("the SQL text contains a NUL character"); }
+    HttpBuf req = { NULL, 0, 0 };
+    size_t a = pg_begin(&req, 'Q'); pg_cstr(&req, AS_STRING(args[1])); pg_end(&req, a);
+    return pg_finish(c, &req, 1);
+}
+
+/* pg.status(handle) -> "idle", "transaction" or "failed" */
+static Value pg_status_native(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) <= 0 || AS_INT(args[0]) >= PG_MAX_CONNS || !pg_conns[AS_INT(args[0])]) return value_string_copy("closed");
+    PgConn *c = pg_conns[AS_INT(args[0])];
+    if (c->broken) return value_string_copy("broken");
+    return value_string_copy(c->tx == 'T' ? "transaction" : c->tx == 'E' ? "failed" : "idle");
+}
+
+static Value pg_server_version_native(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) <= 0 || AS_INT(args[0]) >= PG_MAX_CONNS || !pg_conns[AS_INT(args[0])]) return value_none();
+    return value_int(pg_conns[AS_INT(args[0])]->server_version);
+}
+
+/* pg.close(handle): says goodbye and closes. Closing twice is fine. */
+static Value pg_close_native(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_INT || AS_INT(args[0]) <= 0 || AS_INT(args[0]) >= PG_MAX_CONNS) return value_none();
+    int h = (int)AS_INT(args[0]);
+    PgConn *c = pg_conns[h];
+    if (!c) return value_none();
+    if (c->busy) return pg_fail("the connection is in use by another thread");
+    pg_conns[h] = NULL;
+    if (!c->broken) {
+        HttpBuf req = { NULL, 0, 0 };
+        size_t a = pg_begin(&req, 'X'); pg_end(&req, a);
+        glow_gil_release();
+        pg_send(c, req.p, req.n);
+        if (c->ssl) SSL_shutdown(c->ssl);
+        glow_gil_acquire();
+        free(req.p);
+    }
+    pg_shutdown(c);
+    free(c);
+    return value_none();
+}
+
 static Value os_time(int argc, Value *args) { (void)argc; (void)args; struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
 #include <time.h>
@@ -5291,6 +6008,14 @@ void std_init(void) {
     var_set("fs", value_dict(fs));
     glow_scripting_init();   /* os.args, os.env, fs.glob, ... (process.c) */
 
+    Dict *pg = dict_new(8);
+    dict_set(pg, "connect", native_func_new("connect", pg_connect_native));
+    dict_set(pg, "query", native_func_new("query", pg_query_native));
+    dict_set(pg, "script", native_func_new("script", pg_script_native));
+    dict_set(pg, "status", native_func_new("status", pg_status_native));
+    dict_set(pg, "server_version", native_func_new("server_version", pg_server_version_native));
+    dict_set(pg, "close", native_func_new("close", pg_close_native));
+    var_set("pg", value_dict(pg));
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4);
     dict_set(http, "listen", native_func_new("listen", http_listen));

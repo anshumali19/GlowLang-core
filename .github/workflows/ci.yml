@@ -68,6 +68,54 @@ jobs:
       - name: Cleanup
         run: rm -f src/lex.yy.c src/glowlang.tab.c src/glowlang.tab.h
 
+  # The PostgreSQL client against a real server: TLS on, SCRAM logins, and a
+  # second role each for MD5 and cleartext passwords.
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start PostgreSQL 17 with TLS
+        run: |
+          docker run -d --name pg -p 5432:5432 \
+            -e POSTGRES_USER=glow -e "POSTGRES_PASSWORD=glow pässword!" -e POSTGRES_DB=glowtest \
+            postgres:17 -c ssl=on \
+            -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem \
+            -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+          for i in $(seq 1 30); do docker exec pg pg_isready -U glow -h localhost && break; sleep 1; done
+          docker exec pg psql -U glow -d glowtest -qc "set password_encryption='md5'; create role md5u login password 'm5 pw'; create role clearu login password 'cl pw'"
+          docker exec pg sh -c "sed -i '1i host all md5u all md5\nhost all clearu all password' /var/lib/postgresql/data/pg_hba.conf"
+          docker exec pg psql -U glow -d glowtest -qc "select pg_reload_conf()"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=2 update
+          sudo apt-get -o Acquire::Retries=2 install -y flex bison libfl-dev libsqlite3-dev libssl-dev libx11-dev gcc
+
+      - name: Build GlowLang
+        run: make clean && make
+
+      - name: PostgreSQL tests
+        env:
+          PG_TEST_URL: postgres://glow:glow%20p%C3%A4ssword!@localhost:5432/glowtest
+        run: |
+          ./bin/glowlang tests/integration/test_postgres.glow
+          GLOW_NOJITEXEC=1 ./bin/glowlang tests/integration/test_postgres.glow
+          GLOWLANG_GC_STRESS=1 ./bin/glowlang tests/integration/test_postgres.glow
+
+      - name: MD5 and cleartext logins
+        run: |
+          cat > logins.glow <<'EOF'
+          use "postgres"
+          let a = postgres.connect("postgres://md5u:m5%20pw@localhost/glowtest?sslmode=disable")
+          let b = postgres.connect("postgres://clearu:cl%20pw@localhost/glowtest?sslmode=require")
+          if a.value("select current_user") != "md5u" or b.value("select current_user") != "clearu":
+              os.exit(1)
+          end
+          show "md5 and cleartext logins ok"
+          EOF
+          ./bin/glowlang logins.glow
+
   build-macos:
     runs-on: macos-latest
     steps:

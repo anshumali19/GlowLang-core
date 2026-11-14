@@ -1,0 +1,346 @@
+# postgres.glow: PostgreSQL for GlowLang.
+#
+#   use "postgres"
+#   let db = postgres.connect("postgres://user:password@localhost:5432/shop")
+#   db.execute("insert into items (name, price) values ($1, $2)", ["pen", 20])
+#   for each row in db.query("select * from items where price < $1", [100]):
+#       show row["name"]
+#   end
+#   db.close()
+#
+# Values are always sent as $1, $2 ... parameters, never pasted into the
+# SQL, so they cannot change what a statement does (no SQL injection).
+#
+# The protocol is built into GlowLang (the `pg` module), so nothing else
+# needs installing: no libpq, no drivers.
+#
+# Types: int, bool, float, text, json/jsonb (dicts and lists) and
+# one-dimensional arrays come back as GlowLang values. numeric comes back as
+# text so money never loses precision: float(x) converts it. Dates and times
+# come back as ISO text such as "2026-11-15" or "2026-11-15 10:30:00+05:30".
+# A list parameter is sent as a PostgreSQL array, a dict as JSON.
+#
+# Errors raise "postgres: <message> [SQLSTATE]"; postgres.error_code(e)
+# returns the SQLSTATE, for example "23505" for a duplicate key.
+
+func _pg_fail(msg):
+    throw "postgres: " + msg
+end
+
+# Percent-decoding for connection URLs, UTF-8 aware.
+func _pg_hex(c):
+    let digits = "0123456789abcdef"
+    return digits.find(c.lower())
+end
+
+func _pg_unquote(s):
+    let bytes = []
+    let i = 0
+    let n = len(s)
+    while i < n:
+        let c = s[i]
+        if c == "%" and i + 2 < n and _pg_hex(s[i + 1]) >= 0 and _pg_hex(s[i + 2]) >= 0:
+            bytes.push(_pg_hex(s[i + 1]) * 16 + _pg_hex(s[i + 2]))
+            i = i + 3
+        else:
+            for each b in c.bytes():
+                bytes.push(b)
+            end
+            i = i + 1
+        end
+    end
+    # UTF-8 bytes back into characters.
+    let out = ""
+    let k = 0
+    while k < len(bytes):
+        let b = bytes[k]
+        let need = 0
+        let cp = b
+        if b >= 240:
+            need = 3
+            cp = b - 240
+        eif b >= 224:
+            need = 2
+            cp = b - 224
+        eif b >= 192:
+            need = 1
+            cp = b - 192
+        end
+        let j = 1
+        while j <= need and k + j < len(bytes):
+            cp = cp * 64 + (bytes[k + j] - 128)
+            j = j + 1
+        end
+        out = out + chr(cp)
+        k = k + need + 1
+    end
+    return out
+end
+
+# postgres://user:password@host:port/database?sslmode=require&...
+func _pg_parse_url(url):
+    let rest = ""
+    if url.starts_with("postgresql://"):
+        rest = url[13:]
+    eif url.starts_with("postgres://"):
+        rest = url[11:]
+    else:
+        _pg_fail("a connection URL starts with postgres:// or postgresql://")
+    end
+    let opts = {}
+    let q = rest.find("?")
+    if q >= 0:
+        for each pair in rest[q + 1:].split("&"):
+            if pair != "":
+                let eq = pair.find("=")
+                if eq < 0:
+                    _pg_fail("bad option in the connection URL: " + pair)
+                end
+                let key = _pg_unquote(pair[:eq])
+                let value = _pg_unquote(pair[eq + 1:])
+                if key == "connect_timeout" or key == "timeout" or key == "port":
+                    opts[key] = int(value)
+                else:
+                    opts[key] = value
+                end
+            end
+        end
+        rest = rest[:q]
+    end
+    let slash = rest.find("/")
+    let authority = rest
+    if slash >= 0:
+        let dbname = _pg_unquote(rest[slash + 1:])
+        if dbname != "":
+            opts["database"] = dbname
+        end
+        authority = rest[:slash]
+    end
+    # The password may contain "@", so split at the last one.
+    let at = -1
+    let p = 0
+    while p < len(authority):
+        if authority[p] == "@":
+            at = p
+        end
+        p = p + 1
+    end
+    let hostport = authority
+    if at >= 0:
+        let userinfo = authority[:at]
+        hostport = authority[at + 1:]
+        let colon = userinfo.find(":")
+        if colon >= 0:
+            opts["user"] = _pg_unquote(userinfo[:colon])
+            opts["password"] = _pg_unquote(userinfo[colon + 1:])
+        else:
+            opts["user"] = _pg_unquote(userinfo)
+        end
+    end
+    if hostport.starts_with("["):
+        let close = hostport.find("]")
+        if close < 0:
+            _pg_fail("bad IPv6 address in the connection URL")
+        end
+        opts["host"] = hostport[1:close]
+        if close + 1 < len(hostport) and hostport[close + 1] == ":":
+            opts["port"] = int(hostport[close + 2:])
+        end
+    else:
+        let colon = hostport.find(":")
+        if colon >= 0:
+            opts["host"] = hostport[:colon]
+            opts["port"] = int(hostport[colon + 1:])
+        eif hostport != "":
+            opts["host"] = hostport
+        end
+    end
+    return opts
+end
+
+# A name (table, column) quoted for SQL: "order" -> "\"order\"".
+func _pg_ident(name):
+    if type(name) != "string" or name == "":
+        _pg_fail("a table or column name must be non-empty text")
+    end
+    return "\"" + name.replace("\"", "\"\"") + "\""
+end
+
+blueprint PgConnection:
+    action init(handle, options):
+        self.handle = handle
+        self.options = options
+        self.depth = 0
+    end
+
+    # Every row as a dict: [{"id": 1, "name": "pen"}, ...]
+    action query(sql, params = none):
+        let r = pg.query(self.handle, sql, params)
+        let cols = r["columns"]
+        let out = []
+        for each values in r["rows"]:
+            let row = {}
+            let i = 0
+            while i < len(cols):
+                row[cols[i]] = values[i]
+                i = i + 1
+            end
+            out.push(row)
+        end
+        return out
+    end
+
+    # The first row as a dict, or none when there are no rows.
+    action one(sql, params = none):
+        let rows = self.query(sql, params)
+        if len(rows) == 0:
+            return none
+        end
+        return rows[0]
+    end
+
+    # The first column of the first row, or none.
+    action value(sql, params = none):
+        let r = pg.query(self.handle, sql, params)
+        if len(r["rows"]) == 0:
+            return none
+        end
+        return r["rows"][0][0]
+    end
+
+    # Rows as lists plus the column names, without building dicts.
+    action raw(sql, params = none):
+        return pg.query(self.handle, sql, params)
+    end
+
+    # Runs a statement and returns how many rows it changed.
+    action execute(sql, params = none):
+        let r = pg.query(self.handle, sql, params)
+        if r["affected"] < 0:
+            return 0
+        end
+        return r["affected"]
+    end
+
+    # Several statements separated by ";", with no parameters. For
+    # creating tables and other setup.
+    action script(sql):
+        pg.script(self.handle, sql)
+    end
+
+    # Inserts one row from a dict and returns it as stored (with defaults
+    # such as a generated id filled in).
+    action insert(table, row):
+        if type(row) != "dict" or len(row) == 0:
+            _pg_fail("insert needs a non-empty dict of column values")
+        end
+        let names = []
+        let marks = []
+        let values = []
+        for each key in row.keys():
+            names.push(_pg_ident(key))
+            values.push(row[key])
+            marks.push("$" + str(len(values)))
+        end
+        let sql = "insert into " + _pg_ident(table) + " (" + ", ".join(names) + ") values (" + ", ".join(marks) + ") returning *"
+        return self.one(sql, values)
+    end
+
+    # Runs work(db) inside a transaction. It commits when work returns and
+    # rolls back if it raises (and the error is raised again). Nested calls
+    # use savepoints, so an inner failure only undoes the inner part.
+    action transaction(work):
+        let level = self.depth
+        if level == 0:
+            pg.query(self.handle, "begin")
+        else:
+            pg.query(self.handle, "savepoint glow_sp_" + str(level))
+        end
+        self.depth = level + 1
+        let result = none
+        try:
+            result = work(self)
+        catch e:
+            self.depth = level
+            if pg.status(self.handle) != "broken":
+                if level == 0:
+                    pg.query(self.handle, "rollback")
+                else:
+                    pg.query(self.handle, "rollback to savepoint glow_sp_" + str(level))
+                end
+            end
+            throw e
+        end
+        self.depth = level
+        if level == 0:
+            pg.query(self.handle, "commit")
+        else:
+            pg.query(self.handle, "release savepoint glow_sp_" + str(level))
+        end
+        return result
+    end
+
+    # "idle", "transaction", "failed" (a statement in the open transaction
+    # failed; roll back), "broken" (the connection was lost) or "closed".
+    action status():
+        return pg.status(self.handle)
+    end
+
+    # The server's version as a number: 170002 for 17.2.
+    action server_version():
+        return pg.server_version(self.handle)
+    end
+
+    action close():
+        pg.close(self.handle)
+    end
+end
+
+blueprint Postgres:
+    # connect("postgres://user:pass@host:5432/db?sslmode=require") or
+    # connect({"host": ..., "port": 5432, "user": ..., "password": ...,
+    #          "database": ..., "sslmode": "prefer"}).
+    # sslmode: "disable", "prefer" (the default: TLS when the server offers
+    # it), "require" (TLS, any certificate) or "verify-full" (TLS with a
+    # trusted certificate for this host name; use it across the internet).
+    # connect_timeout (seconds, default 10) limits connecting; timeout
+    # (seconds, default none) limits each wait for the server.
+    action connect(target = none):
+        let opts = {}
+        if target == none:
+            let url = os.getenv("DATABASE_URL", "")
+            if url == "":
+                _pg_fail("connect() needs a URL or options, or the DATABASE_URL environment variable")
+            end
+            opts = _pg_parse_url(url)
+        eif type(target) == "string":
+            opts = _pg_parse_url(target)
+        eif type(target) == "dict":
+            for each key in target.keys():
+                opts[key] = target[key]
+            end
+        else:
+            _pg_fail("connect() needs a URL string or a dict of options")
+        end
+        let handle = pg.connect(opts)
+        return PgConnection(handle, opts)
+    end
+
+    # The SQLSTATE code in an error message from this library, or none.
+    action error_code(err):
+        let s = str(err)
+        let end_at = s.find("]")
+        let start = s.find(" [")
+        if not s.starts_with("postgres:") or start < 0 or end_at < start:
+            return none
+        end
+        return s[start + 2:end_at]
+    end
+
+    # A table or column name quoted for use in SQL text.
+    action ident(name):
+        return _pg_ident(name)
+    end
+end
+
+let postgres = Postgres()
