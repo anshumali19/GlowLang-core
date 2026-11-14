@@ -1,0 +1,331 @@
+# glowlearn: splitting, scaling, models, clustering, PCA and metrics.
+use "glowlearn"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func near(name, got, want, tol = 1e-6):
+    let d = got - want
+    if d < 0:
+        d = 0 - d
+    end
+    if d <= tol:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func close(name, got, want, tol = 1e-6):
+    if gnum.allclose(got, want, tol):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains("glowlearn:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+# ---- data used below
+# Three well separated groups of points in 2-D, 30 rows each.
+func make_blobs(seed):
+    let rng = RandomState(seed)
+    let centers = [[0, 0], [6, 6], [0, 7]]
+    let names = ["red", "green", "blue"]
+    let X = []
+    let y = []
+    let i = 0
+    while i < 90:
+        let c = i % 3
+        X.push([centers[c][0] + rng.normal(0, 0.8), centers[c][1] + rng.normal(0, 0.8)])
+        y.push(names[c])
+        i = i + 1
+    end
+    return [X, y]
+end
+
+# y = 3 a - 2 b + 5 plus a little noise.
+func make_line(seed, noise):
+    let rng = RandomState(seed)
+    let X = []
+    let y = []
+    let i = 0
+    while i < 80:
+        let a = rng.uniform(-5, 5)
+        let b = rng.uniform(-5, 5)
+        X.push([a, b])
+        y.push(3 * a - 2 * b + 5 + rng.normal(0, noise))
+        i = i + 1
+    end
+    return [X, y]
+end
+
+let blobs = make_blobs(1)
+let bx = blobs[0]
+let by = blobs[1]
+let line = make_line(2, 0.1)
+let lx = line[0]
+let ly = line[1]
+
+show "== metrics"
+near("accuracy", accuracy_score([1, 0, 1, 1], [1, 1, 1, 0]), 0.5)
+near("accuracy strings", accuracy_score(["a", "b"], ["a", "b"]), 1)
+ok("confusion matrix", confusion_matrix([0, 0, 1, 1, 1], [0, 1, 1, 1, 0]) == [[1, 1], [1, 2]])
+ok("confusion matrix labels", confusion_matrix(["a", "b"], ["b", "b"], ["b", "a"]) == [[1, 0], [1, 0]])
+let yt = [1, 1, 1, 0, 0, 0, 0, 1]
+let yp = [1, 0, 1, 0, 0, 1, 0, 1]
+near("precision", precision_score(yt, yp, 1), 0.75)
+near("recall", recall_score(yt, yp, 1), 0.75)
+near("f1", f1_score(yt, yp, 1), 0.75)
+near("precision macro", precision_score([0, 0, 1, 2], [0, 1, 1, 2]), (1 + 0.5 + 1) / 3)
+near("recall macro", recall_score([0, 0, 1, 2], [0, 1, 1, 2]), (0.5 + 1 + 1) / 3)
+near("precision with nothing predicted", precision_score([1, 1], [0, 0], 1), 0)
+near("mse", mean_squared_error([1, 2, 3], [1, 2, 5]), 4 / 3)
+near("rmse", root_mean_squared_error([0, 0], [3, 4]), math.sqrt(12.5))
+near("mae", mean_absolute_error([1, 2, 3], [2, 2, 1]), 1)
+near("r2 perfect", r2_score([1, 2, 3], [1, 2, 3]), 1)
+near("r2 mean predictor", r2_score([1, 2, 3], [2, 2, 2]), 0)
+near("r2 known", r2_score([3, -0.5, 2, 7], [2.5, 0, 2, 8]), 0.9486081370449679)
+near("r2 constant truth, wrong", r2_score([2, 2], [1, 3]), 0)
+
+show "== splitting"
+let parts = train_test_split(bx, by, 0.25, 7)
+ok("split sizes", len(parts[0]) == 67 and len(parts[1]) == 23 and len(parts[2]) == 67 and len(parts[3]) == 23)
+let again = train_test_split(bx, by, 0.25, 7)
+ok("same seed, same split", parts[1] == again[1] and parts[3] == again[3])
+ok("other seed, other split", train_test_split(bx, by, 0.25, 8)[1] != parts[1])
+let plain = train_test_split([[1], [2], [3], [4]], [1, 2, 3, 4], 0.5, 0, false)
+ok("no shuffle keeps order", plain[1] == [[1], [2]] and plain[0] == [[3], [4]] and plain[3] == [1, 2])
+let tiny = train_test_split([[1], [2]], ["a", "b"], 0.1)
+ok("tiny split keeps one row each side", len(tiny[0]) == 1 and len(tiny[1]) == 1)
+let seen = []
+for each row in parts[0] + parts[1]:
+    seen.push(row[0])
+end
+ok("split keeps every row once", gnum.sort(seen) == gnum.sort(gnum.column(bx, 0)))
+let folds = KFold(3).split(10)
+ok("kfold count", len(folds) == 3)
+ok("kfold sizes", len(folds[0][1]) == 4 and len(folds[1][1]) == 3 and len(folds[2][1]) == 3)
+ok("kfold first fold", folds[0][1] == [0, 1, 2, 3] and folds[0][0] == [4, 5, 6, 7, 8, 9])
+let all_test = []
+for each f in KFold(4, true, 3).split(22):
+    all_test = all_test + f[1]
+    ok("kfold train and test do not overlap", len(f[0]) + len(f[1]) == 22)
+end
+ok("kfold tests cover every row once", gnum.sort(all_test) == range(22))
+
+show "== scaling and encoding"
+let sx = [[1, 10, 5], [2, 20, 5], [3, 30, 5]]
+let scaler = StandardScaler()
+let scaled = scaler.fit_transform(sx)
+close("standard scaler means", gnum.mean(scaled, 0), [0, 0, 0])
+close("standard scaler sd", gnum.std(scaled, 0), [1, 1, 0])
+close("standard scaler constant column", gnum.column(scaled, 2), [0, 0, 0])
+close("standard scaler round trip", scaler.inverse_transform(scaled), sx)
+close("standard scaler new data", scaler.transform([[2, 20, 5]]), [[0, 0, 0]])
+let mm = MinMaxScaler()
+close("minmax", mm.fit_transform([[1, 10], [2, 20], [3, 40]]), [[0, 0], [0.5, 1 / 3], [1, 1]])
+close("minmax round trip", mm.inverse_transform([[0.5, 1]]), [[2, 40]])
+close("minmax custom range", MinMaxScaler(-1, 1).fit_transform([[0], [5], [10]]), [[-1], [0], [1]])
+let le = LabelEncoder()
+ok("label encoder", le.fit_transform(["dog", "cat", "dog", "bird"]) == [2, 1, 2, 0])
+ok("label encoder classes sorted", le.classes == ["bird", "cat", "dog"])
+ok("label encoder back", le.inverse_transform([0, 2]) == ["bird", "dog"])
+let oh = OneHotEncoder()
+ok("one hot", oh.fit_transform(["b", "a", "c", "a"]) == [[0, 1, 0], [1, 0, 0], [0, 0, 1], [1, 0, 0]])
+ok("one hot back", oh.inverse_transform([[0, 0, 1], [1, 0, 0]]) == ["c", "a"])
+
+show "== linear regression"
+let lr = LinearRegression().fit([[1], [2], [3], [4]], [3, 5, 7, 9])
+close("exact line coef", lr.coef, [2])
+near("exact line intercept", lr.intercept, 1)
+close("exact line predict", lr.predict([[10], [0]]), [21, 1])
+near("exact line score", lr.score([[1], [2]], [3, 5]), 1)
+let lr2 = LinearRegression().fit(lx, ly)
+close("noisy plane coef", lr2.coef, [3, -2], 0.05)
+near("noisy plane intercept", lr2.intercept, 5, 0.05)
+ok("noisy plane r2", lr2.score(lx, ly) > 0.999)
+let dup = LinearRegression().fit([[1, 1], [2, 2], [3, 3]], [2, 4, 6])
+close("repeated column still predicts", dup.predict([[4, 4]]), [8], 1e-4)
+let ridge0 = Ridge(0).fit(lx, ly)
+close("ridge alpha 0 equals least squares", ridge0.coef, lr2.coef, 1e-9)
+let ridge_big = Ridge(10000).fit(lx, ly)
+ok("ridge shrinks coefficients", gnum.norm(ridge_big.coef) < gnum.norm(lr2.coef) * 0.5)
+near("ridge known value", Ridge(1).fit([[0], [1], [2]], [0, 1, 2]).coef[0], 2 / 3)
+
+show "== logistic regression"
+let lparts = train_test_split(bx, by, 0.3, 5)
+let logit = LogisticRegression().fit(lparts[0], lparts[2])
+ok("logistic classes", logit.classes == ["blue", "green", "red"])
+ok("logistic train accuracy", logit.score(lparts[0], lparts[2]) > 0.97)
+ok("logistic test accuracy", logit.score(lparts[1], lparts[3]) > 0.95)
+let probs = logit.predict_proba([[0, 0], [6, 6]])
+near("probabilities add up to 1", gnum.sum(probs[0]), 1)
+ok("confident about the red centre", probs[0][2] > 0.9)
+ok("confident about the green centre", probs[1][1] > 0.9)
+let two = LogisticRegression(0.5, 300).fit([[0], [1], [2], [3], [10], [11], [12], [13]], [0, 0, 0, 0, 1, 1, 1, 1])
+ok("two classes", two.predict([[1.5], [11.5]]) == [0, 1])
+ok("boundary is between the groups", two.predict([[4]]) == [0] and two.predict([[9]]) == [1])
+ok("stops early when it has converged or runs all epochs", two.n_iter >= 1 and two.n_iter <= 300)
+
+show "== nearest neighbours"
+let knn = KNeighborsClassifier(3).fit(lparts[0], lparts[2])
+ok("knn accuracy", knn.score(lparts[1], lparts[3]) > 0.95)
+let k1 = KNeighborsClassifier(1).fit([[0], [10]], ["low", "high"])
+ok("1-nn", k1.predict([[2], [9], [100]]) == ["low", "high", "high"])
+let kp = KNeighborsClassifier(3).fit([[0], [1], [2], [10]], ["a", "a", "b", "b"])
+close("knn probabilities", kp.predict_proba([[0.5]]), [[2 / 3, 1 / 3]])
+let kr = KNeighborsRegressor(2).fit([[0], [1], [2], [3]], [0, 10, 20, 30])
+close("knn regression", kr.predict([[0.4], [2.6]]), [5, 25])
+ok("knn regression r2", KNeighborsRegressor(3).fit(lx, ly).score(lx, ly) > 0.9)
+
+show "== naive Bayes"
+let nb = GaussianNB().fit(lparts[0], lparts[2])
+ok("naive bayes accuracy", nb.score(lparts[1], lparts[3]) > 0.95)
+near("naive bayes probabilities add up", gnum.sum(nb.predict_proba([[3, 3]])[0]), 1)
+let nbc = GaussianNB().fit([[1, 5], [1, 6], [2, 5], [2, 9]], ["x", "x", "y", "y"])
+ok("naive bayes with a constant feature in a class", nbc.predict([[1, 5.5], [2, 7]]) == ["x", "y"])
+
+show "== decision trees"
+let xor_x = [[0, 0], [0, 1], [1, 0], [1, 1]]
+let xor_y = ["no", "yes", "yes", "no"]
+let tree = DecisionTreeClassifier().fit(xor_x, xor_y)
+ok("tree learns xor", tree.predict(xor_x) == xor_y)
+ok("tree depth", tree.depth() == 2 and tree.leaf_count() == 4)
+let stump = DecisionTreeClassifier(1).fit([[1], [2], [3], [4]], [0, 0, 1, 1])
+ok("stump", stump.predict([[2.4], [2.6]]) == [0, 1] and stump.depth() == 1)
+let big_tree = DecisionTreeClassifier().fit(lparts[0], lparts[2])
+ok("tree fits its training data", big_tree.score(lparts[0], lparts[2]) == 1)
+ok("tree test accuracy", big_tree.score(lparts[1], lparts[3]) > 0.9)
+let pure = DecisionTreeClassifier().fit([[1], [2], [3]], ["a", "a", "a"])
+ok("one class gives a single leaf", pure.leaf_count() == 1 and pure.predict([[9]]) == ["a"])
+let same_rows = DecisionTreeClassifier().fit([[1], [1], [1]], ["a", "b", "a"])
+ok("identical rows cannot be split", same_rows.leaf_count() == 1 and same_rows.predict([[1]]) == ["a"])
+close("tree probabilities", same_rows.predict_proba([[1]]), [[2 / 3, 1 / 3]])
+let leafy = DecisionTreeClassifier(none, 2, 2).fit([[1], [2], [3], [4]], [0, 1, 0, 1])
+ok("min_samples_leaf limits the tree", leafy.leaf_count() <= 2)
+let reg_tree = DecisionTreeRegressor().fit([[1], [2], [3], [4]], [10, 10, 20, 20])
+close("regression tree", reg_tree.predict([[1.5], [3.5]]), [10, 20])
+ok("regression tree depth", reg_tree.depth() == 1)
+let step_tree = DecisionTreeRegressor(3).fit(lx, ly)
+ok("shallow regression tree r2", step_tree.score(lx, ly) > 0.7 and step_tree.depth() <= 3)
+ok("deep regression tree fits exactly", DecisionTreeRegressor().fit(lx, ly).score(lx, ly) > 0.999999)
+
+show "== random forests"
+let forest = RandomForestClassifier(15, none, 3).fit(lparts[0], lparts[2])
+ok("forest accuracy", forest.score(lparts[1], lparts[3]) > 0.95)
+let forest2 = RandomForestClassifier(15, none, 3).fit(lparts[0], lparts[2])
+ok("same seed, same forest", forest.predict_proba(lparts[1]) == forest2.predict_proba(lparts[1]))
+near("forest probabilities add up", gnum.sum(forest.predict_proba([[3, 3]])[0]), 1)
+ok("forest has the trees asked for", len(forest.trees) == 15)
+let rf = RandomForestRegressor(15, none, 4).fit(lx, ly)
+ok("forest regression r2", rf.score(lx, ly) > 0.9)
+
+show "== k-means"
+let km = KMeans(3, 100, 0).fit(bx)
+ok("k-means label count", len(km.labels) == 90 and len(km.centers) == 3)
+# Every true group should sit in one cluster.
+let agree = true
+let g = 0
+while g < 3:
+    let first = km.labels[g]
+    let i = g
+    while i < 90:
+        if km.labels[i] != first:
+            agree = false
+        end
+        i = i + 3
+    end
+    g = g + 1
+end
+ok("k-means finds the three groups", agree)
+ok("k-means uses every cluster", gnum.unique(km.labels) == [0, 1, 2])
+ok("k-means predict matches labels", km.predict(bx) == km.labels)
+near("k-means score is minus inertia", km.score(bx), 0 - km.inertia, 1e-6)
+ok("fewer clusters, more inertia", KMeans(1, 100, 0).fit(bx).inertia > km.inertia)
+let exact = KMeans(2, 50, 1).fit([[0, 0], [0, 2], [10, 0], [10, 2]])
+close("k-means centres", gnum.sort(gnum.column(exact.centers, 0)), [0, 10])
+near("k-means inertia", exact.inertia, 4)
+let all_own = KMeans(3, 50, 2).fit([[1], [5], [9]])
+near("k equal to rows gives zero inertia", all_own.inertia, 0)
+let dupes = KMeans(2, 50, 0).fit([[1, 1], [1, 1], [1, 1]])
+ok("k-means with identical rows still finishes", len(dupes.labels) == 3)
+
+show "== PCA"
+let px = [[2.5, 2.4], [0.5, 0.7], [2.2, 2.9], [1.9, 2.2], [3.1, 3.0], [2.3, 2.7], [2.0, 1.6], [1.0, 1.1], [1.5, 1.6], [1.1, 0.9]]
+let pca = PCA().fit(px)
+close("pca variances", pca.explained_variance, [1.2840277121727839, 0.0490833989383273], 1e-9)
+near("pca ratios add up to 1", gnum.sum(pca.explained_variance_ratio), 1)
+close("pca first direction", gnum.abs(pca.components[0]), [0.6778733985280118, 0.7351786555416521], 1e-9)
+near("pca directions are perpendicular", gnum.dot(pca.components[0], pca.components[1]), 0, 1e-9)
+let z = pca.transform(px)
+close("pca scores are centred", gnum.mean(z, 0), [0, 0], 1e-9)
+close("pca scores have the stated variance", gnum.var(z, 0, 1), pca.explained_variance, 1e-9)
+close("pca round trip", pca.inverse_transform(z), px, 1e-9)
+let pca1 = PCA(1)
+let z1 = pca1.fit_transform(px)
+ok("pca keeps one component", gnum.shape(z1) == [10, 1] and len(pca1.components) == 1)
+ok("one component keeps most of the variance", pca1.explained_variance_ratio[0] > 0.96)
+
+show "== cross validation"
+let scores = cross_val_score(lambda(): KNeighborsClassifier(3), bx, by, 5, 1)
+ok("cross validation gives one score per fold", len(scores) == 5)
+ok("cross validation scores are high", gnum.mean(scores) > 0.95)
+let reg_scores = cross_val_score(lambda(): LinearRegression(), lx, ly, 4)
+ok("cross validation of a regression", gnum.min(reg_scores) > 0.99)
+
+show "== errors"
+fails_with("predict before fit", lambda(): LinearRegression().predict([[1]]), "call fit first")
+fails_with("transform before fit", lambda(): StandardScaler().transform([[1]]), "call fit first")
+fails_with("X is a flat list", lambda(): LinearRegression().fit([1, 2, 3], [1, 2, 3]), "list of rows")
+fails_with("X is empty", lambda(): LinearRegression().fit([], []), "non-empty")
+fails_with("ragged X", lambda(): KMeans(1).fit([[1, 2], [3]]), "same length")
+fails_with("text in X", lambda(): GaussianNB().fit([[1, "a"]], [1]), "only numbers")
+fails_with("X and y lengths", lambda(): LinearRegression().fit([[1], [2]], [1]), "2 rows but y has 1")
+fails_with("text targets for regression", lambda(): LinearRegression().fit([[1], [2]], ["a", "b"]), "expected numbers")
+fails_with("wrong feature count", lambda(): lr.predict([[1, 2]]), "1 feature(s) but X has 2")
+fails_with("one class", lambda(): LogisticRegression().fit([[1], [2]], ["a", "a"]), "at least 2 different labels")
+fails_with("k too large", lambda(): KNeighborsClassifier(5).fit([[1], [2]], [0, 1]), "only 2 rows")
+fails_with("k of zero", lambda(): KNeighborsClassifier(0), "at least 1")
+fails_with("too many clusters", lambda(): KMeans(5).fit([[1], [2]]), "only 2 rows")
+fails_with("too many components", lambda(): PCA(3).fit([[1, 2], [3, 4]]), "only 2 feature(s)")
+fails_with("unknown label", lambda(): le.transform(["wolf"]), "unknown label wolf")
+fails_with("test_size range", lambda(): train_test_split([[1], [2]], [1, 2], 1.5), "between 0 and 1")
+fails_with("split of one row", lambda(): train_test_split([[1]], [1]), "at least 2 rows")
+fails_with("too many folds", lambda(): KFold(5).split(3), "at least that many rows")
+fails_with("metric lengths", lambda(): accuracy_score([1, 2], [1]), "2 and 1 entries")
+fails_with("metric on nothing", lambda(): mean_squared_error([], []), "empty")
+fails_with("missing positive label", lambda(): f1_score([0, 1], [0, 1], 5), "does not appear")
+fails_with("negative alpha", lambda(): Ridge(-1), "negative")
+fails_with("bad tree depth", lambda(): DecisionTreeClassifier(0).fit([[1], [2]], [0, 1]), "max_depth")
+fails_with("minmax range", lambda(): MinMaxScaler(1, 1), "above low")
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

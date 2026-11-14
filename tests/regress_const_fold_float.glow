@@ -1,0 +1,32 @@
+# The optimizer's constant folding kept treating a register as the integer
+# constant it held earlier after a float, a string or an unfolded result was
+# written to it, so `1 + 0.5 + 1` could fold to a whole number.
+func first(x, y):
+    return x
+end
+
+show first((1 + 0.5 + 1) / 3, 1)
+let q = (1 + 0.5 + 1) / 3
+show q
+show first((1 + 0.5) / 3, 1)
+show first((2 + 1.5) / 4, 1)
+show (1 + 0.5 + 1) / 3, (0.5 + 1 + 1) / 3
+
+func mixed():
+    let a = 2 + 3
+    let b = 2 + 0.25
+    let c = 4 * 0.5 + 1
+    let d = 10 - 2.5 - 1
+    return [a, b, c, d]
+end
+show mixed()
+
+let i = 0
+let total = 0
+while i < 3:
+    let step = 1 + 0.5
+    total = total + step + 2
+    i = i + 1
+end
+show total
+show 3 + 4, 3 * 4 - 2, 10 / 5, 7 - 10, 2 + 3 < 6, 1 + 1 == 2

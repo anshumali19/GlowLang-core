@@ -1,0 +1,9 @@
+== tokens
+== distances
+== count vectorizer
+== tf-idf
+== naive Bayes
+== text classifier
+== errors
+
+passed: 95   failed: 0

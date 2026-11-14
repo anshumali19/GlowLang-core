@@ -1,0 +1,1333 @@
+# glowframe.glow
+# Tables of data for GlowLang, written in GlowLang.
+#
+#     use "glowframe"
+#     let df = read_csv("sales.csv")
+#     let big = df.filter(lambda(row): row["amount"] > 100).sort_values("amount", true)
+#     show big.group_by("region").agg({"amount": "sum"}).to_string()
+#     let X = big.to_matrix(["amount", "units"])        # for glowlearn / glowgrad
+#
+# A DataFrame is a set of named columns of equal length. A missing value is
+# none; statistics skip missing values. Nothing is changed in place: every
+# method returns a new DataFrame (or a plain list or number).
+#
+# Mistakes raise an error that starts with "glowframe:".
+
+use "glownum"
+
+# ---------------------------------------------------------------- helpers
+
+func _gf_fail(msg):
+    throw "glowframe: " + msg
+end
+
+func _gf_is_num(v):
+    let t = type(v)
+    return t == "int" or t == "float"
+end
+
+# A text that tells two values apart even when they print the same (1 and "1").
+func _gf_key(v):
+    if v == none:
+        return "n:"
+    end
+    if _gf_is_num(v):
+        return "#:" + str(v)
+    end
+    return type(v) + ":" + str(v)
+end
+
+# The values that are not missing.
+func _gf_present(values):
+    let out = []
+    for each v in values:
+        if v != none:
+            out.push(v)
+        end
+    end
+    return out
+end
+
+func _gf_numbers(values, name, what):
+    let out = []
+    for each v in values:
+        if v != none:
+            if not _gf_is_num(v):
+                _gf_fail(what + ": column '" + name + "' holds " + str(v) + ", which is not a number")
+            end
+            out.push(v)
+        end
+    end
+    return out
+end
+
+# Positions that sort values ascending; missing values go last. Equal values
+# keep their order. Numbers sort before text when a column mixes them.
+func _gf_argsort(values, descending):
+    let nums = []
+    let texts = []
+    let others = []
+    let missing = []
+    let i = 0
+    while i < len(values):
+        let v = values[i]
+        if v == none:
+            missing.push(i)
+        eif _gf_is_num(v):
+            nums.push(i)
+        eif type(v) == "string":
+            texts.push(i)
+        else:
+            others.push(i)
+        end
+        i = i + 1
+    end
+    let order = []
+    for each group in [nums, texts]:
+        let keys = []
+        for each p in group:
+            keys.push(values[p])
+        end
+        let sorted_pos = _gn_argsort(keys)
+        if descending:
+            # Reverse runs of equal values back so ties keep their order.
+            let rev = []
+            let k = len(sorted_pos) - 1
+            while k >= 0:
+                let stop_at = k
+                while stop_at > 0 and keys[sorted_pos[stop_at - 1]] == keys[sorted_pos[k]]:
+                    stop_at = stop_at - 1
+                end
+                let m = stop_at
+                while m <= k:
+                    rev.push(sorted_pos[m])
+                    m = m + 1
+                end
+                k = stop_at - 1
+            end
+            sorted_pos = rev
+        end
+        let part = []
+        for each k in sorted_pos:
+            part.push(group[k])
+        end
+        if descending:
+            order = part + order
+        else:
+            order = order + part
+        end
+    end
+    return order + others + missing
+end
+
+# which: "sum", "mean", "min", "max", "count", "std", "median", "first",
+# "last", "nunique". Missing values are skipped; with nothing left the
+# result is none (0 for sum, count and nunique).
+func _gf_aggregate(values, which, name, what):
+    if not ["sum", "mean", "min", "max", "count", "std", "median", "first", "last", "nunique"].contains(which):
+        _gf_fail(what + ": unknown aggregation '" + str(which) + "' (use sum, mean, min, max, count, std, median, first, last or nunique)")
+    end
+    let present = _gf_present(values)
+    if which == "count":
+        return len(present)
+    end
+    if which == "nunique":
+        let seen = {}
+        for each v in present:
+            seen[_gf_key(v)] = true
+        end
+        return len(seen)
+    end
+    if which == "first":
+        if len(present) == 0:
+            return none
+        end
+        return present[0]
+    end
+    if which == "last":
+        if len(present) == 0:
+            return none
+        end
+        return present[len(present) - 1]
+    end
+    if which == "min" or which == "max":
+        if len(present) == 0:
+            return none
+        end
+        let best = present[0]
+        for each v in present:
+            if type(v) != type(best) and not (_gf_is_num(v) and _gf_is_num(best)):
+                _gf_fail(what + ": column '" + name + "' mixes numbers and text, so " + which + " is undefined")
+            end
+            if which == "min" and v < best:
+                best = v
+            end
+            if which == "max" and v > best:
+                best = v
+            end
+        end
+        return best
+    end
+    let nums = _gf_numbers(values, name, what)
+    if which == "sum":
+        return _gn_vsum(nums)
+    end
+    if len(nums) == 0:
+        return none
+    end
+    if which == "mean":
+        return _gn_vsum(nums) / len(nums)
+    end
+    if which == "median":
+        return _gn_percentile_sorted(_gn_sorted(nums), 50)
+    end
+    if which == "std":
+        # The sample standard deviation (divides by n - 1), as in pandas.
+        if len(nums) < 2:
+            return none
+        end
+        return math.sqrt(_gn_vvar(nums, 1))
+    end
+    return none
+end
+
+# ---------------------------------------------------------------- CSV
+
+# The value a CSV cell stands for: nothing -> none, a number -> the number,
+# true/false -> a boolean, anything else -> the text.
+func _gf_cell(text):
+    let t = text.trim()
+    if t == "":
+        return none
+    end
+    let first = t[0]
+    let looks_numeric = (first >= "0" and first <= "9") or first == "-" or first == "+" or first == "."
+    if looks_numeric and t.is_number():
+        let whole = true
+        let i = 0
+        while i < len(t):
+            let c = t[i]
+            if not ((c >= "0" and c <= "9") or ((c == "-" or c == "+") and i == 0)):
+                whole = false
+            end
+            i = i + 1
+        end
+        if whole:
+            return int(t)
+        end
+        return float(t)
+    end
+    if t == "true":
+        return true
+    end
+    if t == "false":
+        return false
+    end
+    return text
+end
+
+# Splits CSV text into rows of text cells. Handles quoted cells, doubled
+# quotes inside them, separators and new lines inside quotes, and both
+# kinds of line ending.
+func _gf_split_csv(text, sep):
+    let rows = []
+    let row = []
+    let cell = ""
+    let quoted = false
+    let was_quoted = false
+    let n = len(text)
+    let i = 0
+    while i < n:
+        let c = text[i]
+        if quoted:
+            if c == "\"":
+                if i + 1 < n and text[i + 1] == "\"":
+                    cell = cell + "\""
+                    i = i + 1
+                else:
+                    quoted = false
+                end
+            else:
+                cell = cell + c
+            end
+        eif c == "\"" and cell == "" and not was_quoted:
+            quoted = true
+            was_quoted = true
+        eif c == sep:
+            row.push([cell, was_quoted])
+            cell = ""
+            was_quoted = false
+        eif c == "\n" or c == "\r":
+            if c == "\r" and i + 1 < n and text[i + 1] == "\n":
+                i = i + 1
+            end
+            row.push([cell, was_quoted])
+            rows.push(row)
+            row = []
+            cell = ""
+            was_quoted = false
+        else:
+            cell = cell + c
+        end
+        i = i + 1
+    end
+    if quoted:
+        _gf_fail("CSV: a quoted cell is never closed")
+    end
+    if cell != "" or was_quoted or len(row) > 0:
+        row.push([cell, was_quoted])
+        rows.push(row)
+    end
+    return rows
+end
+
+# A DataFrame from CSV text whose first line names the columns.
+func parse_csv(text, sep = ","):
+    if type(text) != "string":
+        _gf_fail("parse_csv needs the CSV text as a string")
+    end
+    if type(sep) != "string" or len(sep) != 1:
+        _gf_fail("parse_csv: the separator must be a single character")
+    end
+    let rows = _gf_split_csv(text, sep)
+    # Lines with nothing on them are skipped.
+    let kept = []
+    for each r in rows:
+        if not (len(r) == 1 and r[0][0].trim() == "" and not r[0][1]):
+            kept.push(r)
+        end
+    end
+    if len(kept) == 0:
+        _gf_fail("parse_csv: the text has no header line")
+    end
+    let names = []
+    for each c in kept[0]:
+        let name = c[0].trim()
+        if name == "":
+            _gf_fail("parse_csv: a column has no name")
+        end
+        if names.contains(name):
+            _gf_fail("parse_csv: the column name '" + name + "' appears twice")
+        end
+        names.push(name)
+    end
+    let cols = {}
+    for each name in names:
+        cols[name] = []
+    end
+    let line = 1
+    while line < len(kept):
+        let r = kept[line]
+        if len(r) != len(names):
+            _gf_fail("parse_csv: data row " + str(line) + " has " + str(len(r)) + " cell(s) but the header has " + str(len(names)))
+        end
+        let j = 0
+        while j < len(names):
+            if r[j][1]:
+                # A quoted cell is always text.
+                cols[names[j]].push(r[j][0])
+            else:
+                cols[names[j]].push(_gf_cell(r[j][0]))
+            end
+            j = j + 1
+        end
+        line = line + 1
+    end
+    return _gf_make(names, cols)
+end
+
+func read_csv(path, sep = ","):
+    if type(path) != "string":
+        _gf_fail("read_csv needs a file path")
+    end
+    if not fs.exists(path):
+        _gf_fail("read_csv: no file at " + path)
+    end
+    return parse_csv(fs.read(path), sep)
+end
+
+func _gf_csv_cell(v, sep):
+    if v == none:
+        return ""
+    end
+    let s = str(v)
+    let needs_quotes = s.contains(sep) or s.contains("\"") or s.contains("\n") or s.contains("\r") or s != s.trim() or s == ""
+    # Text that would be read back as a number or a boolean is quoted too.
+    if type(v) == "string" and not needs_quotes:
+        let back = _gf_cell(s)
+        if type(back) != "string":
+            needs_quotes = true
+        end
+    end
+    if needs_quotes:
+        return "\"" + s.replace("\"", "\"\"") + "\""
+    end
+    return s
+end
+
+# ---------------------------------------------------------------- building
+
+# A DataFrame that takes over the given names and column lists (no copy).
+func _gf_make(names, cols):
+    let df = DataFrame({})
+    df.names = names
+    df.cols = cols
+    df.length = 0
+    if len(names) > 0:
+        df.length = len(cols[names[0]])
+    end
+    return df
+end
+
+# A DataFrame from a list of dicts, one per row. A key missing from a row is
+# a missing value. Columns appear in the order they are first seen.
+func frame_from_rows(rows):
+    if type(rows) != "list":
+        _gf_fail("frame_from_rows needs a list of dicts")
+    end
+    let names = []
+    for each r in rows:
+        if type(r) != "dict":
+            _gf_fail("frame_from_rows needs a list of dicts, found " + str(r))
+        end
+        for each k in r.keys():
+            if not names.contains(k):
+                names.push(k)
+            end
+        end
+    end
+    let cols = {}
+    for each name in names:
+        let values = []
+        for each r in rows:
+            values.push(r.get(name, none))
+        end
+        cols[name] = values
+    end
+    return _gf_make(names, cols)
+end
+
+# A DataFrame from a matrix (a list of rows) and one name per column.
+func frame_from_matrix(matrix, names):
+    if type(matrix) != "list" or type(names) != "list":
+        _gf_fail("frame_from_matrix needs a list of rows and a list of column names")
+    end
+    let cols = {}
+    let seen = []
+    for each name in names:
+        if type(name) != "string" or seen.contains(name):
+            _gf_fail("frame_from_matrix: column names must be different strings")
+        end
+        seen.push(name)
+        cols[name] = []
+    end
+    for each r in matrix:
+        if type(r) != "list" or len(r) != len(names):
+            _gf_fail("frame_from_matrix: every row must have " + str(len(names)) + " value(s)")
+        end
+        let j = 0
+        while j < len(names):
+            cols[names[j]].push(r[j])
+            j = j + 1
+        end
+    end
+    return _gf_make(names.copy(), cols)
+end
+
+# The rows of several DataFrames, one after another. A column missing from
+# one of them is filled with missing values.
+func frame_concat(frames):
+    if type(frames) != "list" or len(frames) == 0:
+        _gf_fail("frame_concat needs a non-empty list of DataFrames")
+    end
+    let names = []
+    for each f in frames:
+        for each name in f.names:
+            if not names.contains(name):
+                names.push(name)
+            end
+        end
+    end
+    let cols = {}
+    for each name in names:
+        let values = []
+        for each f in frames:
+            if f.names.contains(name):
+                for each v in f.cols[name]:
+                    values.push(v)
+                end
+            else:
+                let i = 0
+                while i < f.length:
+                    values.push(none)
+                    i = i + 1
+                end
+            end
+        end
+        cols[name] = values
+    end
+    return _gf_make(names, cols)
+end
+
+# ---------------------------------------------------------------- DataFrame
+
+blueprint DataFrame:
+    # data: a dict from column name to a list of values, all the same length.
+    action init(data):
+        if type(data) != "dict":
+            _gf_fail("DataFrame needs a dict of column name -> list of values")
+        end
+        self.names = []
+        self.cols = {}
+        self.length = 0
+        let first = true
+        for each name in data.keys():
+            let values = data[name]
+            if type(values) != "list":
+                _gf_fail("DataFrame: column '" + name + "' must be a list")
+            end
+            if first:
+                self.length = len(values)
+                first = false
+            eif len(values) != self.length:
+                _gf_fail("DataFrame: column '" + name + "' has " + str(len(values)) + " value(s) but '" + self.names[0] + "' has " + str(self.length))
+            end
+            self.names.push(name)
+            self.cols[name] = values.copy()
+        end
+    end
+
+    action _need(name, what):
+        if not self.names.contains(name):
+            _gf_fail(what + ": there is no column '" + str(name) + "' (columns: " + ", ".join(self.names) + ")")
+        end
+    end
+
+    action _take(positions):
+        let cols = {}
+        for each name in self.names:
+            let src = self.cols[name]
+            let values = []
+            for each i in positions:
+                values.push(src[i])
+            end
+            cols[name] = values
+        end
+        return _gf_make(self.names.copy(), cols)
+    end
+
+    # ---- looking
+    # [rows, columns]
+    action shape():
+        return [self.length, len(self.names)]
+    end
+
+    action columns():
+        return self.names.copy()
+    end
+
+    action count_rows():
+        return self.length
+    end
+
+    # A copy of one column as a list.
+    action col(name):
+        self._need(name, "col")
+        return self.cols[name].copy()
+    end
+
+    # One row as a dict.
+    action row(i):
+        if type(i) != "int" or i < 0 or i >= self.length:
+            _gf_fail("row: " + str(i) + " is outside the " + str(self.length) + " row(s)")
+        end
+        let out = {}
+        for each name in self.names:
+            out[name] = self.cols[name][i]
+        end
+        return out
+    end
+
+    # Every row as a dict.
+    action rows():
+        let out = []
+        let i = 0
+        while i < self.length:
+            out.push(self.row(i))
+            i = i + 1
+        end
+        return out
+    end
+
+    action head(n = 5):
+        if n < 0:
+            n = 0
+        end
+        if n > self.length:
+            n = self.length
+        end
+        return self._take(range(n))
+    end
+
+    action tail(n = 5):
+        if n < 0:
+            n = 0
+        end
+        if n > self.length:
+            n = self.length
+        end
+        let positions = []
+        let i = self.length - n
+        while i < self.length:
+            positions.push(i)
+            i = i + 1
+        end
+        return self._take(positions)
+    end
+
+    # The rows at the given positions, in that order.
+    action take(positions):
+        for each i in positions:
+            if type(i) != "int" or i < 0 or i >= self.length:
+                _gf_fail("take: " + str(i) + " is outside the " + str(self.length) + " row(s)")
+            end
+        end
+        return self._take(positions)
+    end
+
+    # n rows chosen at random, without repeats.
+    action sample(n, seed = 0):
+        if n < 0 or n > self.length:
+            _gf_fail("sample: cannot take " + str(n) + " of " + str(self.length) + " row(s)")
+        end
+        return self._take(RandomState(seed).permutation(self.length)[:n])
+    end
+
+    # ---- choosing columns
+    action select(names):
+        if type(names) != "list":
+            names = [names]
+        end
+        let cols = {}
+        for each name in names:
+            self._need(name, "select")
+            cols[name] = self.cols[name].copy()
+        end
+        return _gf_make(names.copy(), cols)
+    end
+
+    action drop(names):
+        if type(names) != "list":
+            names = [names]
+        end
+        for each name in names:
+            self._need(name, "drop")
+        end
+        let kept = []
+        for each name in self.names:
+            if not names.contains(name):
+                kept.push(name)
+            end
+        end
+        return self.select(kept)
+    end
+
+    # mapping: a dict from old name to new name.
+    action rename(mapping):
+        if type(mapping) != "dict":
+            _gf_fail("rename needs a dict of old name -> new name")
+        end
+        let names = []
+        let cols = {}
+        for each old in mapping.keys():
+            self._need(old, "rename")
+        end
+        for each name in self.names:
+            let fresh = mapping.get(name, name)
+            if names.contains(fresh):
+                _gf_fail("rename: two columns would be called '" + str(fresh) + "'")
+            end
+            names.push(fresh)
+            cols[fresh] = self.cols[name].copy()
+        end
+        return _gf_make(names, cols)
+    end
+
+    # Adds or replaces a column. values is a list with one entry per row, or
+    # a function that takes a row (a dict) and returns the value.
+    action with_column(name, values):
+        if type(name) != "string":
+            _gf_fail("with_column: the column name must be a string")
+        end
+        let fresh = []
+        if type(values) == "list":
+            if len(values) != self.length and len(self.names) > 0:
+                _gf_fail("with_column: " + str(len(values)) + " value(s) for " + str(self.length) + " row(s)")
+            end
+            fresh = values.copy()
+        else:
+            let i = 0
+            while i < self.length:
+                fresh.push(values(self.row(i)))
+                i = i + 1
+            end
+        end
+        let names = self.names.copy()
+        let cols = {}
+        for each n in self.names:
+            cols[n] = self.cols[n].copy()
+        end
+        if not names.contains(name):
+            names.push(name)
+        end
+        cols[name] = fresh
+        return _gf_make(names, cols)
+    end
+
+    # A column with f applied to every value (missing values included).
+    action map_column(name, f):
+        self._need(name, "map_column")
+        let fresh = []
+        for each v in self.cols[name]:
+            fresh.push(f(v))
+        end
+        return self.with_column(name, fresh)
+    end
+
+    # ---- choosing rows
+    # The rows for which keep(row) is true; row is a dict.
+    action filter(keep):
+        let positions = []
+        let i = 0
+        while i < self.length:
+            if keep(self.row(i)) == true:
+                positions.push(i)
+            end
+            i = i + 1
+        end
+        return self._take(positions)
+    end
+
+    # Rows ordered by one column, or by several (the first matters most).
+    # Missing values go last; equal values keep their order.
+    action sort_values(by, descending = false):
+        if type(by) != "list":
+            by = [by]
+        end
+        if len(by) == 0:
+            _gf_fail("sort_values needs at least one column")
+        end
+        let order = range(self.length)
+        # Stable sorts from the least important column to the most.
+        let k = len(by) - 1
+        while k >= 0:
+            self._need(by[k], "sort_values")
+            let src = self.cols[by[k]]
+            let values = []
+            for each i in order:
+                values.push(src[i])
+            end
+            let next = []
+            for each p in _gf_argsort(values, descending):
+                next.push(order[p])
+            end
+            order = next
+            k = k - 1
+        end
+        return self._take(order)
+    end
+
+    # Rows with a missing value (in the named columns, or anywhere) removed.
+    action dropna(names = none):
+        if names == none:
+            names = self.names
+        eif type(names) != "list":
+            names = [names]
+        end
+        for each name in names:
+            self._need(name, "dropna")
+        end
+        let positions = []
+        let i = 0
+        while i < self.length:
+            let complete = true
+            for each name in names:
+                if self.cols[name][i] == none:
+                    complete = false
+                end
+            end
+            if complete:
+                positions.push(i)
+            end
+            i = i + 1
+        end
+        return self._take(positions)
+    end
+
+    # Missing values (in the named columns, or everywhere) replaced by value.
+    action fillna(value, names = none):
+        if names == none:
+            names = self.names
+        eif type(names) != "list":
+            names = [names]
+        end
+        for each name in names:
+            self._need(name, "fillna")
+        end
+        let cols = {}
+        for each name in self.names:
+            let values = self.cols[name].copy()
+            if names.contains(name):
+                let i = 0
+                while i < len(values):
+                    if values[i] == none:
+                        values[i] = value
+                    end
+                    i = i + 1
+                end
+            end
+            cols[name] = values
+        end
+        return _gf_make(self.names.copy(), cols)
+    end
+
+    # How many values are missing in each column: a dict.
+    action isna_counts():
+        let out = {}
+        for each name in self.names:
+            out[name] = self.length - len(_gf_present(self.cols[name]))
+        end
+        return out
+    end
+
+    # Rows that repeat an earlier row (in the named columns, or all) removed.
+    action drop_duplicates(names = none):
+        if names == none:
+            names = self.names
+        eif type(names) != "list":
+            names = [names]
+        end
+        for each name in names:
+            self._need(name, "drop_duplicates")
+        end
+        let seen = {}
+        let positions = []
+        let i = 0
+        while i < self.length:
+            let parts = []
+            for each name in names:
+                parts.push(_gf_key(self.cols[name][i]))
+            end
+            let key = "\n".join(parts)
+            if seen.get(key, false) != true:
+                seen[key] = true
+                positions.push(i)
+            end
+            i = i + 1
+        end
+        return self._take(positions)
+    end
+
+    # ---- one column
+    # The different values of a column, in order of first appearance.
+    action unique(name):
+        self._need(name, "unique")
+        let seen = {}
+        let out = []
+        for each v in self.cols[name]:
+            let key = _gf_key(v)
+            if seen.get(key, false) != true:
+                seen[key] = true
+                out.push(v)
+            end
+        end
+        return out
+    end
+
+    # How often each value appears: a DataFrame with the value and "count",
+    # most frequent first. Missing values are not counted.
+    action value_counts(name):
+        self._need(name, "value_counts")
+        let index = {}
+        let values = []
+        let counts = []
+        for each v in self.cols[name]:
+            if v != none:
+                let key = _gf_key(v)
+                let at = index.get(key, -1)
+                if at < 0:
+                    index[key] = len(values)
+                    values.push(v)
+                    counts.push(1)
+                else:
+                    counts[at] = counts[at] + 1
+                end
+            end
+        end
+        let cols = {}
+        cols[name] = values
+        cols["count"] = counts
+        if name == "count":
+            _gf_fail("value_counts: the column is itself called 'count'; rename it first")
+        end
+        return _gf_make([name, "count"], cols).sort_values("count", true)
+    end
+
+    action sum(name):
+        self._need(name, "sum")
+        return _gf_aggregate(self.cols[name], "sum", name, "sum")
+    end
+
+    action mean(name):
+        self._need(name, "mean")
+        return _gf_aggregate(self.cols[name], "mean", name, "mean")
+    end
+
+    action min(name):
+        self._need(name, "min")
+        return _gf_aggregate(self.cols[name], "min", name, "min")
+    end
+
+    action max(name):
+        self._need(name, "max")
+        return _gf_aggregate(self.cols[name], "max", name, "max")
+    end
+
+    action median(name):
+        self._need(name, "median")
+        return _gf_aggregate(self.cols[name], "median", name, "median")
+    end
+
+    # The sample standard deviation (divides by n - 1).
+    action std(name):
+        self._need(name, "std")
+        return _gf_aggregate(self.cols[name], "std", name, "std")
+    end
+
+    # The number of values that are not missing.
+    action count(name):
+        self._need(name, "count")
+        return _gf_aggregate(self.cols[name], "count", name, "count")
+    end
+
+    # Pearson correlation of two numeric columns, over the rows where both
+    # are present.
+    action corr(a, b):
+        self._need(a, "corr")
+        self._need(b, "corr")
+        let xs = []
+        let ys = []
+        let i = 0
+        while i < self.length:
+            let x = self.cols[a][i]
+            let y = self.cols[b][i]
+            if x != none and y != none:
+                if not _gf_is_num(x) or not _gf_is_num(y):
+                    _gf_fail("corr: both columns must hold numbers")
+                end
+                xs.push(x)
+                ys.push(y)
+            end
+            i = i + 1
+        end
+        return gnum.corrcoef(xs, ys)
+    end
+
+    # The names of the columns whose present values are all numbers.
+    action numeric_columns():
+        let out = []
+        for each name in self.names:
+            let present = _gf_present(self.cols[name])
+            let numeric = len(present) > 0
+            for each v in present:
+                if not _gf_is_num(v):
+                    numeric = false
+                end
+            end
+            if numeric:
+                out.push(name)
+            end
+        end
+        return out
+    end
+
+    # count, mean, std, min, median and max of every numeric column.
+    action describe():
+        let stats = ["count", "mean", "std", "min", "median", "max"]
+        let cols = {}
+        cols["stat"] = stats
+        let names = ["stat"]
+        for each name in self.numeric_columns():
+            if name == "stat":
+                _gf_fail("describe: a column is itself called 'stat'; rename it first")
+            end
+            let values = []
+            for each s in stats:
+                values.push(_gf_aggregate(self.cols[name], s, name, "describe"))
+            end
+            cols[name] = values
+            names.push(name)
+        end
+        return _gf_make(names, cols)
+    end
+
+    # ---- groups
+    # Groups the rows by one column or several. Rows whose key is missing
+    # are left out. Groups come out sorted by key.
+    action group_by(by):
+        if type(by) != "list":
+            by = [by]
+        end
+        if len(by) == 0:
+            _gf_fail("group_by needs at least one column")
+        end
+        for each name in by:
+            self._need(name, "group_by")
+        end
+        return GroupBy(self, by)
+    end
+
+    # ---- joining
+    # Rows of this DataFrame paired with the rows of other that have the
+    # same value in the column `on`. how "inner" keeps only matches; "left"
+    # keeps every row of this DataFrame. A column other shares (apart from
+    # `on`) gets the suffix "_right".
+    action merge(other, on, how = "inner"):
+        if how != "inner" and how != "left":
+            _gf_fail("merge: how must be \"inner\" or \"left\"")
+        end
+        self._need(on, "merge")
+        other._need(on, "merge")
+        let lookup = {}
+        let i = 0
+        while i < other.length:
+            let v = other.cols[on][i]
+            if v != none:
+                let key = _gf_key(v)
+                if lookup.get(key, none) == none:
+                    lookup[key] = []
+                end
+                lookup[key].push(i)
+            end
+            i = i + 1
+        end
+        let left_pos = []
+        let right_pos = []
+        i = 0
+        while i < self.length:
+            let v = self.cols[on][i]
+            let matches = none
+            if v != none:
+                matches = lookup.get(_gf_key(v), none)
+            end
+            if matches != none:
+                for each m in matches:
+                    left_pos.push(i)
+                    right_pos.push(m)
+                end
+            eif how == "left":
+                left_pos.push(i)
+                right_pos.push(-1)
+            end
+            i = i + 1
+        end
+        let names = self.names.copy()
+        let cols = {}
+        for each name in self.names:
+            let src = self.cols[name]
+            let values = []
+            for each p in left_pos:
+                values.push(src[p])
+            end
+            cols[name] = values
+        end
+        for each name in other.names:
+            if name != on:
+                let fresh = name
+                if names.contains(fresh):
+                    fresh = name + "_right"
+                end
+                if names.contains(fresh):
+                    _gf_fail("merge: cannot name the column '" + name + "' from the right side; rename it first")
+                end
+                let src = other.cols[name]
+                let values = []
+                for each p in right_pos:
+                    if p < 0:
+                        values.push(none)
+                    else:
+                        values.push(src[p])
+                    end
+                end
+                names.push(fresh)
+                cols[fresh] = values
+            end
+        end
+        return _gf_make(names, cols)
+    end
+
+    # ---- output
+    # The numbers of the named columns (default: every column) as a list of
+    # rows, ready for glowlearn. A missing or non-numeric value is an error.
+    action to_matrix(names = none):
+        if names == none:
+            names = self.names
+        eif type(names) != "list":
+            names = [names]
+        end
+        for each name in names:
+            self._need(name, "to_matrix")
+        end
+        let out = []
+        let i = 0
+        while i < self.length:
+            let r = []
+            for each name in names:
+                let v = self.cols[name][i]
+                if not _gf_is_num(v):
+                    _gf_fail("to_matrix: row " + str(i) + " of column '" + name + "' is " + str(v) + ", not a number (see dropna and fillna)")
+                end
+                r.push(v)
+            end
+            out.push(r)
+            i = i + 1
+        end
+        return out
+    end
+
+    action to_csv_text(sep = ","):
+        if type(sep) != "string" or len(sep) != 1:
+            _gf_fail("to_csv_text: the separator must be a single character")
+        end
+        let lines = []
+        let header = []
+        for each name in self.names:
+            header.push(_gf_csv_cell(name, sep))
+        end
+        lines.push(sep.join(header))
+        let i = 0
+        while i < self.length:
+            let cells = []
+            for each name in self.names:
+                cells.push(_gf_csv_cell(self.cols[name][i], sep))
+            end
+            lines.push(sep.join(cells))
+            i = i + 1
+        end
+        return "\n".join(lines) + "\n"
+    end
+
+    action to_csv(path, sep = ","):
+        fs.write(path, self.to_csv_text(sep))
+        return none
+    end
+
+    # The table as aligned text. More than max_rows rows are shortened to
+    # the first and last few.
+    action to_string(max_rows = 20):
+        let positions = range(self.length)
+        let cut = -1
+        if self.length > max_rows and max_rows >= 2:
+            let top = math.floor(max_rows / 2)
+            positions = range(top)
+            cut = top
+            let i = self.length - (max_rows - top)
+            while i < self.length:
+                positions.push(i)
+                i = i + 1
+            end
+        end
+        let widths = []
+        let texts = []
+        for each name in self.names:
+            let column = []
+            let w = len(name)
+            for each p in positions:
+                let v = self.cols[name][p]
+                let s = ""
+                if v != none:
+                    s = str(v)
+                end
+                if len(s) > w:
+                    w = len(s)
+                end
+                column.push(s)
+            end
+            texts.push(column)
+            widths.push(w)
+        end
+        let lines = []
+        let header = []
+        let rule = []
+        let j = 0
+        while j < len(self.names):
+            header.push(_gf_pad(self.names[j], widths[j], false))
+            rule.push("-" * widths[j])
+            j = j + 1
+        end
+        lines.push("  ".join(header).trim_end())
+        lines.push("  ".join(rule))
+        let r = 0
+        while r < len(positions):
+            if r == cut:
+                lines.push("...")
+            end
+            let cells = []
+            j = 0
+            while j < len(self.names):
+                let v = self.cols[self.names[j]][positions[r]]
+                cells.push(_gf_pad(texts[j][r], widths[j], _gf_is_num(v)))
+                j = j + 1
+            end
+            lines.push("  ".join(cells).trim_end())
+            r = r + 1
+        end
+        lines.push("[" + str(self.length) + " rows x " + str(len(self.names)) + " columns]")
+        return "\n".join(lines)
+    end
+end
+
+# Text padded to a width; numbers are pushed to the right.
+func _gf_pad(s, width, right):
+    let gap = width - len(s)
+    if gap <= 0:
+        return s
+    end
+    if right:
+        return " " * gap + s
+    end
+    return s + " " * gap
+end
+
+# The result of DataFrame.group_by.
+blueprint GroupBy:
+    action init(frame, by):
+        self.frame = frame
+        self.by = by
+        # self.groups: one list of row positions per group, sorted by key.
+        let index = {}
+        let groups = []
+        let i = 0
+        while i < frame.length:
+            let parts = []
+            let complete = true
+            for each name in by:
+                let v = frame.cols[name][i]
+                if v == none:
+                    complete = false
+                end
+                parts.push(_gf_key(v))
+            end
+            if complete:
+                let key = "\n".join(parts)
+                let at = index.get(key, -1)
+                if at < 0:
+                    index[key] = len(groups)
+                    groups.push([i])
+                else:
+                    groups[at].push(i)
+                end
+            end
+            i = i + 1
+        end
+        # Sort the groups by their key columns, the first mattering most.
+        let order = range(len(groups))
+        let k = len(by) - 1
+        while k >= 0:
+            let values = []
+            for each g in order:
+                values.push(frame.cols[by[k]][groups[g][0]])
+            end
+            let next = []
+            for each p in _gf_argsort(values, false):
+                next.push(order[p])
+            end
+            order = next
+            k = k - 1
+        end
+        self.groups = []
+        for each g in order:
+            self.groups.push(groups[g])
+        end
+    end
+
+    action _keys():
+        let cols = {}
+        for each name in self.by:
+            let values = []
+            for each g in self.groups:
+                values.push(self.frame.cols[name][g[0]])
+            end
+            cols[name] = values
+        end
+        return cols
+    end
+
+    # The number of rows in each group, in a column called "size".
+    action size():
+        if self.by.contains("size"):
+            _gf_fail("size: a grouping column is itself called 'size'; rename it first")
+        end
+        let cols = self._keys()
+        let sizes = []
+        for each g in self.groups:
+            sizes.push(len(g))
+        end
+        cols["size"] = sizes
+        return _gf_make(self.by + ["size"], cols)
+    end
+
+    # spec: a dict from column name to an aggregation ("sum", "mean", "min",
+    # "max", "count", "std", "median", "first", "last", "nunique"), or to a
+    # list of them. One aggregation keeps the column's name; a list gives
+    # columns named like amount_sum and amount_mean.
+    action agg(spec):
+        if type(spec) != "dict" or len(spec) == 0:
+            _gf_fail("agg needs a dict of column name -> aggregation")
+        end
+        let cols = self._keys()
+        let names = self.by.copy()
+        for each name in spec.keys():
+            self.frame._need(name, "agg")
+            let wanted = spec[name]
+            let many = type(wanted) == "list"
+            if not many:
+                wanted = [wanted]
+            end
+            for each which in wanted:
+                let out_name = name
+                if many:
+                    out_name = name + "_" + str(which)
+                end
+                if names.contains(out_name):
+                    _gf_fail("agg: two result columns would be called '" + out_name + "'")
+                end
+                let src = self.frame.cols[name]
+                let values = []
+                for each g in self.groups:
+                    let part = []
+                    for each i in g:
+                        part.push(src[i])
+                    end
+                    values.push(_gf_aggregate(part, which, name, "agg"))
+                end
+                names.push(out_name)
+                cols[out_name] = values
+            end
+        end
+        return _gf_make(names, cols)
+    end
+
+    # The groups as a list of [key values, DataFrame] pairs.
+    action parts():
+        let out = []
+        for each g in self.groups:
+            let key = []
+            for each name in self.by:
+                key.push(self.frame.cols[name][g[0]])
+            end
+            out.push([key, self.frame._take(g)])
+        end
+        return out
+    end
+end

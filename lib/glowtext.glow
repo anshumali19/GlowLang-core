@@ -1,0 +1,712 @@
+# glowtext.glow
+# Text processing for machine learning, written in GlowLang.
+#
+#     use "glowtext"
+#     let model = TextClassifier().fit(["great film", "awful film"], ["pos", "neg"])
+#     show model.predict(["a great one"])            # [pos]
+#
+#     let tfidf = TfidfVectorizer()
+#     let rows = tfidf.fit_transform(documents)      # one row of numbers per document
+#     show cosine_similarity(rows[0], rows[1])
+#
+# Documents are strings. Vectorizers turn a list of documents into a matrix
+# (a list of rows) with one column per word of the vocabulary, which is what
+# glowlearn and glowgrad take as X.
+#
+# Mistakes raise an error that starts with "glowtext:".
+
+use "glownum"
+
+func _gt_fail(msg):
+    throw "glowtext: " + msg
+end
+
+func _gt_need_text(text, what):
+    if type(text) != "string":
+        _gt_fail(what + " needs a string, got " + str(text))
+    end
+end
+
+func _gt_need_docs(docs, what):
+    if type(docs) != "list":
+        _gt_fail(what + " needs a list of strings")
+    end
+    for each d in docs:
+        if type(d) != "string":
+            _gt_fail(what + " needs a list of strings, found " + str(d))
+        end
+    end
+end
+
+# Letters and digits; any character outside ASCII counts as a letter, so
+# words in every script stay whole.
+func _gt_is_word_char(c):
+    if c >= "a" and c <= "z":
+        return true
+    end
+    if c >= "A" and c <= "Z":
+        return true
+    end
+    if c >= "0" and c <= "9":
+        return true
+    end
+    return c.byte_len() > 1
+end
+
+# ---------------------------------------------------------------- tokens
+
+# The words of a text. Punctuation and spaces separate words; an apostrophe
+# inside a word is kept (don't, it's).
+func tokenize(text, lowercase = true):
+    _gt_need_text(text, "tokenize")
+    if lowercase:
+        text = text.lower()
+    end
+    let tokens = []
+    let word = ""
+    let n = len(text)
+    let i = 0
+    while i < n:
+        let c = text[i]
+        if _gt_is_word_char(c):
+            word = word + c
+        eif c == "'" and word != "" and i + 1 < n and _gt_is_word_char(text[i + 1]):
+            word = word + c
+        else:
+            if word != "":
+                tokens.push(word)
+                word = ""
+            end
+        end
+        i = i + 1
+    end
+    if word != "":
+        tokens.push(word)
+    end
+    return tokens
+end
+
+# The sentences of a text: split after . ! or ? when a space or the end
+# follows.
+func sentences(text):
+    _gt_need_text(text, "sentences")
+    let out = []
+    let current = ""
+    let n = len(text)
+    let i = 0
+    while i < n:
+        let c = text[i]
+        current = current + c
+        if (c == "." or c == "!" or c == "?") and (i + 1 == n or text[i + 1] == " " or text[i + 1] == "\n"):
+            let s = current.trim()
+            if s != "":
+                out.push(s)
+            end
+            current = ""
+        end
+        i = i + 1
+    end
+    let rest = current.trim()
+    if rest != "":
+        out.push(rest)
+    end
+    return out
+end
+
+# Common English words that carry little meaning.
+func stop_words():
+    return ["a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why", "will", "with", "you", "your", "yours", "yourself", "yourselves"]
+end
+
+func _gt_word_set(words):
+    let set = {}
+    for each w in words:
+        set[w] = true
+    end
+    return set
+end
+
+# The tokens that are not stop words. words defaults to stop_words().
+func remove_stop_words(tokens, words = none):
+    if type(tokens) != "list":
+        _gt_fail("remove_stop_words needs a list of tokens")
+    end
+    if words == none:
+        words = stop_words()
+    end
+    let set = _gt_word_set(words)
+    let out = []
+    for each t in tokens:
+        if set.get(t, false) != true:
+            out.push(t)
+        end
+    end
+    return out
+end
+
+# Runs of n tokens, each joined with a space.
+func ngrams(tokens, n = 2):
+    if type(tokens) != "list":
+        _gt_fail("ngrams needs a list of tokens")
+    end
+    if type(n) != "int" or n < 1:
+        _gt_fail("ngrams: n must be a whole number of at least 1")
+    end
+    let out = []
+    let i = 0
+    while i + n <= len(tokens):
+        out.push(" ".join(tokens[i:i + n]))
+        i = i + 1
+    end
+    return out
+end
+
+# Runs of n characters.
+func char_ngrams(text, n = 3):
+    _gt_need_text(text, "char_ngrams")
+    if type(n) != "int" or n < 1:
+        _gt_fail("char_ngrams: n must be a whole number of at least 1")
+    end
+    let out = []
+    let i = 0
+    while i + n <= len(text):
+        out.push(text[i:i + n])
+        i = i + 1
+    end
+    return out
+end
+
+# How often each token appears: a dict from token to count.
+func word_counts(tokens):
+    if type(tokens) != "list":
+        _gt_fail("word_counts needs a list of tokens")
+    end
+    let counts = {}
+    for each t in tokens:
+        counts[t] = counts.get(t, 0) + 1
+    end
+    return counts
+end
+
+# The n most frequent tokens as [token, count] pairs, most frequent first
+# (ties in alphabetical order).
+func most_common(tokens, n = 10):
+    let counts = word_counts(tokens)
+    let words = _gn_sorted(counts.keys())
+    let negated = []
+    for each w in words:
+        negated.push(0 - counts[w])
+    end
+    let out = []
+    for each i in _gn_argsort(negated):
+        if len(out) >= n:
+            break
+        end
+        out.push([words[i], counts[words[i]]])
+    end
+    return out
+end
+
+# ---------------------------------------------------------------- distances
+
+# The fewest single-character insertions, deletions and substitutions that
+# turn a into b (Levenshtein distance).
+func edit_distance(a, b):
+    _gt_need_text(a, "edit_distance")
+    _gt_need_text(b, "edit_distance")
+    let la = len(a)
+    let lb = len(b)
+    let prev = range(lb + 1)
+    let i = 1
+    while i <= la:
+        let cur = [i]
+        let ca = a[i - 1]
+        let j = 1
+        while j <= lb:
+            let cost = 1
+            if ca == b[j - 1]:
+                cost = 0
+            end
+            let best = prev[j - 1] + cost
+            if prev[j] + 1 < best:
+                best = prev[j] + 1
+            end
+            if cur[j - 1] + 1 < best:
+                best = cur[j - 1] + 1
+            end
+            cur.push(best)
+            j = j + 1
+        end
+        prev = cur
+        i = i + 1
+    end
+    return prev[lb]
+end
+
+# Shared items divided by all items, from 0 to 1. Two empty lists give 1.
+func jaccard_similarity(a, b):
+    if type(a) != "list" or type(b) != "list":
+        _gt_fail("jaccard_similarity needs two lists of tokens")
+    end
+    let sa = _gt_word_set(a)
+    let sb = _gt_word_set(b)
+    let shared = 0
+    for each k in sa.keys():
+        if sb.get(k, false) == true:
+            shared = shared + 1
+        end
+    end
+    let total = len(sa) + len(sb) - shared
+    if total == 0:
+        return 1.0
+    end
+    return shared / (total * 1.0)
+end
+
+# The cosine of the angle between two vectors: 1 for the same direction,
+# 0 for nothing in common. A vector of zeros gives 0.
+func cosine_similarity(a, b):
+    if type(a) != "list" or type(b) != "list" or len(a) != len(b):
+        _gt_fail("cosine_similarity needs two vectors of the same length")
+    end
+    let dot = 0.0
+    let na = 0.0
+    let nb = 0.0
+    let i = 0
+    while i < len(a):
+        dot = dot + a[i] * b[i]
+        na = na + a[i] * a[i]
+        nb = nb + b[i] * b[i]
+        i = i + 1
+    end
+    if na == 0 or nb == 0:
+        return 0.0
+    end
+    return dot / math.sqrt(na * nb)
+end
+
+# The rows of matrix most like the query vector, as [row number, similarity]
+# pairs, best first.
+func most_similar(query, matrix, top = 5):
+    if type(matrix) != "list":
+        _gt_fail("most_similar needs a list of rows")
+    end
+    let scores = []
+    for each row in matrix:
+        scores.push(0 - cosine_similarity(query, row))
+    end
+    let out = []
+    for each i in _gn_argsort(scores):
+        if len(out) >= top:
+            break
+        end
+        out.push([i, 0 - scores[i]])
+    end
+    return out
+end
+
+# ---------------------------------------------------------------- vectorizers
+
+func _gt_check_vectorizer(lowercase, stop_list, ngram_max, min_df, max_features, what):
+    if stop_list != none and type(stop_list) != "list":
+        _gt_fail(what + ": stop words must be a list of words (or none)")
+    end
+    if type(ngram_max) != "int" or ngram_max < 1:
+        _gt_fail(what + ": ngram_max must be a whole number of at least 1")
+    end
+    if type(min_df) != "int" or min_df < 1:
+        _gt_fail(what + ": min_df must be a whole number of at least 1")
+    end
+    if max_features != none and (type(max_features) != "int" or max_features < 1):
+        _gt_fail(what + ": max_features must be a whole number of at least 1 (or none)")
+    end
+end
+
+# The terms of one document: its words, then its 2-word runs, and so on up
+# to ngram_max.
+func _gt_terms(v, doc):
+    let tokens = tokenize(doc, v.lowercase)
+    if v.stop_set != none:
+        let kept = []
+        for each t in tokens:
+            if v.stop_set.get(t, false) != true:
+                kept.push(t)
+            end
+        end
+        tokens = kept
+    end
+    if v.ngram_max == 1:
+        return tokens
+    end
+    let terms = tokens.copy()
+    let n = 2
+    while n <= v.ngram_max:
+        for each g in ngrams(tokens, n):
+            terms.push(g)
+        end
+        n = n + 1
+    end
+    return terms
+end
+
+# Learns the vocabulary and the number of documents each term is in.
+func _gt_fit(v, docs, what):
+    _gt_need_docs(docs, what)
+    if len(docs) == 0:
+        _gt_fail(what + " needs at least one document")
+    end
+    let df = {}
+    let totals = {}
+    for each doc in docs:
+        let seen = {}
+        for each t in _gt_terms(v, doc):
+            totals[t] = totals.get(t, 0) + 1
+            if seen.get(t, false) != true:
+                seen[t] = true
+                df[t] = df.get(t, 0) + 1
+            end
+        end
+    end
+    let terms = []
+    for each t in _gn_sorted(df.keys()):
+        if df[t] >= v.min_df:
+            terms.push(t)
+        end
+    end
+    if v.max_features != none and len(terms) > v.max_features:
+        # Keep the most frequent terms (ties in alphabetical order).
+        let negated = []
+        for each t in terms:
+            negated.push(0 - totals[t])
+        end
+        let kept = []
+        for each i in _gn_argsort(negated)[:v.max_features]:
+            kept.push(terms[i])
+        end
+        terms = _gn_sorted(kept)
+    end
+    if len(terms) == 0:
+        _gt_fail(what + ": no words were left (the documents are empty, or every word was filtered out)")
+    end
+    v.vocabulary = terms
+    v.index = {}
+    v.document_counts = []
+    let i = 0
+    while i < len(terms):
+        v.index[terms[i]] = i
+        v.document_counts.push(df[terms[i]])
+        i = i + 1
+    end
+    v.n_documents = len(docs)
+    v.fitted = true
+    return v
+end
+
+func _gt_count_rows(v, docs, what):
+    if not v.fitted:
+        _gt_fail(what + ": call fit first")
+    end
+    _gt_need_docs(docs, what)
+    let width = len(v.vocabulary)
+    let out = []
+    for each doc in docs:
+        let row = []
+        let j = 0
+        while j < width:
+            row.push(0)
+            j = j + 1
+        end
+        for each t in _gt_terms(v, doc):
+            let col = v.index.get(t, -1)
+            if col >= 0:
+                row[col] = row[col] + 1
+            end
+        end
+        out.push(row)
+    end
+    return out
+end
+
+# Counts how often each vocabulary term appears in each document.
+blueprint CountVectorizer:
+    action init(lowercase = true, stop_list = none, ngram_max = 1, min_df = 1, max_features = none):
+        _gt_check_vectorizer(lowercase, stop_list, ngram_max, min_df, max_features, "CountVectorizer")
+        self.lowercase = lowercase
+        self.stop_set = none
+        if stop_list != none:
+            self.stop_set = _gt_word_set(stop_list)
+        end
+        self.ngram_max = ngram_max
+        self.min_df = min_df
+        self.max_features = max_features
+        self.fitted = false
+        self.vocabulary = []
+        self.index = {}
+        self.document_counts = []
+        self.n_documents = 0
+    end
+
+    action fit(docs):
+        return _gt_fit(self, docs, "CountVectorizer.fit")
+    end
+
+    # One row per document, one column per term of self.vocabulary. Words
+    # that were not seen by fit are ignored.
+    action transform(docs):
+        return _gt_count_rows(self, docs, "CountVectorizer.transform")
+    end
+
+    action fit_transform(docs):
+        return self.fit(docs).transform(docs)
+    end
+end
+
+# Counts weighted so that terms found in few documents matter more
+# (tf-idf), with each row scaled to length 1.
+#   weight = count * (ln((1 + documents) / (1 + documents with the term)) + 1)
+blueprint TfidfVectorizer:
+    action init(lowercase = true, stop_list = none, ngram_max = 1, min_df = 1, max_features = none):
+        _gt_check_vectorizer(lowercase, stop_list, ngram_max, min_df, max_features, "TfidfVectorizer")
+        self.lowercase = lowercase
+        self.stop_set = none
+        if stop_list != none:
+            self.stop_set = _gt_word_set(stop_list)
+        end
+        self.ngram_max = ngram_max
+        self.min_df = min_df
+        self.max_features = max_features
+        self.fitted = false
+        self.vocabulary = []
+        self.index = {}
+        self.document_counts = []
+        self.n_documents = 0
+        self.idf = []
+    end
+
+    action fit(docs):
+        _gt_fit(self, docs, "TfidfVectorizer.fit")
+        self.idf = []
+        for each df in self.document_counts:
+            self.idf.push(math.log((1.0 + self.n_documents) / (1.0 + df)) + 1.0)
+        end
+        return self
+    end
+
+    action transform(docs):
+        let rows = _gt_count_rows(self, docs, "TfidfVectorizer.transform")
+        let width = len(self.vocabulary)
+        for each row in rows:
+            let norm = 0.0
+            let j = 0
+            while j < width:
+                if row[j] != 0:
+                    row[j] = row[j] * self.idf[j]
+                    norm = norm + row[j] * row[j]
+                end
+                j = j + 1
+            end
+            if norm > 0:
+                norm = math.sqrt(norm)
+                j = 0
+                while j < width:
+                    if row[j] != 0:
+                        row[j] = row[j] / norm
+                    end
+                    j = j + 1
+                end
+            end
+        end
+        return rows
+    end
+
+    action fit_transform(docs):
+        return self.fit(docs).transform(docs)
+    end
+end
+
+# ---------------------------------------------------------------- classifiers
+
+# Naive Bayes for counts (such as word counts). alpha is the smoothing added
+# to every count so an unseen word does not rule a class out.
+blueprint MultinomialNB:
+    action init(alpha = 1.0):
+        if alpha <= 0:
+            _gt_fail("MultinomialNB: alpha must be positive")
+        end
+        self.alpha = alpha
+        self.fitted = false
+        self.classes = []
+        self.log_priors = []
+        self.log_probs = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        if type(X) != "list" or len(X) == 0 or type(X[0]) != "list" or len(X[0]) == 0:
+            _gt_fail("MultinomialNB.fit: X must be a non-empty list of rows of counts")
+        end
+        if type(y) != "list" or len(y) != len(X):
+            _gt_fail("MultinomialNB.fit: X has " + str(len(X)) + " rows but y has " + str(len(y)) + " entries")
+        end
+        let width = len(X[0])
+        self.classes = []
+        for each label in y:
+            if not self.classes.contains(label):
+                self.classes.push(label)
+            end
+        end
+        let sortable = true
+        for each label in self.classes:
+            if type(label) != type(self.classes[0]) or (type(label) != "string" and type(label) != "int" and type(label) != "float"):
+                sortable = false
+            end
+        end
+        if sortable:
+            self.classes = _gn_sorted(self.classes)
+        end
+        self.log_priors = []
+        self.log_probs = []
+        for each label in self.classes:
+            let totals = []
+            let j = 0
+            while j < width:
+                totals.push(self.alpha)
+                j = j + 1
+            end
+            let rows = 0
+            let i = 0
+            while i < len(X):
+                if y[i] == label:
+                    let row = X[i]
+                    if type(row) != "list" or len(row) != width:
+                        _gt_fail("MultinomialNB.fit: every row of X must have the same length")
+                    end
+                    j = 0
+                    while j < width:
+                        if row[j] < 0:
+                            _gt_fail("MultinomialNB.fit: counts cannot be negative")
+                        end
+                        totals[j] = totals[j] + row[j]
+                        j = j + 1
+                    end
+                    rows = rows + 1
+                end
+                i = i + 1
+            end
+            let all = 0.0
+            for each t in totals:
+                all = all + t
+            end
+            let logs = []
+            for each t in totals:
+                logs.push(math.log(t / all))
+            end
+            self.log_probs.push(logs)
+            self.log_priors.push(math.log(rows / (len(X) * 1.0)))
+        end
+        self.n_features = width
+        self.fitted = true
+        return self
+    end
+
+    # One row per sample: the probability of each class, in the order of
+    # self.classes.
+    action predict_proba(X):
+        if not self.fitted:
+            _gt_fail("MultinomialNB.predict_proba: call fit first")
+        end
+        if type(X) != "list":
+            _gt_fail("MultinomialNB.predict_proba: X must be a list of rows of counts")
+        end
+        let out = []
+        for each row in X:
+            if type(row) != "list" or len(row) != self.n_features:
+                _gt_fail("MultinomialNB.predict_proba: the model was fitted with " + str(self.n_features) + " feature(s); a row has a different length")
+            end
+            let scores = []
+            let c = 0
+            while c < len(self.classes):
+                let s = self.log_priors[c]
+                let logs = self.log_probs[c]
+                let j = 0
+                while j < self.n_features:
+                    if row[j] != 0:
+                        s = s + row[j] * logs[j]
+                    end
+                    j = j + 1
+                end
+                scores.push(s)
+                c = c + 1
+            end
+            out.push(gnum.softmax(scores))
+        end
+        return out
+    end
+
+    action predict(X):
+        let out = []
+        for each probs in self.predict_proba(X):
+            out.push(self.classes[gnum.argmax(probs)])
+        end
+        return out
+    end
+
+    # Accuracy on the given data.
+    action score(X, y):
+        let pred = self.predict(X)
+        if type(y) != "list" or len(y) != len(pred) or len(pred) == 0:
+            _gt_fail("MultinomialNB.score: X and y must have the same, non-zero number of rows")
+        end
+        let hit = 0
+        let i = 0
+        while i < len(y):
+            if pred[i] == y[i]:
+                hit = hit + 1
+            end
+            i = i + 1
+        end
+        return hit / (len(y) * 1.0)
+    end
+end
+
+# Word counts and naive Bayes in one step: fit on documents and labels,
+# predict labels for new documents.
+blueprint TextClassifier:
+    action init(stop_list = none, ngram_max = 1, alpha = 1.0):
+        self.vectorizer = CountVectorizer(true, stop_list, ngram_max)
+        self.model = MultinomialNB(alpha)
+        self.fitted = false
+        self.classes = []
+    end
+
+    action fit(docs, labels):
+        if type(labels) != "list" or type(docs) != "list" or len(labels) != len(docs):
+            _gt_fail("TextClassifier.fit needs one label per document")
+        end
+        self.model.fit(self.vectorizer.fit_transform(docs), labels)
+        self.classes = self.model.classes
+        self.fitted = true
+        return self
+    end
+
+    action predict(docs):
+        if not self.fitted:
+            _gt_fail("TextClassifier.predict: call fit first")
+        end
+        return self.model.predict(self.vectorizer.transform(docs))
+    end
+
+    action predict_proba(docs):
+        if not self.fitted:
+            _gt_fail("TextClassifier.predict_proba: call fit first")
+        end
+        return self.model.predict_proba(self.vectorizer.transform(docs))
+    end
+
+    action score(docs, labels):
+        if not self.fitted:
+            _gt_fail("TextClassifier.score: call fit first")
+        end
+        return self.model.score(self.vectorizer.transform(docs), labels)
+    end
+end

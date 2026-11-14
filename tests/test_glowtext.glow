@@ -1,0 +1,206 @@
+# glowtext: tokens, distances, vectorizers and text classifiers.
+use "glowtext"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func near(name, got, want, tol = 1e-9):
+    let d = got - want
+    if d < 0:
+        d = 0 - d
+    end
+    if d <= tol:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains("glowtext:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+show "== tokens"
+same("words", tokenize("Hello, World! It's 2 o'clock."), ["hello", "world", "it's", "2", "o'clock"])
+same("keeps case when asked", tokenize("Hello World", false), ["Hello", "World"])
+same("punctuation only", tokenize("... !!! ---"), [])
+same("empty text", tokenize(""), [])
+same("quotes around a word", tokenize("'quoted' word"), ["quoted", "word"])
+same("trailing apostrophe", tokenize("dogs' bowls"), ["dogs", "bowls"])
+same("hyphens and slashes split", tokenize("state-of-the-art and/or"), ["state", "of", "the", "art", "and", "or"])
+same("tabs and new lines", tokenize("one\ttwo\nthree"), ["one", "two", "three"])
+same("other scripts stay whole", tokenize("Café naïve über 日本語 привет"), ["café", "naïve", "über", "日本語", "привет"])
+same("numbers", tokenize("3.14 and 1,000"), ["3", "14", "and", "1", "000"])
+same("sentences", sentences("Hi there. How are you? Fine!"), ["Hi there.", "How are you?", "Fine!"])
+same("sentence without an end mark", sentences("No end mark"), ["No end mark"])
+same("decimal points do not split", sentences("It costs 3.50 today. Cheap."), ["It costs 3.50 today.", "Cheap."])
+same("no sentences", sentences("   "), [])
+same("remove stop words", remove_stop_words(tokenize("The cat is on the mat")), ["cat", "mat"])
+same("own stop words", remove_stop_words(["a", "b", "c"], ["b"]), ["a", "c"])
+ok("stop word list", stop_words().contains("the") and not stop_words().contains("cat"))
+same("bigrams", ngrams(["a", "b", "c"], 2), ["a b", "b c"])
+same("trigrams", ngrams(["a", "b", "c"], 3), ["a b c"])
+same("n larger than the list", ngrams(["a"], 2), [])
+same("unigrams", ngrams(["a", "b"], 1), ["a", "b"])
+same("character n-grams", char_ngrams("glow", 2), ["gl", "lo", "ow"])
+let counts = word_counts(tokenize("the cat and the hat and the bat"))
+ok("word counts", counts["the"] == 3 and counts["and"] == 2 and counts["cat"] == 1 and len(counts) == 5)
+same("most common", most_common(tokenize("b a b c a b"), 2), [["b", 3], ["a", 2]])
+same("most common ties are alphabetical", most_common(["z", "y", "x"], 2), [["x", 1], ["y", 1]])
+same("most common of nothing", most_common([], 3), [])
+
+show "== distances"
+same("edit distance", edit_distance("kitten", "sitting"), 3)
+same("edit distance to empty", edit_distance("", "abc"), 3)
+same("edit distance of equal words", edit_distance("glow", "glow"), 0)
+same("edit distance is symmetric", edit_distance("flaw", "lawn"), edit_distance("lawn", "flaw"))
+same("edit distance counts characters, not bytes", edit_distance("café", "cafe"), 1)
+near("jaccard", jaccard_similarity(["a", "b", "c"], ["b", "c", "d"]), 0.5)
+near("jaccard ignores repeats", jaccard_similarity(["a", "a", "b"], ["a", "b", "b"]), 1)
+near("jaccard of nothing in common", jaccard_similarity(["a"], ["b"]), 0)
+near("jaccard of two empty lists", jaccard_similarity([], []), 1)
+near("cosine same direction", cosine_similarity([1, 2, 3], [2, 4, 6]), 1)
+near("cosine right angle", cosine_similarity([1, 0], [0, 5]), 0)
+near("cosine opposite", cosine_similarity([1, 1], [-1, -1]), -1)
+near("cosine with a zero vector", cosine_similarity([0, 0], [1, 2]), 0)
+near("cosine known value", cosine_similarity([1, 1], [1, 0]), math.sqrt(0.5))
+
+show "== count vectorizer"
+let docs = ["the cat sat", "the dog sat", "the cat ate the fish"]
+let cv = CountVectorizer()
+let counted = cv.fit_transform(docs)
+same("vocabulary is sorted", cv.vocabulary, ["ate", "cat", "dog", "fish", "sat", "the"])
+same("counts", counted, [[0, 1, 0, 0, 1, 1], [0, 0, 1, 0, 1, 1], [1, 1, 0, 1, 0, 2]])
+same("document counts", cv.document_counts, [1, 2, 1, 1, 2, 3])
+same("unseen words are ignored", cv.transform(["the bird sat"]), [[0, 0, 0, 0, 1, 1]])
+same("an empty document is a row of zeros", cv.transform([""]), [[0, 0, 0, 0, 0, 0]])
+let no_stop = CountVectorizer(true, stop_words())
+no_stop.fit(docs)
+same("stop words removed", no_stop.vocabulary, ["ate", "cat", "dog", "fish", "sat"])
+let bi = CountVectorizer(true, none, 2)
+bi.fit(["a b c"])
+same("bigrams in the vocabulary", bi.vocabulary, ["a", "a b", "b", "b c", "c"])
+let frequent = CountVectorizer(true, none, 1, 2)
+frequent.fit(docs)
+same("min_df drops rare words", frequent.vocabulary, ["cat", "sat", "the"])
+let top2 = CountVectorizer(true, none, 1, 1, 2)
+top2.fit(docs)
+same("max_features keeps the most frequent", top2.vocabulary, ["cat", "the"])
+let cased = CountVectorizer(false)
+cased.fit(["Cat cat"])
+same("case kept when lowercase is off", cased.vocabulary, ["Cat", "cat"])
+
+show "== tf-idf"
+let tv = TfidfVectorizer()
+let weighted = tv.fit_transform(docs)
+same("tf-idf vocabulary", tv.vocabulary, cv.vocabulary)
+near("idf of a word in every document", tv.idf[5], 1)
+near("idf of a word in one document", tv.idf[0], math.log(4 / 2) + 1)
+near("idf of a word in two documents", tv.idf[1], math.log(4 / 3) + 1)
+let all_unit = true
+for each row in weighted:
+    let length = 0.0
+    for each v in row:
+        length = length + v * v
+    end
+    if length < 0.999999 or length > 1.000001:
+        all_unit = false
+    end
+end
+ok("every row has length 1", all_unit)
+# Row 0 is "the cat sat": weights idf(cat), idf(sat), idf(the), then scaled.
+let w_cat = math.log(4 / 3) + 1
+let norm0 = math.sqrt(w_cat * w_cat + w_cat * w_cat + 1)
+near("tf-idf value, cat", weighted[0][1], w_cat / norm0)
+near("tf-idf value, the", weighted[0][5], 1 / norm0)
+near("tf-idf value, absent word", weighted[0][0], 0)
+ok("rare words outweigh common ones", weighted[2][3] > weighted[2][1])
+same("an empty document stays all zeros", tv.transform(["zzz"]), [[0, 0, 0, 0, 0, 0]])
+let sims = most_similar(tv.transform(["cat sat"])[0], weighted, 2)
+ok("most similar document", sims[0][0] == 0 and len(sims) == 2 and sims[0][1] > sims[1][1])
+near("a document is most like itself", most_similar(weighted[1], weighted, 1)[0][1], 1)
+
+show "== naive Bayes"
+let nb = MultinomialNB().fit([[2, 0], [3, 0], [0, 2], [0, 4]], ["a", "a", "b", "b"])
+same("classes", nb.classes, ["a", "b"])
+same("predict", nb.predict([[1, 0], [0, 1], [5, 1]]), ["a", "b", "a"])
+# With alpha 1: P(word 0 | a) = (5 + 1) / (5 + 2) = 6/7, P(word 0 | b) = 1/8.
+let p = nb.predict_proba([[1, 0]])[0]
+near("probability by hand", p[0], (6 / 7) / (6 / 7 + 1 / 8))
+near("probabilities add up to 1", p[0] + p[1], 1)
+near("no evidence gives the priors", nb.predict_proba([[0, 0]])[0][0], 0.5)
+near("score", nb.score([[1, 0], [0, 1]], ["a", "a"]), 0.5)
+let uneven = MultinomialNB().fit([[1], [1], [1], [1]], [1, 1, 1, 0])
+near("priors follow class sizes", uneven.predict_proba([[0]])[0][1], 0.75)
+same("number labels are sorted", uneven.classes, [0, 1])
+
+show "== text classifier"
+let train = ["what a great wonderful film", "I loved this great movie", "wonderful acting and a great story", "an awful boring film", "I hated this terrible movie", "boring story and awful acting"]
+let labels = ["pos", "pos", "pos", "neg", "neg", "neg"]
+let clf = TextClassifier().fit(train, labels)
+same("classes", clf.classes, ["neg", "pos"])
+same("predict", clf.predict(["a great story", "terrible and boring", "loved it"]), ["pos", "neg", "pos"])
+near("training accuracy", clf.score(train, labels), 1)
+let probs = clf.predict_proba(["great wonderful"])[0]
+ok("confident about a clear case", probs[1] > 0.8)
+let unknown = clf.predict_proba(["zebra xylophone"])[0]
+near("only unseen words gives the priors", unknown[0], 0.5)
+let with_bigrams = TextClassifier(stop_words(), 2).fit(train, labels)
+same("stop words and bigrams", with_bigrams.predict(["great film", "awful film"]), ["pos", "neg"])
+
+show "== errors"
+fails_with("tokenize a number", lambda(): tokenize(5), "needs a string")
+fails_with("ngrams of zero", lambda(): ngrams(["a"], 0), "at least 1")
+fails_with("ngrams of text", lambda(): ngrams("abc", 2), "list of tokens")
+fails_with("edit distance of a list", lambda(): edit_distance(["a"], "a"), "needs a string")
+fails_with("cosine lengths", lambda(): cosine_similarity([1, 2], [1]), "same length")
+fails_with("transform before fit", lambda(): CountVectorizer().transform(["a"]), "call fit first")
+fails_with("fit on nothing", lambda(): CountVectorizer().fit([]), "at least one document")
+fails_with("fit on empty documents", lambda(): TfidfVectorizer().fit(["", "..."]), "no words were left")
+fails_with("documents must be strings", lambda(): CountVectorizer().fit(["a", 5]), "list of strings")
+fails_with("a single string is not a list", lambda(): CountVectorizer().fit("a b c"), "list of strings")
+fails_with("min_df", lambda(): CountVectorizer(true, none, 1, 0), "min_df")
+fails_with("stop words type", lambda(): CountVectorizer(true, "the"), "list of words")
+fails_with("alpha", lambda(): MultinomialNB(0), "alpha must be positive")
+fails_with("naive Bayes lengths", lambda(): MultinomialNB().fit([[1]], ["a", "b"]), "1 rows but y has 2")
+fails_with("naive Bayes negative counts", lambda(): MultinomialNB().fit([[-1]], ["a"]), "negative")
+fails_with("naive Bayes predict before fit", lambda(): MultinomialNB().predict([[1]]), "call fit first")
+fails_with("naive Bayes row width", lambda(): nb.predict([[1, 2, 3]]), "different length")
+fails_with("classifier predict before fit", lambda(): TextClassifier().predict(["a"]), "call fit first")
+fails_with("classifier label count", lambda(): TextClassifier().fit(["a", "b"], ["x"]), "one label per document")
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

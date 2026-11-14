@@ -2505,7 +2505,17 @@ void jit_compile_osr(Bytecode *bc) {
 void jit_compile_baseline(Bytecode *bc) { jit_compile_baseline_ext(bc, NULL, 0); }
 
 static void propagate_types(Instruction *code, int count, int param_count, TypeSignature sig, FuncEntry *fe) {
-    unsigned char reg_types[256]; memset(reg_types, 0, 256);
+    /* One entry per register the code uses. This was a fixed 256-entry
+       array on the stack, so a function with more registers than that (a
+       long one with many locals and branches) wrote past it. */
+    int nregs = 32;
+    for (int i = 0; i < count; i++) {
+        if (code[i].r0 >= nregs) nregs = code[i].r0 + 1;
+        if (code[i].r1 >= nregs) nregs = code[i].r1 + 1;
+        if (code[i].r2 >= nregs) nregs = code[i].r2 + 1;
+    }
+    unsigned char *reg_types = calloc((size_t)nregs, 1);
+    if (!reg_types) return;
     int start_reg = (fe && fe->name && strchr(fe->name, ':')) ? 1 : 0;
     for (int i = 0; i < param_count && (start_reg + i) < 16; i++) reg_types[start_reg + i] = (sig >> (i * 4)) & 0xF;
     for (int i = 0; i < count; i++) {
@@ -2530,6 +2540,7 @@ static void propagate_types(Instruction *code, int count, int param_count, TypeS
             default: break;
         }
     }
+    free(reg_types);
 }
 
 void jit_compile_specialized(FuncEntry *fe, TypeSignature sig) {

@@ -1,0 +1,65 @@
+# A function that uses more than 256 registers: the optimizing compiler's
+# type table was a fixed 256-entry array on the C stack and was overrun
+# (the runtime stopped with "stack smashing detected").
+func pick(op, a, b):
+    if op == "add":
+        let r1 = a + b
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "sub":
+        let r1 = a - b
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "mul":
+        let r1 = a * b
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "min":
+        let r1 = a
+        if b < a:
+            r1 = b
+        end
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "max":
+        let r1 = a
+        if b > a:
+            r1 = b
+        end
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "avg":
+        let r1 = (a + b) / 2
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "sq":
+        let r1 = a * a + b * b
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "first":
+        let r1 = [a, b, a + b, a - b, a * b, a + 1, b + 1, a + 2, b + 2][0]
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "last":
+        let r1 = [a, b, a + b, a - b, a * b, a + 1, b + 1, a + 2, b + 2][8]
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    eif op == "text":
+        let r1 = str(a) + "-" + str(b) + "-" + str(a + b) + "-" + str(a - b) + "-" + str(a * b)
+        return r1
+    else:
+        let r1 = 0 - a - b
+        let r2 = r1 * 2 + a - b + (a * b + 1) * (a - b + 2) + (a + 1) * (b + 1)
+        return r1 + r2 - r2
+    end
+end
+
+let ops = ["add", "sub", "mul", "min", "max", "avg", "sq", "first", "last", "other"]
+let total = 0
+let i = 0
+while i < 3000:
+    total = total + pick(ops[i % 10], i % 7, 3)
+    i = i + 1
+end
+show total
+show pick("text", 4, 3)
