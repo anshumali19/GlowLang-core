@@ -79,9 +79,16 @@ GlowLang is dynamically typed with the following value types:
 | Lambda | `lambda(x): x * 2` | Anonymous function |
 | Object | `MyClass()` | Class instance |
 
+**Whole numbers are integers.** A calculation whose result is a whole number
+gives an integer, even from floats: `2.5 * 2` is `5`, `type(2.5 * 2)` is
+`"int"`, and `3.0` prints as `3`. `7 / 2` is `3.5` and `6 / 3` is `2`.
+Arithmetic, comparisons and `==` treat `1` and `1.0` as the same number, so
+this only shows in `type()` and in printed text. To always show decimal
+places, format the number: `format(3, ".1f")` is `"3.0"`.
+
 ### Type Checking
 ```glow
-let t = type(value)   # Returns type as string: "int", "float", "string", "list", "dict", etc.
+let t = type(value)   # "int", "float", "string", "list", "dict", "instance" (an object) ...
 ```
 
 Conversions: `int(x)`, `float(x)`, `str(x)` (also `string(x)`), `bool(x)`.
@@ -192,6 +199,16 @@ show f"Welcome to {name} v{version}!"
 show f"{name.upper()} has {len(name)} letters, next version {version + 1}"
 ```
 
+After the expression, `:` and a format spec control how it is written, the
+same mini-language as `format()` below:
+```glow
+let price = 1234.5
+show f"Total: {price:,.2f}"     # Total: 1,234.50
+show f"[{7:>3}] [{0.256:.1%}]"  # [  7] [25.6%]
+```
+A string literal inside the braces is not supported yet; put it in a
+variable first. An expression that cannot be read raises an error saying so.
+
 ### String Operations
 ```glow
 let s = "Hello, World"
@@ -225,12 +242,12 @@ Indexing pure-ASCII text is constant-time, and walking any string with
 | Method | Result |
 |--------|--------|
 | `s.upper()`, `s.lower()` | Changed case |
-| `s.trim()` (`strip`), `s.trim_start()`, `s.trim_end()` | Whitespace removed |
+| `s.trim()` (`strip`), `s.trim_start()`, `s.trim_end()` | Whitespace removed; `s.trim("-=")` removes those characters instead |
 | `s.replace(old, new)` | Every occurrence replaced |
 | `s.contains(x)`, `s.starts_with(x)`, `s.ends_with(x)` | `true` / `false` |
 | `s.find(x)` | Position of `x` (in characters), or `-1` |
 | `s.count(x)` | Number of occurrences |
-| `s.split(sep)`, `s.lines()` | List of parts |
+| `s.split(sep)`, `s.lines()` | List of parts; `s.split()` with no separator gives the words (split at any spaces, tabs and new lines, none empty) |
 | `sep.join(list)` | Items joined with `sep` |
 | `s.is_number()` | Whether `float(s)` would succeed |
 | `s.byte_len()`, `s.bytes()` | Size in UTF-8 bytes; the bytes as a list of numbers |
@@ -302,6 +319,11 @@ show scores.filter(lambda(x): x > 80).join(", ")
 let empty = {}
 let user = {"name": "Alice", "age": 30}
 ```
+
+Keys are text. A number or `true`/`false` used as a key is stored as its
+text, so `d[1]` and `d["1"]` are the same entry and `d.keys()` gives
+`["1"]`. Other values (`none`, lists, dicts, objects) cannot be keys and
+raise an error.
 
 Dictionaries keep insertion order: `keys()`, `values()`, `for each` loops,
 `show` and `json.stringify` list entries in the order they were added.
@@ -402,6 +424,9 @@ end
 ```
 
 ### Every Loop (Range-based)
+`every i from a to b` counts up from `a` to `b`, both included. When `b` is
+less than `a` it runs zero times (so `every i from 1 to len(items)` is safe
+for an empty list); to count down, loop over `range(10, 0, -1)`.
 ```glow
 every i from 0 to 9:
     show i
@@ -452,7 +477,20 @@ let result = square(5)   # 25
 ```
 
 ### Default Returns
-Functions without an explicit `return` statement return `none`.
+Functions without an explicit `return` statement return `none`, and so does
+a function that ends without reaching one.
+
+### Variables in Functions
+A function reads and changes a global that was declared (with `let`) before
+the function. Assigning to any other name inside a function makes a local
+variable, the way Python does, so declare globals a function changes above
+the function:
+```glow
+let count = 0
+func bump():
+    count = count + 1     # the global, declared above
+end
+```
 
 ### Default Parameter Values
 A parameter can have a default value, used when the caller leaves that
@@ -609,6 +647,23 @@ show c.count          # Direct property access
 show c.value()        # Method access
 ```
 
+### Showing an object: `to_string`
+An object whose class has a `to_string()` method shows as the text it
+returns: in `show`, `str()`, f-strings and inside lists. It must return
+text.
+```glow
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+    func to_string():
+        return "(" + str(self.x) + ", " + str(self.y) + ")"
+    end
+end
+show Point(1, 2)        # (1, 2)
+```
+
 ### Inheritance
 `extends` makes a class inherit another's methods, `init` included. A
 method defined in the child replaces the parent's, and chains of any depth
@@ -632,6 +687,38 @@ end
 show Dog("Rex").speak()    # Rex barks (init comes from Animal)
 ```
 Extending something that is not a class raises an error.
+
+### Calling the parent: `super`
+Inside a method, `super.name(args)` runs the parent class's version of a
+method on the same object. It is how a child's `init` lets the parent set up
+its part, and how an override adds to the parent's behaviour instead of
+replacing it:
+```glow
+blueprint Puppy extends Dog:
+    action init(name, age):
+        super.init(name)           # Animal's init sets self.name
+        self.age = age
+    end
+    action speak():
+        return super.speak() + " softly"
+    end
+end
+
+show Puppy("Bo", 1).speak()    # Bo barks softly
+```
+`super` looks the method up from the parent upward, so it also finds a
+method the parent itself inherited. It works only inside a method of a class
+that extends another; anywhere else it raises an error saying so.
+
+### Checking classes: `is_a` and `class_name`
+`type(x)` is `"instance"` for every object. To ask about its class:
+```glow
+let p = Puppy("Bo", 1)
+show class_name(p)          # Puppy
+show is_a(p, Dog)           # true: Puppy extends Dog
+show is_a(p, Animal)        # true: and Dog extends Animal
+show is_a(p, "Animal")      # true: a class name works too
+```
 
 ---
 
@@ -877,16 +964,21 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 |----------|-------------|
 | `show a, b` / `print` | Print values separated by spaces |
 | `len(x)` | Length of a string, list or dict |
-| `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, class name, ... |
+| `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, `"instance"` (an object), `"class"`, ... |
+| `class_name(x)` | The class of an object (`"Dog"`), a class's own name, or `type(x)` for other values |
+| `is_a(x, C)` | Whether `x` was made from class `C` or one that extends it (`C` may be a class or its name) |
 | `int(x)`, `float(x)`, `str(x)` / `string(x)`, `bool(x)` | Conversions; `int("42")`, `int("ff", 16)` parse text and raise on anything that is not a whole number |
-| `range(n)` | `[0, 1, ..., n-1]` |
+| `range(n)`, `range(start, stop)`, `range(start, stop, step)` | Whole numbers from start (default 0) up to, not including, stop: `range(0, 10, 3)` is `[0, 3, 6, 9]`, `range(5, 0, -1)` is `[5, 4, 3, 2, 1]` |
+| `enumerate(items, start)` | `[[0, first], [1, second], ...]` (counting from `start`, default 0) |
+| `zip(a, b, ...)` | `[[a0, b0], [a1, b1], ...]`, as long as the shortest list |
+| `format(value, spec)` | Text for a value: `format(3.14159, ".2f")` is `"3.14"`. Spec: `[[fill]align][sign][0][width][,][.precision][type]` with align `<` `>` `^` `=`, sign `+` or space, type `d` `f` `e` `g` `%` `x` `X` `o` `b` `s` |
 | `append(list, x)` | Add to a list |
 | `pairs(x)` | `[index, item]` / `[key, value]` pairs |
-| `abs`, `min`, `max`, `sum`, `round`, `floor`, `ceil` | Numbers (`min`/`max` take values or one list) |
+| `abs`, `min`, `max`, `sum`, `round`, `floor`, `ceil` | Numbers (`min`/`max` take values or one list; `round(x, 2)` rounds to 2 decimal places, `round(x, -2)` to hundreds) |
 | `random()`, `random_int(lo, hi)`, `random_seed(n)` | A float in [0, 1); a whole number from lo to hi inclusive; restart the sequence for repeatable runs (xoshiro256\*\*; for secrets use `crypto.random_bytes`) |
 | `sorted(list, key, descending)`, `reversed(x)` | New ordered list (or reversed string) |
 | `input(prompt)` / `ask(prompt)` | Read a line from standard input (`none` at end of input) |
-| `assert(condition, message)` | Raise when the condition is false |
+| `assert(condition, message)` | Raise an error ("Assertion failed: message") when the condition is false; `try`/`catch` can handle it |
 | `dict()` | Empty dictionary |
 
 ### Math (`math.`)

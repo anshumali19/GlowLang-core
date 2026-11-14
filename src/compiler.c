@@ -33,6 +33,11 @@ Bytecode *compiling_bc = NULL;
 Class *last_compiling_class = NULL;
 Trait *last_compiling_trait = NULL;
 static const char *compiling_class_name = NULL;
+/* For `super`: the parent of the class being compiled, and of the class
+   whose method body is being compiled (NULL outside a method). */
+static const char *compiling_parent_name = NULL;
+static const char *method_parent_name = NULL;
+static int in_method_body = 0;
 static const char *compiling_trait_name = NULL;
 
 Node* node_new(NodeType t) { Node *n = arena_alloc(sizeof(Node)); memset(n, 0, sizeof(Node)); n->type = t; n->line = line_num; return n; }
@@ -451,6 +456,20 @@ static void hoist_locals(FuncEntry *fe, Node *n) {
    parser (wrapped as an assignment), so any expression works there. */
 extern Node *root;
 int yyparse(void);
+/* While parsing an f-string's {expression}, a syntax error is not
+   reported here: the f-string raises a clear error when it runs instead. */
+static int quiet_parse = 0;
+
+/* Falling off the end of a function returns none. (It used to return
+   register 0: the first parameter, self, or the first local.) */
+static int compile_expr(Node *n, int target_reg);
+static void emit_implicit_return(void) {
+    int r = next_free_reg++;
+    compile_expr(newVarNode(intern_string("none")), r);
+    int idx = bc_emit(compiling_bc, OP_RETURN, 0, 0);
+    compiling_bc->code[idx].r0 = r;
+}
+
 static Node *parse_fstring_expr(const char *src) {
     size_t n = strlen(src);
     char *code = malloc(n + 32);
@@ -460,7 +479,9 @@ static Node *parse_fstring_expr(const char *src) {
     YY_BUFFER_STATE old = get_current_buffer();
     YY_BUFFER_STATE b = yy_scan_string(code);
     root = NULL;
+    quiet_parse = 1;
     int rc = yyparse();
+    quiet_parse = 0;
     yy_delete_buffer(b);
     if (old) yy_switch_to_buffer(old);
     Node *r = root;
@@ -933,12 +954,20 @@ static void compile_stmt(Node *n) {
             Class *saved_class = last_compiling_class; Trait *saved_trait = last_compiling_trait;
             compiling_class_name = NULL; compiling_trait_name = NULL;
             last_compiling_class = NULL; last_compiling_trait = NULL;
+            const char *saved_method_parent = method_parent_name;
+            int saved_in_method = in_method_body;
+            /* Only a class method's own body may use super; a function nested
+               in it is an ordinary function without self. */
+            in_method_body = is_method && saved_class != NULL;
+            method_parent_name = in_method_body ? compiling_parent_name : NULL;
             compile_stmt(n->left);
+            method_parent_name = saved_method_parent;
+            in_method_body = saved_in_method;
             compiling_class_name = saved_class_name; compiling_trait_name = saved_trait_name;
             last_compiling_class = saved_class; last_compiling_trait = saved_trait;
+            emit_implicit_return();
             note_reg_peak();
             fe->body->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
-            bc_emit(compiling_bc, OP_RETURN, 0, 0);
             optimize_bytecode(compiling_bc);
             analyze_escapes(compiling_bc);
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
@@ -1007,7 +1036,9 @@ static void compile_stmt(Node *n) {
         }
         case NODE_CLASS: {
             const char *old_class = compiling_class_name;
+            const char *old_parent = compiling_parent_name;
             compiling_class_name = n->name;
+            compiling_parent_name = n->parent_name;
             Class *pc = last_compiling_class; last_compiling_class = (Class*)1;
             int parent_reg = -1;
             if (n->parent_name) {
@@ -1024,6 +1055,7 @@ static void compile_stmt(Node *n) {
             compile_stmt(n->left);
             last_compiling_class = pc;
             compiling_class_name = old_class;
+            compiling_parent_name = old_parent;
             break;
         }
         case NODE_TRAIT: {
@@ -1309,6 +1341,27 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_CALL_EXPR:
         case NODE_CALL: {
+            /* super.m(args) -> __glow_super(Parent, "m", self, args...): calls
+               the parent class's m (found up its chain) on the current self.
+               Outside a method of a class that extends another, the helper
+               raises a clear error instead. A local named super wins. */
+            if (n->type == NODE_CALL_EXPR && n->left && n->left->type == NODE_INDEX && n->left->name &&
+                n->left->left && n->left->left->type == NODE_VAR && n->left->left->name &&
+                strcmp(n->left->left->name, "super") == 0 && get_local_reg("super") == -1) {
+                int ac0 = n->call_arg_count;
+                Node **sa = malloc(sizeof(Node*) * (size_t)(ac0 + 3));
+                int ok_ctx = in_method_body && method_parent_name;
+                sa[0] = ok_ctx ? newVarNode(method_parent_name) : newStringNode(in_method_body ? "no-parent" : "not-in-method");
+                sa[1] = newStringNode(n->left->name);
+                sa[2] = ok_ctx ? newVarNode(intern_string("self")) : newStringNode("");
+                for (int i = 0; i < ac0; i++) sa[i + 3] = n->call_args[i];
+                Node *sc = node_new(NODE_CALL);
+                sc->name = intern_string("__glow_super");
+                sc->call_args = sa;
+                sc->call_arg_count = ac0 + 3;
+                sc->line = n->line;
+                return compile_expr(sc, reg);
+            }
             int ac = n->call_arg_count;
             int start_reg = next_free_reg;
 
@@ -1449,11 +1502,47 @@ static int compile_expr(Node *n, int target_reg) {
                 char *src = malloc(elen + 1);
                 memcpy(src, str + start, elen);
                 src[elen] = '\0';
+                /* {expr:spec}: the last ':' outside brackets, followed by a
+                   valid format spec, splits off the spec (a lambda's ':' is
+                   followed by code, so it is not taken for one). */
+                char *spec = NULL;
+                {
+                    int d = 0, cut = -1;
+                    for (size_t k = 0; k < elen; k++) {
+                        char ch = src[k];
+                        if (ch == '(' || ch == '[' || ch == '{') d++;
+                        else if (ch == ')' || ch == ']' || ch == '}') d--;
+                        else if (ch == ':' && d == 0) cut = (int)k;
+                    }
+                    if (cut >= 0) {
+                        const char *sp = src + cut + 1;
+                        int ok = 1;
+                        for (const char *q = sp; *q; q++)
+                            if (!strchr("<>^=+- 0123456789,_.dfFeEgG%xXobs*#", *q) || *q == '*' || *q == '#') { ok = 0; break; }
+                        /* A fill character may be anything when an align follows it. */
+                        if (!ok && sp[0] && sp[1] && strchr("<>^=", sp[1])) {
+                            ok = 1;
+                            for (const char *q = sp + 2; *q; q++) if (!strchr("+- 0123456789,_.dfFeEgG%xXobs", *q)) { ok = 0; break; }
+                        }
+                        if (ok) { spec = strdup(sp); src[cut] = '\0'; }
+                    }
+                }
                 Node *e = parse_fstring_expr(src);
+                if (!e) {
+                    Node **ea = malloc(sizeof(Node*));
+                    ea[0] = newStringNode(intern_string(src));
+                    e = node_new(NODE_CALL); e->name = intern_string("__glow_fstring_error"); e->call_args = ea; e->call_arg_count = 1; e->line = n->line;
+                } else if (spec) {
+                    Node **fa = malloc(sizeof(Node*) * 2);
+                    fa[0] = e; fa[1] = newStringNode(intern_string(spec));
+                    Node *fc = node_new(NODE_CALL); fc->name = intern_string("__glow_format"); fc->call_args = fa; fc->call_arg_count = 2; fc->line = n->line;
+                    e = fc;
+                }
+                free(spec);
                 free(src);
                 if (i < len) i++; /* skip '}' */
                 if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
-                int er = compile_expr(e ? e : newVarNode(intern_string("none")), -1);
+                int er = compile_expr(e, -1);
                 bc_emit_reg(compiling_bc, OP_ADD, acc, acc, er);
             }
             if (acc < 0) acc = compile_expr(newStringNode(intern_string("")), -1);
@@ -1581,7 +1670,7 @@ static int compile_expr(Node *n, int target_reg) {
             next_free_reg = fe->local_count;
             int saved_peak = reg_peak; reg_peak = next_free_reg;
             compile_stmt(n->left);
-            bc_emit(compiling_bc, OP_RETURN, 0, 0);
+            emit_implicit_return();
             note_reg_peak();
             compiling_bc->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;
             compiling_bc = p; compiling_func = pf; next_free_reg = old_free; reg_peak = saved_peak;
@@ -1626,6 +1715,7 @@ static void line_first_word(const char *file, int line, char *out, size_t cap) {
 }
 
 void yyerror(const char *s) {
+    if (quiet_parse) return;
     /* Other languages' spellings of else-if are a common slip; say what
        GlowLang writes instead of a bare "syntax error". */
     char word[32], hint[160];

@@ -382,9 +382,41 @@ static Value trim_impl(Value s, int left, int right) {
     memcpy(out, AS_STRING(s) + a, b - a);
     return r;
 }
-static Value s_trim(int argc, Value *args) { (void)argc; return trim_impl(args[0], 1, 1); }
-static Value s_trim_start(int argc, Value *args) { (void)argc; return trim_impl(args[0], 1, 0); }
-static Value s_trim_end(int argc, Value *args) { (void)argc; return trim_impl(args[0], 0, 1); }
+/* trim(chars): remove any of the characters in chars (whole UTF-8
+   characters) from the ends, instead of whitespace. */
+static int char_in_set(const char *p, size_t clen, const char *set, size_t setlen) {
+    for (size_t i = 0; i < setlen; ) {
+        size_t n = 1;
+        while (i + n < setlen && ((unsigned char)set[i + n] & 0xC0) == 0x80) n++;
+        if (n == clen && memcmp(set + i, p, n) == 0) return 1;
+        i += n;
+    }
+    return 0;
+}
+static Value trim_chars(Value s, Value chars, int left, int right) {
+    if (GET_TYPE(chars) != VAL_STRING) return raise("trim(chars): chars must be text");
+    const char *p = AS_STRING(s), *set = (chars & MASK_PAYLOAD) ? AS_STRING(chars) : "";
+    size_t n = rope_length(s), setlen = strlen(set), a = 0, b = n;
+    while (left && a < b) {
+        size_t c = 1;
+        while (a + c < b && ((unsigned char)p[a + c] & 0xC0) == 0x80) c++;
+        if (!char_in_set(p + a, c, set, setlen)) break;
+        a += c;
+    }
+    while (right && b > a) {
+        size_t c = 1;
+        while (b - c > a && ((unsigned char)p[b - c] & 0xC0) == 0x80) c++;
+        if (!char_in_set(p + b - c, c, set, setlen)) break;
+        b -= c;
+    }
+    char *out;
+    Value r = value_string_alloc(b - a, &out);
+    memcpy(out, p + a, b - a);
+    return r;
+}
+static Value s_trim(int argc, Value *args) { return argc > 1 && GET_TYPE(args[1]) != VAL_NONE ? trim_chars(args[0], args[1], 1, 1) : trim_impl(args[0], 1, 1); }
+static Value s_trim_start(int argc, Value *args) { return argc > 1 && GET_TYPE(args[1]) != VAL_NONE ? trim_chars(args[0], args[1], 1, 0) : trim_impl(args[0], 1, 0); }
+static Value s_trim_end(int argc, Value *args) { return argc > 1 && GET_TYPE(args[1]) != VAL_NONE ? trim_chars(args[0], args[1], 0, 1) : trim_impl(args[0], 0, 1); }
 
 static Value s_starts_with(int argc, Value *args) {
     if (!arg_is(argc, args, 1, VAL_STRING)) return raise("starts_with() needs a string");
@@ -606,9 +638,13 @@ static Value l_reduce(int argc, Value *args) {
 
 /* dict.get(key, default) */
 static Value d_get(int argc, Value *args) {
-    if (!arg_is(argc, args, 1, VAL_STRING)) return raise("get() needs a string key");
+    if (argc < 2) return raise("get() needs a key");
     Dict *d = AS_DICT(args[0]);
-    int i = dict_get_idx(d, AS_STRING(args[1]));
+    char *owned;
+    const char *key = glow_dict_key(args[1], &owned);
+    if (!key) return value_none();
+    int i = dict_get_idx(d, key);
+    free(owned);
     if (i >= 0) return d->values[i];
     return argc >= 3 ? args[2] : value_none();
 }

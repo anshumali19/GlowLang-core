@@ -52,7 +52,7 @@ show "ada" in ages     # true
 
 Each block ends with `end`. Else-if is written `eif`.
 
-```glow
+```text
 if score >= 90:            when score >= 90:
     show "A"                   show "A"
 eif score >= 70:           eif score >= 70:
