@@ -1,0 +1,301 @@
+# glownum: vectors, matrices, linear algebra, statistics, random numbers.
+use "glownum"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func near(name, got, want):
+    let d = got - want
+    if d < 0:
+        d = 0 - d
+    end
+    if d < 1e-9:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func close(name, got, want):
+    if gnum.allclose(got, want, 1e-9):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+# The message of the error f() raises, or "" when it raises nothing.
+func error_of(f):
+    try:
+        f()
+    catch e:
+        return str(e)
+    end
+    return ""
+end
+
+func fails_with(name, f, text):
+    let msg = error_of(f)
+    if msg.contains("glownum:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+show "== making arrays"
+close("zeros", gnum.zeros(3), [0, 0, 0])
+close("ones 2x2", gnum.ones([2, 2]), [[1, 1], [1, 1]])
+close("full", gnum.full([1, 3], 7), [[7, 7, 7]])
+close("eye", gnum.eye(2), [[1, 0], [0, 1]])
+close("arange n", gnum.arange(4), [0, 1, 2, 3])
+close("arange step", gnum.arange(1, 2, 0.25), [1, 1.25, 1.5, 1.75])
+close("arange down", gnum.arange(3, 0, -1), [3, 2, 1])
+close("arange empty", gnum.arange(3, 3), [])
+close("linspace", gnum.linspace(0, 1, 5), [0, 0.25, 0.5, 0.75, 1])
+close("linspace one", gnum.linspace(2, 9, 1), [2])
+ok("zeros(0)", len(gnum.zeros(0)) == 0)
+let z = gnum.zeros([2, 2])
+z[0][0] = 5
+ok("rows are separate lists", z[1][0] == 0)
+let orig = [[1, 2], [3, 4]]
+let dup = gnum.copy(orig)
+dup[0][0] = 99
+ok("copy is deep", orig[0][0] == 1)
+
+show "== shape"
+ok("shape number", gnum.shape(3) == [])
+ok("shape vector", gnum.shape([1, 2, 3]) == [3])
+ok("shape matrix", gnum.shape([[1, 2, 3], [4, 5, 6]]) == [2, 3])
+ok("ndim", gnum.ndim(1) == 0 and gnum.ndim([1]) == 1 and gnum.ndim([[1]]) == 2)
+ok("size", gnum.size([[1, 2], [3, 4]]) == 4)
+close("flatten", gnum.flatten([[1, 2], [3, 4]]), [1, 2, 3, 4])
+close("reshape", gnum.reshape([1, 2, 3, 4, 5, 6], 2, 3), [[1, 2, 3], [4, 5, 6]])
+close("transpose", gnum.transpose([[1, 2, 3], [4, 5, 6]]), [[1, 4], [2, 5], [3, 6]])
+close("column", gnum.column([[1, 2], [3, 4]], 1), [2, 4])
+close("concat rows", gnum.concat([[1, 2]], [[3, 4]]), [[1, 2], [3, 4]])
+close("concat columns", gnum.concat([[1], [2]], [[3], [4]], 1), [[1, 3], [2, 4]])
+close("concat vectors", gnum.concat([1], [2, 3]), [1, 2, 3])
+
+show "== arithmetic"
+near("number + number", gnum.add(2, 3), 5)
+close("vector + number", gnum.add([1, 2], 10), [11, 12])
+close("number - vector", gnum.sub(10, [1, 2]), [9, 8])
+close("vector * vector", gnum.mul([1, 2, 3], [4, 5, 6]), [4, 10, 18])
+close("matrix + matrix", gnum.add([[1, 2], [3, 4]], [[10, 20], [30, 40]]), [[11, 22], [33, 44]])
+close("matrix - row vector", gnum.sub([[1, 2], [3, 4]], [1, 1]), [[0, 1], [2, 3]])
+close("row vector / matrix", gnum.div([8, 8], [[1, 2], [4, 8]]), [[8, 4], [2, 1]])
+close("matrix * number", gnum.mul([[1, 2], [3, 4]], 0.5), [[0.5, 1], [1.5, 2]])
+close("number / matrix", gnum.div(1, [[2, 4]]), [[0.5, 0.25]])
+close("pow", gnum.pow([1, 2, 3], 2), [1, 4, 9])
+close("minimum", gnum.minimum([1, 5, 3], 2), [1, 2, 2])
+close("maximum", gnum.maximum([1, 5, 3], [4, 4, 4]), [4, 5, 4])
+close("neg", gnum.neg([[1, -2]]), [[-1, 2]])
+close("abs", gnum.abs([-1.5, 2, 0]), [1.5, 2, 0])
+close("sqrt", gnum.sqrt([4, 9, 0]), [2, 3, 0])
+close("exp log", gnum.log(gnum.exp([0, 1, 2.5])), [0, 1, 2.5])
+close("square", gnum.square([[3, -4]]), [[9, 16]])
+close("sign", gnum.sign([-3, 0, 2.5]), [-1, 0, 1])
+close("floor ceil", gnum.add(gnum.floor([1.5, -1.5]), gnum.ceil([1.5, -1.5])), [3, -3])
+close("round", gnum.round([1.4, 1.5, -2.5]), [1, 2, -3])
+close("round places", gnum.round([3.14159, 2.71828], 2), [3.14, 2.72])
+close("clip", gnum.clip([-5, 0.5, 5], 0, 1), [0, 0.5, 1])
+close("relu", gnum.relu([-1, 0, 2]), [0, 0, 2])
+close("tanh", gnum.tanh([0]), [0])
+close("sigmoid", gnum.sigmoid([0, 1000, -1000]), [0.5, 1, 0])
+close("apply", gnum.apply([[1, 2]], lambda(x): x * 10), [[10, 20]])
+near("softmax sums to 1", gnum.sum(gnum.softmax([1, 2, 3])), 1)
+close("softmax big numbers", gnum.softmax([1000, 1000]), [0.5, 0.5])
+close("softmax rows", gnum.softmax([[0, 0], [5, 5]]), [[0.5, 0.5], [0.5, 0.5]])
+let before = [1, 2, 3]
+let after = gnum.add(before, 1)
+ok("inputs are not changed", before == [1, 2, 3])
+
+show "== reductions"
+let m = [[1, 2, 3], [4, 5, 6]]
+near("sum all", gnum.sum(m), 21)
+close("sum columns", gnum.sum(m, 0), [5, 7, 9])
+close("sum rows", gnum.sum(m, 1), [6, 15])
+near("mean all", gnum.mean(m), 3.5)
+close("mean columns", gnum.mean(m, 0), [2.5, 3.5, 4.5])
+close("mean rows", gnum.mean(m, 1), [2, 5])
+near("min", gnum.min(m), 1)
+close("max rows", gnum.max(m, 1), [3, 6])
+ok("argmax all", gnum.argmax([3, 9, 2, 9]) == 1)
+ok("argmin", gnum.argmin([3, 1, 2, 1]) == 1)
+ok("argmax columns", gnum.argmax([[1, 9], [5, 2]], 0) == [1, 0])
+near("prod", gnum.prod([1, 2, 3, 4]), 24)
+near("var", gnum.var([1, 2, 3, 4]), 1.25)
+near("var ddof 1", gnum.var([1, 2, 3, 4], none, 1), 5 / 3)
+near("std", gnum.std([2, 4, 4, 4, 5, 5, 7, 9]), 2)
+close("std columns", gnum.std([[1, 10], [3, 30]], 0), [1, 10])
+near("median odd", gnum.median([5, 1, 3]), 3)
+near("median even", gnum.median([4, 1, 3, 2]), 2.5)
+close("median columns", gnum.median([[1, 10], [3, 30], [2, 20]], 0), [2, 20])
+near("percentile 25", gnum.percentile([1, 2, 3, 4, 5], 25), 2)
+near("percentile 90", gnum.percentile([1, 2, 3, 4], 90), 3.7)
+near("percentile 0", gnum.percentile([7, 3, 9], 0), 3)
+near("percentile 100", gnum.percentile([7, 3, 9], 100), 9)
+close("cumsum", gnum.cumsum([1, 2, 3]), [1, 3, 6])
+close("diff", gnum.diff([1, 4, 9, 16]), [3, 5, 7])
+near("sum of a number", gnum.sum(4), 4)
+
+show "== order"
+close("sort", gnum.sort([3, 1, 2]), [1, 2, 3])
+ok("argsort", gnum.argsort([30, 10, 20]) == [1, 2, 0])
+ok("argsort is stable", gnum.argsort([2, 1, 2, 1, 2]) == [1, 3, 0, 2, 4])
+ok("argsort empty", gnum.argsort([]) == [])
+close("sort long", gnum.sort([9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 11]), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11])
+close("unique", gnum.unique([[3, 1], [3, 2]]), [1, 2, 3])
+close("take", gnum.take([10, 20, 30], [2, 0]), [30, 10])
+
+show "== linear algebra"
+near("dot vectors", gnum.dot([1, 2, 3], [4, 5, 6]), 32)
+close("dot matrix vector", gnum.dot([[1, 2], [3, 4]], [1, 1]), [3, 7])
+close("dot vector matrix", gnum.dot([1, 1], [[1, 2], [3, 4]]), [4, 6])
+close("dot matrices", gnum.dot([[1, 2], [3, 4]], [[5, 6], [7, 8]]), [[19, 22], [43, 50]])
+close("matmul 2x3 3x1", gnum.matmul([[1, 2, 3], [4, 5, 6]], [[1], [0], [1]]), [[4], [10]])
+close("outer", gnum.outer([1, 2], [3, 4]), [[3, 4], [6, 8]])
+near("norm", gnum.norm([3, 4]), 5)
+near("norm matrix", gnum.norm([[1, 2], [2, 4]]), 5)
+near("trace", gnum.trace([[1, 2], [3, 4]]), 5)
+near("det 2x2", gnum.det([[1, 2], [3, 4]]), -2)
+near("det 3x3", gnum.det([[2, 0, 1], [1, 3, 2], [1, 1, 1]]), 0)
+near("det needs pivoting", gnum.det([[0, 1], [1, 0]]), -1)
+near("det identity", gnum.det(gnum.eye(4)), 1)
+let a = [[4, 3], [6, 3]]
+close("inv", gnum.inv(a), [[-0.5, 0.5], [1, -2 / 3]])
+close("a times inv(a)", gnum.dot(a, gnum.inv(a)), gnum.eye(2))
+let h = [[2, -1, 0], [-1, 2, -1], [0, -1, 2]]
+close("inv 3x3 round trip", gnum.dot(gnum.inv(h), h), gnum.eye(3))
+close("solve vector", gnum.solve([[2, 1], [1, 3]], [3, 5]), [0.8, 1.4])
+close("solve matrix", gnum.solve([[2, 0], [0, 4]], [[2, 4], [4, 8]]), [[1, 2], [1, 2]])
+close("solve with zero pivot", gnum.solve([[0, 2], [3, 1]], [4, 5]), [1, 2])
+close("lstsq exact line", gnum.lstsq([[1, 0], [1, 1], [1, 2]], [1, 3, 5]), [1, 2])
+close("lstsq best fit", gnum.lstsq([[1, 0], [1, 1], [1, 2]], [0, 1, 1]), [1 / 6, 0.5])
+let dup_cols = gnum.lstsq([[1, 1], [2, 2], [3, 3]], [2, 4, 6])
+ok("lstsq with repeated columns still fits", gnum.allclose(gnum.dot([[1, 1], [2, 2], [3, 3]], dup_cols), [2, 4, 6], 1e-5))
+let eg = gnum.eigh([[2, 1], [1, 2]])
+close("eigh values", eg[0], [1, 3])
+near("eigh vector length", gnum.norm(gnum.column(eg[1], 1)), 1)
+close("eigh vector", gnum.abs(gnum.column(eg[1], 1)), [math.sqrt(0.5), math.sqrt(0.5)])
+let s3 = [[4, 1, 2], [1, 3, 0], [2, 0, 5]]
+let e3 = gnum.eigh(s3)
+let rebuilt = gnum.dot(gnum.dot(e3[1], [[e3[0][0], 0, 0], [0, e3[0][1], 0], [0, 0, e3[0][2]]]), gnum.transpose(e3[1]))
+close("eigh rebuilds the matrix", rebuilt, s3)
+near("eigh values add up to the trace", gnum.sum(e3[0]), 12)
+ok("eigh values ascend", e3[0][0] <= e3[0][1] and e3[0][1] <= e3[0][2])
+close("eigh diagonal matrix", gnum.eigh([[3, 0], [0, 1]])[0], [1, 3])
+let l = gnum.cholesky([[4, 2], [2, 5]])
+close("cholesky", l, [[2, 0], [1, 2]])
+
+show "== statistics"
+close("cov", gnum.cov([[1, 2], [2, 4], [3, 6]]), [[1, 2], [2, 4]])
+close("cov ddof 0", gnum.cov([[1, 2], [3, 6]], 0), [[1, 2], [2, 4]])
+near("corrcoef +1", gnum.corrcoef([1, 2, 3], [2, 4, 6]), 1)
+near("corrcoef -1", gnum.corrcoef([1, 2, 3], [3, 2, 1]), -1)
+near("corrcoef 0", gnum.corrcoef([1, 2, 3, 4], [1, -1, -1, 1]), 0)
+ok("allclose shape mismatch", gnum.allclose([1, 2], [1, 2, 3]) == false)
+ok("allclose vector vs matrix", gnum.allclose([1, 2], [[1, 2]]) == false)
+ok("allclose tolerance", gnum.allclose([1], [1.0000000001]) and not gnum.allclose([1], [1.1]))
+
+show "== random numbers"
+let r1 = RandomState(42)
+let r2 = RandomState(42)
+let same = true
+let in_range = true
+let total = 0.0
+every i from 1 to 2000:
+    let x = r1.random()
+    if x != r2.random():
+        same = false
+    end
+    if x < 0 or x >= 1:
+        in_range = false
+    end
+    total = total + x
+end
+ok("same seed, same numbers", same)
+ok("random is in [0, 1)", in_range)
+ok("random averages near 0.5", total / 2000 > 0.47 and total / 2000 < 0.53)
+ok("different seeds differ", RandomState(1).random() != RandomState(2).random())
+ok("seed 0 works", RandomState(0).random() >= 0)
+ok("negative seed works", RandomState(-5).random() < 1)
+let ints_ok = true
+let seen_low = false
+let seen_high = false
+every i from 1 to 500:
+    let k = r1.randint(1, 6)
+    if k < 1 or k > 6 or k != math.floor(k):
+        ints_ok = false
+    end
+    if k == 1:
+        seen_low = true
+    end
+    if k == 6:
+        seen_high = true
+    end
+end
+ok("randint stays in range", ints_ok)
+ok("randint reaches both ends", seen_low and seen_high)
+let normals = gnum.rng(7).randn(4000)
+ok("normal mean near 0", gnum.abs(gnum.mean(normals)) < 0.06)
+ok("normal sd near 1", gnum.abs(gnum.std(normals) - 1) < 0.06)
+ok("rand shape", gnum.shape(r1.rand([3, 2])) == [3, 2])
+let perm = r1.permutation(10)
+ok("permutation has every number once", gnum.sort(perm) == range(10))
+let items = ["a", "b", "c", "d"]
+let mixed = r1.shuffled(items)
+ok("shuffled keeps the items", len(mixed) == 4 and mixed.contains("a") and mixed.contains("d"))
+ok("shuffled leaves the list alone", items == ["a", "b", "c", "d"])
+ok("choice picks an item", items.contains(r1.choice(items)))
+let u = r1.uniform(5, 6)
+ok("uniform range", u >= 5 and u < 6)
+
+show "== errors"
+fails_with("vector lengths", lambda(): gnum.add([1, 2], [1, 2, 3]), "do not match")
+fails_with("matrix shapes", lambda(): gnum.add([[1, 2]], [[1], [2]]), "do not match")
+fails_with("matrix and vector", lambda(): gnum.add([[1, 2]], [1, 2, 3]), "do not match")
+fails_with("ragged matrix", lambda(): gnum.transpose([[1, 2], [3]]), "same length")
+fails_with("divide by zero", lambda(): gnum.div([1, 2], 0), "division by zero")
+fails_with("log of zero", lambda(): gnum.log([1, 0]), "not positive")
+fails_with("sqrt of negative", lambda(): gnum.sqrt(-1), "negative")
+fails_with("mean of nothing", lambda(): gnum.mean([]), "empty")
+fails_with("max of nothing", lambda(): gnum.max([]), "empty")
+fails_with("axis on a vector", lambda(): gnum.sum([1, 2], 0), "matrix")
+fails_with("bad axis", lambda(): gnum.sum([[1, 2]], 2), "axis must be")
+fails_with("matmul shapes", lambda(): gnum.matmul([[1, 2]], [[1, 2]]), "do not line up")
+fails_with("dot lengths", lambda(): gnum.dot([1, 2], [1]), "do not match")
+fails_with("det of non-square", lambda(): gnum.det([[1, 2, 3], [4, 5, 6]]), "square")
+fails_with("inverse of singular", lambda(): gnum.inv([[1, 2], [2, 4]]), "singular")
+fails_with("solve singular", lambda(): gnum.solve([[1, 1], [1, 1]], [1, 2]), "singular")
+fails_with("solve wrong b", lambda(): gnum.solve([[1, 0], [0, 1]], [1, 2, 3]), "row")
+fails_with("eigh not symmetric", lambda(): gnum.eigh([[1, 2], [3, 4]]), "symmetric")
+fails_with("cholesky not positive", lambda(): gnum.cholesky([[1, 2], [2, 1]]), "positive definite")
+fails_with("reshape count", lambda(): gnum.reshape([1, 2, 3], 2, 2), "do not fit")
+fails_with("variance of one value ddof 1", lambda(): gnum.var([1], none, 1), "more than")
+fails_with("percentile range", lambda(): gnum.percentile([1, 2], 101), "0 to 100")
+fails_with("corrcoef constant", lambda(): gnum.corrcoef([1, 1, 1], [1, 2, 3]), "undefined")
+fails_with("arange zero step", lambda(): gnum.arange(0, 5, 0), "step")
+fails_with("clip order", lambda(): gnum.clip([1], 2, 1), "above")
+fails_with("randint order", lambda(): RandomState(1).randint(5, 1), "below")
+fails_with("choice of nothing", lambda(): RandomState(1).choice([]), "empty")
+fails_with("take out of range", lambda(): gnum.take([1, 2], [5]), "outside")
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

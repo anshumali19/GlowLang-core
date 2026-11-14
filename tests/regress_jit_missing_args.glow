@@ -1,0 +1,54 @@
+# Compiled code calling a method or function with arguments left out: the
+# missing parameters must be none (so defaults apply), not whatever the
+# registers held. A method call from a hot loop used to pass the loop counter.
+blueprint Gen:
+    action init():
+        self.n = 0
+    end
+    action value(offset = 0.0, scale = 1.0):
+        self.n = self.n + 1
+        return offset + scale * 2
+    end
+    action fill(count):
+        let out = []
+        let i = 0
+        while i < count:
+            out.push(self.value())
+            i = i + 1
+        end
+        return out
+    end
+end
+
+func plain(a, b = 10, c = 100):
+    return a + b + c
+end
+
+func fill_plain(count):
+    let total = 0
+    let i = 0
+    while i < count:
+        total = total + plain(1)
+        i = i + 1
+    end
+    return total
+end
+
+let g = Gen()
+let v = g.fill(5000)
+let wrong = 0
+for each x in v:
+    if x != 2:
+        wrong = wrong + 1
+    end
+end
+show "method defaults wrong:", wrong
+show "function defaults:", fill_plain(5000)
+
+let top = 0
+let k = 0
+while k < 5000:
+    top = top + g.value()
+    k = k + 1
+end
+show "top-level loop:", top

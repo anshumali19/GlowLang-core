@@ -1,0 +1,1694 @@
+# glownum.glow
+# Numbers, vectors and matrices for GlowLang, written in GlowLang.
+#
+#     use "glownum"
+#     let a = [[1, 2], [3, 4]]
+#     show gnum.dot(a, gnum.inv(a))        # [[1, 0], [0, 1]]
+#     show gnum.mean(a, 0)                 # column means: [2, 3]
+#
+# A vector is a list of numbers and a matrix is a list of equal-length rows,
+# so results work with every other list function. Nothing is changed in
+# place: every function returns a new list. Everything is reached through
+# the one global `gnum`; seeded random numbers come from RandomState(seed).
+#
+# Mistakes (shapes that do not match, an empty list where numbers are
+# needed, a singular matrix) raise an error that starts with "glownum:".
+
+# ---------------------------------------------------------------- helpers
+
+func _gn_fail(msg):
+    throw "glownum: " + msg
+end
+
+func _gn_is_num(x):
+    let t = type(x)
+    return t == "int" or t == "float"
+end
+
+# 0 for a number, 1 for a vector, 2 for a matrix.
+func _gn_ndim(x):
+    if type(x) != "list":
+        return 0
+    end
+    if len(x) > 0 and type(x[0]) == "list":
+        return 2
+    end
+    return 1
+end
+
+func _gn_shape_text(x):
+    let d = _gn_ndim(x)
+    if d == 0:
+        return "a number"
+    end
+    if d == 1:
+        return "(" + str(len(x)) + ")"
+    end
+    return "(" + str(len(x)) + ", " + str(len(x[0])) + ")"
+end
+
+# Checks that m is a matrix whose rows all have the same length.
+func _gn_need_matrix(m, what):
+    if _gn_ndim(m) != 2:
+        _gn_fail(what + " needs a matrix (a list of rows), got " + _gn_shape_text(m))
+    end
+    let cols = len(m[0])
+    for each row in m:
+        if type(row) != "list" or len(row) != cols:
+            _gn_fail(what + ": every row of a matrix must have the same length")
+        end
+    end
+    return cols
+end
+
+func _gn_need_vector(v, what):
+    if _gn_ndim(v) != 1:
+        _gn_fail(what + " needs a vector (a list of numbers), got " + _gn_shape_text(v))
+    end
+    return len(v)
+end
+
+func _gn_need_square(m, what):
+    let cols = _gn_need_matrix(m, what)
+    if cols != len(m):
+        _gn_fail(what + " needs a square matrix, got " + _gn_shape_text(m))
+    end
+    return cols
+end
+
+# op: 0 add, 1 subtract, 2 multiply, 3 divide, 4 power, 5 smaller, 6 larger
+func _gn_op(op, x, y):
+    if op == 0:
+        return x + y
+    end
+    if op == 1:
+        return x - y
+    end
+    if op == 2:
+        return x * y
+    end
+    if op == 3:
+        if y == 0:
+            _gn_fail("division by zero")
+        end
+        return x / y
+    end
+    if op == 4:
+        return math.pow(x, y)
+    end
+    if op == 5:
+        if x < y:
+            return x
+        end
+        return y
+    end
+    if x > y:
+        return x
+    end
+    return y
+end
+
+func _gn_vec_scalar(op, v, s, scalar_first):
+    let out = []
+    if scalar_first:
+        for each x in v:
+            out.push(_gn_op(op, s, x))
+        end
+    else:
+        for each x in v:
+            out.push(_gn_op(op, x, s))
+        end
+    end
+    return out
+end
+
+func _gn_vec_vec(op, a, b):
+    if len(a) != len(b):
+        _gn_fail("shapes (" + str(len(a)) + ") and (" + str(len(b)) + ") do not match")
+    end
+    let out = []
+    let i = 0
+    let n = len(a)
+    while i < n:
+        out.push(_gn_op(op, a[i], b[i]))
+        i = i + 1
+    end
+    return out
+end
+
+# Element by element, with the same broadcasting rules as NumPy for numbers,
+# vectors and matrices: a number pairs with everything, and a vector pairs
+# with each row of a matrix.
+func _gn_binary(op, a, b):
+    let da = _gn_ndim(a)
+    let db = _gn_ndim(b)
+    if da == 0 and db == 0:
+        return _gn_op(op, a, b)
+    end
+    if da == 1 and db == 0:
+        return _gn_vec_scalar(op, a, b, false)
+    end
+    if da == 0 and db == 1:
+        return _gn_vec_scalar(op, b, a, true)
+    end
+    if da == 1 and db == 1:
+        return _gn_vec_vec(op, a, b)
+    end
+    let out = []
+    if da == 2 and db == 0:
+        _gn_need_matrix(a, "arithmetic")
+        for each row in a:
+            out.push(_gn_vec_scalar(op, row, b, false))
+        end
+        return out
+    end
+    if da == 0 and db == 2:
+        _gn_need_matrix(b, "arithmetic")
+        for each row in b:
+            out.push(_gn_vec_scalar(op, row, a, true))
+        end
+        return out
+    end
+    if da == 2 and db == 1:
+        let cols = _gn_need_matrix(a, "arithmetic")
+        if cols != len(b):
+            _gn_fail("shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not match")
+        end
+        for each row in a:
+            out.push(_gn_vec_vec(op, row, b))
+        end
+        return out
+    end
+    if da == 1 and db == 2:
+        let cols = _gn_need_matrix(b, "arithmetic")
+        if cols != len(a):
+            _gn_fail("shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not match")
+        end
+        for each row in b:
+            out.push(_gn_vec_vec(op, a, row))
+        end
+        return out
+    end
+    let ca = _gn_need_matrix(a, "arithmetic")
+    let cb = _gn_need_matrix(b, "arithmetic")
+    if len(a) != len(b) or ca != cb:
+        _gn_fail("shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not match")
+    end
+    let i = 0
+    while i < len(a):
+        out.push(_gn_vec_vec(op, a[i], b[i]))
+        i = i + 1
+    end
+    return out
+end
+
+# fn: 0 exp, 1 log, 2 sqrt, 3 abs, 4 sigmoid, 5 tanh, 6 relu, 7 negate,
+#     8 square, 9 sign, 10 floor, 11 ceil, 12 round
+func _gn_fn(fn, x):
+    if fn == 0:
+        return math.exp(x)
+    end
+    if fn == 1:
+        if x <= 0:
+            _gn_fail("log of a number that is not positive (" + str(x) + ")")
+        end
+        return math.log(x)
+    end
+    if fn == 2:
+        if x < 0:
+            _gn_fail("sqrt of a negative number (" + str(x) + ")")
+        end
+        return math.sqrt(x)
+    end
+    if fn == 3:
+        if x < 0:
+            return 0 - x
+        end
+        return x
+    end
+    if fn == 4:
+        # Written so that exp never overflows.
+        if x >= 0:
+            return 1.0 / (1.0 + math.exp(0 - x))
+        end
+        let e = math.exp(x)
+        return e / (1.0 + e)
+    end
+    if fn == 5:
+        return math.tanh(x)
+    end
+    if fn == 6:
+        if x > 0:
+            return x
+        end
+        return 0
+    end
+    if fn == 7:
+        return 0 - x
+    end
+    if fn == 8:
+        return x * x
+    end
+    if fn == 9:
+        if x > 0:
+            return 1
+        end
+        if x < 0:
+            return -1
+        end
+        return 0
+    end
+    if fn == 10:
+        return math.floor(x)
+    end
+    if fn == 11:
+        return math.ceil(x)
+    end
+    return math.round(x)
+end
+
+func _gn_unary(fn, x):
+    let d = _gn_ndim(x)
+    if d == 0:
+        return _gn_fn(fn, x)
+    end
+    let out = []
+    if d == 1:
+        for each v in x:
+            out.push(_gn_fn(fn, v))
+        end
+        return out
+    end
+    for each row in x:
+        let r = []
+        for each v in row:
+            r.push(_gn_fn(fn, v))
+        end
+        out.push(r)
+    end
+    return out
+end
+
+func _gn_flat(x):
+    let d = _gn_ndim(x)
+    if d == 0:
+        return [x]
+    end
+    if d == 1:
+        return x.copy()
+    end
+    let out = []
+    for each row in x:
+        for each v in row:
+            out.push(v)
+        end
+    end
+    return out
+end
+
+func _gn_column(m, j):
+    let out = []
+    for each row in m:
+        out.push(row[j])
+    end
+    return out
+end
+
+func _gn_copy(x):
+    if _gn_ndim(x) == 2:
+        let out = []
+        for each row in x:
+            out.push(row.copy())
+        end
+        return out
+    end
+    if type(x) == "list":
+        return x.copy()
+    end
+    return x
+end
+
+func _gn_vsum(v):
+    let s = 0.0
+    for each x in v:
+        s = s + x
+    end
+    return s
+end
+
+func _gn_vmean(v):
+    if len(v) == 0:
+        _gn_fail("mean of an empty list")
+    end
+    return _gn_vsum(v) / len(v)
+end
+
+func _gn_vvar(v, ddof):
+    let n = len(v)
+    if n - ddof <= 0:
+        _gn_fail("variance needs more than " + str(ddof) + " value(s), got " + str(n))
+    end
+    let m = _gn_vsum(v) / n
+    let s = 0.0
+    for each x in v:
+        s = s + (x - m) * (x - m)
+    end
+    return s / (n - ddof)
+end
+
+func _gn_vmin(v):
+    if len(v) == 0:
+        _gn_fail("min of an empty list")
+    end
+    let best = v[0]
+    for each x in v:
+        if x < best:
+            best = x
+        end
+    end
+    return best
+end
+
+func _gn_vmax(v):
+    if len(v) == 0:
+        _gn_fail("max of an empty list")
+    end
+    let best = v[0]
+    for each x in v:
+        if x > best:
+            best = x
+        end
+    end
+    return best
+end
+
+# Position of the first smallest (want_max false) or largest value.
+func _gn_varg(v, want_max):
+    if len(v) == 0:
+        _gn_fail("argmin/argmax of an empty list")
+    end
+    let best = 0
+    let i = 1
+    let n = len(v)
+    while i < n:
+        if want_max:
+            if v[i] > v[best]:
+                best = i
+            end
+        else:
+            if v[i] < v[best]:
+                best = i
+            end
+        end
+        i = i + 1
+    end
+    return best
+end
+
+func _gn_vprod(v):
+    let p = 1
+    for each x in v:
+        p = p * x
+    end
+    return p
+end
+
+# A stable merge sort of the positions 0..n-1 by value, so equal values keep
+# their order on every platform.
+func _gn_argsort(v):
+    let n = len(v)
+    let idx = range(n)
+    if n < 2:
+        return idx
+    end
+    let buf = range(n)
+    let width = 1
+    while width < n:
+        let lo = 0
+        while lo < n:
+            let mid = lo + width
+            if mid > n:
+                mid = n
+            end
+            let hi = lo + 2 * width
+            if hi > n:
+                hi = n
+            end
+            let i = lo
+            let j = mid
+            let k = lo
+            while i < mid and j < hi:
+                if v[idx[j]] < v[idx[i]]:
+                    buf[k] = idx[j]
+                    j = j + 1
+                else:
+                    buf[k] = idx[i]
+                    i = i + 1
+                end
+                k = k + 1
+            end
+            while i < mid:
+                buf[k] = idx[i]
+                i = i + 1
+                k = k + 1
+            end
+            while j < hi:
+                buf[k] = idx[j]
+                j = j + 1
+                k = k + 1
+            end
+            lo = lo + 2 * width
+        end
+        let swap = idx
+        idx = buf
+        buf = swap
+        width = width * 2
+    end
+    return idx
+end
+
+func _gn_sorted(v):
+    let out = []
+    for each i in _gn_argsort(v):
+        out.push(v[i])
+    end
+    return out
+end
+
+# q from 0 to 100, linear interpolation between neighbours (NumPy's default).
+func _gn_percentile_sorted(s, q):
+    let n = len(s)
+    if n == 0:
+        _gn_fail("percentile of an empty list")
+    end
+    if q < 0 or q > 100:
+        _gn_fail("percentile must be from 0 to 100, got " + str(q))
+    end
+    let pos = (n - 1) * q / 100.0
+    let lo = math.floor(pos)
+    let hi = math.ceil(pos)
+    if lo == hi:
+        return s[lo]
+    end
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+end
+
+# which: 0 sum, 1 mean, 2 min, 3 max, 4 argmin, 5 argmax, 6 product,
+#        7 variance, 8 standard deviation, 9 median
+func _gn_reduce_vec(which, v, extra):
+    if which == 0:
+        return _gn_vsum(v)
+    end
+    if which == 1:
+        return _gn_vmean(v)
+    end
+    if which == 2:
+        return _gn_vmin(v)
+    end
+    if which == 3:
+        return _gn_vmax(v)
+    end
+    if which == 4:
+        return _gn_varg(v, false)
+    end
+    if which == 5:
+        return _gn_varg(v, true)
+    end
+    if which == 6:
+        return _gn_vprod(v)
+    end
+    if which == 7:
+        return _gn_vvar(v, extra)
+    end
+    if which == 8:
+        return math.sqrt(_gn_vvar(v, extra))
+    end
+    return _gn_percentile_sorted(_gn_sorted(v), 50)
+end
+
+# axis none: over every number. axis 0: one result per column.
+# axis 1: one result per row.
+func _gn_reduce(which, x, axis, extra):
+    let d = _gn_ndim(x)
+    if d == 0:
+        x = [x]
+        d = 1
+    end
+    if axis == none:
+        if d == 2:
+            _gn_need_matrix(x, "a reduction")
+        end
+        return _gn_reduce_vec(which, _gn_flat(x), extra)
+    end
+    if d != 2:
+        _gn_fail("axis can only be given for a matrix")
+    end
+    let cols = _gn_need_matrix(x, "a reduction")
+    let out = []
+    if axis == 0:
+        let j = 0
+        while j < cols:
+            out.push(_gn_reduce_vec(which, _gn_column(x, j), extra))
+            j = j + 1
+        end
+        return out
+    end
+    if axis == 1:
+        for each row in x:
+            out.push(_gn_reduce_vec(which, row, extra))
+        end
+        return out
+    end
+    _gn_fail("axis must be 0, 1 or none, got " + str(axis))
+end
+
+func _gn_transpose(m):
+    let cols = _gn_need_matrix(m, "transpose")
+    let out = []
+    let j = 0
+    while j < cols:
+        out.push(_gn_column(m, j))
+        j = j + 1
+    end
+    return out
+end
+
+func _gn_vdot(a, b):
+    let n = len(a)
+    if n != len(b):
+        _gn_fail("dot: lengths " + str(n) + " and " + str(len(b)) + " do not match")
+    end
+    let s = 0.0
+    let i = 0
+    while i < n:
+        s = s + a[i] * b[i]
+        i = i + 1
+    end
+    return s
+end
+
+func _gn_matmul(a, b):
+    let ca = _gn_need_matrix(a, "matmul")
+    _gn_need_matrix(b, "matmul")
+    if ca != len(b):
+        _gn_fail("matmul: shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not line up")
+    end
+    let bt = _gn_transpose(b)
+    let out = []
+    for each row in a:
+        let r = []
+        for each col in bt:
+            let s = 0.0
+            let p = 0
+            while p < ca:
+                s = s + row[p] * col[p]
+                p = p + 1
+            end
+            r.push(s)
+        end
+        out.push(r)
+    end
+    return out
+end
+
+func _gn_eye(n):
+    let out = []
+    let i = 0
+    while i < n:
+        let row = []
+        let j = 0
+        while j < n:
+            if i == j:
+                row.push(1.0)
+            else:
+                row.push(0.0)
+            end
+            j = j + 1
+        end
+        out.push(row)
+        i = i + 1
+    end
+    return out
+end
+
+func _gn_abs(x):
+    if x < 0:
+        return 0 - x
+    end
+    return x
+end
+
+# Gaussian elimination with partial pivoting on a copy of a, applied to the
+# right-hand sides in rhs (a matrix). Returns [solution, determinant].
+# The determinant is 0 (and the solution none) when a is singular.
+func _gn_eliminate(a, rhs):
+    let n = len(a)
+    let m = _gn_copy(a)
+    let b = _gn_copy(rhs)
+    let width = 0
+    if len(b) > 0:
+        width = len(b[0])
+    end
+    let scale = 0.0
+    for each row in m:
+        for each v in row:
+            if _gn_abs(v) > scale:
+                scale = _gn_abs(v)
+            end
+        end
+    end
+    let det = 1.0
+    let col = 0
+    while col < n:
+        let pivot = col
+        let r = col + 1
+        while r < n:
+            if _gn_abs(m[r][col]) > _gn_abs(m[pivot][col]):
+                pivot = r
+            end
+            r = r + 1
+        end
+        if scale == 0 or _gn_abs(m[pivot][col]) <= scale * 1e-13:
+            return [none, 0.0]
+        end
+        if pivot != col:
+            let tmp = m[col]
+            m[col] = m[pivot]
+            m[pivot] = tmp
+            tmp = b[col]
+            b[col] = b[pivot]
+            b[pivot] = tmp
+            det = 0 - det
+        end
+        let prow = m[col]
+        let p = prow[col]
+        det = det * p
+        r = col + 1
+        while r < n:
+            let row = m[r]
+            let f = row[col] / p
+            if f != 0:
+                let j = col
+                while j < n:
+                    row[j] = row[j] - f * prow[j]
+                    j = j + 1
+                end
+                let brow = b[r]
+                let bp = b[col]
+                j = 0
+                while j < width:
+                    brow[j] = brow[j] - f * bp[j]
+                    j = j + 1
+                end
+            end
+            r = r + 1
+        end
+        col = col + 1
+    end
+    # Back substitution.
+    let x = []
+    let i = 0
+    while i < n:
+        x.push([])
+        i = i + 1
+    end
+    i = n - 1
+    while i >= 0:
+        let row = m[i]
+        let out = []
+        let j = 0
+        while j < width:
+            let s = b[i][j]
+            let k = i + 1
+            while k < n:
+                s = s - row[k] * x[k][j]
+                k = k + 1
+            end
+            out.push(s / row[i])
+            j = j + 1
+        end
+        x[i] = out
+        i = i - 1
+    end
+    return [x, det]
+end
+
+# Symmetric eigen-decomposition by cyclic Jacobi rotations.
+# Returns [values, vectors]: values ascending, vectors[i][k] is component i
+# of the unit eigenvector for values[k].
+func _gn_eigh(a0):
+    let n = len(a0)
+    let a = _gn_copy(a0)
+    let v = _gn_eye(n)
+    let sweep = 0
+    while sweep < 100:
+        let off = 0.0
+        let diag = 0.0
+        let i = 0
+        while i < n:
+            diag = diag + a[i][i] * a[i][i]
+            let j = i + 1
+            while j < n:
+                off = off + a[i][j] * a[i][j]
+                j = j + 1
+            end
+            i = i + 1
+        end
+        if off <= 1e-22 * (diag + off) or off == 0:
+            break
+        end
+        let p = 0
+        while p < n - 1:
+            let q = p + 1
+            while q < n:
+                let apq = a[p][q]
+                if apq != 0:
+                    let theta = (a[q][q] - a[p][p]) / (2.0 * apq)
+                    let t = 1.0 / (_gn_abs(theta) + math.sqrt(theta * theta + 1.0))
+                    if theta < 0:
+                        t = 0 - t
+                    end
+                    let c = 1.0 / math.sqrt(t * t + 1.0)
+                    let s = t * c
+                    let k = 0
+                    while k < n:
+                        let akp = a[k][p]
+                        let akq = a[k][q]
+                        a[k][p] = c * akp - s * akq
+                        a[k][q] = s * akp + c * akq
+                        k = k + 1
+                    end
+                    k = 0
+                    while k < n:
+                        let apk = a[p][k]
+                        let aqk = a[q][k]
+                        a[p][k] = c * apk - s * aqk
+                        a[q][k] = s * apk + c * aqk
+                        k = k + 1
+                    end
+                    k = 0
+                    while k < n:
+                        let vkp = v[k][p]
+                        let vkq = v[k][q]
+                        v[k][p] = c * vkp - s * vkq
+                        v[k][q] = s * vkp + c * vkq
+                        k = k + 1
+                    end
+                end
+                q = q + 1
+            end
+            p = p + 1
+        end
+        sweep = sweep + 1
+    end
+    let values = []
+    let i = 0
+    while i < n:
+        values.push(a[i][i])
+        i = i + 1
+    end
+    let order = _gn_argsort(values)
+    let sorted_values = []
+    for each k in order:
+        sorted_values.push(values[k])
+    end
+    let vectors = []
+    i = 0
+    while i < n:
+        let row = []
+        for each k in order:
+            row.push(v[i][k])
+        end
+        vectors.push(row)
+        i = i + 1
+    end
+    # Fix each vector's sign so results are the same on every run: the
+    # component with the largest size is made positive.
+    let k = 0
+    while k < n:
+        let big = 0
+        i = 1
+        while i < n:
+            if _gn_abs(vectors[i][k]) > _gn_abs(vectors[big][k]) + 1e-12:
+                big = i
+            end
+            i = i + 1
+        end
+        if vectors[big][k] < 0:
+            i = 0
+            while i < n:
+                vectors[i][k] = 0 - vectors[i][k]
+                i = i + 1
+            end
+        end
+        k = k + 1
+    end
+    return [sorted_values, vectors]
+end
+
+# ------------------------------------------------------------ random numbers
+
+# Repeatable random numbers: the same seed gives the same sequence on every
+# machine (a Lehmer generator, computed with exact integers).
+blueprint RandomState:
+    action init(seed = 0):
+        if not _gn_is_num(seed):
+            _gn_fail("RandomState needs a number as its seed")
+        end
+        let s = math.floor(seed) % 2147483647
+        if s <= 0:
+            s = s + 2147483646
+        end
+        self.state = s
+        self.spare = none
+        # The first few outputs of a small seed are small; skip them.
+        let i = 0
+        while i < 8:
+            self.state = self.state * 48271 % 2147483647
+            i = i + 1
+        end
+    end
+
+    # A float in [0, 1).
+    action random():
+        self.state = self.state * 48271 % 2147483647
+        return (self.state - 1) / 2147483646.0
+    end
+
+    action uniform(low = 0.0, high = 1.0):
+        return low + (high - low) * self.random()
+    end
+
+    # A whole number from low to high, both included.
+    action randint(low, high):
+        if high < low:
+            _gn_fail("randint: high (" + str(high) + ") is below low (" + str(low) + ")")
+        end
+        return low + math.floor(self.random() * (high - low + 1))
+    end
+
+    # Normal (Gaussian) numbers by the Box-Muller method.
+    action normal(mean = 0.0, sd = 1.0):
+        if self.spare != none:
+            let z = self.spare
+            self.spare = none
+            return mean + sd * z
+        end
+        let u = 1.0 - self.random()
+        let w = self.random()
+        let r = math.sqrt(-2.0 * math.log(u))
+        self.spare = r * math.sin(2.0 * math.pi * w)
+        return mean + sd * r * math.cos(2.0 * math.pi * w)
+    end
+
+    # shape: a length, or [rows, cols]. Uniform numbers in [0, 1).
+    action rand(shape):
+        if type(shape) == "list":
+            let out = []
+            let i = 0
+            while i < shape[0]:
+                out.push(self.rand(shape[1]))
+                i = i + 1
+            end
+            return out
+        end
+        let v = []
+        let i = 0
+        while i < shape:
+            v.push(self.random())
+            i = i + 1
+        end
+        return v
+    end
+
+    # shape: a length, or [rows, cols]. Standard normal numbers.
+    action randn(shape):
+        if type(shape) == "list":
+            let out = []
+            let i = 0
+            while i < shape[0]:
+                out.push(self.randn(shape[1]))
+                i = i + 1
+            end
+            return out
+        end
+        let v = []
+        let i = 0
+        while i < shape:
+            v.push(self.normal())
+            i = i + 1
+        end
+        return v
+    end
+
+    # The numbers 0..n-1 in a random order.
+    action permutation(n):
+        let p = range(n)
+        let i = n - 1
+        while i > 0:
+            let j = math.floor(self.random() * (i + 1))
+            let tmp = p[i]
+            p[i] = p[j]
+            p[j] = tmp
+            i = i - 1
+        end
+        return p
+    end
+
+    # A shuffled copy of a list.
+    action shuffled(items):
+        let out = []
+        for each i in self.permutation(len(items)):
+            out.push(items[i])
+        end
+        return out
+    end
+
+    action choice(items):
+        if len(items) == 0:
+            _gn_fail("choice from an empty list")
+        end
+        return items[math.floor(self.random() * len(items))]
+    end
+end
+
+# ------------------------------------------------------------ the gnum object
+
+blueprint GlowNum:
+    action init():
+        self.version = "1.0"
+    end
+
+    # ---- making arrays. shape: a length, or [rows, cols].
+    action full(shape, value):
+        if type(shape) == "list":
+            if len(shape) != 2:
+                _gn_fail("a shape is a length or [rows, cols]")
+            end
+            let out = []
+            let i = 0
+            while i < shape[0]:
+                out.push(self.full(shape[1], value))
+                i = i + 1
+            end
+            return out
+        end
+        if not _gn_is_num(shape) or shape < 0:
+            _gn_fail("a shape is a length or [rows, cols]")
+        end
+        let v = []
+        let i = 0
+        while i < shape:
+            v.push(value)
+            i = i + 1
+        end
+        return v
+    end
+
+    action zeros(shape):
+        return self.full(shape, 0.0)
+    end
+
+    action ones(shape):
+        return self.full(shape, 1.0)
+    end
+
+    action eye(n):
+        return _gn_eye(n)
+    end
+
+    # start, start+step, ... up to but not including finish.
+    action arange(start, finish = none, step = 1):
+        if finish == none:
+            finish = start
+            start = 0
+        end
+        if step == 0:
+            _gn_fail("arange: step cannot be 0")
+        end
+        let out = []
+        let x = start
+        let i = 0
+        if step > 0:
+            while x < finish:
+                out.push(x)
+                i = i + 1
+                x = start + i * step
+            end
+        else:
+            while x > finish:
+                out.push(x)
+                i = i + 1
+                x = start + i * step
+            end
+        end
+        return out
+    end
+
+    # count evenly spaced numbers from start to finish, both included.
+    action linspace(start, finish, count = 50):
+        if count < 1:
+            _gn_fail("linspace needs a count of at least 1")
+        end
+        if count == 1:
+            return [start]
+        end
+        let out = []
+        let i = 0
+        while i < count:
+            out.push(start + (finish - start) * i / (count - 1.0))
+            i = i + 1
+        end
+        out[count - 1] = finish
+        return out
+    end
+
+    action copy(x):
+        return _gn_copy(x)
+    end
+
+    # ---- shape
+    action shape(x):
+        let d = _gn_ndim(x)
+        if d == 0:
+            return []
+        end
+        if d == 1:
+            return [len(x)]
+        end
+        return [len(x), _gn_need_matrix(x, "shape")]
+    end
+
+    action ndim(x):
+        return _gn_ndim(x)
+    end
+
+    action size(x):
+        return len(_gn_flat(x))
+    end
+
+    action flatten(x):
+        return _gn_flat(x)
+    end
+
+    # Reads the numbers row by row into rows x cols.
+    action reshape(x, rows, cols):
+        let flat = _gn_flat(x)
+        if rows * cols != len(flat):
+            _gn_fail("reshape: " + str(len(flat)) + " numbers do not fit (" + str(rows) + ", " + str(cols) + ")")
+        end
+        let out = []
+        let i = 0
+        while i < rows:
+            out.push(flat[i * cols:(i + 1) * cols])
+            i = i + 1
+        end
+        return out
+    end
+
+    action transpose(m):
+        return _gn_transpose(m)
+    end
+
+    action row(m, i):
+        _gn_need_matrix(m, "row")
+        return m[i].copy()
+    end
+
+    action column(m, j):
+        let cols = _gn_need_matrix(m, "column")
+        if j < 0 or j >= cols:
+            _gn_fail("column " + str(j) + " is outside a matrix with " + str(cols) + " columns")
+        end
+        return _gn_column(m, j)
+    end
+
+    # Rows of matrices a then b (axis 0), or their columns side by side (axis 1).
+    action concat(a, b, axis = 0):
+        if _gn_ndim(a) == 1 and _gn_ndim(b) == 1:
+            return a + b
+        end
+        let ca = _gn_need_matrix(a, "concat")
+        let cb = _gn_need_matrix(b, "concat")
+        let out = []
+        if axis == 0:
+            if ca != cb:
+                _gn_fail("concat: matrices have " + str(ca) + " and " + str(cb) + " columns")
+            end
+            for each r in a:
+                out.push(r.copy())
+            end
+            for each r in b:
+                out.push(r.copy())
+            end
+            return out
+        end
+        if len(a) != len(b):
+            _gn_fail("concat: matrices have " + str(len(a)) + " and " + str(len(b)) + " rows")
+        end
+        let i = 0
+        while i < len(a):
+            out.push(a[i] + b[i])
+            i = i + 1
+        end
+        return out
+    end
+
+    # ---- arithmetic, element by element
+    action add(a, b):
+        return _gn_binary(0, a, b)
+    end
+
+    action sub(a, b):
+        return _gn_binary(1, a, b)
+    end
+
+    action mul(a, b):
+        return _gn_binary(2, a, b)
+    end
+
+    action div(a, b):
+        return _gn_binary(3, a, b)
+    end
+
+    action pow(a, b):
+        return _gn_binary(4, a, b)
+    end
+
+    action minimum(a, b):
+        return _gn_binary(5, a, b)
+    end
+
+    action maximum(a, b):
+        return _gn_binary(6, a, b)
+    end
+
+    action neg(x):
+        return _gn_unary(7, x)
+    end
+
+    action exp(x):
+        return _gn_unary(0, x)
+    end
+
+    action log(x):
+        return _gn_unary(1, x)
+    end
+
+    action sqrt(x):
+        return _gn_unary(2, x)
+    end
+
+    action abs(x):
+        return _gn_unary(3, x)
+    end
+
+    action sigmoid(x):
+        return _gn_unary(4, x)
+    end
+
+    action tanh(x):
+        return _gn_unary(5, x)
+    end
+
+    action relu(x):
+        return _gn_unary(6, x)
+    end
+
+    action square(x):
+        return _gn_unary(8, x)
+    end
+
+    action sign(x):
+        return _gn_unary(9, x)
+    end
+
+    action floor(x):
+        return _gn_unary(10, x)
+    end
+
+    action ceil(x):
+        return _gn_unary(11, x)
+    end
+
+    # Rounds to a number of decimal places (halves go away from zero).
+    action round(x, places = 0):
+        if places == 0:
+            return _gn_unary(12, x)
+        end
+        let f = math.pow(10, places)
+        return _gn_binary(3, _gn_unary(12, _gn_binary(2, x, f)), f)
+    end
+
+    action clip(x, low, high):
+        if low > high:
+            _gn_fail("clip: low (" + str(low) + ") is above high (" + str(high) + ")")
+        end
+        return _gn_binary(5, _gn_binary(6, x, low), high)
+    end
+
+    # Calls f on every number.
+    action apply(x, f):
+        let d = _gn_ndim(x)
+        if d == 0:
+            return f(x)
+        end
+        let out = []
+        if d == 1:
+            for each v in x:
+                out.push(f(v))
+            end
+            return out
+        end
+        for each r in x:
+            let o = []
+            for each v in r:
+                o.push(f(v))
+            end
+            out.push(o)
+        end
+        return out
+    end
+
+    # Each row turned into probabilities that add up to 1.
+    action softmax(x):
+        if _gn_ndim(x) == 2:
+            let out = []
+            for each r in x:
+                out.push(self.softmax(r))
+            end
+            return out
+        end
+        _gn_need_vector(x, "softmax")
+        if len(x) == 0:
+            return []
+        end
+        let top = _gn_vmax(x)
+        let e = []
+        let total = 0.0
+        for each v in x:
+            let t = math.exp(v - top)
+            e.push(t)
+            total = total + t
+        end
+        let out = []
+        for each t in e:
+            out.push(t / total)
+        end
+        return out
+    end
+
+    # ---- reductions. axis: none (everything), 0 (per column), 1 (per row).
+    action sum(x, axis = none):
+        return _gn_reduce(0, x, axis, 0)
+    end
+
+    action mean(x, axis = none):
+        return _gn_reduce(1, x, axis, 0)
+    end
+
+    action min(x, axis = none):
+        return _gn_reduce(2, x, axis, 0)
+    end
+
+    action max(x, axis = none):
+        return _gn_reduce(3, x, axis, 0)
+    end
+
+    action argmin(x, axis = none):
+        return _gn_reduce(4, x, axis, 0)
+    end
+
+    action argmax(x, axis = none):
+        return _gn_reduce(5, x, axis, 0)
+    end
+
+    action prod(x, axis = none):
+        return _gn_reduce(6, x, axis, 0)
+    end
+
+    # ddof 0 divides by n (NumPy's default); ddof 1 divides by n - 1.
+    action var(x, axis = none, ddof = 0):
+        return _gn_reduce(7, x, axis, ddof)
+    end
+
+    action std(x, axis = none, ddof = 0):
+        return _gn_reduce(8, x, axis, ddof)
+    end
+
+    action median(x, axis = none):
+        return _gn_reduce(9, x, axis, 0)
+    end
+
+    # q from 0 to 100.
+    action percentile(x, q):
+        return _gn_percentile_sorted(_gn_sorted(_gn_flat(x)), q)
+    end
+
+    action cumsum(v):
+        _gn_need_vector(v, "cumsum")
+        let out = []
+        let s = 0.0
+        for each x in v:
+            s = s + x
+            out.push(s)
+        end
+        return out
+    end
+
+    # Differences between neighbours: v[1]-v[0], v[2]-v[1], ...
+    action diff(v):
+        _gn_need_vector(v, "diff")
+        let out = []
+        let i = 1
+        while i < len(v):
+            out.push(v[i] - v[i - 1])
+            i = i + 1
+        end
+        return out
+    end
+
+    # ---- order
+    action sort(v):
+        _gn_need_vector(v, "sort")
+        return _gn_sorted(v)
+    end
+
+    # The positions that would sort v (equal values keep their order).
+    action argsort(v):
+        _gn_need_vector(v, "argsort")
+        return _gn_argsort(v)
+    end
+
+    # The different values, sorted.
+    action unique(x):
+        let s = _gn_sorted(_gn_flat(x))
+        let out = []
+        for each v in s:
+            if len(out) == 0 or out[len(out) - 1] != v:
+                out.push(v)
+            end
+        end
+        return out
+    end
+
+    # The items of v at the given positions.
+    action take(v, positions):
+        let out = []
+        for each i in positions:
+            if i < 0 or i >= len(v):
+                _gn_fail("take: position " + str(i) + " is outside a list of " + str(len(v)))
+            end
+            out.push(v[i])
+        end
+        return out
+    end
+
+    # ---- linear algebra
+    # vector.vector -> number, matrix.vector -> vector,
+    # vector.matrix -> vector, matrix.matrix -> matrix.
+    action dot(a, b):
+        let da = _gn_ndim(a)
+        let db = _gn_ndim(b)
+        if da == 1 and db == 1:
+            return _gn_vdot(a, b)
+        end
+        if da == 2 and db == 1:
+            let cols = _gn_need_matrix(a, "dot")
+            if cols != len(b):
+                _gn_fail("dot: shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not line up")
+            end
+            let out = []
+            for each r in a:
+                out.push(_gn_vdot(r, b))
+            end
+            return out
+        end
+        if da == 1 and db == 2:
+            let cols = _gn_need_matrix(b, "dot")
+            if len(b) != len(a):
+                _gn_fail("dot: shapes " + _gn_shape_text(a) + " and " + _gn_shape_text(b) + " do not line up")
+            end
+            let out = []
+            let j = 0
+            while j < cols:
+                out.push(_gn_vdot(a, _gn_column(b, j)))
+                j = j + 1
+            end
+            return out
+        end
+        if da == 2 and db == 2:
+            return _gn_matmul(a, b)
+        end
+        _gn_fail("dot needs vectors or matrices; use mul for numbers")
+    end
+
+    action matmul(a, b):
+        return _gn_matmul(a, b)
+    end
+
+    action outer(a, b):
+        _gn_need_vector(a, "outer")
+        _gn_need_vector(b, "outer")
+        let out = []
+        for each x in a:
+            out.push(_gn_vec_scalar(2, b, x, true))
+        end
+        return out
+    end
+
+    # Length of a vector, or the Frobenius norm of a matrix.
+    action norm(x):
+        let s = 0.0
+        for each v in _gn_flat(x):
+            s = s + v * v
+        end
+        return math.sqrt(s)
+    end
+
+    action trace(m):
+        let n = _gn_need_square(m, "trace")
+        let s = 0.0
+        let i = 0
+        while i < n:
+            s = s + m[i][i]
+            i = i + 1
+        end
+        return s
+    end
+
+    action det(m):
+        let n = _gn_need_square(m, "det")
+        return _gn_eliminate(m, self.full([n, 0], 0))[1]
+    end
+
+    action inv(m):
+        let n = _gn_need_square(m, "inv")
+        let r = _gn_eliminate(m, _gn_eye(n))
+        if r[0] == none:
+            _gn_fail("inv: the matrix is singular (it has no inverse)")
+        end
+        return r[0]
+    end
+
+    # Solves a x = b. b is a vector (x is a vector) or a matrix of columns.
+    action solve(a, b):
+        let n = _gn_need_square(a, "solve")
+        let is_vec = _gn_ndim(b) == 1
+        let rhs = b
+        if is_vec:
+            rhs = []
+            for each v in b:
+                rhs.push([v])
+            end
+        else:
+            _gn_need_matrix(b, "solve")
+        end
+        if len(rhs) != n:
+            _gn_fail("solve: a is " + _gn_shape_text(a) + " but b has " + str(len(rhs)) + " row(s)")
+        end
+        let r = _gn_eliminate(a, rhs)
+        if r[0] == none:
+            _gn_fail("solve: the matrix is singular (no single solution)")
+        end
+        if is_vec:
+            return _gn_column(r[0], 0)
+        end
+        return r[0]
+    end
+
+    # The x that makes a x as close to b as possible (least squares).
+    # ridge > 0 adds ridge * |x|^2 to what is minimised. When the columns of
+    # a are not independent, the smallest stabilising ridge is used.
+    action lstsq(a, b, ridge = 0.0):
+        let cols = _gn_need_matrix(a, "lstsq")
+        let is_vec = _gn_ndim(b) == 1
+        let rhs = b
+        if is_vec:
+            rhs = []
+            for each v in b:
+                rhs.push([v])
+            end
+        else:
+            _gn_need_matrix(b, "lstsq")
+        end
+        if len(rhs) != len(a):
+            _gn_fail("lstsq: a has " + str(len(a)) + " rows but b has " + str(len(rhs)))
+        end
+        let at = _gn_transpose(a)
+        let ata = _gn_matmul(at, a)
+        let atb = _gn_matmul(at, rhs)
+        let i = 0
+        if ridge > 0:
+            while i < cols:
+                ata[i][i] = ata[i][i] + ridge
+                i = i + 1
+            end
+        end
+        let r = _gn_eliminate(ata, atb)
+        if r[0] == none:
+            let bump = 0.0
+            i = 0
+            while i < cols:
+                bump = bump + _gn_abs(ata[i][i])
+                i = i + 1
+            end
+            bump = bump / cols * 1e-10
+            if bump == 0:
+                bump = 1e-10
+            end
+            i = 0
+            while i < cols:
+                ata[i][i] = ata[i][i] + bump
+                i = i + 1
+            end
+            r = _gn_eliminate(ata, atb)
+            if r[0] == none:
+                _gn_fail("lstsq: could not solve the system")
+            end
+        end
+        if is_vec:
+            return _gn_column(r[0], 0)
+        end
+        return r[0]
+    end
+
+    # For a symmetric matrix: [values, vectors]. values go from smallest to
+    # largest; column k of vectors is the unit eigenvector of values[k].
+    action eigh(m):
+        let n = _gn_need_square(m, "eigh")
+        let i = 0
+        while i < n:
+            let j = i + 1
+            while j < n:
+                let tol = 1e-9 * (1.0 + _gn_abs(m[i][j]) + _gn_abs(m[j][i]))
+                if _gn_abs(m[i][j] - m[j][i]) > tol:
+                    _gn_fail("eigh needs a symmetric matrix")
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        return _gn_eigh(m)
+    end
+
+    # The lower-triangular L with L L^T = m, for a positive definite m.
+    action cholesky(m):
+        let n = _gn_need_square(m, "cholesky")
+        let l = self.zeros([n, n])
+        let i = 0
+        while i < n:
+            let j = 0
+            while j <= i:
+                let s = m[i][j]
+                let k = 0
+                while k < j:
+                    s = s - l[i][k] * l[j][k]
+                    k = k + 1
+                end
+                if i == j:
+                    if s <= 0:
+                        _gn_fail("cholesky: the matrix is not positive definite")
+                    end
+                    l[i][j] = math.sqrt(s)
+                else:
+                    l[i][j] = s / l[j][j]
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        return l
+    end
+
+    # ---- statistics
+    # Covariance between the columns of x (each row is one observation).
+    action cov(x, ddof = 1):
+        let cols = _gn_need_matrix(x, "cov")
+        let n = len(x)
+        if n - ddof <= 0:
+            _gn_fail("cov needs more than " + str(ddof) + " row(s), got " + str(n))
+        end
+        let means = _gn_reduce(1, x, 0, 0)
+        let centered = _gn_binary(1, x, means)
+        let c = _gn_matmul(_gn_transpose(centered), centered)
+        return _gn_binary(3, c, n - ddof)
+    end
+
+    # Pearson correlation of two vectors, from -1 to 1.
+    action corrcoef(a, b):
+        _gn_need_vector(a, "corrcoef")
+        _gn_need_vector(b, "corrcoef")
+        if len(a) != len(b):
+            _gn_fail("corrcoef: lengths " + str(len(a)) + " and " + str(len(b)) + " do not match")
+        end
+        if len(a) < 2:
+            _gn_fail("corrcoef needs at least 2 values")
+        end
+        let ma = _gn_vmean(a)
+        let mb = _gn_vmean(b)
+        let sab = 0.0
+        let saa = 0.0
+        let sbb = 0.0
+        let i = 0
+        while i < len(a):
+            let da = a[i] - ma
+            let db = b[i] - mb
+            sab = sab + da * db
+            saa = saa + da * da
+            sbb = sbb + db * db
+            i = i + 1
+        end
+        if saa == 0 or sbb == 0:
+            _gn_fail("corrcoef: one of the lists never changes, so correlation is undefined")
+        end
+        return sab / math.sqrt(saa * sbb)
+    end
+
+    # ---- comparing
+    # true when every pair of numbers differs by at most tol.
+    action allclose(a, b, tol = 1e-8):
+        let fa = _gn_flat(a)
+        let fb = _gn_flat(b)
+        if len(fa) != len(fb) or _gn_ndim(a) != _gn_ndim(b):
+            return false
+        end
+        if _gn_ndim(a) == 2 and len(a) != len(b):
+            return false
+        end
+        let i = 0
+        while i < len(fa):
+            if _gn_abs(fa[i] - fb[i]) > tol:
+                return false
+            end
+            i = i + 1
+        end
+        return true
+    end
+
+    action rng(seed = 0):
+        return RandomState(seed)
+    end
+end
+
+gnum = GlowNum()

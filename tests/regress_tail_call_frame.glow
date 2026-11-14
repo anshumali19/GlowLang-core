@@ -1,0 +1,73 @@
+# A tail call into a function with more registers than its caller: compiled
+# code called from there put its frames inside the callee's frame and
+# overwrote live values (here the receiver of math.sqrt).
+func vsum(v):
+    let s = 0.0
+    for each x in v:
+        s = s + x
+    end
+    return s
+end
+
+func vvar(v, ddof):
+    let n = len(v)
+    let m = vsum(v) / n
+    let s = 0.0
+    for each x in v:
+        s = s + (x - m) * (x - m)
+    end
+    return s / (n - ddof)
+end
+
+func vmax(v):
+    return v[0]
+end
+
+func vprod(v):
+    return v[0]
+end
+
+func reduce_vec(which, v, extra):
+    if which == 0:
+        return vsum(v)
+    end
+    if which == 1:
+        let a = vmax(v)
+        let b = vprod(v)
+        let c = vmax(v) + vprod(v) + a + b
+        return c
+    end
+    if which == 7:
+        return vvar(v, extra)
+    end
+    if which == 8:
+        return math.sqrt(vvar(v, extra))
+    end
+    return none
+end
+
+func reduce(which, x, axis, extra):
+    if axis == none:
+        return reduce_vec(which, x.copy(), extra)
+    end
+    return none
+end
+
+blueprint Stats:
+    action init():
+        self.calls = 0
+    end
+    action std(x, axis = none, ddof = 0):
+        return reduce(8, x, axis, ddof)
+    end
+end
+
+let st = Stats()
+let v = [1, 3, 5, 7]
+let i = 0
+let total = 0
+while i < 50:
+    total = total + st.std(v)
+    i = i + 1
+end
+show round(total * 1000)

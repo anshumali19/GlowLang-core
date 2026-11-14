@@ -577,6 +577,10 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
                 int curr_offset = (int)(args - vm_stack);
                 if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
                 FuncEntry *cached_fe = (FuncEntry*)pc->cache[0].val;
+                /* Parameters the caller left out are none, as in the
+                   interpreter (they used to keep whatever the registers
+                   held, so a default parameter saw garbage). */
+                for (int k = 1 + argc; k < cached_fe->body->preserved_locals; k++) args[k] = value_none();
                 typedef Value (*JITFunc)(Value *R, int *pc_idx);
                 /* A method cached at its baseline tier keeps counting
                    towards the optimizing tier, and switches to it once it
@@ -640,6 +644,7 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
         if (self_slot < 0) self_slot = global_get_slot("self");
         Value old_self = (self_slot >= 0 && self_slot < global_table.count) ? global_table.values[self_slot] : value_none();
         if (self_slot >= 0 && self_slot < global_table.count) global_table.values[self_slot] = obj;
+        for (int k = 1 + argc; k < fe->body->preserved_locals; k++) args[k] = value_none();
         TypeSignature sig = compute_signature(args, fe->param_count);
         void *jit = func_get_specialization(fe, sig);
         if (!(jit && jit != (void*)1)) {

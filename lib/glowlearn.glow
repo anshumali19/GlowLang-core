@@ -1,0 +1,1730 @@
+# glowlearn.glow
+# Classic machine learning for GlowLang, written in GlowLang.
+#
+#     use "glowlearn"
+#     let parts = train_test_split(X, y, 0.25, 42)      # [X_train, X_test, y_train, y_test]
+#     let model = RandomForestClassifier(30).fit(parts[0], parts[2])
+#     show accuracy_score(parts[3], model.predict(parts[1]))
+#
+# X is always a matrix: a list of rows, one row of numbers per sample.
+# y is a list with one entry per sample: numbers for regression, numbers or
+# strings (class labels) for classification.
+#
+# Every model has fit(X, y) (which returns the model, so calls can be
+# chained), predict(X) and score(X, y). Anything random takes a seed and
+# gives the same result for the same seed on every machine.
+#
+# Mistakes raise an error that starts with "glowlearn:".
+
+use "glownum"
+
+# ---------------------------------------------------------------- helpers
+
+func _gl_fail(msg):
+    throw "glowlearn: " + msg
+end
+
+# Checks X is a non-empty matrix of numbers; returns its number of columns.
+func _gl_check_X(X, what):
+    if type(X) != "list" or len(X) == 0:
+        _gl_fail(what + ": X must be a non-empty list of rows")
+    end
+    if type(X[0]) != "list":
+        _gl_fail(what + ": X must be a list of rows (for one feature, write [[1], [2], [3]])")
+    end
+    let cols = len(X[0])
+    if cols == 0:
+        _gl_fail(what + ": the rows of X are empty")
+    end
+    for each row in X:
+        if type(row) != "list" or len(row) != cols:
+            _gl_fail(what + ": every row of X must have the same length")
+        end
+        for each v in row:
+            let t = type(v)
+            if t != "int" and t != "float":
+                _gl_fail(what + ": X must hold only numbers, found " + str(v))
+            end
+        end
+    end
+    return cols
+end
+
+func _gl_check_Xy(X, y, what):
+    let cols = _gl_check_X(X, what)
+    if type(y) != "list":
+        _gl_fail(what + ": y must be a list with one entry per row of X")
+    end
+    if len(y) != len(X):
+        _gl_fail(what + ": X has " + str(len(X)) + " rows but y has " + str(len(y)) + " entries")
+    end
+    return cols
+end
+
+func _gl_check_numbers(y, what):
+    for each v in y:
+        let t = type(v)
+        if t != "int" and t != "float":
+            _gl_fail(what + ": expected numbers, found " + str(v))
+        end
+    end
+end
+
+func _gl_need_fitted(model, what):
+    if not model.fitted:
+        _gl_fail(what + ": call fit first")
+    end
+end
+
+func _gl_check_width(X, want, what):
+    let cols = _gl_check_X(X, what)
+    if cols != want:
+        _gl_fail(what + ": the model was fitted with " + str(want) + " feature(s) but X has " + str(cols))
+    end
+end
+
+# The different labels of y. Numbers (or strings) come back sorted; a mix
+# keeps the order of first appearance.
+func _gl_classes(y):
+    let found = []
+    let all_num = true
+    let all_str = true
+    for each v in y:
+        if not found.contains(v):
+            found.push(v)
+        end
+        let t = type(v)
+        if t != "int" and t != "float":
+            all_num = false
+        end
+        if t != "string":
+            all_str = false
+        end
+    end
+    if all_num or all_str:
+        return _gn_sorted(found)
+    end
+    return found
+end
+
+func _gl_index_of(classes, label, what):
+    let i = 0
+    while i < len(classes):
+        if classes[i] == label:
+            return i
+        end
+        i = i + 1
+    end
+    _gl_fail(what + ": unknown label " + str(label))
+end
+
+func _gl_take(items, positions):
+    let out = []
+    for each i in positions:
+        out.push(items[i])
+    end
+    return out
+end
+
+func _gl_sqdist(a, b):
+    let s = 0.0
+    let i = 0
+    let n = len(a)
+    while i < n:
+        let d = a[i] - b[i]
+        s = s + d * d
+        i = i + 1
+    end
+    return s
+end
+
+func _gl_argmax(v):
+    let best = 0
+    let i = 1
+    while i < len(v):
+        if v[i] > v[best]:
+            best = i
+        end
+        i = i + 1
+    end
+    return best
+end
+
+func _gl_accuracy(y_true, y_pred):
+    let hit = 0
+    let i = 0
+    while i < len(y_true):
+        if y_true[i] == y_pred[i]:
+            hit = hit + 1
+        end
+        i = i + 1
+    end
+    return hit / (len(y_true) * 1.0)
+end
+
+func _gl_r2(y_true, y_pred):
+    let mean = _gn_vmean(y_true)
+    let ss_res = 0.0
+    let ss_tot = 0.0
+    let i = 0
+    while i < len(y_true):
+        ss_res = ss_res + (y_true[i] - y_pred[i]) * (y_true[i] - y_pred[i])
+        ss_tot = ss_tot + (y_true[i] - mean) * (y_true[i] - mean)
+        i = i + 1
+    end
+    if ss_tot == 0:
+        if ss_res == 0:
+            return 1.0
+        end
+        return 0.0
+    end
+    return 1.0 - ss_res / ss_tot
+end
+
+# ---------------------------------------------------------------- metrics
+
+func _gl_check_pair(y_true, y_pred, what):
+    if type(y_true) != "list" or type(y_pred) != "list":
+        _gl_fail(what + " needs two lists")
+    end
+    if len(y_true) != len(y_pred):
+        _gl_fail(what + ": the lists have " + str(len(y_true)) + " and " + str(len(y_pred)) + " entries")
+    end
+    if len(y_true) == 0:
+        _gl_fail(what + ": the lists are empty")
+    end
+end
+
+# The share of predictions that are right, from 0 to 1.
+func accuracy_score(y_true, y_pred):
+    _gl_check_pair(y_true, y_pred, "accuracy_score")
+    return _gl_accuracy(y_true, y_pred)
+end
+
+# counts[i][j]: how often label i was predicted as label j.
+# labels defaults to every label seen, sorted.
+func confusion_matrix(y_true, y_pred, labels = none):
+    _gl_check_pair(y_true, y_pred, "confusion_matrix")
+    if labels == none:
+        labels = _gl_classes(y_true + y_pred)
+    end
+    let n = len(labels)
+    let out = gnum.full([n, n], 0)
+    let i = 0
+    while i < len(y_true):
+        let a = _gl_index_of(labels, y_true[i], "confusion_matrix")
+        let b = _gl_index_of(labels, y_pred[i], "confusion_matrix")
+        out[a][b] = out[a][b] + 1
+        i = i + 1
+    end
+    return out
+end
+
+# which: 0 precision, 1 recall, 2 f1. With positive = none the result is
+# the plain average over every label (the "macro" average).
+func _gl_prf(y_true, y_pred, positive, which, what):
+    _gl_check_pair(y_true, y_pred, what)
+    let labels = _gl_classes(y_true + y_pred)
+    let wanted = labels
+    if positive != none:
+        if not labels.contains(positive):
+            _gl_fail(what + ": the label " + str(positive) + " does not appear")
+        end
+        wanted = [positive]
+    end
+    let total = 0.0
+    for each label in wanted:
+        let tp = 0
+        let fp = 0
+        let fn = 0
+        let i = 0
+        while i < len(y_true):
+            let t = y_true[i] == label
+            let p = y_pred[i] == label
+            if t and p:
+                tp = tp + 1
+            eif p:
+                fp = fp + 1
+            eif t:
+                fn = fn + 1
+            end
+            i = i + 1
+        end
+        let precision = 0.0
+        if tp + fp > 0:
+            precision = tp / ((tp + fp) * 1.0)
+        end
+        let recall = 0.0
+        if tp + fn > 0:
+            recall = tp / ((tp + fn) * 1.0)
+        end
+        if which == 0:
+            total = total + precision
+        eif which == 1:
+            total = total + recall
+        eif precision + recall > 0:
+            total = total + 2.0 * precision * recall / (precision + recall)
+        end
+    end
+    return total / len(wanted)
+end
+
+# Of everything predicted as the label, the share that really was it.
+func precision_score(y_true, y_pred, positive = none):
+    return _gl_prf(y_true, y_pred, positive, 0, "precision_score")
+end
+
+# Of everything that really was the label, the share that was found.
+func recall_score(y_true, y_pred, positive = none):
+    return _gl_prf(y_true, y_pred, positive, 1, "recall_score")
+end
+
+func f1_score(y_true, y_pred, positive = none):
+    return _gl_prf(y_true, y_pred, positive, 2, "f1_score")
+end
+
+func mean_squared_error(y_true, y_pred):
+    _gl_check_pair(y_true, y_pred, "mean_squared_error")
+    let s = 0.0
+    let i = 0
+    while i < len(y_true):
+        s = s + (y_true[i] - y_pred[i]) * (y_true[i] - y_pred[i])
+        i = i + 1
+    end
+    return s / len(y_true)
+end
+
+func root_mean_squared_error(y_true, y_pred):
+    return math.sqrt(mean_squared_error(y_true, y_pred))
+end
+
+func mean_absolute_error(y_true, y_pred):
+    _gl_check_pair(y_true, y_pred, "mean_absolute_error")
+    let s = 0.0
+    let i = 0
+    while i < len(y_true):
+        s = s + _gn_abs(y_true[i] - y_pred[i])
+        i = i + 1
+    end
+    return s / len(y_true)
+end
+
+# 1 is a perfect fit; 0 is no better than always predicting the mean.
+func r2_score(y_true, y_pred):
+    _gl_check_pair(y_true, y_pred, "r2_score")
+    return _gl_r2(y_true, y_pred)
+end
+
+# ------------------------------------------------------- splitting the data
+
+# Returns [X_train, X_test, y_train, y_test]. test_size is the share of
+# rows (0 to 1) that go to the test set.
+func train_test_split(X, y, test_size = 0.25, seed = 0, shuffle = true):
+    if type(X) != "list" or type(y) != "list" or len(X) != len(y):
+        _gl_fail("train_test_split: X and y must be lists of the same length")
+    end
+    let n = len(X)
+    if n < 2:
+        _gl_fail("train_test_split needs at least 2 rows, got " + str(n))
+    end
+    if test_size <= 0 or test_size >= 1:
+        _gl_fail("train_test_split: test_size must be between 0 and 1, got " + str(test_size))
+    end
+    let n_test = math.ceil(n * test_size - 1e-9)
+    if n_test < 1:
+        n_test = 1
+    end
+    if n_test > n - 1:
+        n_test = n - 1
+    end
+    let order = range(n)
+    if shuffle:
+        order = RandomState(seed).permutation(n)
+    end
+    let test_idx = order[:n_test]
+    let train_idx = order[n_test:]
+    return [_gl_take(X, train_idx), _gl_take(X, test_idx), _gl_take(y, train_idx), _gl_take(y, test_idx)]
+end
+
+# Splits row numbers into n_splits folds; each fold is the test set once.
+blueprint KFold:
+    action init(n_splits = 5, shuffle = false, seed = 0):
+        if n_splits < 2:
+            _gl_fail("KFold needs at least 2 splits")
+        end
+        self.n_splits = n_splits
+        self.shuffle = shuffle
+        self.seed = seed
+    end
+
+    # A list of [train_positions, test_positions], one per fold.
+    action split(n):
+        if type(n) == "list":
+            n = len(n)
+        end
+        if n < self.n_splits:
+            _gl_fail("KFold: " + str(self.n_splits) + " splits need at least that many rows, got " + str(n))
+        end
+        let order = range(n)
+        if self.shuffle:
+            order = RandomState(self.seed).permutation(n)
+        end
+        let base = math.floor(n / self.n_splits)
+        let extra = n % self.n_splits
+        let folds = []
+        let start = 0
+        let f = 0
+        while f < self.n_splits:
+            let size = base
+            if f < extra:
+                size = size + 1
+            end
+            let test_idx = order[start:start + size]
+            let train_idx = order[:start] + order[start + size:]
+            folds.push([train_idx, test_idx])
+            start = start + size
+            f = f + 1
+        end
+        return folds
+    end
+end
+
+# make_model is a function that returns a new, unfitted model. Returns the
+# model's score on each of cv folds.
+func cross_val_score(make_model, X, y, cv = 5, seed = 0):
+    _gl_check_Xy(X, y, "cross_val_score")
+    let scores = []
+    for each fold in KFold(cv, true, seed).split(len(X)):
+        let model = make_model()
+        model.fit(_gl_take(X, fold[0]), _gl_take(y, fold[0]))
+        scores.push(model.score(_gl_take(X, fold[1]), _gl_take(y, fold[1])))
+    end
+    return scores
+end
+
+# ------------------------------------------------------------ preprocessing
+
+# Rescales every column to mean 0 and standard deviation 1.
+blueprint StandardScaler:
+    action init():
+        self.fitted = false
+        self.mean = []
+        self.scale = []
+    end
+
+    action fit(X):
+        _gl_check_X(X, "StandardScaler.fit")
+        self.mean = gnum.mean(X, 0)
+        self.scale = []
+        for each s in gnum.std(X, 0):
+            if s == 0:
+                # A column that never changes is left where it is.
+                self.scale.push(1.0)
+            else:
+                self.scale.push(s)
+            end
+        end
+        self.fitted = true
+        return self
+    end
+
+    action transform(X):
+        _gl_need_fitted(self, "StandardScaler.transform")
+        _gl_check_width(X, len(self.mean), "StandardScaler.transform")
+        return gnum.div(gnum.sub(X, self.mean), self.scale)
+    end
+
+    action fit_transform(X):
+        return self.fit(X).transform(X)
+    end
+
+    action inverse_transform(X):
+        _gl_need_fitted(self, "StandardScaler.inverse_transform")
+        _gl_check_width(X, len(self.mean), "StandardScaler.inverse_transform")
+        return gnum.add(gnum.mul(X, self.scale), self.mean)
+    end
+end
+
+# Rescales every column to run from low to high (0 to 1 by default).
+blueprint MinMaxScaler:
+    action init(low = 0.0, high = 1.0):
+        if high <= low:
+            _gl_fail("MinMaxScaler: high must be above low")
+        end
+        self.low = low
+        self.high = high
+        self.fitted = false
+        self.data_min = []
+        self.data_range = []
+    end
+
+    action fit(X):
+        _gl_check_X(X, "MinMaxScaler.fit")
+        self.data_min = gnum.min(X, 0)
+        self.data_range = []
+        let tops = gnum.max(X, 0)
+        let j = 0
+        while j < len(tops):
+            let r = tops[j] - self.data_min[j]
+            if r == 0:
+                r = 1.0
+            end
+            self.data_range.push(r)
+            j = j + 1
+        end
+        self.fitted = true
+        return self
+    end
+
+    action transform(X):
+        _gl_need_fitted(self, "MinMaxScaler.transform")
+        _gl_check_width(X, len(self.data_min), "MinMaxScaler.transform")
+        let unit = gnum.div(gnum.sub(X, self.data_min), self.data_range)
+        return gnum.add(gnum.mul(unit, self.high - self.low), self.low)
+    end
+
+    action fit_transform(X):
+        return self.fit(X).transform(X)
+    end
+
+    action inverse_transform(X):
+        _gl_need_fitted(self, "MinMaxScaler.inverse_transform")
+        _gl_check_width(X, len(self.data_min), "MinMaxScaler.inverse_transform")
+        let unit = gnum.div(gnum.sub(X, self.low), self.high - self.low)
+        return gnum.add(gnum.mul(unit, self.data_range), self.data_min)
+    end
+end
+
+# Turns labels into the numbers 0, 1, 2, ... and back.
+blueprint LabelEncoder:
+    action init():
+        self.fitted = false
+        self.classes = []
+    end
+
+    action fit(y):
+        if type(y) != "list" or len(y) == 0:
+            _gl_fail("LabelEncoder.fit needs a non-empty list of labels")
+        end
+        self.classes = _gl_classes(y)
+        self.fitted = true
+        return self
+    end
+
+    action transform(y):
+        _gl_need_fitted(self, "LabelEncoder.transform")
+        let out = []
+        for each v in y:
+            out.push(_gl_index_of(self.classes, v, "LabelEncoder.transform"))
+        end
+        return out
+    end
+
+    action fit_transform(y):
+        return self.fit(y).transform(y)
+    end
+
+    action inverse_transform(codes):
+        _gl_need_fitted(self, "LabelEncoder.inverse_transform")
+        let out = []
+        for each c in codes:
+            if c < 0 or c >= len(self.classes) or c != math.floor(c):
+                _gl_fail("LabelEncoder.inverse_transform: " + str(c) + " is not a known code")
+            end
+            out.push(self.classes[c])
+        end
+        return out
+    end
+end
+
+# Turns a list of labels into rows of 0s with a single 1.
+blueprint OneHotEncoder:
+    action init():
+        self.fitted = false
+        self.categories = []
+    end
+
+    action fit(values):
+        if type(values) != "list" or len(values) == 0:
+            _gl_fail("OneHotEncoder.fit needs a non-empty list of labels")
+        end
+        self.categories = _gl_classes(values)
+        self.fitted = true
+        return self
+    end
+
+    action transform(values):
+        _gl_need_fitted(self, "OneHotEncoder.transform")
+        let out = []
+        for each v in values:
+            let row = gnum.full(len(self.categories), 0)
+            row[_gl_index_of(self.categories, v, "OneHotEncoder.transform")] = 1
+            out.push(row)
+        end
+        return out
+    end
+
+    action fit_transform(values):
+        return self.fit(values).transform(values)
+    end
+
+    action inverse_transform(rows):
+        _gl_need_fitted(self, "OneHotEncoder.inverse_transform")
+        let out = []
+        for each row in rows:
+            if len(row) != len(self.categories):
+                _gl_fail("OneHotEncoder.inverse_transform: rows must have " + str(len(self.categories)) + " entries")
+            end
+            out.push(self.categories[_gl_argmax(row)])
+        end
+        return out
+    end
+end
+
+# ------------------------------------------------------------ linear models
+
+func _gl_linear_fit(model, X, y, ridge, what):
+    let cols = _gl_check_Xy(X, y, what)
+    _gl_check_numbers(y, what)
+    let x_mean = gnum.mean(X, 0)
+    let y_mean = _gn_vmean(y)
+    let xc = gnum.sub(X, x_mean)
+    let yc = gnum.sub(y, y_mean)
+    model.coef = gnum.lstsq(xc, yc, ridge)
+    model.intercept = y_mean - _gn_vdot(model.coef, x_mean)
+    model.n_features = cols
+    model.fitted = true
+    return model
+end
+
+func _gl_linear_predict(model, X, what):
+    _gl_need_fitted(model, what)
+    _gl_check_width(X, model.n_features, what)
+    let out = []
+    for each row in X:
+        out.push(_gn_vdot(model.coef, row) + model.intercept)
+    end
+    return out
+end
+
+# Ordinary least squares: y = coef . x + intercept.
+blueprint LinearRegression:
+    action init():
+        self.fitted = false
+        self.coef = []
+        self.intercept = 0.0
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        return _gl_linear_fit(self, X, y, 0.0, "LinearRegression.fit")
+    end
+
+    action predict(X):
+        return _gl_linear_predict(self, X, "LinearRegression.predict")
+    end
+
+    # R squared on the given data.
+    action score(X, y):
+        return r2_score(y, self.predict(X))
+    end
+end
+
+# Least squares with a penalty of alpha * |coef|^2, which keeps the
+# coefficients small when features overlap.
+blueprint Ridge:
+    action init(alpha = 1.0):
+        if alpha < 0:
+            _gl_fail("Ridge: alpha cannot be negative")
+        end
+        self.alpha = alpha
+        self.fitted = false
+        self.coef = []
+        self.intercept = 0.0
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        return _gl_linear_fit(self, X, y, self.alpha, "Ridge.fit")
+    end
+
+    action predict(X):
+        return _gl_linear_predict(self, X, "Ridge.predict")
+    end
+
+    action score(X, y):
+        return r2_score(y, self.predict(X))
+    end
+end
+
+# Classification by a linear model and softmax; works for two or more
+# classes. Trained by gradient descent on standardized features; coef and
+# intercept are reported in the units of the original features.
+blueprint LogisticRegression:
+    action init(lr = 0.5, epochs = 500, l2 = 0.0):
+        if lr <= 0:
+            _gl_fail("LogisticRegression: lr must be positive")
+        end
+        if epochs < 1:
+            _gl_fail("LogisticRegression: epochs must be at least 1")
+        end
+        if l2 < 0:
+            _gl_fail("LogisticRegression: l2 cannot be negative")
+        end
+        self.lr = lr
+        self.epochs = epochs
+        self.l2 = l2
+        self.fitted = false
+        self.classes = []
+        self.coef = []
+        self.intercept = []
+        self.n_features = 0
+        self.n_iter = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "LogisticRegression.fit")
+        self.classes = _gl_classes(y)
+        let n_classes = len(self.classes)
+        if n_classes < 2:
+            _gl_fail("LogisticRegression.fit needs at least 2 different labels in y")
+        end
+        let scaler = StandardScaler().fit(X)
+        let xs = scaler.transform(X)
+        let n = len(xs)
+        let targets = []
+        for each label in y:
+            targets.push(_gl_index_of(self.classes, label, "LogisticRegression.fit"))
+        end
+        let w = gnum.zeros([n_classes, cols])
+        let b = gnum.zeros(n_classes)
+        let epoch = 0
+        while epoch < self.epochs:
+            let gw = gnum.zeros([n_classes, cols])
+            let gb = gnum.zeros(n_classes)
+            let i = 0
+            while i < n:
+                let row = xs[i]
+                let logits = []
+                let c = 0
+                while c < n_classes:
+                    logits.push(_gn_vdot(w[c], row) + b[c])
+                    c = c + 1
+                end
+                let probs = gnum.softmax(logits)
+                c = 0
+                while c < n_classes:
+                    let err = probs[c]
+                    if c == targets[i]:
+                        err = err - 1.0
+                    end
+                    if err != 0:
+                        let g = gw[c]
+                        let j = 0
+                        while j < cols:
+                            g[j] = g[j] + err * row[j]
+                            j = j + 1
+                        end
+                        gb[c] = gb[c] + err
+                    end
+                    c = c + 1
+                end
+                i = i + 1
+            end
+            let biggest = 0.0
+            let c = 0
+            while c < n_classes:
+                let j = 0
+                while j < cols:
+                    let g = gw[c][j] / n + self.l2 * w[c][j]
+                    w[c][j] = w[c][j] - self.lr * g
+                    if _gn_abs(g) > biggest:
+                        biggest = _gn_abs(g)
+                    end
+                    j = j + 1
+                end
+                let g = gb[c] / n
+                b[c] = b[c] - self.lr * g
+                if _gn_abs(g) > biggest:
+                    biggest = _gn_abs(g)
+                end
+                c = c + 1
+            end
+            epoch = epoch + 1
+            if biggest < 1e-7:
+                break
+            end
+        end
+        self.n_iter = epoch
+        # Back to the units of the original features.
+        self.coef = []
+        self.intercept = []
+        let c = 0
+        while c < n_classes:
+            let row = []
+            let shift = b[c]
+            let j = 0
+            while j < cols:
+                let v = w[c][j] / scaler.scale[j]
+                row.push(v)
+                shift = shift - v * scaler.mean[j]
+                j = j + 1
+            end
+            self.coef.push(row)
+            self.intercept.push(shift)
+            c = c + 1
+        end
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    # One row per sample: the probability of each class, in the order of
+    # self.classes.
+    action predict_proba(X):
+        _gl_need_fitted(self, "LogisticRegression.predict_proba")
+        _gl_check_width(X, self.n_features, "LogisticRegression.predict_proba")
+        let out = []
+        for each row in X:
+            let logits = []
+            let c = 0
+            while c < len(self.classes):
+                logits.push(_gn_vdot(self.coef[c], row) + self.intercept[c])
+                c = c + 1
+            end
+            out.push(gnum.softmax(logits))
+        end
+        return out
+    end
+
+    action predict(X):
+        let out = []
+        for each probs in self.predict_proba(X):
+            out.push(self.classes[_gl_argmax(probs)])
+        end
+        return out
+    end
+
+    # Accuracy on the given data.
+    action score(X, y):
+        return accuracy_score(y, self.predict(X))
+    end
+end
+
+# -------------------------------------------------------- nearest neighbours
+
+# The positions of the k rows of train closest to row (nearest first).
+func _gl_nearest(train, row, k):
+    let dists = []
+    for each t in train:
+        dists.push(_gl_sqdist(t, row))
+    end
+    return _gn_argsort(dists)[:k]
+end
+
+func _gl_knn_fit(model, X, y, what):
+    let cols = _gl_check_Xy(X, y, what)
+    if model.k > len(X):
+        _gl_fail(what + ": k is " + str(model.k) + " but there are only " + str(len(X)) + " rows")
+    end
+    model.train_x = gnum.copy(X)
+    model.train_y = y.copy()
+    model.n_features = cols
+    model.fitted = true
+    return model
+end
+
+# Predicts the most common label among the k closest training rows.
+blueprint KNeighborsClassifier:
+    action init(k = 5):
+        if k < 1 or k != math.floor(k):
+            _gl_fail("KNeighborsClassifier: k must be a whole number of at least 1")
+        end
+        self.k = k
+        self.fitted = false
+        self.classes = []
+        self.train_x = []
+        self.train_y = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        _gl_knn_fit(self, X, y, "KNeighborsClassifier.fit")
+        self.classes = _gl_classes(y)
+        return self
+    end
+
+    action predict_proba(X):
+        _gl_need_fitted(self, "KNeighborsClassifier.predict_proba")
+        _gl_check_width(X, self.n_features, "KNeighborsClassifier.predict_proba")
+        let out = []
+        for each row in X:
+            let votes = gnum.zeros(len(self.classes))
+            for each i in _gl_nearest(self.train_x, row, self.k):
+                let c = _gl_index_of(self.classes, self.train_y[i], "KNeighborsClassifier")
+                votes[c] = votes[c] + 1.0 / self.k
+            end
+            out.push(votes)
+        end
+        return out
+    end
+
+    action predict(X):
+        let out = []
+        for each votes in self.predict_proba(X):
+            out.push(self.classes[_gl_argmax(votes)])
+        end
+        return out
+    end
+
+    action score(X, y):
+        return accuracy_score(y, self.predict(X))
+    end
+end
+
+# Predicts the average target of the k closest training rows.
+blueprint KNeighborsRegressor:
+    action init(k = 5):
+        if k < 1 or k != math.floor(k):
+            _gl_fail("KNeighborsRegressor: k must be a whole number of at least 1")
+        end
+        self.k = k
+        self.fitted = false
+        self.train_x = []
+        self.train_y = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        _gl_check_numbers(y, "KNeighborsRegressor.fit")
+        return _gl_knn_fit(self, X, y, "KNeighborsRegressor.fit")
+    end
+
+    action predict(X):
+        _gl_need_fitted(self, "KNeighborsRegressor.predict")
+        _gl_check_width(X, self.n_features, "KNeighborsRegressor.predict")
+        let out = []
+        for each row in X:
+            let total = 0.0
+            for each i in _gl_nearest(self.train_x, row, self.k):
+                total = total + self.train_y[i]
+            end
+            out.push(total / self.k)
+        end
+        return out
+    end
+
+    action score(X, y):
+        return r2_score(y, self.predict(X))
+    end
+end
+
+# -------------------------------------------------------------- naive Bayes
+
+# Assumes each feature follows a bell curve within each class.
+blueprint GaussianNB:
+    action init():
+        self.fitted = false
+        self.classes = []
+        self.means = []
+        self.variances = []
+        self.log_priors = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "GaussianNB.fit")
+        self.classes = _gl_classes(y)
+        # A small floor on the variances keeps constant features usable.
+        let floor_var = _gn_vmax(gnum.var(X, 0)) * 1e-9
+        if floor_var == 0:
+            floor_var = 1e-9
+        end
+        self.means = []
+        self.variances = []
+        self.log_priors = []
+        for each label in self.classes:
+            let rows = []
+            let i = 0
+            while i < len(y):
+                if y[i] == label:
+                    rows.push(X[i])
+                end
+                i = i + 1
+            end
+            self.means.push(gnum.mean(rows, 0))
+            self.variances.push(gnum.add(gnum.var(rows, 0), floor_var))
+            self.log_priors.push(math.log(len(rows) / (len(y) * 1.0)))
+        end
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    action predict_proba(X):
+        _gl_need_fitted(self, "GaussianNB.predict_proba")
+        _gl_check_width(X, self.n_features, "GaussianNB.predict_proba")
+        let out = []
+        for each row in X:
+            let scores = []
+            let c = 0
+            while c < len(self.classes):
+                let s = self.log_priors[c]
+                let mean = self.means[c]
+                let variance = self.variances[c]
+                let j = 0
+                while j < self.n_features:
+                    let d = row[j] - mean[j]
+                    s = s - 0.5 * math.log(2.0 * math.pi * variance[j]) - d * d / (2.0 * variance[j])
+                    j = j + 1
+                end
+                scores.push(s)
+                c = c + 1
+            end
+            out.push(gnum.softmax(scores))
+        end
+        return out
+    end
+
+    action predict(X):
+        let out = []
+        for each probs in self.predict_proba(X):
+            out.push(self.classes[_gl_argmax(probs)])
+        end
+        return out
+    end
+
+    action score(X, y):
+        return accuracy_score(y, self.predict(X))
+    end
+end
+
+# ------------------------------------------------------------ decision trees
+#
+# target holds class numbers (classification) or numbers (regression).
+# cfg: {"classes": count or 0 for regression, "max_depth", "min_split",
+#       "min_leaf", "max_features", "rng"}.
+
+func _gl_leaf(target, rows, cfg):
+    let k = cfg["classes"]
+    if k > 0:
+        let probs = gnum.zeros(k)
+        for each r in rows:
+            probs[target[r]] = probs[target[r]] + 1.0 / len(rows)
+        end
+        return {"leaf": true, "value": _gl_argmax(probs), "probs": probs, "samples": len(rows)}
+    end
+    let total = 0.0
+    for each r in rows:
+        total = total + target[r]
+    end
+    return {"leaf": true, "value": total / len(rows), "samples": len(rows)}
+end
+
+# The best [feature, threshold] for these rows, or none when no split helps.
+# Impurity is Gini for classes and squared error for numbers; both are
+# tracked as running sums while the rows are walked in sorted order.
+func _gl_best_split(X, target, rows, cfg):
+    let n = len(rows)
+    let k = cfg["classes"]
+    let min_leaf = cfg["min_leaf"]
+    let features = range(len(X[0]))
+    if cfg["max_features"] < len(features):
+        features = cfg["rng"].permutation(len(features))[:cfg["max_features"]]
+    end
+    # The impurity before splitting, in the same units as the split score.
+    let parent = 0.0
+    let totals = gnum.zeros(k)
+    let sum_all = 0.0
+    if k > 0:
+        for each r in rows:
+            totals[target[r]] = totals[target[r]] + 1
+        end
+        let sq = 0.0
+        for each c in totals:
+            sq = sq + c * c
+        end
+        parent = n - sq / n
+    else:
+        let sumsq = 0.0
+        for each r in rows:
+            sum_all = sum_all + target[r]
+            sumsq = sumsq + target[r] * target[r]
+        end
+        parent = sumsq - sum_all * sum_all / n
+    end
+    if parent <= 1e-12:
+        return none
+    end
+    # A split that does not lower the impurity is still taken while the rows
+    # are mixed (xor needs two questions before the first one pays off).
+    let best_score = parent * (1.0 + 1e-12) + 1e-12
+    let best = none
+    for each j in features:
+        let vals = []
+        for each r in rows:
+            vals.push(X[r][j])
+        end
+        let order = _gn_argsort(vals)
+        let left = gnum.zeros(k)
+        let right = totals.copy()
+        let left_sq = 0.0
+        let right_sq = 0.0
+        if k > 0:
+            for each c in totals:
+                right_sq = right_sq + c * c
+            end
+        end
+        let left_sum = 0.0
+        let i = 0
+        while i < n - 1:
+            let pos = order[i]
+            let t = target[rows[pos]]
+            if k > 0:
+                # Moving one row changes the sums of squared counts by
+                # 2c+1 on the left and 1-2c on the right.
+                left_sq = left_sq + 2 * left[t] + 1
+                right_sq = right_sq - 2 * right[t] + 1
+                left[t] = left[t] + 1
+                right[t] = right[t] - 1
+            else:
+                left_sum = left_sum + t
+            end
+            let v = vals[pos]
+            let v_next = vals[order[i + 1]]
+            let nl = i + 1
+            let nr = n - nl
+            if v != v_next and nl >= min_leaf and nr >= min_leaf:
+                let score = 0.0
+                if k > 0:
+                    score = (nl - left_sq / nl) + (nr - right_sq / nr)
+                else:
+                    let right_sum = sum_all - left_sum
+                    score = parent + sum_all * sum_all / n - left_sum * left_sum / nl - right_sum * right_sum / nr
+                end
+                if score < best_score and (best == none or score < best_score - 1e-12):
+                    best_score = score
+                    best = [j, (v + v_next) / 2.0]
+                end
+            end
+            i = i + 1
+        end
+    end
+    return best
+end
+
+func _gl_build_tree(X, target, rows, depth, cfg):
+    let n = len(rows)
+    if n < cfg["min_split"] or (cfg["max_depth"] != none and depth >= cfg["max_depth"]):
+        return _gl_leaf(target, rows, cfg)
+    end
+    let split = _gl_best_split(X, target, rows, cfg)
+    if split == none:
+        return _gl_leaf(target, rows, cfg)
+    end
+    let left_rows = []
+    let right_rows = []
+    for each r in rows:
+        if X[r][split[0]] <= split[1]:
+            left_rows.push(r)
+        else:
+            right_rows.push(r)
+        end
+    end
+    if len(left_rows) == 0 or len(right_rows) == 0:
+        return _gl_leaf(target, rows, cfg)
+    end
+    let node = {"leaf": false, "feature": split[0], "threshold": split[1], "samples": n}
+    node["left"] = _gl_build_tree(X, target, left_rows, depth + 1, cfg)
+    node["right"] = _gl_build_tree(X, target, right_rows, depth + 1, cfg)
+    return node
+end
+
+func _gl_tree_leaf(node, row):
+    while not node["leaf"]:
+        if row[node["feature"]] <= node["threshold"]:
+            node = node["left"]
+        else:
+            node = node["right"]
+        end
+    end
+    return node
+end
+
+func _gl_tree_depth(node):
+    if node["leaf"]:
+        return 0
+    end
+    let a = _gl_tree_depth(node["left"])
+    let b = _gl_tree_depth(node["right"])
+    if a > b:
+        return a + 1
+    end
+    return b + 1
+end
+
+func _gl_tree_leaves(node):
+    if node["leaf"]:
+        return 1
+    end
+    return _gl_tree_leaves(node["left"]) + _gl_tree_leaves(node["right"])
+end
+
+func _gl_tree_cfg(n_classes, max_depth, min_samples_split, min_samples_leaf, max_features, n_features, seed, what):
+    if max_depth != none and max_depth < 1:
+        _gl_fail(what + ": max_depth must be at least 1 (or none for no limit)")
+    end
+    if min_samples_split < 2:
+        _gl_fail(what + ": min_samples_split must be at least 2")
+    end
+    if min_samples_leaf < 1:
+        _gl_fail(what + ": min_samples_leaf must be at least 1")
+    end
+    let mf = n_features
+    if max_features == "sqrt":
+        mf = math.floor(math.sqrt(n_features))
+    eif max_features != none:
+        mf = max_features
+    end
+    if mf < 1:
+        mf = 1
+    end
+    if mf > n_features:
+        mf = n_features
+    end
+    return {"classes": n_classes, "max_depth": max_depth, "min_split": min_samples_split, "min_leaf": min_samples_leaf, "max_features": mf, "rng": RandomState(seed)}
+end
+
+# A tree of yes/no questions about single features, chosen to make the
+# groups as pure as possible (CART with Gini impurity).
+blueprint DecisionTreeClassifier:
+    action init(max_depth = none, min_samples_split = 2, min_samples_leaf = 1, max_features = none, seed = 0):
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_features = max_features
+        self.seed = seed
+        self.fitted = false
+        self.classes = []
+        self.tree = none
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "DecisionTreeClassifier.fit")
+        self.classes = _gl_classes(y)
+        let target = []
+        for each label in y:
+            target.push(_gl_index_of(self.classes, label, "DecisionTreeClassifier.fit"))
+        end
+        let cfg = _gl_tree_cfg(len(self.classes), self.max_depth, self.min_samples_split, self.min_samples_leaf, self.max_features, cols, self.seed, "DecisionTreeClassifier")
+        self.tree = _gl_build_tree(X, target, range(len(X)), 0, cfg)
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    action predict_proba(X):
+        _gl_need_fitted(self, "DecisionTreeClassifier.predict_proba")
+        _gl_check_width(X, self.n_features, "DecisionTreeClassifier.predict_proba")
+        let out = []
+        for each row in X:
+            out.push(_gl_tree_leaf(self.tree, row)["probs"].copy())
+        end
+        return out
+    end
+
+    action predict(X):
+        _gl_need_fitted(self, "DecisionTreeClassifier.predict")
+        _gl_check_width(X, self.n_features, "DecisionTreeClassifier.predict")
+        let out = []
+        for each row in X:
+            out.push(self.classes[_gl_tree_leaf(self.tree, row)["value"]])
+        end
+        return out
+    end
+
+    action score(X, y):
+        return accuracy_score(y, self.predict(X))
+    end
+
+    action depth():
+        _gl_need_fitted(self, "DecisionTreeClassifier.depth")
+        return _gl_tree_depth(self.tree)
+    end
+
+    action leaf_count():
+        _gl_need_fitted(self, "DecisionTreeClassifier.leaf_count")
+        return _gl_tree_leaves(self.tree)
+    end
+end
+
+# The same tree, predicting a number: the average target of the leaf.
+blueprint DecisionTreeRegressor:
+    action init(max_depth = none, min_samples_split = 2, min_samples_leaf = 1, max_features = none, seed = 0):
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_features = max_features
+        self.seed = seed
+        self.fitted = false
+        self.tree = none
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "DecisionTreeRegressor.fit")
+        _gl_check_numbers(y, "DecisionTreeRegressor.fit")
+        let cfg = _gl_tree_cfg(0, self.max_depth, self.min_samples_split, self.min_samples_leaf, self.max_features, cols, self.seed, "DecisionTreeRegressor")
+        self.tree = _gl_build_tree(X, y, range(len(X)), 0, cfg)
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    action predict(X):
+        _gl_need_fitted(self, "DecisionTreeRegressor.predict")
+        _gl_check_width(X, self.n_features, "DecisionTreeRegressor.predict")
+        let out = []
+        for each row in X:
+            out.push(_gl_tree_leaf(self.tree, row)["value"])
+        end
+        return out
+    end
+
+    action score(X, y):
+        return r2_score(y, self.predict(X))
+    end
+
+    action depth():
+        _gl_need_fitted(self, "DecisionTreeRegressor.depth")
+        return _gl_tree_depth(self.tree)
+    end
+
+    action leaf_count():
+        _gl_need_fitted(self, "DecisionTreeRegressor.leaf_count")
+        return _gl_tree_leaves(self.tree)
+    end
+end
+
+# ------------------------------------------------------------ random forests
+
+# Trees grown on random resamples of the rows. Returns the list of trees.
+func _gl_grow_forest(X, target, n_classes, model, cols, what):
+    if model.n_estimators < 1:
+        _gl_fail(what + ": n_estimators must be at least 1")
+    end
+    let rng = RandomState(model.seed)
+    let n = len(X)
+    let trees = []
+    let t = 0
+    while t < model.n_estimators:
+        let rows = []
+        let i = 0
+        while i < n:
+            rows.push(rng.randint(0, n - 1))
+            i = i + 1
+        end
+        let cfg = _gl_tree_cfg(n_classes, model.max_depth, 2, 1, model.max_features, cols, rng.randint(1, 2000000000), what)
+        trees.push(_gl_build_tree(X, target, rows, 0, cfg))
+        t = t + 1
+    end
+    return trees
+end
+
+# Many decision trees, each grown on a random resample of the rows and
+# looking at a random subset of the features at every split. The trees'
+# class probabilities are averaged.
+blueprint RandomForestClassifier:
+    action init(n_estimators = 20, max_depth = none, seed = 0, max_features = "sqrt"):
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.seed = seed
+        self.max_features = max_features
+        self.fitted = false
+        self.classes = []
+        self.trees = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "RandomForestClassifier.fit")
+        self.classes = _gl_classes(y)
+        let target = []
+        for each label in y:
+            target.push(_gl_index_of(self.classes, label, "RandomForestClassifier.fit"))
+        end
+        self.trees = _gl_grow_forest(X, target, len(self.classes), self, cols, "RandomForestClassifier")
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    action predict_proba(X):
+        _gl_need_fitted(self, "RandomForestClassifier.predict_proba")
+        _gl_check_width(X, self.n_features, "RandomForestClassifier.predict_proba")
+        let out = []
+        for each row in X:
+            let probs = gnum.zeros(len(self.classes))
+            for each tree in self.trees:
+                let leaf = _gl_tree_leaf(tree, row)["probs"]
+                let c = 0
+                while c < len(probs):
+                    probs[c] = probs[c] + leaf[c] / len(self.trees)
+                    c = c + 1
+                end
+            end
+            out.push(probs)
+        end
+        return out
+    end
+
+    action predict(X):
+        let out = []
+        for each probs in self.predict_proba(X):
+            out.push(self.classes[_gl_argmax(probs)])
+        end
+        return out
+    end
+
+    action score(X, y):
+        return accuracy_score(y, self.predict(X))
+    end
+end
+
+# The same forest for numbers: the trees' predictions are averaged.
+blueprint RandomForestRegressor:
+    action init(n_estimators = 20, max_depth = none, seed = 0, max_features = none):
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.seed = seed
+        self.max_features = max_features
+        self.fitted = false
+        self.trees = []
+        self.n_features = 0
+    end
+
+    action fit(X, y):
+        let cols = _gl_check_Xy(X, y, "RandomForestRegressor.fit")
+        _gl_check_numbers(y, "RandomForestRegressor.fit")
+        self.trees = _gl_grow_forest(X, y, 0, self, cols, "RandomForestRegressor")
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    action predict(X):
+        _gl_need_fitted(self, "RandomForestRegressor.predict")
+        _gl_check_width(X, self.n_features, "RandomForestRegressor.predict")
+        let out = []
+        for each row in X:
+            let total = 0.0
+            for each tree in self.trees:
+                total = total + _gl_tree_leaf(tree, row)["value"]
+            end
+            out.push(total / len(self.trees))
+        end
+        return out
+    end
+
+    action score(X, y):
+        return r2_score(y, self.predict(X))
+    end
+end
+
+# ---------------------------------------------------------------- clustering
+
+# For each row, [position of the closest center, squared distance to it].
+func _gl_closest(centers, row):
+    let best = 0
+    let best_d = _gl_sqdist(centers[0], row)
+    let c = 1
+    while c < len(centers):
+        let d = _gl_sqdist(centers[c], row)
+        if d < best_d:
+            best_d = d
+            best = c
+        end
+        c = c + 1
+    end
+    return [best, best_d]
+end
+
+# One k-means run from a k-means++ start. Returns [centers, labels, inertia, steps].
+func _gl_kmeans_run(X, k, max_iter, rng):
+    let n = len(X)
+    let cols = len(X[0])
+    let centers = [X[rng.randint(0, n - 1)].copy()]
+    let dist = []
+    for each row in X:
+        dist.push(_gl_sqdist(centers[0], row))
+    end
+    while len(centers) < k:
+        let total = _gn_vsum(dist)
+        let pick = 0
+        if total > 0:
+            # A row is chosen with probability proportional to its squared
+            # distance from the nearest center so far.
+            let target = rng.random() * total
+            let run = 0.0
+            let i = 0
+            while i < n:
+                run = run + dist[i]
+                if run >= target and dist[i] > 0:
+                    pick = i
+                    break
+                end
+                i = i + 1
+            end
+            if i == n:
+                pick = _gl_argmax(dist)
+            end
+        else:
+            pick = rng.randint(0, n - 1)
+        end
+        centers.push(X[pick].copy())
+        let i = 0
+        while i < n:
+            let d = _gl_sqdist(X[pick], X[i])
+            if d < dist[i]:
+                dist[i] = d
+            end
+            i = i + 1
+        end
+    end
+    let labels = gnum.full(n, -1)
+    let inertia = 0.0
+    let steps = 0
+    while steps < max_iter:
+        steps = steps + 1
+        let changed = false
+        inertia = 0.0
+        let dists = []
+        let i = 0
+        while i < n:
+            let hit = _gl_closest(centers, X[i])
+            if hit[0] != labels[i]:
+                labels[i] = hit[0]
+                changed = true
+            end
+            dists.push(hit[1])
+            inertia = inertia + hit[1]
+            i = i + 1
+        end
+        if not changed:
+            break
+        end
+        let sums = gnum.zeros([k, cols])
+        let counts = gnum.full(k, 0)
+        i = 0
+        while i < n:
+            let s = sums[labels[i]]
+            let row = X[i]
+            let j = 0
+            while j < cols:
+                s[j] = s[j] + row[j]
+                j = j + 1
+            end
+            counts[labels[i]] = counts[labels[i]] + 1
+            i = i + 1
+        end
+        let c = 0
+        while c < k:
+            if counts[c] == 0:
+                # An empty cluster takes the row that is farthest from its center.
+                let far = _gl_argmax(dists)
+                centers[c] = X[far].copy()
+                dists[far] = 0.0
+            else:
+                let j = 0
+                while j < cols:
+                    centers[c][j] = sums[c][j] / counts[c]
+                    j = j + 1
+                end
+            end
+            c = c + 1
+        end
+    end
+    return [centers, labels, inertia, steps]
+end
+
+# Groups rows into k clusters around their means. The best of n_init runs
+# (lowest inertia) is kept.
+blueprint KMeans:
+    action init(k = 8, max_iter = 300, seed = 0, n_init = 3):
+        if k < 1 or k != math.floor(k):
+            _gl_fail("KMeans: k must be a whole number of at least 1")
+        end
+        if max_iter < 1 or n_init < 1:
+            _gl_fail("KMeans: max_iter and n_init must be at least 1")
+        end
+        self.k = k
+        self.max_iter = max_iter
+        self.seed = seed
+        self.n_init = n_init
+        self.fitted = false
+        self.centers = []
+        self.labels = []
+        self.inertia = 0.0
+        self.n_iter = 0
+        self.n_features = 0
+    end
+
+    action fit(X):
+        let cols = _gl_check_X(X, "KMeans.fit")
+        if self.k > len(X):
+            _gl_fail("KMeans.fit: k is " + str(self.k) + " but there are only " + str(len(X)) + " rows")
+        end
+        let rng = RandomState(self.seed)
+        let best = none
+        let run = 0
+        while run < self.n_init:
+            let result = _gl_kmeans_run(X, self.k, self.max_iter, rng)
+            if best == none or result[2] < best[2]:
+                best = result
+            end
+            run = run + 1
+        end
+        self.centers = best[0]
+        self.labels = best[1]
+        self.inertia = best[2]
+        self.n_iter = best[3]
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    # The cluster number (0 to k-1) of each row.
+    action predict(X):
+        _gl_need_fitted(self, "KMeans.predict")
+        _gl_check_width(X, self.n_features, "KMeans.predict")
+        let out = []
+        for each row in X:
+            out.push(_gl_closest(self.centers, row)[0])
+        end
+        return out
+    end
+
+    action fit_predict(X):
+        return self.fit(X).labels.copy()
+    end
+
+    # Minus the summed squared distance to the nearest center (higher is better).
+    action score(X):
+        _gl_need_fitted(self, "KMeans.score")
+        _gl_check_width(X, self.n_features, "KMeans.score")
+        let total = 0.0
+        for each row in X:
+            total = total + _gl_closest(self.centers, row)[1]
+        end
+        return 0 - total
+    end
+end
+
+# ---------------------------------------------------- dimensionality reduction
+
+# Principal component analysis: the directions along which the data varies
+# most. components[i] is the i-th direction (a unit vector).
+blueprint PCA:
+    action init(n_components = none):
+        if n_components != none and n_components < 1:
+            _gl_fail("PCA: n_components must be at least 1")
+        end
+        self.n_components = n_components
+        self.fitted = false
+        self.mean = []
+        self.components = []
+        self.explained_variance = []
+        self.explained_variance_ratio = []
+        self.n_features = 0
+    end
+
+    action fit(X):
+        let cols = _gl_check_X(X, "PCA.fit")
+        if len(X) < 2:
+            _gl_fail("PCA.fit needs at least 2 rows")
+        end
+        let keep = cols
+        if self.n_components != none:
+            keep = self.n_components
+        end
+        if keep > cols:
+            _gl_fail("PCA.fit: n_components is " + str(keep) + " but X has only " + str(cols) + " feature(s)")
+        end
+        self.mean = gnum.mean(X, 0)
+        let eig = gnum.eigh(gnum.cov(X))
+        let values = eig[0]
+        let vectors = eig[1]
+        let total = 0.0
+        for each v in values:
+            if v > 0:
+                total = total + v
+            end
+        end
+        self.components = []
+        self.explained_variance = []
+        self.explained_variance_ratio = []
+        # eigh returns the smallest value first; the largest come first here.
+        let i = 0
+        while i < keep:
+            let k = cols - 1 - i
+            let v = values[k]
+            if v < 0:
+                v = 0.0
+            end
+            self.components.push(_gn_column(vectors, k))
+            self.explained_variance.push(v)
+            if total > 0:
+                self.explained_variance_ratio.push(v / total)
+            else:
+                self.explained_variance_ratio.push(0.0)
+            end
+            i = i + 1
+        end
+        self.n_features = cols
+        self.fitted = true
+        return self
+    end
+
+    # The rows expressed in the principal directions.
+    action transform(X):
+        _gl_need_fitted(self, "PCA.transform")
+        _gl_check_width(X, self.n_features, "PCA.transform")
+        let out = []
+        for each row in X:
+            let centered = _gn_vec_vec(1, row, self.mean)
+            let proj = []
+            for each comp in self.components:
+                proj.push(_gn_vdot(centered, comp))
+            end
+            out.push(proj)
+        end
+        return out
+    end
+
+    action fit_transform(X):
+        return self.fit(X).transform(X)
+    end
+
+    # Back from the principal directions to the original features.
+    action inverse_transform(Z):
+        _gl_need_fitted(self, "PCA.inverse_transform")
+        _gl_check_width(Z, len(self.components), "PCA.inverse_transform")
+        let out = []
+        for each z in Z:
+            let row = self.mean.copy()
+            let i = 0
+            while i < len(z):
+                let comp = self.components[i]
+                let j = 0
+                while j < len(row):
+                    row[j] = row[j] + z[i] * comp[j]
+                    j = j + 1
+                end
+                i = i + 1
+            end
+            out.push(row)
+        end
+        return out
+    end
+end

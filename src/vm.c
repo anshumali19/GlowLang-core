@@ -2502,6 +2502,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                any other callee runs without them. */
             if (current_closure && current_closure->body != fe->body) current_closure = NULL;
             bc = fe->body; pc = bc->code;
+            /* The callee reuses this frame but may have more locals than the
+               function it replaces. Compiled code puts the frames of its own
+               calls above vm_stack_top, so a top left at the smaller size let
+               them overwrite the callee's upper registers. */
+            if (__builtin_expect(base_reg + bc->local_count > vm_stack_top, 0)) vm_stack_top = base_reg + bc->local_count;
 
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
             stack_arena_used = old_arena_used;
