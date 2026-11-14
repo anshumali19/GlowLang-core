@@ -1,0 +1,225 @@
+# Integration tests for lib/postgres.glow and the built-in pg module.
+# Needs a PostgreSQL server; set PG_TEST_URL, for example
+#   PG_TEST_URL="postgres://glow:secret@localhost:5432/glowtest" glowlang tests/integration/test_postgres.glow
+# The server should have TLS on (the CI job uses PostgreSQL's self-signed
+# certificate) so the sslmode checks can run; set PG_TEST_NO_TLS=1 if not.
+use "postgres"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains("postgres:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+let url = os.getenv("PG_TEST_URL", "")
+if url == "":
+    show "PG_TEST_URL is not set; skipping the PostgreSQL tests"
+    os.exit(0)
+end
+let tls = os.getenv("PG_TEST_NO_TLS", "") == ""
+
+let db = postgres.connect(url)
+db.script("drop table if exists glow_items; drop table if exists \"order\"; drop table if exists glow_big")
+
+show "== connecting"
+ok("server version", db.server_version() >= 100000)
+same("status when idle", db.status(), "idle")
+if tls:
+    let secure = postgres.connect(url + "?sslmode=require")
+    same("sslmode=require uses TLS", secure.value("select ssl from pg_stat_ssl where pid = pg_backend_pid()"), true)
+    secure.close()
+    let plain = postgres.connect(url + "?sslmode=disable")
+    same("sslmode=disable does not", plain.value("select ssl from pg_stat_ssl where pid = pg_backend_pid()"), false)
+    plain.close()
+    fails_with("verify-full rejects a self-signed certificate", lambda(): postgres.connect(url + "?sslmode=verify-full"), "not trusted")
+end
+let opts = _pg_parse_url(url)
+let bad = {}
+for each k in opts.keys():
+    bad[k] = opts[k]
+end
+bad["password"] = "certainly wrong"
+let bad_login = ""
+try:
+    postgres.connect(bad)
+catch e:
+    bad_login = str(e)
+end
+same("wrong password has SQLSTATE 28P01", postgres.error_code(bad_login), "28P01")
+fails_with("bad sslmode", lambda(): postgres.connect(url + "?sslmode=sometimes"), "sslmode must be")
+fails_with("nobody listening", lambda(): postgres.connect({"host": "127.0.0.1", "port": 1, "connect_timeout": 3}), "cannot connect")
+fails_with("not a URL", lambda(): postgres.connect("mysql://x"), "postgres://")
+
+show "== URLs"
+let u = _pg_parse_url("postgresql://us%40er:p%C3%A4ss%20w%2Fo%3Ard@db.example.com:6543/my%20db?sslmode=require&connect_timeout=5")
+same("user", u["user"], "us@er")
+same("password", u["password"], "päss w/o:rd")
+same("host", u["host"], "db.example.com")
+same("port", u["port"], 6543)
+same("database", u["database"], "my db")
+same("sslmode", u["sslmode"], "require")
+same("connect_timeout", u["connect_timeout"], 5)
+let u6 = _pg_parse_url("postgres://a:b@c@[::1]:5433/x")
+same("password with @", u6["password"], "b@c")
+same("IPv6 host", u6["host"], "::1")
+same("IPv6 port", u6["port"], 5433)
+same("host only", _pg_parse_url("postgres://localhost")["host"], "localhost")
+
+show "== types"
+let row = db.one("select $1::int as i, $2::int8 as big, $3::float8 as f, $4::bool as b, $5::text as t, $6::numeric as n, $7::jsonb as j, $8::int[] as a, $9::text[] as ta, $10::text as nul", [-42, 9007199254740993, 0.1, false, "naïve 🚀 \"q\" \\ \n end", "12345678901234567890.0001", {"k": [1, {"z": none}]}, [3, none, 5], ["a,b", "c\"d", "{e}", none, ""], none])
+same("int", row["i"], -42)
+same("int8 past 2^53 stays exact", str(row["big"]), "9007199254740993")
+same("float", row["f"], 0.1)
+same("bool", row["b"], false)
+same("text with unicode, quotes and newline", row["t"], "naïve 🚀 \"q\" \\ \n end")
+same("numeric stays exact text", row["n"], "12345678901234567890.0001")
+same("jsonb from a dict", row["j"], {"k": [1, {"z": none}]})
+same("int array with NULL", row["a"], [3, none, 5])
+same("text array with commas, quotes and braces", row["ta"], ["a,b", "c\"d", "{e}", none, ""])
+same("NULL", row["nul"], none)
+same("empty string is not NULL", db.value("select $1::text", [""]), "")
+same("NaN", str(db.value("select 'NaN'::float8")), "nan")
+ok("infinity", db.value("select 'Infinity'::float8") > 1e308)
+same("bool array", db.value("select ARRAY[true, false, null]"), [true, false, none])
+same("float array", db.value("select ARRAY[1.5, 2]::float8[]"), [1.5, 2.0])
+same("json", db.value("select '{\"a\": [1, 2]}'::json"), {"a": [1, 2]})
+same("date comes back as ISO text", db.value("select '2026-11-15'::date"), "2026-11-15")
+same("timestamp", db.value("select '2026-11-15 10:30:00'::timestamp"), "2026-11-15 10:30:00")
+same("multi-dimensional array stays text", db.value("select ARRAY[[1,2],[3,4]]"), "{{1,2},{3,4}}")
+same("bigint arithmetic", str(db.value("select 9223372036854775807::int8")), "9223372036854775807")
+same("glowlang big int as a parameter", str(db.value("select $1::numeric + 1", [123456789012345678901234567890])), "123456789012345678901234567891")
+same("bytea comes back as hex", db.value("select '\\x00ff'::bytea"), "\\x00ff")
+
+show "== statements"
+db.script("create table glow_items (id serial primary key, name text unique not null, price numeric(10,2), tags text[], meta jsonb); create table \"order\" (\"select\" int)")
+let pen = db.insert("glow_items", {"name": "pen", "price": "20.50", "tags": ["blue", "office"], "meta": {"stock": 3}})
+same("insert returns the stored row", pen["id"], 1)
+same("insert keeps numeric exact", pen["price"], "20.50")
+same("insert with an array", pen["tags"], ["blue", "office"])
+same("insert with jsonb", pen["meta"], {"stock": 3})
+same("execute counts inserted rows", db.execute("insert into glow_items (name, price) values ($1, $2), ($3, $4)", ["ink", 5, "pad", 12]), 2)
+same("execute counts updated rows", db.execute("update glow_items set price = price + 1 where price < $1", [15]), 2)
+same("execute counts deleted rows", db.execute("delete from glow_items where name = $1", ["nothing"]), 0)
+same("query returns dicts", db.query("select name from glow_items order by id"), [{"name": "pen"}, {"name": "ink"}, {"name": "pad"}])
+same("one with no rows", db.one("select * from glow_items where id = $1", [999]), none)
+same("value with no rows", db.value("select id from glow_items where id = $1", [999]), none)
+let evil = "x'); drop table glow_items; --"
+db.insert("glow_items", {"name": evil})
+same("SQL injection is stored as plain text", db.value("select name from glow_items where name = $1", [evil]), evil)
+same("table still exists", db.value("select count(*) from glow_items"), 4)
+db.insert("order", {"select": 7})
+same("reserved names are quoted", db.value("select \"select\" from \"order\""), 7)
+same("ident quoting", postgres.ident("a\"b"), "\"a\"\"b\"")
+let r = db.raw("select 1 as a, 2 as b")
+same("raw columns", r["columns"], ["a", "b"])
+same("raw rows", r["rows"], [[1, 2]])
+same("command tag", db.raw("update glow_items set price = price where false")["command"], "UPDATE 0")
+same("a statement with no result", db.query("create temp table t1 (x int)"), [])
+same("same column name twice keeps the last", db.one("select 1 as x, 2 as x"), {"x": 2})
+
+show "== errors"
+fails_with("syntax error", lambda(): db.query("selec 1"), "[42601]")
+same("usable after an error", db.value("select 5"), 5)
+let dup = ""
+try:
+    db.insert("glow_items", {"name": "pen"})
+catch e:
+    dup = str(e)
+end
+same("duplicate key code", postgres.error_code(dup), "23505")
+ok("duplicate key detail", dup.contains("DETAIL:"))
+fails_with("missing table", lambda(): db.query("select * from no_such_table"), "[42P01]")
+fails_with("wrong parameter count", lambda(): db.query("select $1::int, $2::int", [1]), "[08P01]")
+fails_with("bad parameter type", lambda(): db.query("select $1::int", ["abc"]), "[22P02]")
+fails_with("division by zero", lambda(): db.value("select 1 / 0"), "[22012]")
+fails_with("parameters must be a list", lambda(): db.query("select 1", "x"), "must be a list")
+same("error_code of other errors", postgres.error_code("something else"), none)
+
+show "== transactions"
+db.transaction(lambda(tx): tx.insert("glow_items", {"name": "committed"}))
+same("commit", db.value("select count(*) from glow_items where name = 'committed'"), 1)
+fails_with("rollback raises the error again", lambda(): db.transaction(lambda(tx): [tx.insert("glow_items", {"name": "rolled back"}), tx.query("selec")]), "[42601]")
+same("rollback undid the insert", db.value("select count(*) from glow_items where name = 'rolled back'"), 0)
+same("idle after rollback", db.status(), "idle")
+
+func outer(tx):
+    tx.insert("glow_items", {"name": "outer"})
+    try:
+        tx.transaction(lambda(t2): [t2.insert("glow_items", {"name": "inner"}), t2.query("selec")])
+    catch e:
+        # only the inner part is undone
+    end
+    same("inside a transaction", tx.status(), "transaction")
+    return "done"
+end
+same("nested transaction returns work's result", db.transaction(outer), "done")
+same("outer part kept", db.value("select count(*) from glow_items where name = 'outer'"), 1)
+same("inner part undone", db.value("select count(*) from glow_items where name = 'inner'"), 0)
+db.query("begin")
+fails_with("error inside a manual transaction", lambda(): db.query("selec"), "[42601]")
+same("status failed", db.status(), "failed")
+db.query("rollback")
+same("idle again", db.status(), "idle")
+
+show "== size"
+db.script("create table glow_big (id int, body text)")
+let big_text = "0123456789" * 500000
+db.execute("insert into glow_big values ($1, $2)", [1, big_text])
+same("5 MB text round trip", len(db.value("select body from glow_big where id = 1")), 5000000)
+let many = []
+let marks = []
+every i from 1 to 2000:
+    many.push(i)
+    marks.push("$" + str(i) + "::int")
+end
+same("2000 parameters", db.value("select " + " + ".join(marks), many), 2001000)
+same("100000 rows", len(db.raw("select g from generate_series(1, 100000) g")["rows"]), 100000)
+same("sum over many rows", db.value("select sum(g)::int8 from generate_series(1, 100000) g"), 5000050000)
+
+show "== script"
+db.script("create temp table s1 (x int); insert into s1 values (1), (2); insert into s1 values (3)")
+same("script ran every statement", db.value("select sum(x)::int from s1"), 6)
+fails_with("script error", lambda(): db.script("select 1; selec 2"), "[42601]")
+
+show "== closing"
+db.script("drop table glow_items; drop table \"order\"; drop table glow_big")
+db.close()
+db.close()
+same("status after close", db.status(), "closed")
+fails_with("use after close", lambda(): db.query("select 1"), "closed")
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end
