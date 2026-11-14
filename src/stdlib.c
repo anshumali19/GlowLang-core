@@ -6221,6 +6221,88 @@ const char *glow_type_name(Value v) {
     return "none";
 }
 
+/* ---- Classes: super, class_name, is_a ---- */
+
+static int is_obj_type(Value v, ObjType t) {
+    return GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == t;
+}
+
+static Value class_error(const char *msg) {
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return value_none();
+}
+
+/* The compiler turns super.m(args) inside a method of a class C that extends
+   P into __glow_super(P, "m", self, args...). It runs P's m, looked up from P
+   upward, on the same self. */
+static Value native_glow_super(int argc, Value *args) {
+    if (argc < 3 || GET_TYPE(args[1]) != VAL_STRING) return class_error("super: bad call");
+    const char *name = AS_STRING(args[1]);
+    if (!is_obj_type(args[0], OBJ_CLASS)) {
+        const char *why = GET_TYPE(args[0]) == VAL_STRING && strcmp(AS_STRING(args[0]), "no-parent") == 0
+            ? "super can only be used in a class that extends another class"
+            : "super can only be used inside a method of a class";
+        char msg[200];
+        snprintf(msg, sizeof msg, "%s (super.%.80s)", why, name);
+        return class_error(msg);
+    }
+    for (Class *k = AS_CLASS(args[0]); k; k = k->parent) {
+        Value m = dict_get(k->methods, name);
+        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body) {
+            /* A method's frame: register 0 is self, then its parameters, then
+               its other locals (none). Missing arguments are none and extra
+               ones are ignored, as in an ordinary method call. */
+            FuncEntry *fe = AS_BOUND_METHOD(m)->method;
+            int nargs = argc - 3;
+            int new_base = vm_stack_top;
+            int needed = new_base + fe->body->local_count + 16;
+            if (needed + 512 >= vm_stack_size || glow_stack_low()) return class_error("Maximum recursion depth exceeded");
+            vm_stack[new_base] = args[2];
+            for (int i = 0; i < fe->param_count; i++) vm_stack[new_base + 1 + i] = i < nargs ? args[3 + i] : value_none();
+            for (int i = 1 + fe->param_count; i < fe->body->local_count; i++) vm_stack[new_base + i] = value_none();
+            int saved_top = vm_stack_top;
+            vm_stack_top = needed;
+            Value r = run_bytecode(fe->body, NULL, NULL, new_base);
+            vm_stack_top = saved_top;
+            return r;
+        }
+    }
+    char msg[240];
+    snprintf(msg, sizeof msg, "super: %.80s and the classes it extends have no method '%.80s'", AS_CLASS(args[0])->name, name);
+    return class_error(msg);
+}
+
+/* class_name(x): the class of an object ("Dog"), a class's own name, or
+   type(x) for anything else. */
+static Value native_class_name(int argc, Value *args) {
+    if (argc < 1) return class_error("class_name(x) needs a value");
+    Value v = args[0];
+    if (is_obj_type(v, OBJ_INSTANCE) && AS_INSTANCE(v)->klass && AS_INSTANCE(v)->klass->name)
+        return value_string_copy(AS_INSTANCE(v)->klass->name);
+    if (is_obj_type(v, OBJ_CLASS) && AS_CLASS(v)->name) return value_string_copy(AS_CLASS(v)->name);
+    return value_string_copy(glow_type_name(v));
+}
+
+/* is_a(x, C): x was made from C or from a class that extends it (or x is C
+   or a subclass of it). C may be the class or its name. A type name such
+   as "int" or "list" checks type(x). */
+static Value native_is_a(int argc, Value *args) {
+    if (argc < 2) return class_error("is_a(x, class) needs a value and a class");
+    Value v = args[0], c = args[1];
+    Class *k = is_obj_type(v, OBJ_INSTANCE) ? AS_INSTANCE(v)->klass : is_obj_type(v, OBJ_CLASS) ? AS_CLASS(v) : NULL;
+    if (is_obj_type(c, OBJ_CLASS)) {
+        for (; k; k = k->parent) if (k == AS_CLASS(c)) return value_bool(1);
+        return value_bool(0);
+    }
+    if (GET_TYPE(c) == VAL_STRING && (c & MASK_PAYLOAD)) {
+        const char *want = AS_STRING(c);
+        for (; k; k = k->parent) if (k->name && strcmp(k->name, want) == 0) return value_bool(1);
+        return value_bool(strcmp(glow_type_name(v), want) == 0);
+    }
+    return class_error("is_a(x, class): the second argument must be a class or a name");
+}
+
 Value native_type(int argc, Value *args) {
     if (argc < 1) return value_none();
     return value_string_copy(glow_type_name(args[0]));
@@ -6296,6 +6378,9 @@ void std_init(void) {
     var_set("dict", native_func_new("dict", native_dict));
     var_set("len", native_func_new("len", native_len));
     var_set("type", native_func_new("type", native_type));
+    var_set("class_name", native_func_new("class_name", native_class_name));
+    var_set("is_a", native_func_new("is_a", native_is_a));
+    var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
     var_set("floor", native_func_new("floor", math_floor));
     var_set("ceil", native_func_new("ceil", math_ceil));

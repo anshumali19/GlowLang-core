@@ -81,7 +81,7 @@ GlowLang is dynamically typed with the following value types:
 
 ### Type Checking
 ```glow
-let t = type(value)   # Returns type as string: "int", "float", "string", "list", "dict", etc.
+let t = type(value)   # "int", "float", "string", "list", "dict", "instance" (an object) ...
 ```
 
 Conversions: `int(x)`, `float(x)`, `str(x)` (also `string(x)`), `bool(x)`.
@@ -633,6 +633,38 @@ show Dog("Rex").speak()    # Rex barks (init comes from Animal)
 ```
 Extending something that is not a class raises an error.
 
+### Calling the parent: `super`
+Inside a method, `super.name(args)` runs the parent class's version of a
+method on the same object. It is how a child's `init` lets the parent set up
+its part, and how an override adds to the parent's behaviour instead of
+replacing it:
+```glow
+blueprint Puppy extends Dog:
+    action init(name, age):
+        super.init(name)           # Animal's init sets self.name
+        self.age = age
+    end
+    action speak():
+        return super.speak() + " softly"
+    end
+end
+
+show Puppy("Bo", 1).speak()    # Bo barks softly
+```
+`super` looks the method up from the parent upward, so it also finds a
+method the parent itself inherited. It works only inside a method of a class
+that extends another; anywhere else it raises an error saying so.
+
+### Checking classes: `is_a` and `class_name`
+`type(x)` is `"instance"` for every object. To ask about its class:
+```glow
+let p = Puppy("Bo", 1)
+show class_name(p)          # Puppy
+show is_a(p, Dog)           # true: Puppy extends Dog
+show is_a(p, Animal)        # true: and Dog extends Animal
+show is_a(p, "Animal")      # true: a class name works too
+```
+
 ---
 
 ## 12. Traits
@@ -877,7 +909,9 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 |----------|-------------|
 | `show a, b` / `print` | Print values separated by spaces |
 | `len(x)` | Length of a string, list or dict |
-| `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, class name, ... |
+| `type(x)` | `"int"`, `"float"`, `"string"`, `"bool"`, `"list"`, `"dict"`, `"none"`, `"instance"` (an object), `"class"`, ... |
+| `class_name(x)` | The class of an object (`"Dog"`), a class's own name, or `type(x)` for other values |
+| `is_a(x, C)` | Whether `x` was made from class `C` or one that extends it (`C` may be a class or its name) |
 | `int(x)`, `float(x)`, `str(x)` / `string(x)`, `bool(x)` | Conversions; `int("42")`, `int("ff", 16)` parse text and raise on anything that is not a whole number |
 | `range(n)` | `[0, 1, ..., n-1]` |
 | `append(list, x)` | Add to a list |

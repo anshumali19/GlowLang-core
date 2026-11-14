@@ -33,6 +33,11 @@ Bytecode *compiling_bc = NULL;
 Class *last_compiling_class = NULL;
 Trait *last_compiling_trait = NULL;
 static const char *compiling_class_name = NULL;
+/* For `super`: the parent of the class being compiled, and of the class
+   whose method body is being compiled (NULL outside a method). */
+static const char *compiling_parent_name = NULL;
+static const char *method_parent_name = NULL;
+static int in_method_body = 0;
 static const char *compiling_trait_name = NULL;
 
 Node* node_new(NodeType t) { Node *n = arena_alloc(sizeof(Node)); memset(n, 0, sizeof(Node)); n->type = t; n->line = line_num; return n; }
@@ -933,7 +938,15 @@ static void compile_stmt(Node *n) {
             Class *saved_class = last_compiling_class; Trait *saved_trait = last_compiling_trait;
             compiling_class_name = NULL; compiling_trait_name = NULL;
             last_compiling_class = NULL; last_compiling_trait = NULL;
+            const char *saved_method_parent = method_parent_name;
+            int saved_in_method = in_method_body;
+            /* Only a class method's own body may use super; a function nested
+               in it is an ordinary function without self. */
+            in_method_body = is_method && saved_class != NULL;
+            method_parent_name = in_method_body ? compiling_parent_name : NULL;
             compile_stmt(n->left);
+            method_parent_name = saved_method_parent;
+            in_method_body = saved_in_method;
             compiling_class_name = saved_class_name; compiling_trait_name = saved_trait_name;
             last_compiling_class = saved_class; last_compiling_trait = saved_trait;
             note_reg_peak();
@@ -1007,7 +1020,9 @@ static void compile_stmt(Node *n) {
         }
         case NODE_CLASS: {
             const char *old_class = compiling_class_name;
+            const char *old_parent = compiling_parent_name;
             compiling_class_name = n->name;
+            compiling_parent_name = n->parent_name;
             Class *pc = last_compiling_class; last_compiling_class = (Class*)1;
             int parent_reg = -1;
             if (n->parent_name) {
@@ -1024,6 +1039,7 @@ static void compile_stmt(Node *n) {
             compile_stmt(n->left);
             last_compiling_class = pc;
             compiling_class_name = old_class;
+            compiling_parent_name = old_parent;
             break;
         }
         case NODE_TRAIT: {
@@ -1309,6 +1325,27 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_CALL_EXPR:
         case NODE_CALL: {
+            /* super.m(args) -> __glow_super(Parent, "m", self, args...): calls
+               the parent class's m (found up its chain) on the current self.
+               Outside a method of a class that extends another, the helper
+               raises a clear error instead. A local named super wins. */
+            if (n->type == NODE_CALL_EXPR && n->left && n->left->type == NODE_INDEX && n->left->name &&
+                n->left->left && n->left->left->type == NODE_VAR && n->left->left->name &&
+                strcmp(n->left->left->name, "super") == 0 && get_local_reg("super") == -1) {
+                int ac0 = n->call_arg_count;
+                Node **sa = malloc(sizeof(Node*) * (size_t)(ac0 + 3));
+                int ok_ctx = in_method_body && method_parent_name;
+                sa[0] = ok_ctx ? newVarNode(method_parent_name) : newStringNode(in_method_body ? "no-parent" : "not-in-method");
+                sa[1] = newStringNode(n->left->name);
+                sa[2] = ok_ctx ? newVarNode(intern_string("self")) : newStringNode("");
+                for (int i = 0; i < ac0; i++) sa[i + 3] = n->call_args[i];
+                Node *sc = node_new(NODE_CALL);
+                sc->name = intern_string("__glow_super");
+                sc->call_args = sa;
+                sc->call_arg_count = ac0 + 3;
+                sc->line = n->line;
+                return compile_expr(sc, reg);
+            }
             int ac = n->call_arg_count;
             int start_reg = next_free_reg;
 

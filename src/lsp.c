@@ -303,6 +303,9 @@ static const CompletionEntry keywords[] = {
 static const CompletionEntry builtins[] = {
     {"len",        "function", "Return the length of a string, list, or dict",                    3},
     {"type",       "function", "Return the type name of a value as a string",                     3},
+    {"class_name", "function", "The class of an object, e.g. \"Dog\"",                                3},
+    {"is_a",       "function", "Whether a value was made from a class or one that extends it",   3},
+    {"super",      "keyword",  "Inside a method: super.name(args) runs the parent class's method", 14},
     {"range",      "function", "Generate a list of integers in a range",                          3},
     {"append",     "function", "Append an element to a list",                                     3},
     {"push",       "function", "Push an element to the end of a list",                            3},
@@ -376,7 +379,7 @@ static const char *keyword_names[] = {
 };
 
 static const char *builtin_names[] = {
-    "len", "type", "range", "append", "push", "pop",
+    "len", "type", "class_name", "is_a", "range", "append", "push", "pop",
     "sort", "reverse", "keys", "values", "has", "remove",
     "merge", "upper", "lower", "trim", "find", "replace",
     "starts_with", "ends_with", "split",

@@ -1,0 +1,177 @@
+# super, class_name and is_a, in both class styles.
+let passed = 0
+let failed = 0
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+# ---- classic style ----
+class Shape:
+    func init(name):
+        self.name = name
+        self.log = ["Shape.init"]
+    end
+    func area():
+        return 0
+    end
+    func describe():
+        return self.name + " with area " + str(self.area())
+    end
+    func tag(prefix, suffix = "!"):
+        return prefix + self.name + suffix
+    end
+end
+
+class Rect extends Shape:
+    func init(w, h):
+        super.init("rect")
+        self.w = w
+        self.h = h
+        self.log.push("Rect.init")
+    end
+    func area():
+        return self.w * self.h
+    end
+    func describe():
+        return "[" + super.describe() + "]"
+    end
+end
+
+class Square extends Rect:
+    func init(side):
+        super.init(side, side)
+        self.name = "square"
+        self.log.push("Square.init")
+    end
+    func describe():
+        return "<" + super.describe() + ">"
+    end
+    func tag(prefix):
+        # Shape.tag, two levels up: Rect does not define tag.
+        return super.tag(prefix, "?")
+    end
+end
+
+let r = Rect(2, 3)
+same("super.init sets parent fields", r.name, "rect")
+same("child fields after super.init", r.area(), 6)
+same("super.method uses the child's overrides", r.describe(), "[rect with area 6]")
+let sq = Square(4)
+same("init chain order", sq.log, ["Shape.init", "Rect.init", "Square.init"])
+same("super through three levels", sq.describe(), "<[square with area 16]>")
+same("super finds a grandparent's method", sq.tag(">"), ">square?")
+same("default arguments through super", Rect(1, 1).tag("#"), "#rect!")
+
+# ---- natural style ----
+blueprint Animal:
+    action init(name):
+        self.name = name
+    end
+    can speak():
+        return self.name + " makes a sound"
+    end
+end
+
+blueprint Dog extends Animal:
+    action init(name, breed):
+        super.init(name)
+        self.breed = breed
+    end
+    can speak():
+        return super.speak() + ", a " + self.breed + " bark"
+    end
+end
+
+let d = Dog("Rex", "beagle")
+same("blueprint super.init", d.name, "Rex")
+same("blueprint super.speak", d.speak(), "Rex makes a sound, a beagle bark")
+
+# A classic class extending a blueprint, calling super.
+class RobotDog extends Dog:
+    func speak():
+        return "beep; " + super.speak()
+    end
+end
+same("mixed styles", RobotDog("Bolt", "robot").speak(), "beep; Bolt makes a sound, a robot bark")
+
+# ---- hot code: the JIT compiles these ----
+let total = 0
+every i from 1 to 3000:
+    total = total + Square(i % 7).area()
+end
+same("super in a hot loop", total, 428 * 91 + 1 + 4 + 9 + 16)
+
+# ---- errors ----
+class Lonely:
+    func hi():
+        return super.hi()
+    end
+end
+fails_with("super without a parent", lambda(): Lonely().hi(), "extends another class")
+func outside():
+    return super.go()
+end
+fails_with("super outside a method", lambda(): outside(), "inside a method")
+class Missing extends Shape:
+    func nothing():
+        return super.no_such_method()
+    end
+end
+fails_with("method missing up the chain", lambda(): Missing("m").nothing(), "no method 'no_such_method'")
+class Nested extends Shape:
+    func outer():
+        func inner():
+            return super.area()
+        end
+        return inner()
+    end
+end
+fails_with("super in a function nested in a method", lambda(): Nested("n").outer(), "inside a method")
+func local_super():
+    let super = {"go": lambda(): "local wins"}
+    return super["go"]()
+end
+same("a local named super is just a variable", local_super(), "local wins")
+
+# ---- class_name and is_a ----
+same("class_name of an object", class_name(sq), "Square")
+same("class_name of a class", class_name(Rect), "Rect")
+same("class_name of other values", [class_name(5), class_name("x"), class_name([1])], ["int", "string", "list"])
+same("type() stays instance", type(sq), "instance")
+same("type() of a class", type(Rect), "class")
+same("is_a own class", is_a(sq, Square), true)
+same("is_a parent", is_a(sq, Rect), true)
+same("is_a grandparent", is_a(sq, Shape), true)
+same("is_a unrelated", is_a(r, Square), false)
+same("is_a across styles", is_a(RobotDog("x", "y"), Animal), true)
+same("is_a by name", is_a(sq, "Shape"), true)
+same("is_a type name", [is_a(5, "int"), is_a("s", "string"), is_a(5, "string")], [true, true, false])
+same("is_a with a class as the value", [is_a(Square, Shape), is_a(Shape, Square)], [true, false])
+same("is_a of a plain value against a class", is_a(5, Shape), false)
+fails_with("is_a with a bad second argument", lambda(): is_a(sq, 5), "must be a class or a name")
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end
