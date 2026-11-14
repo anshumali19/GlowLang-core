@@ -1,0 +1,284 @@
+# oauth.glow: OAuth 2.0 and OpenID Connect logins ("Sign in with Google").
+#
+#   use "oauth"
+#   let google = oauth.provider("google", {
+#       "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+#       "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+#       "redirect_uri": "https://myapp.example/auth/callback"})
+#
+#   # 1. Send the user to the provider. Keep state, verifier and nonce in
+#   #    the user's session until they come back.
+#   let login = google.authorize_url()
+#   # redirect to login["url"]
+#
+#   # 2. On the callback: check state, swap the code for tokens, read who it is.
+#   if query["state"] != session["state"]: ... refuse ...
+#   let tokens = google.exchange(query["code"], session["verifier"])
+#   let user = google.verify_id_token(tokens["id_token"], session["nonce"])
+#   show user["email"]
+#
+# Providers: "google", "microsoft" and "github" (GitHub has no ID tokens:
+# call google-style APIs with the access token instead). Any other provider
+# works through OAuthClient with its URLs.
+#
+# PKCE (S256) and state are always used. ID tokens are checked against the
+# provider's published keys (JWKS, cached and refreshed when keys rotate):
+# signature, issuer, audience (your client_id), expiry and nonce.
+#
+# Every failure raises an error starting with "oauth:".
+use "jwt"
+
+func _oa_fail(msg):
+    throw "oauth: " + msg
+end
+
+func _oa_enc(text):
+    let hex = "0123456789ABCDEF"
+    let out = ""
+    for each b in str(text).bytes():
+        if (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b == 46 or b == 126:
+            out = out + chr(b)
+        else:
+            out = out + "%" + hex[floor(b / 16)] + hex[b % 16]
+        end
+    end
+    return out
+end
+
+func _oa_form(fields):
+    let parts = []
+    for each k in fields.keys():
+        if fields[k] != none:
+            parts.push(_oa_enc(k) + "=" + _oa_enc(fields[k]))
+        end
+    end
+    return "&".join(parts)
+end
+
+# POSTs a form and returns the JSON reply, raising the provider's error.
+func _oa_post(url, fields, extra_headers = none):
+    let headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+    if extra_headers != none:
+        for each k in extra_headers.keys():
+            headers[k] = extra_headers[k]
+        end
+    end
+    let r = http.request("POST", url, {"headers": headers, "body": _oa_form(fields), "timeout": 30})
+    let data = none
+    try:
+        data = json.parse(r["body"])
+    catch e:
+        _oa_fail("the token endpoint answered " + str(r["status"]) + " with something that is not JSON")
+    end
+    if type(data) != "dict":
+        _oa_fail("the token endpoint answered " + str(r["status"]) + " with unexpected JSON")
+    end
+    if r["status"] >= 400 or data.has("error"):
+        let why = str(data.get("error", "status " + str(r["status"])))
+        if data.has("error_description"):
+            why = why + ": " + str(data["error_description"])
+        end
+        _oa_fail("the provider refused: " + why)
+    end
+    return data
+end
+
+# Public keys from JWKS URLs, by URL then key id, with when they were fetched.
+let _oa_jwks = {}
+
+func _oa_key(jwks_url, kid):
+    let entry = _oa_jwks.get(jwks_url, none)
+    let fresh = entry != none and os.time() - entry["at"] < 3600
+    if fresh and entry["keys"].has(kid):
+        return entry["keys"][kid]
+    end
+    # Unknown key id: the provider may have rotated keys. Refetch, but not
+    # more than once a minute, so bad tokens cannot make us hammer it.
+    if entry != none and os.time() - entry["at"] < 60 and not entry["keys"].has(kid):
+        _oa_fail("the ID token was signed with an unknown key")
+    end
+    let r = http.request("GET", jwks_url, {"timeout": 30})
+    if r["status"] != 200:
+        _oa_fail("cannot fetch the provider's keys (status " + str(r["status"]) + ")")
+    end
+    let keys = {}
+    for each jwk in json.parse(r["body"]).get("keys", []):
+        if jwk.has("kid") and (jwk.get("use", "sig") == "sig") and (jwk.get("kty", "") == "RSA" or jwk.get("kty", "") == "EC"):
+            try:
+                keys[jwk["kid"]] = crypto.jwk_to_pem(jwk)
+            catch e:
+                # skip keys we cannot use
+            end
+        end
+    end
+    _oa_jwks[jwks_url] = {"at": os.time(), "keys": keys}
+    if not keys.has(kid):
+        _oa_fail("the ID token was signed with an unknown key")
+    end
+    return keys[kid]
+end
+
+blueprint OAuthClient:
+    # config: client_id, client_secret (none for public apps), redirect_uri,
+    # authorize_url, token_url, and for ID tokens jwks_url and issuer.
+    # scope: the default scopes, space separated.
+    action init(config):
+        for each needed in ["client_id", "authorize_url", "token_url"]:
+            if config.get(needed, none) == none or config[needed] == "":
+                _oa_fail("the configuration needs " + needed)
+            end
+        end
+        self.config = config
+    end
+
+    # The URL to send the user to, plus the values to keep in their session:
+    # {"url", "state", "verifier", "nonce"}. extra: more query parameters,
+    # e.g. {"scope": "openid email", "prompt": "consent", "access_type": "offline"}.
+    action authorize_url(extra = none):
+        let state = crypto.random_token(24)
+        let verifier = crypto.random_token(48)
+        let nonce = crypto.random_token(24)
+        let params = {
+            "response_type": "code",
+            "client_id": self.config["client_id"],
+            "redirect_uri": self.config.get("redirect_uri", none),
+            "scope": self.config.get("scope", none),
+            "state": state,
+            "code_challenge": crypto.sha256_b64url(verifier),
+            "code_challenge_method": "S256"}
+        if self.config.get("jwks_url", none) != none:
+            params["nonce"] = nonce
+        end
+        if extra != none:
+            for each k in extra.keys():
+                params[k] = extra[k]
+            end
+        end
+        let sep = "?"
+        if self.config["authorize_url"].contains("?"):
+            sep = "&"
+        end
+        return {"url": self.config["authorize_url"] + sep + _oa_form(params), "state": state, "verifier": verifier, "nonce": nonce}
+    end
+
+    # Swaps the code from the callback for tokens:
+    # {"access_token", "token_type", "expires_in", "refresh_token"?, "id_token"?, "scope"?}
+    action exchange(code, verifier):
+        if type(code) != "string" or code == "":
+            _oa_fail("the callback had no code")
+        end
+        return self._token({"grant_type": "authorization_code", "code": code,
+                            "redirect_uri": self.config.get("redirect_uri", none), "code_verifier": verifier})
+    end
+
+    # New tokens from a refresh token.
+    action refresh(refresh_token):
+        return self._token({"grant_type": "refresh_token", "refresh_token": refresh_token})
+    end
+
+    # Tokens for the app itself (no user), e.g. for server-to-server APIs.
+    action client_credentials(scope = none):
+        return self._token({"grant_type": "client_credentials", "scope": scope})
+    end
+
+    action _token(fields):
+        fields["client_id"] = self.config["client_id"]
+        let secret = self.config.get("client_secret", none)
+        if secret != none:
+            fields["client_secret"] = secret
+        end
+        let tokens = _oa_post(self.config["token_url"], fields)
+        if not tokens.has("access_token"):
+            _oa_fail("the provider's answer has no access_token")
+        end
+        return tokens
+    end
+
+    # Checks an ID token (signature from the provider's keys, issuer,
+    # audience = client_id, expiry, and the nonce from authorize_url) and
+    # returns its claims: sub (the user's stable id), email, name ...
+    action verify_id_token(id_token, nonce = none):
+        let jwks_url = self.config.get("jwks_url", none)
+        if jwks_url == none:
+            _oa_fail("this provider has no ID tokens (no jwks_url configured)")
+        end
+        let header = jwt.header(id_token)
+        let key = _oa_key(jwks_url, header.get("kid", ""))
+        let opts = {"algorithms": ["RS256", "ES256"], "audience": self.config["client_id"], "leeway": 60, "require": ["exp", "iat", "sub"]}
+        if self.config.get("issuer", none) != none:
+            opts["issuer"] = self.config["issuer"]
+        end
+        let claims = none
+        try:
+            claims = jwt.decode(id_token, key, opts)
+        catch e:
+            _oa_fail("the ID token is not valid: " + str(e).replace("jwt: ", ""))
+        end
+        if nonce != none and claims.get("nonce", none) != nonce:
+            _oa_fail("the ID token's nonce does not match this login")
+        end
+        return claims
+    end
+end
+
+blueprint OAuth:
+    # A client for a known provider. config needs client_id, client_secret
+    # and redirect_uri; anything else given overrides the preset.
+    action provider(name, config):
+        let preset = {}
+        if name == "google":
+            preset = {"authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+                      "token_url": "https://oauth2.googleapis.com/token",
+                      "jwks_url": "https://www.googleapis.com/oauth2/v3/certs",
+                      "issuer": ["https://accounts.google.com", "accounts.google.com"],
+                      "scope": "openid email profile"}
+        eif name == "microsoft":
+            let tenant = config.get("tenant", "common")
+            preset = {"authorize_url": "https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/authorize",
+                      "token_url": "https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/token",
+                      "jwks_url": "https://login.microsoftonline.com/" + tenant + "/discovery/v2.0/keys",
+                      "scope": "openid email profile"}
+            if tenant != "common" and tenant != "organizations" and tenant != "consumers":
+                preset["issuer"] = "https://login.microsoftonline.com/" + tenant + "/v2.0"
+            end
+        eif name == "github":
+            preset = {"authorize_url": "https://github.com/login/oauth/authorize",
+                      "token_url": "https://github.com/login/oauth/access_token",
+                      "scope": "read:user user:email"}
+        else:
+            _oa_fail("unknown provider " + str(name) + " (google, microsoft, github); use OAuthClient for others")
+        end
+        for each k in config.keys():
+            preset[k] = config[k]
+        end
+        return OAuthClient(preset)
+    end
+
+    # An access token for a Google service account (server-to-server: Sheets,
+    # Drive, Gmail API ...). account is the service account's JSON key file
+    # (its text, or the parsed dict); scopes is a list of scope URLs.
+    # Returns {"access_token", "expires_at"}. Cache it until expires_at.
+    action google_service_token(account, scopes):
+        let acct = account
+        if type(account) == "string":
+            acct = json.parse(account)
+        end
+        for each needed in ["client_email", "private_key"]:
+            if type(acct) != "dict" or not acct.has(needed):
+                _oa_fail("the service account key has no " + needed)
+            end
+        end
+        let token_url = acct.get("token_uri", "https://oauth2.googleapis.com/token")
+        let now = jwt.now()
+        let claims = {"iss": acct["client_email"], "scope": " ".join(scopes), "aud": token_url, "iat": now, "exp": now + 3600}
+        let headers = none
+        if acct.has("private_key_id"):
+            headers = {"kid": acct["private_key_id"]}
+        end
+        let assertion = jwt.encode(claims, acct["private_key"], "RS256", headers)
+        let reply = _oa_post(token_url, {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion})
+        return {"access_token": reply["access_token"], "expires_at": now + reply.get("expires_in", 3600) - 60}
+    end
+end
+
+let oauth = OAuth()

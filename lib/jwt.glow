@@ -1,0 +1,240 @@
+# jwt.glow: JSON Web Tokens (RFC 7519), signed with HMAC, RSA or ECDSA.
+#
+#   use "jwt"
+#   let token = jwt.encode({"sub": "42", "exp": jwt.now() + 3600}, secret)
+#   let claims = jwt.decode(token, secret)          # raises if forged or expired
+#   show claims["sub"]
+#
+# For tokens signed with a key pair, sign with the private key and check
+# with the public key (or certificate), naming the algorithm you expect:
+#
+#   let token = jwt.encode(claims, private_pem, "RS256", {"kid": "key-1"})
+#   let claims = jwt.decode(token, public_pem, {"algorithms": ["RS256"], "audience": "my-app"})
+#
+# Algorithms: HS256 HS384 HS512 (a shared secret of at least 32, 48 or 64
+# characters),
+# RS256 RS384 RS512 (RSA, 2048 bits or more) and ES256 ES384 (EC P-256 and
+# P-384). Keys are PEM text. "none" is never accepted.
+#
+# decode checks the signature first, then exp (expiry), nbf (not before),
+# iat, aud (audience) and iss (issuer) when they are present or asked for.
+# Every failure raises an error starting with "jwt:".
+
+func _jwt_fail(msg):
+    throw "jwt: " + msg
+end
+
+func _jwt_b64(text):
+    return crypto.base64(text, true)
+end
+
+func _jwt_unb64(part, what):
+    try:
+        return crypto.unbase64(part)
+    catch e:
+        _jwt_fail("the " + what + " is not valid base64url")
+    end
+end
+
+func _jwt_is_number(v):
+    return type(v) == "int" or type(v) == "float"
+end
+
+func _jwt_is_pem(key):
+    return type(key) == "string" and key.contains("-----BEGIN")
+end
+
+blueprint Jwt:
+    # Seconds since 1970 (UTC), the unit of exp, nbf and iat.
+    action now():
+        return int(os.time())
+    end
+
+    # A token for claims (a dict). headers adds to the header, e.g. a kid.
+    action encode(claims, key, alg = "HS256", headers = none):
+        if type(claims) != "dict":
+            _jwt_fail("claims must be a dict")
+        end
+        if type(key) != "string" or key == "":
+            _jwt_fail("the key must be text: a secret, or a PEM private key")
+        end
+        # RFC 7518: an HMAC key at least as long as the hash (32/48/64 bytes).
+        let min_len = {"HS256": 32, "HS384": 48, "HS512": 64}.get(alg, 0)
+        if min_len > 0 and not _jwt_is_pem(key) and key.byte_len() < min_len:
+            _jwt_fail("an " + alg + " secret must be at least " + str(min_len) + " characters (crypto.random_token(" + str(min_len) + ") makes one)")
+        end
+        let header = {"alg": alg, "typ": "JWT"}
+        if headers != none:
+            for each k in headers.keys():
+                if k != "alg":
+                    header[k] = headers[k]
+                end
+            end
+        end
+        let signing_input = _jwt_b64(json.stringify(header)) + "." + _jwt_b64(json.stringify(claims))
+        let sig = ""
+        try:
+            sig = crypto.sign(alg, key, signing_input)
+        catch e:
+            _jwt_fail(str(e).replace("crypto.sign: ", ""))
+        end
+        return signing_input + "." + sig
+    end
+
+    # The header of a token, without checking anything.
+    action header(token):
+        return self._parts(token)[0]
+    end
+
+    # The claims of a token WITHOUT checking the signature. Only for
+    # looking at a token (debugging, picking a key); never trust them.
+    action unverified(token):
+        return self._parts(token)[1]
+    end
+
+    action _parts(token):
+        if type(token) != "string":
+            _jwt_fail("the token must be text")
+        end
+        let parts = token.trim().split(".")
+        if len(parts) != 3:
+            _jwt_fail("a token has three parts separated by dots")
+        end
+        let header = none
+        let claims = none
+        try:
+            header = json.parse(_jwt_unb64(parts[0], "header"))
+            claims = json.parse(_jwt_unb64(parts[1], "payload"))
+        catch e:
+            if str(e).starts_with("jwt:"):
+                throw e
+            end
+            _jwt_fail("the token's header or payload is not JSON")
+        end
+        if type(header) != "dict" or type(claims) != "dict":
+            _jwt_fail("the token's header and payload must be JSON objects")
+        end
+        return [header, claims, parts[0] + "." + parts[1], parts[2]]
+    end
+
+    # Checks a token and returns its claims. key is the secret or the PEM
+    # public key / certificate; or a dict of key id -> key, picked by the
+    # token's "kid". options:
+    #   algorithms  the algorithms to accept (default ["HS256"] for a secret;
+    #               required for PEM keys)
+    #   audience    required "aud" (text, or a list: any one may match)
+    #   issuer      required "iss" (text, or a list)
+    #   leeway      seconds of clock difference to allow (default 0)
+    #   require     claims that must be present, e.g. ["exp", "sub"]
+    #   now         the time to check against (for tests)
+    action decode(token, key, options = none):
+        let opts = options
+        if opts == none:
+            opts = {}
+        end
+        let p = self._parts(token)
+        let header = p[0]
+        let claims = p[1]
+        let alg = header.get("alg", none)
+        if type(alg) != "string" or alg == "" or alg.lower() == "none":
+            _jwt_fail("the token is not signed (alg none) and is refused")
+        end
+        let chosen = key
+        if type(key) == "dict":
+            let kid = header.get("kid", none)
+            if kid == none or not key.has(kid):
+                _jwt_fail("no key for this token's kid " + str(kid))
+            end
+            chosen = key[kid]
+        end
+        if type(chosen) != "string" or chosen == "":
+            _jwt_fail("the key must be text")
+        end
+        let algorithms = opts.get("algorithms", none)
+        if algorithms == none:
+            if _jwt_is_pem(chosen):
+                _jwt_fail("say which algorithms to accept, e.g. {\"algorithms\": [\"RS256\"]}")
+            end
+            algorithms = ["HS256"]
+        end
+        if not algorithms.contains(alg):
+            _jwt_fail("the token uses " + alg + ", which is not accepted here")
+        end
+        let good = false
+        try:
+            good = crypto.verify(alg, chosen, p[2], p[3])
+        catch e:
+            _jwt_fail(str(e).replace("crypto.verify: ", ""))
+        end
+        if not good:
+            _jwt_fail("the signature is invalid")
+        end
+
+        let now = opts.get("now", none)
+        if now == none:
+            now = os.time()
+        end
+        let leeway = opts.get("leeway", 0)
+        for each name in opts.get("require", []):
+            if not claims.has(name):
+                _jwt_fail("the token has no " + name + " claim")
+            end
+        end
+        if claims.has("exp"):
+            if not _jwt_is_number(claims["exp"]):
+                _jwt_fail("exp must be a number")
+            end
+            if now >= claims["exp"] + leeway:
+                _jwt_fail("the token has expired")
+            end
+        end
+        if claims.has("nbf"):
+            if not _jwt_is_number(claims["nbf"]):
+                _jwt_fail("nbf must be a number")
+            end
+            if now < claims["nbf"] - leeway:
+                _jwt_fail("the token is not valid yet")
+            end
+        end
+        if claims.has("iat") and not _jwt_is_number(claims["iat"]):
+            _jwt_fail("iat must be a number")
+        end
+        let audience = opts.get("audience", none)
+        if audience != none:
+            let wanted = audience
+            if type(wanted) == "string":
+                wanted = [wanted]
+            end
+            let aud = claims.get("aud", none)
+            let have = aud
+            if type(aud) == "string":
+                have = [aud]
+            end
+            if type(have) != "list":
+                _jwt_fail("the token has no audience (aud)")
+            end
+            let match = false
+            for each a in have:
+                if wanted.contains(a):
+                    match = true
+                end
+            end
+            if not match:
+                _jwt_fail("the token is for another audience")
+            end
+        end
+        let issuer = opts.get("issuer", none)
+        if issuer != none:
+            let allowed = issuer
+            if type(allowed) == "string":
+                allowed = [allowed]
+            end
+            if not allowed.contains(claims.get("iss", none)):
+                _jwt_fail("the token comes from another issuer")
+            end
+        end
+        return claims
+    end
+end
+
+let jwt = Jwt()

@@ -4119,6 +4119,448 @@ static Value pg_close_native(int argc, Value *args) {
     return value_none();
 }
 
+/* ---- Signing for JWT / OAuth: crypto.base64, crypto.sign, crypto.verify ...
+ *
+ * GlowLang strings hold text, not arbitrary bytes, so everything binary
+ * (digests, signatures, random bytes) stays in C and crosses into GlowLang
+ * as base64url text.
+ *
+ *   crypto.base64(text, url)          text -> base64 (url=true: base64url, no padding)
+ *   crypto.unbase64(text)             base64 or base64url -> text (must be UTF-8)
+ *   crypto.random_token(n)            n random bytes as base64url
+ *   crypto.sha256_b64url(text)        SHA-256 as base64url (PKCE S256)
+ *   crypto.sign(alg, key, data)       JWS signature as base64url
+ *   crypto.verify(alg, key, data, s)  true / false
+ *   crypto.jwk_to_pem(jwk)            a public JWK (RSA or EC) as PEM text
+ *
+ * alg: HS256 HS384 HS512 (key: a secret), RS256 RS384 RS512 (RSA, at least
+ * 2048 bits), ES256 ES384 (EC P-256 / P-384). Private keys and public keys
+ * or certificates are PEM text. An HS algorithm refuses a PEM key, which
+ * blocks the "algorithm confusion" attack on verifiers.
+ */
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/x509.h>
+#include <openssl/ecdsa.h>
+#include <openssl/bn.h>
+#include <openssl/core_names.h>
+#include <openssl/param_build.h>
+
+static Value jws_fail(const char *fn, const char *msg) {
+    char buf[300];
+    snprintf(buf, sizeof(buf), "crypto.%s: %s", fn, msg);
+    pending_exception = value_string_copy(buf);
+    has_exception = 1;
+    return value_none();
+}
+
+static char *b64_encode(const unsigned char *in, size_t n, int url) {
+    size_t cap = 4 * ((n + 2) / 3) + 1;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    int len = EVP_EncodeBlock((unsigned char*)out, in, (int)n);
+    if (url) {
+        for (int i = 0; i < len; i++) { if (out[i] == '+') out[i] = '-'; else if (out[i] == '/') out[i] = '_'; }
+        while (len > 0 && out[len - 1] == '=') len--;
+        out[len] = 0;
+    }
+    return out;
+}
+
+/* Accepts standard and url alphabets, with or without padding.
+   Returns malloc'd bytes and their count, or NULL on bad input. */
+static unsigned char *b64_decode(const char *in, size_t n, size_t *outn) {
+    char *t = malloc(n + 4);
+    if (!t) return NULL;
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = in[i];
+        if (c == '-') c = '+'; else if (c == '_') c = '/';
+        else if (c == '=') continue;
+        else if (!(isalnum((unsigned char)c) || c == '+' || c == '/')) { free(t); return NULL; }
+        t[k++] = c;
+    }
+    if (k % 4 == 1) { free(t); return NULL; }
+    size_t pad = (4 - k % 4) % 4;
+    for (size_t i = 0; i < pad; i++) t[k++] = '=';
+    unsigned char *out = malloc(k / 4 * 3 + 1);
+    int r = k ? EVP_DecodeBlock(out, (unsigned char*)t, (int)k) : 0;
+    free(t);
+    if (r < 0) { free(out); return NULL; }
+    *outn = (size_t)r - pad;
+    out[*outn] = 0;
+    return out;
+}
+
+/* Valid UTF-8 with no NUL (what a GlowLang string can hold). */
+static int utf8_ok(const unsigned char *s, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        unsigned char c = s[i];
+        if (c == 0) return 0;
+        if (c < 0x80) { i++; continue; }
+        int extra;
+        if (c >= 0xC2 && c <= 0xDF) extra = 1;
+        else if ((c & 0xF0) == 0xE0) extra = 2;
+        else if (c >= 0xF0 && c <= 0xF4) extra = 3;
+        else return 0;
+        if (i + (size_t)extra >= n) return 0;
+        for (int k = 1; k <= extra; k++) if ((s[i + k] & 0xC0) != 0x80) return 0;
+        i += (size_t)extra + 1;
+    }
+    return 1;
+}
+
+static int str_arg(Value v, const char **s, size_t *n) {
+    if (GET_TYPE(v) != VAL_STRING) return 0;
+    *s = (v & MASK_PAYLOAD) ? AS_STRING(v) : "";
+    *n = (v & MASK_PAYLOAD) ? rope_length(v) : 0;
+    return 1;
+}
+
+static Value crypto_base64_native(int argc, Value *args) {
+    const char *s; size_t n;
+    if (argc < 1 || !str_arg(args[0], &s, &n)) return jws_fail("base64", "needs text");
+    int url = argc > 1 && GET_TYPE(args[1]) == VAL_BOOL && AS_BOOL(args[1]);
+    char *out = b64_encode((const unsigned char*)s, n, url);
+    Value v = value_string_copy(out ? out : "");
+    free(out);
+    return v;
+}
+
+static Value crypto_unbase64_native(int argc, Value *args) {
+    const char *s; size_t n, outn = 0;
+    if (argc < 1 || !str_arg(args[0], &s, &n)) return jws_fail("unbase64", "needs text");
+    unsigned char *out = b64_decode(s, n, &outn);
+    if (!out) return jws_fail("unbase64", "the text is not valid base64");
+    if (!utf8_ok(out, outn)) { free(out); return jws_fail("unbase64", "the decoded bytes are not text (binary data or invalid UTF-8)"); }
+    Value v = value_string_copy_len((const char*)out, outn);
+    free(out);
+    return v;
+}
+
+static Value crypto_random_token_native(int argc, Value *args) {
+    int64_t n;
+    if (!random_count_arg(argc, args, "crypto.random_token", &n)) return value_none();
+    unsigned char *buf = malloc((size_t)n);
+    if (!buf || RAND_bytes(buf, (int)n) != 1) { free(buf); return jws_fail("random_token", "the secure random source failed"); }
+    char *out = b64_encode(buf, (size_t)n, 1);
+    OPENSSL_cleanse(buf, (size_t)n);
+    free(buf);
+    Value v = value_string_copy(out ? out : "");
+    free(out);
+    return v;
+}
+
+static Value crypto_sha256_b64url_native(int argc, Value *args) {
+    const char *s; size_t n;
+    if (argc < 1 || !str_arg(args[0], &s, &n)) return jws_fail("sha256_b64url", "needs text");
+    unsigned char md[32];
+    SHA256((const unsigned char*)s, n, md);
+    char *out = b64_encode(md, 32, 1);
+    Value v = value_string_copy(out);
+    free(out);
+    return v;
+}
+
+typedef struct { const char *name; int kind; const EVP_MD *(*md)(void); int ec_bytes; const char *curve; } JwsAlg;
+/* kind: 1 HMAC, 2 RSA PKCS#1 v1.5, 3 ECDSA */
+static const JwsAlg *jws_alg(const char *name) {
+    static const JwsAlg algs[] = {
+        { "HS256", 1, EVP_sha256, 0, NULL }, { "HS384", 1, EVP_sha384, 0, NULL }, { "HS512", 1, EVP_sha512, 0, NULL },
+        { "RS256", 2, EVP_sha256, 0, NULL }, { "RS384", 2, EVP_sha384, 0, NULL }, { "RS512", 2, EVP_sha512, 0, NULL },
+        { "ES256", 3, EVP_sha256, 32, "prime256v1" }, { "ES384", 3, EVP_sha384, 48, "secp384r1" },
+    };
+    for (size_t i = 0; i < sizeof(algs) / sizeof(algs[0]); i++) if (strcmp(algs[i].name, name) == 0) return &algs[i];
+    return NULL;
+}
+
+/* Loads a PEM key. want_private: a private key; otherwise a public key,
+   a certificate or a private key (its public half is used). */
+static EVP_PKEY *jws_load_key(const char *pem, size_t n, int want_private) {
+    EVP_PKEY *k = NULL;
+    BIO *b = BIO_new_mem_buf(pem, (int)n);
+    if (!b) return NULL;
+    if (want_private) k = PEM_read_bio_PrivateKey(b, NULL, NULL, (void*)"");
+    else {
+        k = PEM_read_bio_PUBKEY(b, NULL, NULL, NULL);
+        if (!k) {
+            (void)BIO_reset(b);
+            X509 *x = PEM_read_bio_X509(b, NULL, NULL, NULL);
+            if (x) { k = X509_get_pubkey(x); X509_free(x); }
+        }
+        if (!k) { (void)BIO_reset(b); k = PEM_read_bio_PrivateKey(b, NULL, NULL, (void*)""); }
+    }
+    BIO_free(b);
+    ERR_clear_error();
+    return k;
+}
+
+/* NULL if the key suits the algorithm, else why not. */
+static const char *jws_check_key(const JwsAlg *a, EVP_PKEY *k) {
+    if (a->kind == 2) {
+        if (EVP_PKEY_get_base_id(k) != EVP_PKEY_RSA) return "the key is not an RSA key";
+        if (EVP_PKEY_get_bits(k) < 2048) return "RSA keys must be at least 2048 bits";
+    } else if (a->kind == 3) {
+        if (EVP_PKEY_get_base_id(k) != EVP_PKEY_EC) return "the key is not an EC key";
+        char group[64] = "";
+        size_t gl = 0;
+        if (!EVP_PKEY_get_utf8_string_param(k, OSSL_PKEY_PARAM_GROUP_NAME, group, sizeof(group), &gl) || strcmp(group, a->curve) != 0)
+            return a->ec_bytes == 32 ? "ES256 needs a P-256 key" : "ES384 needs a P-384 key";
+    }
+    return NULL;
+}
+
+static int looks_like_pem(const char *s, size_t n) {
+    for (size_t i = 0; i + 10 <= n; i++) if (memcmp(s + i, "-----BEGIN", 10) == 0) return 1;
+    return 0;
+}
+
+static Value crypto_sign_native(int argc, Value *args) {
+    const char *alg, *key, *data; size_t an, kn, dn;
+    if (argc < 3 || !str_arg(args[0], &alg, &an) || !str_arg(args[1], &key, &kn) || !str_arg(args[2], &data, &dn))
+        return jws_fail("sign", "needs (alg, key, data) as text");
+    const JwsAlg *a = jws_alg(alg);
+    if (!a) return jws_fail("sign", "unsupported algorithm (use HS256/384/512, RS256/384/512, ES256 or ES384)");
+    unsigned char sig[1024];
+    size_t sl = sizeof(sig);
+    if (a->kind == 1) {
+        if (kn == 0) return jws_fail("sign", "the HMAC secret is empty");
+        if (looks_like_pem(key, kn)) return jws_fail("sign", "an HS algorithm needs a shared secret, not a PEM key");
+        unsigned int ul = 0;
+        if (!HMAC(a->md(), key, (int)kn, (const unsigned char*)data, dn, sig, &ul)) return jws_fail("sign", "HMAC failed");
+        sl = ul;
+    } else {
+        EVP_PKEY *k = jws_load_key(key, kn, 1);
+        if (!k) return jws_fail("sign", "the key is not a PEM private key");
+        const char *why = jws_check_key(a, k);
+        if (why) { EVP_PKEY_free(k); return jws_fail("sign", why); }
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        unsigned char der[1024];
+        size_t derl = sizeof(der);
+        int ok = ctx && EVP_DigestSignInit(ctx, NULL, a->md(), NULL, k) == 1 &&
+                 EVP_DigestSign(ctx, a->kind == 3 ? der : sig, a->kind == 3 ? &derl : &sl, (const unsigned char*)data, dn) == 1;
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(k);
+        if (!ok) { ERR_clear_error(); return jws_fail("sign", "signing failed"); }
+        if (a->kind == 3) {   /* DER (r, s) -> fixed-size r || s as JWS wants */
+            const unsigned char *p = der;
+            ECDSA_SIG *es = d2i_ECDSA_SIG(NULL, &p, (long)derl);
+            if (!es) return jws_fail("sign", "signing failed");
+            const BIGNUM *r, *s;
+            ECDSA_SIG_get0(es, &r, &s);
+            memset(sig, 0, (size_t)a->ec_bytes * 2);
+            BN_bn2binpad(r, sig, a->ec_bytes);
+            BN_bn2binpad(s, sig + a->ec_bytes, a->ec_bytes);
+            ECDSA_SIG_free(es);
+            sl = (size_t)a->ec_bytes * 2;
+        }
+    }
+    char *out = b64_encode(sig, sl, 1);
+    OPENSSL_cleanse(sig, sizeof(sig));
+    Value v = value_string_copy(out);
+    free(out);
+    return v;
+}
+
+static Value crypto_verify_native(int argc, Value *args) {
+    const char *alg, *key, *data, *sig64; size_t an, kn, dn, sn;
+    if (argc < 4 || !str_arg(args[0], &alg, &an) || !str_arg(args[1], &key, &kn) || !str_arg(args[2], &data, &dn) || !str_arg(args[3], &sig64, &sn))
+        return jws_fail("verify", "needs (alg, key, data, signature) as text");
+    const JwsAlg *a = jws_alg(alg);
+    if (!a) return jws_fail("verify", "unsupported algorithm (use HS256/384/512, RS256/384/512, ES256 or ES384)");
+    size_t sigl = 0;
+    unsigned char *sig = b64_decode(sig64, sn, &sigl);
+    if (!sig) return value_bool(0);
+    int good = 0;
+    if (a->kind == 1) {
+        if (kn == 0 || looks_like_pem(key, kn)) { free(sig); return jws_fail("verify", "an HS algorithm needs a shared secret, not a PEM key"); }
+        unsigned char md[EVP_MAX_MD_SIZE]; unsigned int ml = 0;
+        HMAC(a->md(), key, (int)kn, (const unsigned char*)data, dn, md, &ml);
+        good = ml == sigl && CRYPTO_memcmp(md, sig, ml) == 0;
+    } else {
+        EVP_PKEY *k = jws_load_key(key, kn, 0);
+        if (!k) { free(sig); return jws_fail("verify", "the key is not a PEM public key, certificate or private key"); }
+        const char *why = jws_check_key(a, k);
+        if (why) { EVP_PKEY_free(k); free(sig); return jws_fail("verify", why); }
+        unsigned char der[256];
+        const unsigned char *check = sig;
+        size_t checkl = sigl;
+        int shape_ok = 1;
+        if (a->kind == 3) {   /* r || s -> DER for OpenSSL */
+            shape_ok = sigl == (size_t)a->ec_bytes * 2;
+            if (shape_ok) {
+                ECDSA_SIG *es = ECDSA_SIG_new();
+                BIGNUM *r = BN_bin2bn(sig, a->ec_bytes, NULL), *s = BN_bin2bn(sig + a->ec_bytes, a->ec_bytes, NULL);
+                ECDSA_SIG_set0(es, r, s);
+                unsigned char *p = der;
+                int dl = i2d_ECDSA_SIG(es, &p);
+                ECDSA_SIG_free(es);
+                shape_ok = dl > 0;
+                check = der; checkl = (size_t)dl;
+            }
+        }
+        if (shape_ok) {
+            EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+            good = ctx && EVP_DigestVerifyInit(ctx, NULL, a->md(), NULL, k) == 1 &&
+                   EVP_DigestVerify(ctx, check, checkl, (const unsigned char*)data, dn) == 1;
+            EVP_MD_CTX_free(ctx);
+        }
+        EVP_PKEY_free(k);
+        ERR_clear_error();
+    }
+    free(sig);
+    return value_bool(good);
+}
+
+/* A public JWK ({"kty": "RSA", "n", "e"} or {"kty": "EC", "crv", "x", "y"})
+   as PEM, for verifying tokens from a provider's JWKS endpoint. */
+static unsigned char *jwk_field(Dict *d, const char *name, size_t *n) {
+    Value v = dict_get(d, name);
+    if (GET_TYPE(v) != VAL_STRING || !(v & MASK_PAYLOAD)) return NULL;
+    return b64_decode(AS_STRING(v), rope_length(v), n);
+}
+
+static Value crypto_jwk_to_pem_native(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_DICT) return jws_fail("jwk_to_pem", "needs a JWK dict");
+    Dict *d = AS_DICT(args[0]);
+    Value kty = dict_get(d, "kty");
+    if (GET_TYPE(kty) != VAL_STRING) return jws_fail("jwk_to_pem", "the JWK has no kty");
+    EVP_PKEY *k = NULL;
+    EVP_PKEY_CTX *pc = NULL;
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    OSSL_PARAM *params = NULL;
+    BIGNUM *bn_n = NULL, *bn_e = NULL;
+    unsigned char *a = NULL, *b = NULL, *pt = NULL;
+    size_t an = 0, bnl = 0;
+    const char *err = NULL;
+    if (strcmp(AS_STRING(kty), "RSA") == 0) {
+        a = jwk_field(d, "n", &an); b = jwk_field(d, "e", &bnl);
+        if (!a || !b || an == 0 || bnl == 0) err = "an RSA JWK needs n and e";
+        else {
+            bn_n = BN_bin2bn(a, (int)an, NULL); bn_e = BN_bin2bn(b, (int)bnl, NULL);
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn_n);
+            OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, bn_e);
+            params = OSSL_PARAM_BLD_to_param(bld);
+            pc = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+        }
+    } else if (strcmp(AS_STRING(kty), "EC") == 0) {
+        Value crv = dict_get(d, "crv");
+        const char *group = NULL; size_t len = 0;
+        if (GET_TYPE(crv) == VAL_STRING && strcmp(AS_STRING(crv), "P-256") == 0) { group = "prime256v1"; len = 32; }
+        else if (GET_TYPE(crv) == VAL_STRING && strcmp(AS_STRING(crv), "P-384") == 0) { group = "secp384r1"; len = 48; }
+        a = jwk_field(d, "x", &an); b = jwk_field(d, "y", &bnl);
+        if (!group) err = "only the P-256 and P-384 curves are supported";
+        else if (!a || !b || an != len || bnl != len) err = "an EC JWK needs x and y of the curve's size";
+        else {
+            pt = malloc(1 + 2 * len);
+            pt[0] = 4; memcpy(pt + 1, a, len); memcpy(pt + 1 + len, b, len);
+            OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, group, 0);
+            OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, pt, 1 + 2 * len);
+            params = OSSL_PARAM_BLD_to_param(bld);
+            pc = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+        }
+    } else err = "kty must be RSA or EC";
+    if (!err && (!pc || !params || EVP_PKEY_fromdata_init(pc) != 1 || EVP_PKEY_fromdata(pc, &k, EVP_PKEY_PUBLIC_KEY, params) != 1))
+        err = "the key data is invalid";
+    Value result = value_none();
+    if (!err) {
+        BIO *out = BIO_new(BIO_s_mem());
+        if (out && PEM_write_bio_PUBKEY(out, k)) {
+            char *p; long n = BIO_get_mem_data(out, &p);
+            result = value_string_copy_len(p, (size_t)n);
+        } else err = "cannot write the key";
+        BIO_free(out);
+    }
+    EVP_PKEY_free(k); EVP_PKEY_CTX_free(pc); OSSL_PARAM_free(params); OSSL_PARAM_BLD_free(bld);
+    BN_free(bn_n); BN_free(bn_e); free(a); free(b); free(pt);
+    ERR_clear_error();
+    if (err) return jws_fail("jwk_to_pem", err);
+    return result;
+}
+
+/* crypto.generate_keypair(alg) -> {"private": PEM, "public": PEM} for
+   RS256/384/512 (RSA 2048, or "bits" 3072/4096 as a second argument),
+   ES256 (P-256) or ES384 (P-384). */
+static Value crypto_generate_keypair_native(int argc, Value *args) {
+    const char *alg; size_t an;
+    if (argc < 1 || !str_arg(args[0], &alg, &an)) return jws_fail("generate_keypair", "needs an algorithm such as RS256 or ES256");
+    const JwsAlg *a = jws_alg(alg);
+    if (!a || a->kind == 1) return jws_fail("generate_keypair", "use RS256, RS384, RS512, ES256 or ES384 (HS algorithms use crypto.random_token(32) as the secret)");
+    EVP_PKEY *k = NULL;
+    if (a->kind == 2) {
+        int bits = argc > 1 && GET_TYPE(args[1]) == VAL_INT ? (int)AS_INT(args[1]) : 2048;
+        if (bits != 2048 && bits != 3072 && bits != 4096) return jws_fail("generate_keypair", "RSA keys are 2048, 3072 or 4096 bits");
+        glow_gil_release();
+        k = EVP_RSA_gen((unsigned int)bits);
+        glow_gil_acquire();
+    } else {
+        k = EVP_EC_gen(a->curve);
+    }
+    if (!k) { ERR_clear_error(); return jws_fail("generate_keypair", "key generation failed"); }
+    BIO *priv = BIO_new(BIO_s_mem()), *pub = BIO_new(BIO_s_mem());
+    Value result = value_none();
+    if (priv && pub && PEM_write_bio_PrivateKey(priv, k, NULL, NULL, 0, NULL, NULL) && PEM_write_bio_PUBKEY(pub, k)) {
+        char *p1, *p2;
+        long n1 = BIO_get_mem_data(priv, &p1), n2 = BIO_get_mem_data(pub, &p2);
+        Dict *d = dict_new(2);
+        dict_set(d, "private", value_string_copy_len(p1, (size_t)n1));
+        dict_set(d, "public", value_string_copy_len(p2, (size_t)n2));
+        result = value_dict(d);
+    }
+    BIO_free(priv); BIO_free(pub); EVP_PKEY_free(k);
+    if (GET_TYPE(result) == VAL_NONE) return jws_fail("generate_keypair", "cannot write the keys");
+    return result;
+}
+
+/* crypto.pem_to_jwk(pem) -> the public JWK of a PEM key or certificate
+   ({"kty": "RSA", "n", "e"} or {"kty": "EC", "crv", "x", "y"}), for
+   publishing your own JWKS. */
+static void jwk_put_bn(Dict *d, const char *name, const BIGNUM *bn, int pad) {
+    int n = pad ? pad : BN_num_bytes(bn);
+    unsigned char *buf = malloc((size_t)(n ? n : 1));
+    BN_bn2binpad(bn, buf, n);
+    char *t = b64_encode(buf, (size_t)n, 1);
+    dict_set(d, name, value_string_copy(t));
+    free(t); free(buf);
+}
+
+static Value crypto_pem_to_jwk_native(int argc, Value *args) {
+    const char *pem; size_t n;
+    if (argc < 1 || !str_arg(args[0], &pem, &n)) return jws_fail("pem_to_jwk", "needs PEM text");
+    EVP_PKEY *k = jws_load_key(pem, n, 0);
+    if (!k) return jws_fail("pem_to_jwk", "the text is not a PEM key or certificate");
+    Dict *d = dict_new(4);
+    Value result = value_dict(d);
+    const char *err = NULL;
+    if (EVP_PKEY_get_base_id(k) == EVP_PKEY_RSA) {
+        BIGNUM *bn_n = NULL, *bn_e = NULL;
+        if (EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_RSA_N, &bn_n) && EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_RSA_E, &bn_e)) {
+            dict_set(d, "kty", value_string_copy("RSA"));
+            jwk_put_bn(d, "n", bn_n, 0);
+            jwk_put_bn(d, "e", bn_e, 0);
+        } else err = "cannot read the RSA key";
+        BN_free(bn_n); BN_free(bn_e);
+    } else if (EVP_PKEY_get_base_id(k) == EVP_PKEY_EC) {
+        char group[64] = ""; size_t gl = 0;
+        EVP_PKEY_get_utf8_string_param(k, OSSL_PKEY_PARAM_GROUP_NAME, group, sizeof(group), &gl);
+        int len = strcmp(group, "prime256v1") == 0 ? 32 : strcmp(group, "secp384r1") == 0 ? 48 : 0;
+        BIGNUM *x = NULL, *y = NULL;
+        if (!len) err = "only P-256 and P-384 keys are supported";
+        else if (EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_EC_PUB_X, &x) && EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_EC_PUB_Y, &y)) {
+            dict_set(d, "kty", value_string_copy("EC"));
+            dict_set(d, "crv", value_string_copy(len == 32 ? "P-256" : "P-384"));
+            jwk_put_bn(d, "x", x, len);
+            jwk_put_bn(d, "y", y, len);
+        } else err = "cannot read the EC key";
+        BN_free(x); BN_free(y);
+    } else err = "only RSA and EC keys are supported";
+    EVP_PKEY_free(k);
+    ERR_clear_error();
+    if (err) return jws_fail("pem_to_jwk", err);
+    return result;
+}
+
 static Value os_time(int argc, Value *args) { (void)argc; (void)args; struct timeval tv; gettimeofday(&tv, NULL); return value_float(tv.tv_sec + tv.tv_usec / 1000000.0); }
 
 #include <time.h>
@@ -5921,6 +6363,15 @@ void std_init(void) {
     dict_set(crypto, "random_hex", native_func_new("random_hex", crypto_random_hex));
     dict_set(crypto, "equal", native_func_new("equal", crypto_equal));
     dict_set(crypto, "uuid4", native_func_new("uuid4", crypto_uuid4));
+    dict_set(crypto, "base64", native_func_new("base64", crypto_base64_native));
+    dict_set(crypto, "unbase64", native_func_new("unbase64", crypto_unbase64_native));
+    dict_set(crypto, "random_token", native_func_new("random_token", crypto_random_token_native));
+    dict_set(crypto, "sha256_b64url", native_func_new("sha256_b64url", crypto_sha256_b64url_native));
+    dict_set(crypto, "sign", native_func_new("sign", crypto_sign_native));
+    dict_set(crypto, "verify", native_func_new("verify", crypto_verify_native));
+    dict_set(crypto, "jwk_to_pem", native_func_new("jwk_to_pem", crypto_jwk_to_pem_native));
+    dict_set(crypto, "pem_to_jwk", native_func_new("pem_to_jwk", crypto_pem_to_jwk_native));
+    dict_set(crypto, "generate_keypair", native_func_new("generate_keypair", crypto_generate_keypair_native));
     var_set("crypto", value_dict(crypto));
 
     Dict *tensor = dict_new(4);
