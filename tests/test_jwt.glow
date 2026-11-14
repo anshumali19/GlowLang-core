@@ -1,0 +1,166 @@
+# jwt.glow and the crypto functions behind it: base64, signing, verifying,
+# key pairs and JWKs. Keys are generated fresh each run.
+use "jwt"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+show "== base64"
+same("base64", crypto.base64("hello world"), "aGVsbG8gd29ybGQ=")
+same("base64url drops padding", crypto.base64("hello world", true), "aGVsbG8gd29ybGQ")
+same("base64url alphabet", crypto.base64("??>>", true), "Pz8-Pg")
+same("standard alphabet", crypto.base64("??>>"), "Pz8+Pg==")
+same("empty", crypto.base64(""), "")
+same("unbase64 standard", crypto.unbase64("aGVsbG8gd29ybGQ="), "hello world")
+same("unbase64 url without padding", crypto.unbase64("aGVsbG8gd29ybGQ"), "hello world")
+same("unbase64 url alphabet", crypto.unbase64("Pz8-Pg"), "??>>")
+same("unicode round trip", crypto.unbase64(crypto.base64("naïve 🚀", true)), "naïve 🚀")
+fails_with("bad base64", lambda(): crypto.unbase64("a*b"), "not valid base64")
+fails_with("impossible length", lambda(): crypto.unbase64("a"), "not valid base64")
+fails_with("binary is not text", lambda(): crypto.unbase64("/w"), "not text")
+same("PKCE S256 example from RFC 7636", crypto.sha256_b64url("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+same("random_token length", len(crypto.random_token(32)), 43)
+ok("random tokens differ", crypto.random_token(16) != crypto.random_token(16))
+
+show "== HS256"
+# The well-known example token from jwt.io.
+let known = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+let c = jwt.decode(known, "your-256-bit-secret")
+same("known token sub", c["sub"], "1234567890")
+same("known token name", c["name"], "John Doe")
+same("known token header", jwt.header(known), {"alg": "HS256", "typ": "JWT"})
+fails_with("known token, wrong secret", lambda(): jwt.decode(known, "not-the-secret"), "signature is invalid")
+same("signature over the exact bytes", crypto.sign("HS256", "your-256-bit-secret", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"), "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+
+let secret = crypto.random_token(32)
+let now = jwt.now()
+let t = jwt.encode({"sub": "42", "exp": now + 60, "roles": ["admin"], "name": "Zoë"}, secret)
+let back = jwt.decode(t, secret)
+same("round trip", back["sub"], "42")
+same("unicode claim", back["name"], "Zoë")
+same("list claim", back["roles"], ["admin"])
+let secret64 = crypto.random_token(48)
+same("HS512", jwt.decode(jwt.encode({"a": 1}, secret64, "HS512"), secret64, {"algorithms": ["HS512"]})["a"], 1)
+fails_with("HS512 needs a 64-character secret", lambda(): jwt.encode({"a": 1}, secret, "HS512"), "at least 64")
+fails_with("short secret refused when signing", lambda(): jwt.encode({"a": 1}, "short"), "at least 32")
+
+show "== tampering"
+let parts = t.split(".")
+let forged_claims = crypto.base64(json.stringify({"sub": "1", "exp": now + 60}), true)
+fails_with("changed payload", lambda(): jwt.decode(parts[0] + "." + forged_claims + "." + parts[2], secret), "signature is invalid")
+fails_with("changed signature", lambda(): jwt.decode(parts[0] + "." + parts[1] + "." + crypto.random_token(32), secret), "signature is invalid")
+fails_with("missing signature", lambda(): jwt.decode(parts[0] + "." + parts[1] + ".", secret), "signature is invalid")
+let none_header = crypto.base64("{\"alg\":\"none\",\"typ\":\"JWT\"}", true)
+fails_with("alg none refused", lambda(): jwt.decode(none_header + "." + parts[1] + ".", secret), "alg none")
+let none2 = crypto.base64("{\"alg\":\"NoNe\"}", true)
+fails_with("alg NoNe refused", lambda(): jwt.decode(none2 + "." + parts[1] + ".", secret), "alg none")
+fails_with("algorithm not in the allowed list", lambda(): jwt.decode(t, secret, {"algorithms": ["HS512"]}), "not accepted")
+fails_with("two parts", lambda(): jwt.decode("a.b", secret), "three parts")
+fails_with("not base64", lambda(): jwt.decode("*.*.*", secret), "not valid base64url")
+fails_with("not JSON", lambda(): jwt.decode(crypto.base64("hi", true) + ".e30.x", secret), "not JSON")
+fails_with("payload not an object", lambda(): jwt.decode("e30." + crypto.base64("[1]", true) + ".x", secret), "JSON objects")
+fails_with("token not text", lambda(): jwt.decode(5, secret), "must be text")
+
+show "== claims"
+fails_with("expired", lambda(): jwt.decode(jwt.encode({"exp": now - 10}, secret), secret), "expired")
+same("leeway accepts slightly expired", jwt.decode(jwt.encode({"exp": now - 10, "x": 1}, secret), secret, {"leeway": 30})["x"], 1)
+fails_with("expiry exactly now", lambda(): jwt.decode(jwt.encode({"exp": 1000}, secret), secret, {"now": 1000}), "expired")
+fails_with("not valid yet", lambda(): jwt.decode(jwt.encode({"nbf": now + 100}, secret), secret), "not valid yet")
+fails_with("exp must be a number", lambda(): jwt.decode(jwt.encode({"exp": "soon"}, secret), secret), "exp must be a number")
+fails_with("required claim missing", lambda(): jwt.decode(jwt.encode({"a": 1}, secret), secret, {"require": ["exp"]}), "no exp claim")
+let aud_t = jwt.encode({"aud": ["app-1", "app-2"], "iss": "https://issuer.example"}, secret)
+same("audience in a list", jwt.decode(aud_t, secret, {"audience": "app-2"})["iss"], "https://issuer.example")
+same("one of several audiences", jwt.decode(aud_t, secret, {"audience": ["x", "app-1"]})["iss"], "https://issuer.example")
+fails_with("wrong audience", lambda(): jwt.decode(aud_t, secret, {"audience": "app-3"}), "another audience")
+fails_with("audience asked, none given", lambda(): jwt.decode(jwt.encode({"a": 1}, secret), secret, {"audience": "app-1"}), "no audience")
+same("issuer", jwt.decode(aud_t, secret, {"issuer": "https://issuer.example"})["aud"], ["app-1", "app-2"])
+fails_with("wrong issuer", lambda(): jwt.decode(aud_t, secret, {"issuer": "https://evil.example"}), "another issuer")
+same("unverified reads claims", jwt.unverified(aud_t)["iss"], "https://issuer.example")
+
+show "== RSA and EC"
+let rsa = crypto.generate_keypair("RS256")
+let ec256 = crypto.generate_keypair("ES256")
+let ec384 = crypto.generate_keypair("ES384")
+let rt = jwt.encode({"sub": "r", "exp": now + 60}, rsa["private"], "RS256", {"kid": "k1"})
+same("RS256 with the public key", jwt.decode(rt, rsa["public"], {"algorithms": ["RS256"]})["sub"], "r")
+same("RS256 kid header", jwt.header(rt)["kid"], "k1")
+same("RS256 header keeps alg", jwt.header(jwt.encode({}, rsa["private"], "RS256", {"alg": "none"}))["alg"], "RS256")
+same("RS384", jwt.decode(jwt.encode({"v": 3}, rsa["private"], "RS384"), rsa["public"], {"algorithms": ["RS384"]})["v"], 3)
+same("RS512", jwt.decode(jwt.encode({"v": 5}, rsa["private"], "RS512"), rsa["public"], {"algorithms": ["RS512"]})["v"], 5)
+same("ES256", jwt.decode(jwt.encode({"v": 1}, ec256["private"], "ES256"), ec256["public"], {"algorithms": ["ES256"]})["v"], 1)
+same("ES384", jwt.decode(jwt.encode({"v": 2}, ec384["private"], "ES384"), ec384["public"], {"algorithms": ["ES384"]})["v"], 2)
+same("ES256 signature is 64 bytes (r || s)", len(crypto.sign("ES256", ec256["private"], "x")), 86)
+same("verify with the private key also works", jwt.decode(rt, rsa["private"], {"algorithms": ["RS256"]})["sub"], "r")
+same("pick a key by kid", jwt.decode(rt, {"k0": ec256["public"], "k1": rsa["public"]}, {"algorithms": ["RS256"]})["sub"], "r")
+fails_with("unknown kid", lambda(): jwt.decode(rt, {"k0": rsa["public"]}, {"algorithms": ["RS256"]}), "no key for this token's kid")
+let other = crypto.generate_keypair("RS256")
+fails_with("RS256 with another key", lambda(): jwt.decode(rt, other["public"], {"algorithms": ["RS256"]}), "signature is invalid")
+fails_with("PEM key needs algorithms named", lambda(): jwt.decode(rt, rsa["public"]), "say which algorithms")
+# Algorithm confusion: an attacker signs HS256 with the public key as the secret.
+let confused = jwt.header(rt)
+let evil_input = crypto.base64("{\"alg\":\"HS256\"}", true) + "." + crypto.base64("{\"sub\":\"admin\"}", true)
+fails_with("HS256 refuses a PEM public key as its secret", lambda(): jwt.decode(evil_input + "." + crypto.random_token(32), rsa["public"], {"algorithms": ["HS256", "RS256"]}), "not a PEM key")
+fails_with("sign HS256 with a PEM", lambda(): crypto.sign("HS256", rsa["private"], "x"), "not a PEM key")
+fails_with("RSA key for ES256", lambda(): crypto.sign("ES256", rsa["private"], "x"), "not an EC key")
+fails_with("P-384 key for ES256", lambda(): crypto.sign("ES256", ec384["private"], "x"), "P-256")
+fails_with("EC key for RS256", lambda(): crypto.verify("RS256", ec256["public"], "x", "AA"), "not an RSA key")
+fails_with("public key cannot sign", lambda(): crypto.sign("RS256", rsa["public"], "x"), "not a PEM private key")
+fails_with("unknown algorithm", lambda(): crypto.sign("PS256", rsa["private"], "x"), "unsupported algorithm")
+same("ES256 wrong-size signature is just invalid", crypto.verify("ES256", ec256["public"], "x", "AAAA"), false)
+same("garbage signature is just invalid", crypto.verify("RS256", rsa["public"], "x", "!!!"), false)
+
+show "== JWK"
+let jwk = crypto.pem_to_jwk(rsa["public"])
+same("RSA JWK kty", jwk["kty"], "RSA")
+same("RSA JWK e", jwk["e"], "AQAB")
+same("RSA JWK round trip", crypto.jwk_to_pem(jwk), rsa["public"])
+same("JWK from a private key gives the public half", crypto.pem_to_jwk(rsa["private"]), jwk)
+let ejwk = crypto.pem_to_jwk(ec384["public"])
+same("EC JWK", [ejwk["kty"], ejwk["crv"], len(ejwk["x"]), len(ejwk["y"])], ["EC", "P-384", 64, 64])
+same("EC JWK round trip", crypto.jwk_to_pem(ejwk), ec384["public"])
+same("a token checks against a key rebuilt from its JWK", jwt.decode(rt, crypto.jwk_to_pem(jwk), {"algorithms": ["RS256"]})["sub"], "r")
+fails_with("JWK without kty", lambda(): crypto.jwk_to_pem({"n": "x"}), "no kty")
+fails_with("JWK with an unknown curve", lambda(): crypto.jwk_to_pem({"kty": "EC", "crv": "P-521", "x": "AA", "y": "AA"}), "P-256 and P-384")
+fails_with("JWK with a bad modulus", lambda(): crypto.jwk_to_pem({"kty": "RSA", "n": "", "e": "AQAB"}), "needs n and e")
+fails_with("not a key", lambda(): crypto.pem_to_jwk("hello"), "not a PEM key")
+fails_with("keypair for HS256", lambda(): crypto.generate_keypair("HS256"), "random_token")
+same("RSA 3072", crypto.pem_to_jwk(crypto.generate_keypair("RS256", 3072)["public"])["n"].byte_len(), 512)
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

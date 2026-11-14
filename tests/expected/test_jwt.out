@@ -1,0 +1,8 @@
+== base64
+== HS256
+== tampering
+== claims
+== RSA and EC
+== JWK
+
+passed: 85   failed: 0

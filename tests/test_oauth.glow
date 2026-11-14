@@ -1,0 +1,239 @@
+# oauth.glow against a mock identity provider that runs in this program:
+# login URLs with PKCE, code exchange, refresh, provider errors, ID tokens
+# checked through a JWKS endpoint (with key rotation), and Google
+# service-account tokens.
+use "oauth"
+
+let passed = 0
+let failed = 0
+
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains("oauth:") and msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+# Decodes an application/x-www-form-urlencoded body (ASCII values).
+func form_decode(body):
+    let out = {}
+    for each pair in body.split("&"):
+        let eq = pair.find("=")
+        if eq > 0:
+            let v = pair[eq + 1:]
+            let text = ""
+            let i = 0
+            while i < len(v):
+                if v[i] == "%" and i + 2 < len(v):
+                    let digits = "0123456789abcdef"
+                    text = text + chr(digits.find(v[i + 1].lower()) * 16 + digits.find(v[i + 2].lower()))
+                    i = i + 3
+                else:
+                    text = text + v[i]
+                    i = i + 1
+                end
+            end
+            out[pair[:eq]] = text
+        end
+    end
+    return out
+end
+
+# ---- the mock provider ----
+let port = 18000 + int(os.time() * 1000) % 2000
+let base = "http://127.0.0.1:" + str(port)
+let idp = {"kid": "key-1", "keys": crypto.generate_keypair("RS256"), "nonce": "", "client": "my-client", "issuer": "https://mock.issuer", "exp_in": 300, "jwks_hits": 0, "last_form": {}}
+let sa_keys = crypto.generate_keypair("RS256")
+
+func id_token_for(sub):
+    let now = int(os.time())
+    return jwt.encode({"iss": idp["issuer"], "aud": idp["client"], "sub": sub, "email": sub + "@example.com", "nonce": idp["nonce"], "iat": now, "exp": now + idp["exp_in"]}, idp["keys"]["private"], "RS256", {"kid": idp["kid"]})
+end
+
+func respond(client, status, body):
+    let reason = "OK"
+    if status != 200:
+        reason = "Error"
+    end
+    http.send(client, "HTTP/1.1 " + str(status) + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " + str(body.byte_len()) + "\r\nConnection: close\r\n\r\n" + body)
+    http.close(client)
+end
+
+func serve(server):
+    while true:
+        let client = http.accept(server)
+        let req = http.read(client)
+        let line = req.split("\r\n")[0]
+        let body = ""
+        let at = req.find("\r\n\r\n")
+        if at >= 0:
+            body = req[at + 4:]
+        end
+        if line.starts_with("GET /quit"):
+            respond(client, 200, "{}")
+            http.close(server)
+            return none
+        eif line.starts_with("GET /jwks"):
+            idp["jwks_hits"] = idp["jwks_hits"] + 1
+            let jwk = crypto.pem_to_jwk(idp["keys"]["public"])
+            jwk["kid"] = idp["kid"]
+            jwk["use"] = "sig"
+            jwk["alg"] = "RS256"
+            respond(client, 200, json.stringify({"keys": [{"kty": "oct", "kid": "skip-me"}, jwk]}))
+        eif line.starts_with("POST /token"):
+            let f = form_decode(body)
+            idp["last_form"] = f
+            if f.get("grant_type", "") == "authorization_code" and f.get("code", "") == "good-code":
+                respond(client, 200, json.stringify({"access_token": "at-1", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "rt-1", "id_token": id_token_for("user-7")}))
+            eif f.get("grant_type", "") == "refresh_token" and f.get("refresh_token", "") == "rt-1":
+                respond(client, 200, json.stringify({"access_token": "at-2", "token_type": "Bearer", "expires_in": 3600}))
+            eif f.get("grant_type", "") == "client_credentials":
+                respond(client, 200, json.stringify({"access_token": "app-token", "token_type": "Bearer", "expires_in": 600}))
+            eif f.get("grant_type", "") == "urn:ietf:params:oauth:grant-type:jwt-bearer":
+                # A Google-style token endpoint: check the signed assertion.
+                try:
+                    let c = jwt.decode(f["assertion"], sa_keys["public"], {"algorithms": ["RS256"], "audience": base + "/token"})
+                    respond(client, 200, json.stringify({"access_token": "sa-token:" + c["scope"], "expires_in": 3599, "token_type": "Bearer"}))
+                catch e:
+                    respond(client, 400, json.stringify({"error": "invalid_grant", "error_description": str(e)}))
+                end
+            else:
+                respond(client, 400, json.stringify({"error": "invalid_grant", "error_description": "Bad code"}))
+            end
+        eif line.starts_with("POST /broken"):
+            respond(client, 500, "<html>oops</html>")
+        else:
+            respond(client, 404, "{\"error\": \"not_found\"}")
+        end
+    end
+end
+
+let server = http.listen(port)
+if server < 0:
+    show "cannot listen on port " + str(port)
+    os.exit(1)
+end
+spawn serve(server)
+
+let client = OAuthClient({"client_id": "my-client", "client_secret": "s3cret", "redirect_uri": "http://localhost/cb",
+                          "authorize_url": "https://idp.example/authorize?tenant=x", "token_url": base + "/token",
+                          "jwks_url": base + "/jwks", "issuer": "https://mock.issuer", "scope": "openid email"})
+
+show "== login URL"
+let login = client.authorize_url({"prompt": "consent"})
+let url = login["url"]
+ok("starts at the authorize URL, keeping its query", url.starts_with("https://idp.example/authorize?tenant=x&"))
+ok("response_type=code", url.contains("response_type=code"))
+ok("client_id", url.contains("client_id=my-client"))
+ok("redirect_uri encoded", url.contains("redirect_uri=http%3A%2F%2Flocalhost%2Fcb"))
+ok("scope encoded", url.contains("scope=openid%20email"))
+ok("state", url.contains("state=" + login["state"]))
+ok("nonce for OpenID", url.contains("nonce=" + login["nonce"]))
+ok("PKCE challenge", url.contains("code_challenge=" + crypto.sha256_b64url(login["verifier"])))
+ok("PKCE method", url.contains("code_challenge_method=S256"))
+ok("extra parameters", url.contains("prompt=consent"))
+ok("verifier length within 43..128", len(login["verifier"]) >= 43 and len(login["verifier"]) <= 128)
+ok("state differs per login", client.authorize_url()["state"] != login["state"])
+
+show "== code exchange"
+idp["nonce"] = login["nonce"]
+let tokens = client.exchange("good-code", login["verifier"])
+same("access token", tokens["access_token"], "at-1")
+same("refresh token", tokens["refresh_token"], "rt-1")
+same("sent the verifier", idp["last_form"]["code_verifier"], login["verifier"])
+same("sent the redirect_uri", idp["last_form"]["redirect_uri"], "http://localhost/cb")
+same("sent the client secret", idp["last_form"]["client_secret"], "s3cret")
+let user = client.verify_id_token(tokens["id_token"], login["nonce"])
+same("ID token subject", user["sub"], "user-7")
+same("ID token email", user["email"], "user-7@example.com")
+same("JWKS fetched once", idp["jwks_hits"], 1)
+client.verify_id_token(tokens["id_token"], login["nonce"])
+same("JWKS cached", idp["jwks_hits"], 1)
+fails_with("wrong nonce", lambda(): client.verify_id_token(tokens["id_token"], "other-nonce"), "nonce does not match")
+fails_with("bad code", lambda(): client.exchange("bad-code", login["verifier"]), "invalid_grant: Bad code")
+fails_with("empty code", lambda(): client.exchange("", login["verifier"]), "no code")
+same("refresh", client.refresh("rt-1")["access_token"], "at-2")
+same("client credentials", client.client_credentials("api.read")["access_token"], "app-token")
+same("client credentials scope sent", idp["last_form"]["scope"], "api.read")
+
+show "== ID token checks"
+let other_client = OAuthClient({"client_id": "someone-else", "authorize_url": "x", "token_url": base + "/token", "jwks_url": base + "/jwks", "issuer": "https://mock.issuer"})
+fails_with("token for another client", lambda(): other_client.verify_id_token(tokens["id_token"]), "another audience")
+let wrong_issuer = OAuthClient({"client_id": "my-client", "authorize_url": "x", "token_url": base + "/token", "jwks_url": base + "/jwks", "issuer": "https://real.issuer"})
+fails_with("token from another issuer", lambda(): wrong_issuer.verify_id_token(tokens["id_token"]), "another issuer")
+idp["exp_in"] = -120
+let stale = id_token_for("user-7")
+idp["exp_in"] = 300
+fails_with("expired ID token", lambda(): client.verify_id_token(stale), "expired")
+let forged = jwt.encode({"iss": "https://mock.issuer", "aud": "my-client", "sub": "admin", "iat": int(os.time()), "exp": int(os.time()) + 60}, crypto.generate_keypair("RS256")["private"], "RS256", {"kid": "key-1"})
+fails_with("token signed by someone else", lambda(): client.verify_id_token(forged), "signature is invalid")
+fails_with("HS256 ID token refused", lambda(): client.verify_id_token(jwt.encode({"sub": "x"}, crypto.random_token(32), "HS256", {"kid": "key-1"})), "not accepted")
+
+# Key rotation: the provider switches keys; after the refetch delay a token
+# with the new kid is accepted.
+idp["keys"] = crypto.generate_keypair("RS256")
+idp["kid"] = "key-2"
+let rotated = id_token_for("user-8")
+fails_with("new kid right after a fetch is refused", lambda(): client.verify_id_token(rotated), "unknown key")
+same("no refetch within a minute", idp["jwks_hits"], 1)
+_oa_jwks[base + "/jwks"]["at"] = os.time() - 120
+same("new key after the delay", client.verify_id_token(rotated)["sub"], "user-8")
+same("refetched once", idp["jwks_hits"], 2)
+
+show "== Google service account"
+let account = json.stringify({"type": "service_account", "client_email": "bot@proj.iam.gserviceaccount.com", "private_key": sa_keys["private"], "private_key_id": "abc", "token_uri": base + "/token"})
+let sa = oauth.google_service_token(account, ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.readonly"])
+same("service token", sa["access_token"], "sa-token:https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly")
+ok("expires_at a little under an hour", sa["expires_at"] > os.time() + 3400 and sa["expires_at"] < os.time() + 3600)
+same("assertion has the key id", jwt.header(idp["last_form"]["assertion"])["kid"], "abc")
+same("assertion issuer", jwt.unverified(idp["last_form"]["assertion"])["iss"], "bot@proj.iam.gserviceaccount.com")
+fails_with("service account without a key", lambda(): oauth.google_service_token({"client_email": "x"}, []), "no private_key")
+
+show "== providers"
+let g = oauth.provider("google", {"client_id": "g-id", "client_secret": "g-s", "redirect_uri": "https://a.example/cb"})
+ok("google login URL", g.authorize_url()["url"].starts_with("https://accounts.google.com/o/oauth2/v2/auth?"))
+ok("google default scope", g.authorize_url()["url"].contains("scope=openid%20email%20profile"))
+let m = oauth.provider("microsoft", {"client_id": "m", "tenant": "contoso.onmicrosoft.com"})
+ok("microsoft tenant URL", m.authorize_url()["url"].starts_with("https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize?"))
+let gh = oauth.provider("github", {"client_id": "h"})
+ok("github has no nonce", not gh.authorize_url()["url"].contains("nonce="))
+fails_with("github has no ID tokens", lambda(): gh.verify_id_token("a.b.c"), "no ID tokens")
+fails_with("unknown provider", lambda(): oauth.provider("myspace", {}), "unknown provider")
+fails_with("missing client_id", lambda(): OAuthClient({"authorize_url": "a", "token_url": "b"}), "needs client_id")
+let broken = OAuthClient({"client_id": "x", "authorize_url": "a", "token_url": base + "/broken"})
+fails_with("token endpoint answering HTML", lambda(): broken.refresh("r"), "not JSON")
+
+http.request("GET", base + "/quit")
+threads.join_all()
+
+show ""
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end
