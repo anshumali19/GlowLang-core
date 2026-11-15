@@ -771,6 +771,26 @@ catch e:
 end
 ```
 
+### Finally
+A `finally` block runs however the `try` is left: after the body finishes,
+after `catch` handles an error, when an error is not caught (it then goes
+on), and when `return`, `stop` or `skip` leaves early. Use it for cleanup
+that must always happen, such as closing a file or a connection:
+```glow
+let db = sqlite.open("shop.db")
+try:
+    sqlite.exec(db, "insert into orders (item) values ('pen')")
+catch e:
+    show "could not save: " + str(e)
+finally:
+    sqlite.close(db)          # runs in every case
+end
+```
+`catch` is optional (`try:` ... `finally:` ... `end`). A `return` value is
+worked out before `finally` runs, and a `return` inside `finally` replaces
+it. An error raised inside `finally` is not caught by its own `catch`; it
+goes to the enclosing `try`.
+
 ### Throw
 ```glow
 func divide(a, b):

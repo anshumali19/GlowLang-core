@@ -239,6 +239,83 @@ static void bc_add_handler(Bytecode *bc, int start, int end, int handler, int ex
     bc->exception_count++;
 }
 
+/* ---- try / catch / finally ----
+   Every try (with or without finally) is a context on this stack while
+   its body (and, with finally, its catch body) compiles. A `return`, `stop`
+   or `skip` that leaves contexts runs their finally blocks first, innermost
+   first, as inline copies. An inline copy of context k's finally must not be
+   protected by context k (or any inner one): an error in a finally block
+   leaves its own try. Those spans are recorded as exclusions, and each
+   context's protected range is cut around them.
+
+   Errors from a native call are noticed when the next instruction starts,
+   so each boundary between protected and unprotected code gets a NOP: the
+   error of the instruction before it is noticed at the NOP. */
+#define MAX_TRY_DEPTH 64
+#define MAX_TRY_EXCL 256
+typedef struct {
+    Node *fin;          /* finally body, or NULL */
+    int loop_depth;     /* loop_stack_ptr when the try began */
+    int nexcl;
+    int excl_start[MAX_TRY_EXCL], excl_end[MAX_TRY_EXCL];
+} TryCtx;
+static TryCtx try_stack[MAX_TRY_DEPTH];
+static int try_depth = 0;
+
+static void compile_stmt(Node *n);
+
+static void try_push(Node *fin) {
+    if (try_depth >= MAX_TRY_DEPTH) { fprintf(stderr, "try blocks nested too deeply\n"); exit(1); }
+    TryCtx *c = &try_stack[try_depth++];
+    c->fin = fin; c->loop_depth = loop_stack_ptr; c->nexcl = 0;
+}
+
+static void try_exclude(TryCtx *c, int from, int to) {
+    if (c->nexcl >= MAX_TRY_EXCL) { fprintf(stderr, "too many early exits from one try block\n"); exit(1); }
+    c->excl_start[c->nexcl] = from; c->excl_end[c->nexcl] = to; c->nexcl++;
+}
+
+/* Protects [start, end) minus c's exclusions with the handler. */
+static void try_add_ranges(TryCtx *c, int start, int end, int handler, int exc_reg) {
+    int from = start;
+    for (int i = 0; i < c->nexcl; i++) {
+        int a = c->excl_start[i], b = c->excl_end[i];
+        if (b <= from || a >= end) continue;
+        if (a > from) bc_add_handler(compiling_bc, from, a, handler, exc_reg);
+        if (b > from) from = b;
+    }
+    if (from < end) bc_add_handler(compiling_bc, from, end, handler, exc_reg);
+}
+
+/* Runs the finally blocks of contexts try_depth-1 down to `to` (inline),
+   for a jump that leaves them. */
+static void try_unwind(int to) {
+    if (to >= try_depth) return;
+    int saved_depth = try_depth;
+    int marks[MAX_TRY_DEPTH];
+    for (int k = saved_depth - 1; k >= to; k--) {
+        marks[k] = bc_emit(compiling_bc, OP_NOP, 0, 0);
+        if (try_stack[k].fin) {
+            /* The block runs outside contexts k and inner ones. A try inside
+               it reuses slot k, so keep context k's record. */
+            TryCtx saved = try_stack[k];
+            try_depth = k;
+            compile_stmt(try_stack[k].fin);
+            try_stack[k] = saved;
+        }
+    }
+    try_depth = saved_depth;
+    int after = bc_emit(compiling_bc, OP_NOP, 0, 0);
+    for (int k = saved_depth - 1; k >= to; k--) try_exclude(&try_stack[k], marks[k] + 1, after + 1);
+}
+
+/* The lowest context a stop/skip of the innermost loop leaves. */
+static int try_loop_floor(void) {
+    int k = try_depth;
+    while (k > 0 && try_stack[k - 1].loop_depth == loop_stack_ptr && loop_stack_ptr > 0) k--;
+    return k;
+}
+
 /* Each local gets the next free register (not its index): temporaries are
    allocated above every existing local, so a local declared mid-function
    must not land on a register an enclosing loop is still using for its
@@ -895,6 +972,7 @@ static void compile_stmt(Node *n) {
         }
         case NODE_RETURN: {
             int r = compile_expr(n->left, -1);
+            try_unwind(0);
             int idx = bc_emit(compiling_bc, OP_RETURN, 0, 0);
             compiling_bc->code[idx].r0 = r;
             break;
@@ -956,6 +1034,8 @@ static void compile_stmt(Node *n) {
             last_compiling_class = NULL; last_compiling_trait = NULL;
             const char *saved_method_parent = method_parent_name;
             int saved_in_method = in_method_body;
+            int saved_try_depth = try_depth;
+            try_depth = 0;   /* a return here does not run the caller's finally */
             /* Only a class method's own body may use super; a function nested
                in it is an ordinary function without self. */
             in_method_body = is_method && saved_class != NULL;
@@ -963,6 +1043,7 @@ static void compile_stmt(Node *n) {
             compile_stmt(n->left);
             method_parent_name = saved_method_parent;
             in_method_body = saved_in_method;
+            try_depth = saved_try_depth;
             compiling_class_name = saved_class_name; compiling_trait_name = saved_trait_name;
             last_compiling_class = saved_class; last_compiling_trait = saved_trait;
             emit_implicit_return();
@@ -1009,6 +1090,7 @@ static void compile_stmt(Node *n) {
         }
         case NODE_EXPR_STMT: compile_expr(n->left, -1); break;
         case NODE_STOP: {
+            try_unwind(try_loop_floor());
             int idx = bc_emit(compiling_bc, OP_STOP, 0, 0);
             if (loop_stack_ptr > 0) {
                 LoopScope *loop = &loop_stack[loop_stack_ptr - 1];
@@ -1022,6 +1104,7 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_SKIP: {
+            try_unwind(try_loop_floor());
             int idx = bc_emit(compiling_bc, OP_SKIP, 0, 0);
             if (loop_stack_ptr > 0) {
                 LoopScope *loop = &loop_stack[loop_stack_ptr - 1];
@@ -1072,34 +1155,68 @@ static void compile_stmt(Node *n) {
         case NODE_TRY_CATCH: {
             /* The VM delivers the caught exception into a dedicated register
                (it used to overwrite register 0, i.e. `self` in methods or the
-               first local in functions). */
+               first local in functions).
+
+               Layout (F = the finally block, when there is one):
+                   body; NOP; F; JUMP end
+               h1: [catch: bind e; catch body; NOP; F; JUMP end
+               h2:  F; THROW e2]           (an error in the catch body)
+                   [no catch: F; THROW e]  (the error goes on after F)
+               end: */
             if (next_free_reg < (compiling_func ? compiling_func->reg_floor : 0)) next_free_reg = compiling_func->reg_floor;
+            Node *fin = n->third;
             int exc_reg = next_free_reg++;
             int start_pc = compiling_bc->count;
+            try_push(fin);
             compile_stmt(n->left);
-            int end_pc = compiling_bc->count;
-            int j = bc_emit(compiling_bc, OP_JUMP, 0, 0);
-            int h = compiling_bc->count;
-            /* The range includes the jump over the handler: an error a native
-               call raises is noticed when the next instruction dispatches, so
-               a call that ends the try body would otherwise escape it. */
-            bc_add_handler(compiling_bc, start_pc, end_pc + 1, h, exc_reg);
-            if (n->name) {
-                int var_reg = get_local_reg(n->name);
-                if (compiling_func && var_reg == -1 && !global_is_declared(n->name)) {
-                    func_add_local(compiling_func, n->name);
-                    var_reg = get_local_reg(n->name);
+            int body_end = bc_emit(compiling_bc, OP_NOP, 0, 0);
+            TryCtx body_ctx = try_stack[--try_depth];
+            if (fin) compile_stmt(fin);
+            int jumps[2]; int njumps = 0;
+            jumps[njumps++] = bc_emit(compiling_bc, OP_JUMP, 0, 0);
+            int h1 = compiling_bc->count;
+            if (n->right) {
+                if (n->name) {
+                    int var_reg = get_local_reg(n->name);
+                    if (compiling_func && var_reg == -1 && !global_is_declared(n->name)) {
+                        func_add_local(compiling_func, n->name);
+                        var_reg = get_local_reg(n->name);
+                    }
+                    if (var_reg != -1) {
+                        bc_emit_reg(compiling_bc, OP_MOVE, var_reg, exc_reg, 0);
+                    } else {
+                        int slot = global_get_slot(n->name);
+                        if (!compiling_func) global_mark_declared(slot);
+                        int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
+                        compiling_bc->code[idx].r0 = exc_reg;
+                    }
                 }
-                if (var_reg != -1) {
-                    bc_emit_reg(compiling_bc, OP_MOVE, var_reg, exc_reg, 0);
+                if (fin) {
+                    int exc2 = next_free_reg++;
+                    int c_start = compiling_bc->count;
+                    try_push(fin);
+                    compile_stmt(n->right);
+                    int c_end = bc_emit(compiling_bc, OP_NOP, 0, 0);
+                    TryCtx catch_ctx = try_stack[--try_depth];
+                    compile_stmt(fin);
+                    jumps[njumps++] = bc_emit(compiling_bc, OP_JUMP, 0, 0);
+                    int h2 = compiling_bc->count;
+                    compile_stmt(fin);
+                    int t = bc_emit(compiling_bc, OP_THROW, 0, 0);
+                    compiling_bc->code[t].r0 = exc2;
+                    try_add_ranges(&catch_ctx, c_start, c_end + 1, h2, exc2);
                 } else {
-                    int slot = global_get_slot(n->name);
-                    if (!compiling_func) global_mark_declared(slot);
-                    int idx = bc_emit(compiling_bc, OP_STORE_VAR, slot, 0);
-                    compiling_bc->code[idx].r0 = exc_reg;
+                    compile_stmt(n->right);
                 }
+            } else {
+                /* try / finally without catch: run F, then the error goes on. */
+                compile_stmt(fin);
+                int t = bc_emit(compiling_bc, OP_THROW, 0, 0);
+                compiling_bc->code[t].r0 = exc_reg;
             }
-            compile_stmt(n->right); compiling_bc->code[j].arg = compiling_bc->count; break;
+            for (int k = 0; k < njumps; k++) compiling_bc->code[jumps[k]].arg = compiling_bc->count;
+            try_add_ranges(&body_ctx, start_pc, body_end + 1, h1, exc_reg);
+            break;
         }
         case NODE_THROW: { int r = compile_expr(n->left, -1); int idx = bc_emit(compiling_bc, OP_THROW, 0, 0); compiling_bc->code[idx].r0 = r; break; }
         case NODE_SPAWN: {
@@ -1669,7 +1786,10 @@ static int compile_expr(Node *n, int target_reg) {
             hoist_locals(fe, n->left);
             next_free_reg = fe->local_count;
             int saved_peak = reg_peak; reg_peak = next_free_reg;
+            int saved_try_depth_l = try_depth;
+            try_depth = 0;   /* a return in a lambda does not run the caller's finally */
             compile_stmt(n->left);
+            try_depth = saved_try_depth_l;
             emit_implicit_return();
             note_reg_peak();
             compiling_bc->local_count = reg_peak > fe->reg_floor ? reg_peak : fe->reg_floor;

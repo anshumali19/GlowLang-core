@@ -1,0 +1,368 @@
+# try / catch / finally: the finally block runs however the try is left.
+let passed = 0
+let failed = 0
+let log = []
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func catch_text(f):
+    try:
+        f()
+    catch e:
+        return "error: " + str(e)
+    end
+    return "no error"
+end
+
+show "== the four ways out"
+func normal():
+    log = []
+    try:
+        log.push("body")
+    catch e:
+        log.push("catch")
+    finally:
+        log.push("finally")
+    end
+    log.push("after")
+    return log
+end
+same("normal end", normal(), ["body", "finally", "after"])
+
+func caught():
+    log = []
+    try:
+        log.push("body")
+        throw "boom"
+        log.push("not reached")
+    catch e:
+        log.push("catch " + e)
+    finally:
+        log.push("finally")
+    end
+    log.push("after")
+    return log
+end
+same("caught error", caught(), ["body", "catch boom", "finally", "after"])
+
+func uncaught():
+    log = []
+    try:
+        log.push("body")
+        throw "boom"
+    finally:
+        log.push("finally")
+    end
+    log.push("not reached")
+end
+same("uncaught error goes on after finally", catch_text(uncaught), "error: boom")
+same("  and finally ran", log, ["body", "finally"])
+
+func error_in_catch():
+    log = []
+    try:
+        throw "first"
+    catch e:
+        log.push("catch")
+        throw "second"
+    finally:
+        log.push("finally")
+    end
+end
+same("error raised in catch goes on", catch_text(error_in_catch), "error: second")
+same("  after finally", log, ["catch", "finally"])
+
+func native_error():
+    log = []
+    try:
+        let x = [1][5]
+    finally:
+        log.push("finally")
+    end
+end
+same("runtime error", catch_text(native_error).contains("out of range"), true)
+same("  finally ran", log, ["finally"])
+
+show "== return"
+func return_in_try():
+    log = []
+    try:
+        log.push("body")
+        return "from try"
+    finally:
+        log.push("finally")
+    end
+    return "not this"
+end
+same("return in try", return_in_try(), "from try")
+same("  finally ran", log, ["body", "finally"])
+
+func return_in_catch():
+    log = []
+    try:
+        throw "x"
+    catch e:
+        return "from catch"
+    finally:
+        log.push("finally")
+    end
+end
+same("return in catch", return_in_catch(), "from catch")
+same("  finally ran", log, ["finally"])
+
+func return_value_first():
+    let n = 1
+    try:
+        return n
+    finally:
+        n = 99
+    end
+end
+same("the return value is taken before finally", return_value_first(), 1)
+
+func return_in_finally():
+    try:
+        return "try"
+    finally:
+        return "finally"
+    end
+end
+same("return in finally wins", return_in_finally(), "finally")
+
+func nested_finally():
+    log = []
+    try:
+        try:
+            return "inner"
+        finally:
+            log.push("inner finally")
+        end
+    finally:
+        log.push("outer finally")
+    end
+end
+same("nested: both run", nested_finally(), "inner")
+same("  inner first", log, ["inner finally", "outer finally"])
+
+func error_in_finally():
+    try:
+        try:
+            return 1
+        finally:
+            throw "from finally"
+        end
+    catch e:
+        return "outer caught " + e
+    end
+end
+same("error in finally reaches the outer try", error_in_finally(), "outer caught from finally")
+
+func finally_error_not_caught_by_own_catch():
+    log = []
+    try:
+        log.push("body")
+    catch e:
+        log.push("own catch")
+    finally:
+        throw "late"
+    end
+end
+same("an error in finally skips its own catch", catch_text(finally_error_not_caught_by_own_catch), "error: late")
+same("  own catch not run", log, ["body"])
+
+func plain_try_inside_finally_try():
+    log = []
+    try:
+        try:
+            return "value"
+        catch e:
+            log.push("inner catch")
+        end
+    finally:
+        log.push("finally")
+        throw "oops"
+    end
+end
+same("inner plain catch does not catch the outer finally", catch_text(plain_try_inside_finally_try), "error: oops")
+same("  log", log, ["finally"])
+
+show "== stop and skip"
+func loop_stop():
+    log = []
+    every i from 1 to 5:
+        try:
+            if i == 3:
+                stop
+            end
+            log.push(i)
+        finally:
+            log.push("f" + str(i))
+        end
+    end
+    return log
+end
+same("stop runs finally", loop_stop(), [1, "f1", 2, "f2", "f3"])
+
+func loop_skip():
+    log = []
+    every i from 1 to 3:
+        try:
+            if i == 2:
+                skip
+            end
+            log.push(i)
+        finally:
+            log.push("f" + str(i))
+        end
+    end
+    return log
+end
+same("skip runs finally", loop_skip(), [1, "f1", "f2", 3, "f3"])
+
+func loop_inside_try():
+    log = []
+    try:
+        every i from 1 to 5:
+            if i == 2:
+                stop
+            end
+            log.push(i)
+        end
+        log.push("after loop")
+    finally:
+        log.push("finally once")
+    end
+    return log
+end
+same("stop of a loop inside the try does not run finally early", loop_inside_try(), [1, "after loop", "finally once"])
+
+func nested_loops():
+    log = []
+    every i from 1 to 2:
+        try:
+            every j from 1 to 3:
+                try:
+                    if j == 2:
+                        stop
+                    end
+                    log.push([i, j])
+                finally:
+                    log.push("inner")
+                end
+            end
+        finally:
+            log.push("outer")
+        end
+    end
+    return log
+end
+same("stop leaves only the inner loop's try", nested_loops(), [[1, 1], "inner", "inner", "outer", [2, 1], "inner", "inner", "outer"])
+
+show "== functions and values"
+func lambda_return_inside_try():
+    log = []
+    try:
+        let f = lambda(x): x * 2
+        log.push(f(4))
+    finally:
+        log.push("finally")
+    end
+    return log
+end
+same("a lambda's return does not run the caller's finally", lambda_return_inside_try(), [8, "finally"])
+
+func nested_function_return():
+    log = []
+    try:
+        func helper():
+            return "h"
+        end
+        log.push(helper())
+        log.push(helper())
+    finally:
+        log.push("finally")
+    end
+    return log
+end
+same("a nested function's return does not run it either", nested_function_return(), ["h", "h", "finally"])
+
+func finally_only_no_error():
+    try:
+        let x = 1
+    finally:
+        log = ["ran"]
+    end
+    return log
+end
+same("try / finally without an error", finally_only_no_error(), ["ran"])
+
+func caught_variable_scope():
+    let seen = ""
+    try:
+        throw "v"
+    catch err:
+        seen = err
+    finally:
+        seen = seen + "!"
+    end
+    return seen
+end
+same("catch variable usable, finally after", caught_variable_scope(), "v!")
+
+show "== hot code (compiled)"
+func hot_finally():
+    let count = 0
+    let closed = 0
+    every i from 1 to 3000:
+        try:
+            if i % 100 == 0:
+                throw "x"
+            end
+            count = count + 1
+        catch e:
+            count = count + 0
+        finally:
+            closed = closed + 1
+        end
+    end
+    return [count, closed]
+end
+same("finally in a hot loop", hot_finally(), [2970, 3000])
+
+func hot_return(i):
+    try:
+        return i
+    finally:
+        log.push(i)
+    end
+end
+func run_hot_return():
+    log = []
+    let total = 0
+    every i from 1 to 2000:
+        total = total + hot_return(i)
+    end
+    return [total, len(log)]
+end
+same("return through finally, hot", run_hot_return(), [2001000, 2000])
+
+show "== top level"
+let top = []
+try:
+    top.push("body")
+finally:
+    top.push("finally")
+end
+same("finally at the top level", top, ["body", "finally"])
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end
