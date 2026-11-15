@@ -263,6 +263,7 @@ static inline Value value_bigint(BigInt *b) { return make_value(VAL_OBJECT, (uin
 
 /* Big integer operations (numeric tower stage 2). */
 BigInt* bigint_from_int64(int64_t v);
+void bigint_floor_divmod(BigInt *a, BigInt *b, BigInt **q, BigInt **r);
 BigInt* bigint_from_string(const char *s);
 char* bigint_to_new_string(BigInt *b);
 int bigint_cmp(BigInt *a, BigInt *b);          /* -1, 0, 1 */
@@ -798,6 +799,7 @@ Node* newStringNode(const char *s);
 Node* newVarNode(const char *s);
 Node* newAssignNode(const char *s, Node *e);
 Node* newBinOp(NodeType t, Node *l, Node *r);
+Node* newFloorDivNode(Node *l, Node *r);
 Node* newSeqNode(Node *l, Node *r);
 Node* newPairLoopNode(const char *a, const char *b, Node *coll, Node *body);
 Node* newFuncNode(const char *n, int pc, char **ps, Node *b);

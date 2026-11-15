@@ -95,7 +95,7 @@
 
 (comment) @comment
 ; Single-line
-"//" @comment.line
+"#" @comment.line
 ; Block
 "/*" @comment.block
 

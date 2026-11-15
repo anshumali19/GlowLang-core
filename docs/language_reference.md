@@ -37,6 +37,8 @@ Complete reference for the GlowLang programming language — covering every synt
 /* Multi-line
    comment */
 ```
+`#` starts a comment that runs to the end of the line. `//` is not a
+comment: it is floor division (see Arithmetic).
 
 ### Identifiers
 Identifiers begin with a letter or underscore, followed by letters, digits, or underscores. GlowLang is case-sensitive.
@@ -121,6 +123,7 @@ x += 1    # x = x + 1
 x -= 2    # x = x - 2
 x *= 3    # x = x * 3
 x /= 4    # x = x / 4
+x //= 2   # x = x // 2
 ```
 
 ### Undefined Names
@@ -146,6 +149,7 @@ after that declaration.
 | `-` | Subtraction | `10 - 3` → `7` |
 | `*` | Multiplication (or repeating text / lists) | `5 * 6` → `30`, `"ab" * 2` → `"abab"` |
 | `/` | Division | `15 / 4` → `3.75` |
+| `//` | Floor division: the whole number at or below the quotient (exact for integers of any size) | `15 // 4` → `3`, `-7 // 2` → `-4`, `7.5 // 2` → `3` |
 | `%` | Modulo (sign of the divisor) | `17 % 5` → `2`, `-7 % 3` → `2` |
 | `**` | Power (exact for integers) | `2 ** 10` → `1024`, `2 ** -1` → `0.5` |
 

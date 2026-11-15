@@ -44,10 +44,10 @@ contexts:
   # --------------------------------------------------------
   comments:
     # Single-line comment
-    - match: //
+    - match: '#'
       scope: punctuation.definition.comment.glowlang
       push:
-        - meta_scope: comment.line.double-slash.glowlang
+        - meta_scope: comment.line.number-sign.glowlang
         - match: $\n?
           pop: true
 
@@ -218,7 +218,7 @@ contexts:
   # --------------------------------------------------------
   operators:
     # Compound assignment
-    - match: '[+\-*/%]='
+    - match: '//=|[+\-*/%]='
       scope: keyword.operator.assignment.compound.glowlang
 
     # Comparison
@@ -229,8 +229,8 @@ contexts:
     - match: '='
       scope: keyword.operator.assignment.glowlang
 
-    # Exponentiation
-    - match: '\*\*'
+    # Exponentiation and floor division
+    - match: '\*\*|//'
       scope: keyword.operator.arithmetic.glowlang
 
     # Arithmetic

@@ -8,7 +8,7 @@ VS Code support for the **GlowLang** programming language: syntax highlighting, 
 Rich TextMate grammar with support for:
 - All GlowLang keywords (`func`, `blueprint`, `action`, `when`, `eif`, `otherwise`, `for each`, etc.)
 - String interpolation with `f"Hello {name}"`
-- Triple-quoted strings, comments (`#`, `//`, `/* */`)
+- Triple-quoted strings, comments (`#` and `/* */`)
 - Blueprint/class definitions, method calls, operators
 - Numeric literals (integer and float)
 

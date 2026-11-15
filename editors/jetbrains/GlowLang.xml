@@ -10,7 +10,7 @@
     3. Click the "+" button to add a new file type
     4. Import this XML file, or manually configure:
        - Name: GlowLang
-       - Line comment: //
+       - Line comment: #
        - Block comment start: /*
        - Block comment end: */
        - File extensions: glow
@@ -24,7 +24,7 @@
   <!-- General options -->
   <highlighting>
     <options>
-      <option name="LINE_COMMENT" value="//" />
+      <option name="LINE_COMMENT" value="#" />
       <option name="COMMENT_START" value="/*" />
       <option name="COMMENT_END" value="*/" />
       <option name="HEX_PREFIX" value="0x" />

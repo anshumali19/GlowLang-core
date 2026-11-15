@@ -74,7 +74,8 @@ end
 
 let loss = criterion.forward(act, y)
 
-show "Initial Loss: ", tensor.get(loss.data, 0)
+# Rounded: the last digits differ between CPUs (fused multiply-add on ARM64).
+show "Initial Loss: ", round(tensor.get(loss.data, 0), 9)
 
 # Backward
 loss.backward(none)
@@ -82,5 +83,5 @@ loss.backward(none)
 # Optimize
 optimizer.step()
 
-show "Weight Gradients: ", tensor.get(layer.weight.grad, 0), ", ", tensor.get(layer.weight.grad, 1)
+show "Weight Gradients: ", round(tensor.get(layer.weight.grad, 0), 9), ", ", round(tensor.get(layer.weight.grad, 1), 9)
 show "One training step complete."

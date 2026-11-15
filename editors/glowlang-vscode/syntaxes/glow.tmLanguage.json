@@ -30,10 +30,6 @@
                     "match": "#.*$"
                 },
                 {
-                    "name": "comment.line.double-slash.glow",
-                    "match": "//.*$"
-                },
-                {
                     "name": "comment.block.glow",
                     "begin": "/\\*",
                     "end": "\\*/",
@@ -176,7 +172,7 @@
                 },
                 {
                     "name": "keyword.operator.arithmetic.glow",
-                    "match": "(\\+|-|\\*|/|%|\\*\\*)"
+                    "match": "(\\*\\*|//|\\+|-|\\*|/|%)"
                 },
                 {
                     "name": "keyword.operator.pipe.glow",

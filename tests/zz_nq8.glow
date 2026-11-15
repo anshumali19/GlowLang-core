@@ -1,5 +1,5 @@
 
-// N-Queens Cross-Bench (N=10)
+# N-Queens Cross-Bench (N=10)
 blueprint NQueens:
     can init(n):
         self.n = n

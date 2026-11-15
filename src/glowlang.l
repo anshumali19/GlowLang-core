@@ -261,6 +261,7 @@ int lexer_bracket_depth = 0;
 "+="                   { return PLUS_ASSIGN; }
 "-="                   { return MINUS_ASSIGN; }
 "*="                   { return MUL_ASSIGN; }
+"//="                  { return FLOORDIV_ASSIGN; }
 "/="                   { return DIV_ASSIGN; }
 "%="                   { return MOD_ASSIGN; }
 
@@ -277,6 +278,7 @@ int lexer_bracket_depth = 0;
 "+"                    { return PLUS; }
 "-"                    { return MINUS; }
 "*"                    { return MUL; }
+"//"                   { return FLOORDIV; }
 "/"                    { return DIV; }
 "%"                    { return MOD; }
 "="                    { return ASSIGN; }
@@ -398,7 +400,6 @@ f\"([^"\\]|\\.)*\" {
     so files from every entry point (run, import, eval) read the same. */
 "\xEF\xBB\xBF"         ;
 
-"//"[^\n]*             ;
 "#"[^\n]*              ;
 
 "/*"                   { BEGIN(COMMENT); }

@@ -6785,6 +6785,7 @@ void std_init(void) {
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
+    { extern Value native_floordiv(int argc, Value *args); var_set("__glow_floordiv", native_func_new("__glow_floordiv", native_floordiv)); }
     var_set("format", native_func_new("format", native_format));
     var_set("__glow_format", native_func_new("__glow_format", native_format));
     var_set("__glow_fstring_error", native_func_new("__glow_fstring_error", native_fstring_error));

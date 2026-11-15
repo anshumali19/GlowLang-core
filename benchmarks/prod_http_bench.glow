@@ -2,7 +2,7 @@
 
 func handle_client(client):
     let request = client.read()
-    // Minimal HTTP response
+    # Minimal HTTP response
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!"
     client.write(response)
     client.close()

@@ -67,6 +67,16 @@ Node* newStringNode(const char *s) { Node *n = node_new(NODE_STRING_LIT); n->nam
 Node* newVarNode(const char *s) { Node *n = node_new(NODE_VAR); n->name = s; return n; }
 Node* newAssignNode(const char *s, Node *e) { Node *n = node_new(NODE_ASSIGN); n->name = s; n->left = e; return n; }
 Node* newBinOp(NodeType t, Node *l, Node *r) { Node *n = node_new(t); n->left = l; n->right = r; return n; }
+/* a // b: a call to the runtime's exact floor division. */
+Node* newFloorDivNode(Node *l, Node *r) {
+    Node **args = malloc(sizeof(Node*) * 2);
+    args[0] = l; args[1] = r;
+    Node *n = node_new(NODE_CALL);
+    n->name = intern_string("__glow_floordiv");
+    n->call_args = args; n->call_arg_count = 2;
+    n->line = l ? l->line : 0;
+    return n;
+}
 /* `for each a, b in coll:` iterates pairs(coll) — [index, item] for lists
    and strings, [key, value] for dicts — and unpacks each pair. */
 Node* newPairLoopNode(const char *a, const char *b, Node *coll, Node *body) {

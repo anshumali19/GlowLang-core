@@ -67,7 +67,7 @@ static Node *attach_else(Node *chain, Node *else_part) {
 %token BAD_NUMBER
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
-%token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV MOD POW COLON AND_OP OR_OP NOT_OP
+%token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
 %type <node_list> expr_list arg_list
@@ -81,7 +81,7 @@ static Node *attach_else(Node *chain, Node *else_part) {
 %left EQ NEQ IS IS_NOT IN_KW
 %left LT GT LTE GTE
 %left PLUS MINUS
-%left MUL DIV MOD
+%left MUL DIV FLOORDIV MOD
 %right POW
 %nonassoc NOT_OP
 
@@ -121,6 +121,7 @@ stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->nam
     | postfix MINUS_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_SUB, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | postfix MUL_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MUL, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | postfix DIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_DIV, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
+    | postfix FLOORDIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->name, newFloorDivNode(newVarNode($1->name), $3)); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | postfix MOD_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MOD, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines FINALLY COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; $$->third = $13; }
@@ -151,7 +152,7 @@ eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = attach_else($1, ne
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
 expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr IN_KW expr { $$ = newBinOp(NODE_IN, $1, $3); } | expr NOT_OP IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); } | expr WHEN expr OTHERWISE expr %prec WHEN { $$ = node_new(NODE_COND); $$->left = $3; $$->right = $1; $$->third = $5; };
-term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
+term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term FLOORDIV unary { $$ = newFloorDivNode($1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
 unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); };
 power: postfix | postfix POW unary { $$ = newBinOp(NODE_POW, $1, $3); };
 postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
