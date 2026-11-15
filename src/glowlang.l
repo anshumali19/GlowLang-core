@@ -245,6 +245,7 @@ int lexer_bracket_depth = 0;
 "continue"             { return SKIP; }
 "try"                  { return TRY; }
 "catch"                { return CATCH; }
+"finally"              { return FINALLY; }
 "throw"                { return THROW; }
 "import"               { return IMPORT; }
 "class"                { return CLASS; }
