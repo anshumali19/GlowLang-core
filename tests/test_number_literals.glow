@@ -1,0 +1,52 @@
+# Number literals: hex, binary, octal, and _ between digits.
+let passed = 0
+let failed = 0
+
+func same(name, got, want):
+    if got == want and type(got) == type(want):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + " " + type(got) + ", wanted " + str(want) + " " + type(want) + ")"
+    end
+end
+
+show "== separators"
+same("thousands", 1_000_000, 1000000)
+same("one underscore", 1_0, 10)
+same("float", 3.141_592, 3.141592)
+same("float with a separated whole part", 1_000.5, 1000.5)
+same("exponent", 1_000e3, 1e6)
+same("separated exponent", 1e1_0, 1e10)
+same("big int", 123_456_789_012_345_678_901_234_567_890, 123456789012345678901234567890)
+same("leading zero kept as before", 007, 7)
+
+show "== hex, binary, octal"
+same("hex", 0xff, 255)
+same("hex upper", 0XFF, 255)
+same("hex mixed case", 0xDeadBeef, 3735928559)
+same("binary", 0b1010, 10)
+same("binary upper", 0B11, 3)
+same("octal", 0o17, 15)
+same("octal upper", 0O777, 511)
+same("zero", 0x0 + 0b0 + 0o0, 0)
+same("hex with separators", 0xFF_FF, 65535)
+same("binary with separators", 0b1111_0000, 240)
+same("past 64 bits stays exact", 0xFFFF_FFFF_FFFF_FFFF_FFFF, 1208925819614629174706175)
+same("2 ** 64", 0x1_0000_0000_0000_0000, 2 ** 64)
+same("negative hex", -0x10, -16)
+same("in arithmetic", 0x10 * 2 + 0b1, 33)
+same("as a list index", [10, 20, 30][0b10], 30)
+same("format round trip", format(0xff, "x"), "ff")
+
+show "== names that look like numbers are unchanged"
+let x1 = 5
+let _private = 7
+same("names with digits", x1, 5)
+same("leading underscore name", _private, 7)
+same("member with digits", {"a1": 3}.a1, 3)
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

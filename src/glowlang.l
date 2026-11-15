@@ -288,20 +288,49 @@ int lexer_bracket_depth = 0;
 "("                    { lexer_bracket_depth++; return '('; }
 ")"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return ')'; }
 
-[0-9]+(\.[0-9]+)?[eE][+-]?[0-9]+ {
-    /* Scientific notation: 1e15, 2.5e-3 */
-    yylval.float_val = atof(yytext);
-    return FLOAT_LIT;
-}
-
-[0-9]+\.[0-9]+ {
-    yylval.float_val = atof(yytext);
-    return FLOAT_LIT;
-}
-
-[0-9]+ {
-    yylval.str_val = intern_string(yytext);
+0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)* {
+    /* Hex 0xff, binary 0b1010, octal 0o17; _ may separate digits. */
+    yylval.str_val = glow_radix_literal(yytext);
     return INT_LIT;
+}
+0[bB][01]+(_[01]+)* {
+    yylval.str_val = glow_radix_literal(yytext);
+    return INT_LIT;
+}
+0[oO][0-7]+(_[0-7]+)* {
+    yylval.str_val = glow_radix_literal(yytext);
+    return INT_LIT;
+}
+
+[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?[eE][+-]?[0-9]+(_[0-9]+)* {
+    /* Scientific notation: 1e15, 2.5e-3 (and 1_000e3) */
+    yylval.float_val = atof(glow_strip_underscores(yytext));
+    return FLOAT_LIT;
+}
+
+[0-9]+(_[0-9]+)*\.[0-9]+(_[0-9]+)* {
+    yylval.float_val = atof(glow_strip_underscores(yytext));
+    return FLOAT_LIT;
+}
+
+[0-9]+(_[0-9]+)* {
+    /* 1_000_000: _ between digits is ignored. */
+    yylval.str_val = intern_string(glow_strip_underscores(yytext));
+    return INT_LIT;
+}
+
+[0-9]+(_[0-9]+)*\.[0-9][0-9a-zA-Z_]* {
+    /* The same for a fractional part: 1.5_, 2.0x */
+    glow_bad_literal(yytext);
+    return BAD_NUMBER;
+}
+
+[0-9][0-9a-zA-Z_]* {
+    /* A number run into letters or underscores that is none of the forms
+       above (0b2, 0x, 1_, 1__0, 12abc): one clear error, not "1" and a
+       name. Valid literals tie or win on length and come first. */
+    glow_bad_literal(yytext);
+    return BAD_NUMBER;
 }
 
 \"\"\"[^\"]*\"\"\" {

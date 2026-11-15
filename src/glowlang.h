@@ -782,6 +782,9 @@ extern Node *root;
 extern FILE *yyin;
 int yyparse(void);
 void yyerror(const char *s);
+const char *glow_strip_underscores(const char *text);
+const char *glow_radix_literal(const char *text);
+void glow_bad_literal(const char *text);
 
 /* ================================================================
  *  AST HELPER FUNCTION CONSTRUCTORS

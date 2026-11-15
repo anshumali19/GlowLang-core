@@ -1,0 +1,2 @@
+let mask = 0b102
+show mask
