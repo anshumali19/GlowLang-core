@@ -2,7 +2,7 @@ has executable: true
 find glowlang: true
 find missing: none
 code: 7 ok: false stdout: exiting
-upper: [12 chars, HELLO, WORLD]
+upper: ["12 chars", "HELLO", "WORLD"]
 upper ok: true
 big: 32890 chars
 env: A=one B=none
@@ -24,7 +24,7 @@ reply: bye
 after quit: none
 exit: 0
 closed: process.send: the process handle is closed or invalid
-rest: [got a, got b, eof]
+rest: ["got a", "got b", "eof"]
 exit: 0
 first: sleeping
 read timeout: process.read_line: timed out after 0.3 seconds

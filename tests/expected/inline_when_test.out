@@ -5,7 +5,7 @@ odd
 B
 4 3
 pos neg
-[o, e, o, e, o, e]
+["o", "e", "o", "e", "o", "e"]
 [4, 5, 6]
 [40, 50]
 yes

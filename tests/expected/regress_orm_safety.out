@@ -2,9 +2,9 @@ ids: 1 2 count: 2
 found evil name intact: true note: it's fine
 timestamp is a real time: true
 injection in where_eq: 0
-where_in: [Ana, Robert'); DROP TABLE users; --]
+where_in: ["Ana", "Robert'); DROP TABLE users; --"]
 like: 1
-limit/offset: [Ana]
+limit/offset: ["Ana"]
 update: 1
 count_where: 1
 orm: invalid table or column name: users; DROP TABLE users

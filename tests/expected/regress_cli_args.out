@@ -3,7 +3,7 @@ flags: none true true staging none 1.2 hello []
 option forms: none false false prod v9 1.2 none given []
 short option: none false false qa none 1.2 none given []
 subcommand: rollback false false staging none 1.1 none given []
-after --: none false false staging none --not-a-flag x [extra1, extra2]
+after --: none false false staging none --not-a-flag x ["extra1", "extra2"]
 unknown: error: deploy: unknown option --nope
 missing value: error: deploy: --env needs a value
 flag with value: error: deploy: --force does not take a value

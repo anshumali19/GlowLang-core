@@ -194,9 +194,9 @@
 1e+300 % -2.5 = int:0
 1e+300 % 7 = int:1
 1e+300 % 1e+300 = int:0
-neg: [int:0, int:-5, int:5, int:-140737488355327, int:140737488355328, float:-2.5, int:-1180591620717411303424]
+neg: ["int:0", "int:-5", "int:5", "int:-140737488355327", "int:140737488355328", "float:-2.5", "int:-1180591620717411303424"]
 neg error: Cannot negate string
-pow: [int:1024, int:1180591620717411303424, int:-27, float:0.5, int:3, int:1]
+pow: ["int:1024", "int:1180591620717411303424", "int:-27", "float:0.5", "int:3", "int:1"]
 cmp 1 2 [true, true, false, false, false, true]
 cmp 2.5 2 [false, false, true, true, false, true]
 cmp 3 3 [false, true, false, true, true, false]
@@ -207,4 +207,4 @@ cmp b b [false, true, false, true, true, false]
 cmp [1, 2] [1, 3] [true, true, false, false, false, true]
 cmp none none error: Cannot compare none and none with '<'
 cmp none 0 error: Cannot compare none and int with '<'
-walk: [13999, 10000, abbhéab]
+walk: [13999, 10000, "abbhéab"]

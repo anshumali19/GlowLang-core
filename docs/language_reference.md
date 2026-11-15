@@ -256,6 +256,12 @@ Indexing pure-ASCII text is constant-time, and walking any string with
 
 ## 6. Lists
 
+Inside a list or dict, strings show in quotes (with `
+`, `	`, `\"`
+escaped), so different values always look different: `show ["a, b", "c"]`
+prints `["a, b", "c"]`, not `[a, b, c]`. A string on its own still shows
+as plain text: `show "hi"` prints `hi`.
+
 ### Creation
 ```glow
 let empty = []

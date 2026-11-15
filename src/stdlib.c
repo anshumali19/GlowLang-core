@@ -1901,6 +1901,32 @@ static void ds_putn(DStr *d, const char *s, size_t len) {
 }
 static void ds_puts(DStr *d, const char *s) { ds_putn(d, s, strlen(s)); }
 
+/* A string inside a list or dict is shown quoted, with escapes, so every
+   value prints differently: ["a, b"] and ["a", "b"] no longer look alike,
+   and a dict's values are quoted like its keys. */
+static void ds_quoted(DStr *d, const char *s, size_t n) {
+    ds_putn(d, "\"", 1);
+    size_t run = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        const char *esc = NULL;
+        char hex[8];
+        if (c == '"') esc = "\\\"";
+        else if (c == '\\') esc = "\\\\";
+        else if (c == '\n') esc = "\\n";
+        else if (c == '\t') esc = "\\t";
+        else if (c == '\r') esc = "\\r";
+        else if (c < 0x20 || c == 0x7f) { snprintf(hex, sizeof hex, "\\x%02x", c); esc = hex; }
+        if (esc) {
+            ds_putn(d, s + i - run, run);
+            run = 0;
+            ds_puts(d, esc);
+        } else run++;
+    }
+    ds_putn(d, s + n - run, run);
+    ds_putn(d, "\"", 1);
+}
+
 static void ds_value(DStr *d, Value v, int depth) {
     char nb[64];
     if (depth > 64) { ds_puts(d, "..."); return; }
@@ -1910,7 +1936,11 @@ static void ds_value(DStr *d, Value v, int depth) {
     uint64_t type = (v & MASK_TYPE) >> 48;
     if (type == VAL_INT) { snprintf(nb, sizeof(nb), "%lld", (long long)AS_INT(v)); ds_puts(d, nb); }
     else if (type == VAL_BOOL) ds_puts(d, AS_BOOL(v) ? "true" : "false");
-    else if (type == VAL_STRING) { if (v & MASK_PAYLOAD) ds_puts(d, AS_STRING(v)); }
+    else if (type == VAL_STRING) {
+        if (depth == 0) { if (v & MASK_PAYLOAD) ds_puts(d, AS_STRING(v)); }
+        else if (v & MASK_PAYLOAD) ds_quoted(d, AS_STRING(v), rope_length(v));
+        else ds_puts(d, "\"\"");
+    }
     else if (type == VAL_LIST) {
         List *l = AS_LIST(v);
         ds_puts(d, "[");
@@ -1924,9 +1954,9 @@ static void ds_value(DStr *d, Value v, int depth) {
         for (int i = 0; i < dict->capacity; i++) {
             if (GET_TYPE(dict->keys[i]) != VAL_NONE) {
                 if (printed > 0) ds_puts(d, ", ");
-                ds_puts(d, "\"");
-                ds_puts(d, (const char*)(uintptr_t)(dict->keys[i] & MASK_PAYLOAD));
-                ds_puts(d, "\": ");
+                const char *key = (const char*)(uintptr_t)(dict->keys[i] & MASK_PAYLOAD);
+                ds_quoted(d, key, strlen(key));
+                ds_puts(d, ": ");
                 ds_value(d, dict->values[i], depth + 1);
                 printed++;
             }
