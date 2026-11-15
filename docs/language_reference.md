@@ -79,6 +79,12 @@ GlowLang is dynamically typed with the following value types:
 | Lambda | `lambda(x): x * 2` | Anonymous function |
 | Object | `MyClass()` | Class instance |
 
+**Number literals.** Whole numbers can be written in hex (`0xff`), binary
+(`0b1010`) or octal (`0o17`), of any size. An underscore may separate digits
+anywhere for readability: `1_000_000`, `3.141_592`, `0xFF_FF`. It must sit
+between two digits, so `1_`, `1__0` and `0x_1` are errors, as is a number
+run into letters such as `12abc`.
+
 **Whole numbers are integers.** A calculation whose result is a whole number
 gives an integer, even from floats: `2.5 * 2` is `5`, `type(2.5 * 2)` is
 `"int"`, and `3.0` prints as `3`. `7 / 2` is `3.5` and `6 / 3` is `2`.

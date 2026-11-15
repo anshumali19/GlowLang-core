@@ -1,0 +1,4 @@
+== separators
+== hex, binary, octal
+== names that look like numbers are unchanged
+passed: 27   failed: 0

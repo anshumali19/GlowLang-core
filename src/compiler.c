@@ -1714,8 +1714,57 @@ static void line_first_word(const char *file, int line, char *out, size_t cap) {
     fclose(f);
 }
 
+
+#include <ctype.h>
+/* ---- number literals: 1_000, 0xff, 0b1010, 0o17 ---- */
+
+/* The literal without its _ separators (a static buffer, used at once). */
+const char *glow_strip_underscores(const char *text) {
+    static char buf[4096];
+    size_t o = 0;
+    for (const char *p = text; *p && o + 1 < sizeof buf; p++) if (*p != '_') buf[o++] = *p;
+    buf[o] = '\0';
+    return buf;
+}
+
+/* 0x / 0b / 0o literal -> its value as decimal text (interned), exact at
+   any size: the digits are accumulated in base 10^9 limbs. */
+const char *glow_radix_literal(const char *text) {
+    int base = (text[1] == 'x' || text[1] == 'X') ? 16 : (text[1] == 'b' || text[1] == 'B') ? 2 : 8;
+    size_t n = strlen(text);
+    uint32_t *limbs = calloc(n + 2, sizeof(uint32_t));   /* little-endian, base 1e9 */
+    size_t used = 1;
+    for (const char *p = text + 2; *p; p++) {
+        if (*p == '_') continue;
+        int d = isdigit((unsigned char)*p) ? *p - '0' : (tolower((unsigned char)*p) - 'a' + 10);
+        uint64_t carry = (uint64_t)d;
+        for (size_t i = 0; i < used; i++) {
+            uint64_t v = (uint64_t)limbs[i] * (uint64_t)base + carry;
+            limbs[i] = (uint32_t)(v % 1000000000u);
+            carry = v / 1000000000u;
+        }
+        while (carry) { limbs[used++] = (uint32_t)(carry % 1000000000u); carry /= 1000000000u; }
+    }
+    char *out = malloc(used * 9 + 2);
+    int o = sprintf(out, "%u", limbs[used - 1]);
+    for (size_t i = used - 1; i-- > 0; ) o += sprintf(out + o, "%09u", limbs[i]);
+    const char *r = intern_string(out);
+    free(out); free(limbs);
+    return r;
+}
+
+/* The next syntax error names this malformed literal. */
+static char bad_literal[80];
+void glow_bad_literal(const char *text) { snprintf(bad_literal, sizeof bad_literal, "%s", text); }
+
 void yyerror(const char *s) {
-    if (quiet_parse) return;
+    if (quiet_parse) { bad_literal[0] = 0; return; }
+    char numhint[200];
+    if (bad_literal[0]) {
+        snprintf(numhint, sizeof numhint, "'%s' is not a valid number (write 1_000, 0xff, 0b1010 or 0o17; _ only between digits)", bad_literal);
+        bad_literal[0] = 0;
+        s = numhint;
+    }
     /* Other languages' spellings of else-if are a common slip; say what
        GlowLang writes instead of a bare "syntax error". */
     char word[32], hint[160];
