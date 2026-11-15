@@ -1,0 +1,125 @@
+# Calling with more arguments than a function declares is an error on
+# every call path; fewer is fine (missing ones are none).
+let passed = 0
+let failed = 0
+
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + ", wanted " + str(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg == text:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+func two(a, b):
+    return [a, b]
+end
+func none_params():
+    return "ok"
+end
+func with_default(a, b = 5):
+    return a + b
+end
+class Box:
+    func init(v):
+        self.v = v
+    end
+    func get(extra):
+        return self.v
+    end
+end
+class Child extends Box:
+    func get(extra):
+        return super.get(extra, 99)
+    end
+end
+func countdown(n):
+    if n == 0:
+        return "done"
+    end
+    return countdown(n - 1, "extra")
+end
+func selfcall(n):
+    if n == 0:
+        return 0
+    end
+    let r = selfcall(n - 1, 1)
+    return r
+end
+
+show "== fewer is fine"
+same("missing argument is none", two(1), [1, none])
+same("default fills in", with_default(1), 6)
+same("exact", two(1, 2), [1, 2])
+
+show "== too many"
+fails_with("named function", lambda(): two(1, 2, 3), "two() takes 2 arguments but 3 were given")
+fails_with("no parameters", lambda(): none_params(1), "none_params() takes 0 arguments but 1 was given")
+fails_with("past the defaults", lambda(): with_default(1, 2, 3), "with_default() takes 2 arguments but 3 were given")
+fails_with("lambda", lambda(): (lambda(x): x)(1, 2), "lambda() takes 1 argument but 2 were given")
+fails_with("function in a variable", lambda(): [two][0](1, 2, 3), "two() takes 2 arguments but 3 were given")
+fails_with("method", lambda(): Box(1).get(1, 2), "Box.get() takes 1 argument but 2 were given")
+fails_with("method value", lambda(): [Box(1).get][0](1, 2), "Box.get() takes 1 argument but 2 were given")
+fails_with("constructor", lambda(): Box(1, 2), "Box() takes 1 argument but 2 were given")
+fails_with("super call", lambda(): Child(1).get(0), "Box.get() takes 1 argument but 2 were given")
+fails_with("tail call", lambda(): countdown(3), "countdown() takes 1 argument but 2 were given")
+fails_with("self call", lambda(): selfcall(3), "selfcall() takes 1 argument but 2 were given")
+fails_with("map callback", lambda(): [1, 2].reduce(lambda(x): x, 0), "lambda() takes 1 argument but 2 were given")
+
+show "== in hot code (compiled)"
+func hot_calls():
+    let total = 0
+    every i from 1 to 3000:
+        total = total + two(i, 1)[0]
+        if i == 2999:
+            total = total + two(i, 1, 2)[0]
+        end
+    end
+    return total
+end
+fails_with("hot named call", hot_calls, "two() takes 2 arguments but 3 were given")
+func hot_methods():
+    let b = Box(1)
+    let total = 0
+    every i from 1 to 3000:
+        total = total + b.get(i)
+        if i == 2999:
+            total = total + b.get(i, i)
+        end
+    end
+    return total
+end
+fails_with("hot method call", hot_methods, "Box.get() takes 1 argument but 2 were given")
+func hot_new():
+    let n = 0
+    every i from 1 to 3000:
+        let b = Box(i)
+        if i == 2999:
+            b = Box(i, i)
+        end
+        n = n + 1
+    end
+    return n
+end
+fails_with("hot constructor", hot_new, "Box() takes 1 argument but 2 were given")
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

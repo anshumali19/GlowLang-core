@@ -1396,6 +1396,23 @@ Value jit_iter_pair_second(Value vit) {
 /* `not`, `in` and slicing, shared by the interpreter and compiled code. */
 Value glow_not(Value v) { return value_bool(!value_truthy(v)); }
 
+/* "greet() takes 2 arguments but 3 were given". name is the function's
+   internal name: "Class::method" shows as Class.method, "Class::init" as
+   Class(), and "lambda_7" as lambda. Raises; returns 0. */
+int glow_arity_error(const char *name, int given, int params) {
+    char shown[160];
+    const char *n = name ? name : "function";
+    const char *colon = strstr(n, "::");
+    if (strncmp(n, "lambda_", 7) == 0) snprintf(shown, sizeof shown, "lambda");
+    else if (colon && strcmp(colon + 2, "init") == 0) snprintf(shown, sizeof shown, "%.*s", (int)(colon - n), n);
+    else if (colon) snprintf(shown, sizeof shown, "%.*s.%.80s", (int)(colon - n), n, colon + 2);
+    else snprintf(shown, sizeof shown, "%.120s", n);
+    char msg[300];
+    snprintf(msg, sizeof msg, "%s() takes %d argument%s but %d %s given", shown, params, params == 1 ? "" : "s", given, given == 1 ? "was" : "were");
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return 0;
+}
 /* Dicts are keyed by text. A number or bool key is stored under its text
    form, so d[1] and d["1"] are the same entry (as str(1) is "1"). Any other
    key (none, a list, a dict, an object) raises. Returns the key text, or
@@ -1557,6 +1574,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
    earlier call left in those stack slots. abs_base is the callee's first
    slot, filled the number of slots the caller wrote (self included) and
    total the callee's self and parameter slots. */
+#define CHECK_ARITY(name, given, params) do { \
+    if ((given) > (params)) { glow_arity_error((name), (given), (params)); goto l_OP_THROW; } \
+} while (0)
+#define CLOSURE_NAME(c) ((c)->body && (c)->body->owner ? (c)->body->owner->name : "function")
+
 #define CLEAR_MISSING_ARGS(abs_base, filled, total) do { \
     for (int _k = (filled); _k < (total); _k++) vm_stack[(abs_base) + _k] = value_none(); \
 } while (0)
@@ -2249,6 +2271,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             has_exception = 1; goto l_OP_THROW;
         }
         FuncEntry *fe = func_get(n);
+        if (fe && fe->body) CHECK_ARITY(fe->name, ac, fe->param_count);
         if (fe && fe->body) CLEAR_MISSING_ARGS(base_reg + pc->r2, ac, fe->body->preserved_locals);
         call_stack[my_frame_idx].pc = pc; // Update current frame PC
         /* A nested function calling itself keeps its captured variables. */
@@ -2324,6 +2347,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         }
 
                         FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                        if (ife) CHECK_ARITY(ife->name, count, ife->param_count);
                         vm_stack[callee_base] = inst; // self
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
                         if (ife) {
@@ -2366,6 +2390,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         }
                         int slot = callee_base;
                         if (has_self) { vm_stack[slot] = bm->instance; slot++; }
+                        CHECK_ARITY(bm->method->name, count, bm->method->param_count);
                         for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
                         CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
@@ -2374,6 +2399,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(v);
                     if (c->body) {
+                        CHECK_ARITY(CLOSURE_NAME(c), ac, c->param_count);
                         CLEAR_MISSING_ARGS(base_reg + pc->r2, ac, c->body->preserved_locals);
                         DO_CALL(c->body, c, base_reg + pc->r2, pc->r0);
                     } else R(pc->r0) = value_none();
@@ -2398,6 +2424,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
     }
     l_OP_CALL_SELF_FAST: {
         FuncEntry *fe = bc->owner;
+        if (fe && fe->body) CHECK_ARITY(fe->name, pc->arg, fe->param_count);
         if (fe && fe->body) CLEAR_MISSING_ARGS(base_reg + pc->r2, pc->arg, fe->body->preserved_locals);
         if (fe && fe->body && current_closure && current_closure->body == fe->body) {
             call_stack[my_frame_idx].pc = pc;
@@ -2488,6 +2515,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
                         FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                        if (ife) CHECK_ARITY(ife->name, count, ife->param_count);
                         vm_stack[callee_base] = inst; // self at R0
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
                         if (ife) {
@@ -2508,6 +2536,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         }
 
         if (fe && fe->body) {
+            CHECK_ARITY(fe->name, ac, fe->param_count);
             int needed = fe->param_count;
             if (fe->body->local_count > needed) needed = fe->body->local_count;
             if (base_reg + needed + 512 >= vm_stack_size) { /* VM stack is fixed-size; never realloc it */
@@ -2715,6 +2744,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                     }
                     FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                        if (ife) CHECK_ARITY(ife->name, count, ife->param_count);
                     vm_stack[callee_base] = inst; // self at R0
                     for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
                     if (ife) {
@@ -2758,6 +2788,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                     }
                     int slot = callee_base;
                     if (has_self) { vm_stack[slot] = bm->instance; slot++; } // self at R0
+                    CHECK_ARITY(bm->method->name, count, bm->method->param_count);
                     for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
                     CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                     DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
@@ -2765,6 +2796,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             } else if(ot==OBJ_CLOSURE) {
                 Closure *c = AS_CLOSURE(callee);
                 if(c->body) {
+                    CHECK_ARITY(CLOSURE_NAME(c), ac, c->param_count);
                     CLEAR_MISSING_ARGS(base_reg + pc->r2, ac + (pc->is_method ? 1 : 0), c->body->preserved_locals);
                     DO_CALL(c->body, c, base_reg + pc->r2, pc->r0);
                 } else R(pc->r0) = value_none();
@@ -2834,6 +2866,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             if (callee_base + fe->body->local_count + 16 + 512 >= vm_stack_size) { /* VM stack is fixed-size; never realloc it */
                 pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
             }
+            CHECK_ARITY(fe->name, ac, fe->param_count);
             vm_stack[callee_base] = obj; // SET SELF
             CLEAR_MISSING_ARGS(callee_base, 1 + ac, fe->body->preserved_locals);
 
@@ -2860,6 +2893,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 } else if (ot == OBJ_CLOSURE) {
                     Closure *c = AS_CLOSURE(fallback_callee);
                     if (c->body) {
+                        CHECK_ARITY(CLOSURE_NAME(c), ac, c->param_count);
                         CLEAR_MISSING_ARGS(base_reg + pc->r2 + (pc->is_method ? 1 : 0), ac, c->body->preserved_locals);
                         // A callable field/value is a plain function, so its arguments
                         // begin after the receiver slot on a method-style call.
@@ -2884,6 +2918,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         if (callee_base + bm->method->body->local_count + 16 + 512 >= vm_stack_size) { /* VM stack is fixed-size; never realloc it */
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
+                        CHECK_ARITY(bm->method->name, ac, bm->method->param_count);
                         if (has_self) vm_stack[callee_base] = bm->instance;
                         /* Missing arguments are none (they used to keep values left in
                            those registers, so a default parameter saw garbage). */
@@ -2905,6 +2940,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                             pending_exception = value_string_copy("Maximum recursion depth exceeded"); has_exception = 1; goto l_OP_THROW;
                         }
                         FuncEntry *ife = AS_BOUND_METHOD(init_method)->method;
+                        if (ife) CHECK_ARITY(ife->name, count, ife->param_count);
                         vm_stack[callee_base] = inst; // self at R0
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
                         if (ife) {

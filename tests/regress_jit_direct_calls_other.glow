@@ -127,7 +127,7 @@ func mutual(n):
 end
 show "mutual:", mutual(3000), ping(300, 0), is_even(101)
 
-# Fewer and more arguments than parameters, and default values.
+# Fewer arguments than parameters, and default values.
 func three(a, b, c):
     return [a, b, c]
 end
@@ -138,7 +138,8 @@ func arg_counts(n):
     let out = []
     let i = 0
     while i < n:
-        out = [three(i, 2), three(i), three(), three(i, 2, 3, 4), greet("Ana"), greet("Ana", "Hi")]
+        # Too many arguments is an error now; regress_arity covers it.
+        out = [three(i, 2), three(i), three(), three(i, 2, 3), greet("Ana"), greet("Ana", "Hi")]
         i = i + 1
     end
     return out

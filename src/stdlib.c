@@ -270,6 +270,7 @@ GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Ins
           has_exception = 1;
           return value_none();
       }
+      if (fe && fe->body && argc > fe->param_count) { glow_arity_error(fe->name, argc, fe->param_count); return value_none(); }
       if (fe && fe->body) {
           /* Allocate a fresh register frame for the callee instead of reusing the
            * caller's window via an offset (R + r2*8). The offset model lets nested
@@ -429,6 +430,7 @@ static Value jit_construct(Class *k, int argc, Value *args, Instruction *pc) {
         if (!ife || !ife->body || AS_BOUND_METHOD(init)->native_method) return VAL_DEOPT_SENTINEL;
     }
     if (!ife) return value_instance(instance_new(k));
+    if (argc > ife->param_count) { glow_arity_error(ife->name, argc, ife->param_count); return value_none(); }
 
     Bytecode *body = ife->body;
     int new_base = vm_stack_top;
@@ -505,6 +507,7 @@ GLOW_PLAIN_LOOPS Value jit_call_helper_val(Value callee, int argc, Value *args, 
         if (ot == OBJ_CLOSURE) {
             Closure *c = AS_CLOSURE(callee);
             if (!c->body) return value_none();
+            if (argc > c->param_count) { glow_arity_error(c->body->owner ? c->body->owner->name : "function", argc, c->param_count); return value_none(); }
             if (c->captured_count == 0) return jit_call_helper(c->body->owner, argc, args, pc);
             /* Run with the closure attached so captured variables resolve. */
             int new_base = vm_stack_top;
@@ -571,6 +574,8 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
         if(ot==OBJ_INSTANCE) {
             Instance *inst = AS_INSTANCE(obj);
             if (pc && pc->cache[0].key == inst->klass && pc->cache[1].key == (void*)1) {
+                FuncEntry *arity_fe = (FuncEntry*)pc->cache[0].val;
+                if (argc > arity_fe->param_count) { glow_arity_error(arity_fe->name, argc, arity_fe->param_count); return value_none(); }
                 if (call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
                 g_dbg_pc = pc;
                 int old_top = vm_stack_top;
@@ -638,6 +643,7 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
     if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
 
     Value final_res = value_none();
+    if (fe && fe->body && argc > fe->param_count) { glow_arity_error(fe->name, argc, fe->param_count); return value_none(); }
     if (fe && fe->body) {
         g_dbg_bc = fe->body;
         static int self_slot = -1;
@@ -1856,6 +1862,7 @@ void format_double(char *buf, size_t n, double d) {
    extra ones ignored, as in an ordinary call), then the other locals. */
 Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args) {
     if (!fe || !fe->body) return value_none();
+    if (nargs > fe->param_count) { glow_arity_error(fe->name, nargs, fe->param_count); return value_none(); }
     int new_base = vm_stack_top;
     int needed = new_base + fe->body->local_count + 16;
     if (needed + 512 >= vm_stack_size || glow_stack_low()) {
