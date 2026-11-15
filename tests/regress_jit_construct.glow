@@ -92,7 +92,8 @@ func make_misc(n):
         let b = Bare()
         let d1 = Defaults(1)
         let d3 = Defaults(1, 2, 3)
-        let d4 = Defaults(1, 2, 3, 4)
+        # More arguments than init declares is an error now (regress_arity).
+        let d4 = Defaults(1, 2, 3)
         let r = Returns(i)
         if i == n - 1:
             out.push(b.hello())

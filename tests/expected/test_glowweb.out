@@ -32,7 +32,7 @@ Found prefixed route: true
 PASS: Router prefix works
 
 --- Test 5: Middleware Chain ---
-Middleware log: [before:GET, after:200]
+Middleware log: ["before:GET", "after:200"]
 Before hooks ran: true
 After hooks ran: true
 PASS: Middleware chain works

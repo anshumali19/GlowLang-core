@@ -256,6 +256,12 @@ Indexing pure-ASCII text is constant-time, and walking any string with
 
 ## 6. Lists
 
+Inside a list or dict, strings show in quotes (with `
+`, `	`, `\"`
+escaped), so different values always look different: `show ["a, b", "c"]`
+prints `["a, b", "c"]`, not `[a, b, c]`. A string on its own still shows
+as plain text: `show "hi"` prints `hi`.
+
 ### Creation
 ```glow
 let empty = []
@@ -495,7 +501,9 @@ end
 ### Default Parameter Values
 A parameter can have a default value, used when the caller leaves that
 argument out (or passes `none`). A parameter with no default that the caller
-leaves out is `none`.
+leaves out is `none`. Passing more arguments than a function, method,
+lambda or class `init` declares is an error, such as
+`greet() takes 2 arguments but 3 were given`.
 
 ```glow
 func greet(name, greeting = "Hello", mark = "!"):

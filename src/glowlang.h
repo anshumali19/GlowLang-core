@@ -966,6 +966,7 @@ Value native_val_type(int argc, Value *args);
 Value native_type(int argc, Value *args);
 const char *glow_type_name(Value v);
 const char *glow_dict_key(Value k, char **owned);
+int glow_arity_error(const char *name, int given, int params);
 Value native_tensor_shape(int argc, Value *args);
 Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing);
 Value glow_property_error(Value o, const char *n);

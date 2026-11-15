@@ -13,14 +13,14 @@ insert/remove: [0, 1, 2, 4, 5] 3 true
 copy/reverse: [0, 1, 2, 4, 5] [5, 4, 2, 1, 0]
 sort: [0, 1, 2, 4, 5]
 extend: [0, 1, 2, 4, 5, 10, 11, 12, 13, 14] 10
-pop to empty then push: [again] 1
+pop to empty then push: ["again"] 1
 clear: [] true
 map/filter: [10, 20, 30] [2, 4, 6]
 nested: [[1, 2], [3, [4, 5]], []]
 kept: 30000 bad: 0
-[abc] [a, , b, ] [, ]
-[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[a, b, c] 4
+["abc"] ["a", "", "b", ""] ["", ""]
+["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+["a", "b", "c"] 4
 MIXED 123 _! mixed 123 _!
 HÉLLO WÖRLD àéî 
 abc bnn a<->b<->c

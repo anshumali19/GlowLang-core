@@ -1,4 +1,4 @@
-keys: [zebra, apple, mango, kiwi]
+keys: ["zebra", "apple", "mango", "kiwi"]
 values: [1, 2, 3, 4]
   zebra 1
   apple 2
