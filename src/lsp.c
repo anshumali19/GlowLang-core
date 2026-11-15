@@ -929,8 +929,9 @@ static void handle_semantic_tokens(int id, const char *json) {
             continue;
         }
 
-        /* Single-line comment */
-        if (p[0] == '/' && p[1] == '/') {
+        /* Line comment: # to the end of the line. Block comments are handled
+           just below; // is floor division, not a comment. */
+        if (p[0] == '#') {
             int start_col = cur_col;
             int len = 0;
             while (*p && *p != '\n') { p++; len++; cur_col++; }
@@ -1049,8 +1050,11 @@ static void handle_semantic_tokens(int id, const char *json) {
         if (strchr("+-*/%=<>!&|^~?:", *p)) {
             int start_col = cur_col;
             int len = 1;
-            /* Check for two-char operators */
-            if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
+            /* Check for three- and two-char operators */
+            if (p[0] == '/' && p[1] == '/' && p[2] == '=') {
+                len = 3;
+            } else if ((p[0] == '/' && p[1] == '/') ||
+                (p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
                 (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=') ||
                 (p[0] == '+' && p[1] == '=') || (p[0] == '-' && p[1] == '=') ||
                 (p[0] == '*' && p[1] == '=') || (p[0] == '/' && p[1] == '=') ||

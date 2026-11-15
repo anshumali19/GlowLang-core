@@ -131,6 +131,56 @@ BigInt* bigint_sub(BigInt *a, BigInt *b) {
     return bi_usub(b, a, !a->neg);
 }
 
+
+/* Floor division of big integers: q = floor(a / b), r = a - q*b (r has the
+   sign of b, as in Python). b must not be 0. Long division on the
+   magnitudes, bit by bit, then the floor adjustment for mixed signs. */
+void bigint_floor_divmod(BigInt *a, BigInt *b, BigInt **q, BigInt **r) {
+    int na = a->nlimbs, nb = b->nlimbs;
+    uint32_t *qm = calloc((size_t)na, sizeof(uint32_t));
+    uint32_t *rm = calloc((size_t)nb + 1, sizeof(uint32_t));
+    int rn = nb + 1;
+    for (int bit = na * 32 - 1; bit >= 0; bit--) {
+        /* r = r << 1 | next bit of a */
+        uint32_t carry = (a->limbs[bit / 32] >> (bit % 32)) & 1u;
+        for (int i = 0; i < rn; i++) {
+            uint32_t nc = rm[i] >> 31;
+            rm[i] = (rm[i] << 1) | carry;
+            carry = nc;
+        }
+        /* if r >= |b|: r -= |b|, set the quotient bit */
+        int ge = 1;
+        for (int i = rn - 1; i >= 0; i--) {
+            uint32_t bi = i < nb ? b->limbs[i] : 0;
+            if (rm[i] != bi) { ge = rm[i] > bi; break; }
+        }
+        if (ge) {
+            int64_t borrow = 0;
+            for (int i = 0; i < rn; i++) {
+                int64_t d = (int64_t)rm[i] - (int64_t)(i < nb ? b->limbs[i] : 0) - borrow;
+                borrow = d < 0;
+                rm[i] = (uint32_t)(d + (borrow ? ((int64_t)1 << 32) : 0));
+            }
+            qm[bit / 32] |= 1u << (bit % 32);
+        }
+    }
+    BigInt *qq = bigint_alloc(na, a->neg != b->neg);
+    memcpy(qq->limbs, qm, (size_t)na * sizeof(uint32_t));
+    bigint_normalize(qq);
+    BigInt *rr = bigint_alloc(rn, a->neg);
+    memcpy(rr->limbs, rm, (size_t)rn * sizeof(uint32_t));
+    bigint_normalize(rr);
+    free(qm); free(rm);
+    int r_zero = rr->nlimbs == 1 && rr->limbs[0] == 0;
+    if (!r_zero && a->neg != b->neg) {
+        /* Truncation rounded toward zero; floor goes one further down. */
+        qq = bigint_sub(qq, bigint_from_int64(1));
+        rr = bigint_add(rr, b);
+    }
+    *q = qq;
+    *r = rr;
+}
+
 BigInt* bigint_negate(BigInt *a) {
     BigInt *r = bigint_alloc(a->nlimbs, !a->neg);
     for (int i = 0; i < a->nlimbs; i++) r->limbs[i] = a->limbs[i];

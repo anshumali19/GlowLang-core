@@ -10,7 +10,7 @@ end
 func stress_gc_tensors(iterations):
     let i = 0
     while i < iterations:
-        let t = tensor.create(10000) // Large allocation
+        let t = tensor.create(10000) # Large allocation
         if i % 100 == 0:
             let info = os.gc_info()
             show "   GC Progress: ", i, "/", iterations, " (Allocated: ", info.allocated / 1024 / 1024, " MB)"

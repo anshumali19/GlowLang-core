@@ -17,7 +17,7 @@ name = "glowlang"
 scope = "source.glowlang"
 injection-regex = "glow(lang)?"
 file-types = ["glow"]
-comment-token = "//"
+comment-token = "#"
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 4, unit = "    " }
 language-servers = ["glowlang-lsp"]

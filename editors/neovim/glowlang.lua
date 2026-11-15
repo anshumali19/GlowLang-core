@@ -59,7 +59,7 @@ vim.api.nvim_create_autocmd("FileType", {
             syntax keyword glowBoolean true false
 
             " Comments
-            syntax match glowComment "\/\/.*$"
+            syntax match glowComment "#.*$"
             syntax region glowComment start="/\*" end="\*/"
 
             " Strings
@@ -106,7 +106,7 @@ vim.api.nvim_create_autocmd("FileType", {
         ]])
 
         -- Set buffer options
-        vim.bo[buf].commentstring = "// %s"
+        vim.bo[buf].commentstring = "# %s"
         vim.bo[buf].tabstop = 4
         vim.bo[buf].shiftwidth = 4
         vim.bo[buf].expandtab = true

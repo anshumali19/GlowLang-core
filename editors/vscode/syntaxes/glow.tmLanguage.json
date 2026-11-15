@@ -19,10 +19,6 @@
         "comments": {
             "patterns": [
                 {
-                    "name": "comment.line.double-slash.glow",
-                    "match": "//.*"
-                },
-                {
                     "name": "comment.line.number-sign.glow",
                     "match": "#.*"
                 },
@@ -76,6 +72,6 @@
                 }
             ]
         }
-    ],
+    },
     "scopeName": "source.glow"
 }

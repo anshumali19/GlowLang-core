@@ -1,5 +1,5 @@
 
-// Loop Cross-Bench
+# Loop Cross-Bench
 i = 0
 total = 0
 while i < 1000000:

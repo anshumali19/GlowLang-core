@@ -1,4 +1,4 @@
-// Test Script for CUDA
+# Test Script for CUDA
 
 show "=== GlowLang Hardware Acceleration Test ==="
 

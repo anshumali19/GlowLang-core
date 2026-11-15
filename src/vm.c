@@ -695,6 +695,69 @@ static int seq_repeat(Value a, Value b, Value *out) {
 
 /* Floor modulo, like Python: the result has the sign of the divisor
    (-7 % 3 == 2). Exact for integers. */
+/* An int or a big int, as a BigInt (for exact big arithmetic). */
+static int as_bigint_operand(Value v, BigInt **out) {
+    if (GET_TYPE(v) == VAL_INT) { *out = bigint_from_int64(AS_INT(v)); return 1; }
+    if (is_bigint(v)) { *out = AS_BIGINT(v); return 1; }
+    return 0;
+}
+/* A BigInt result as the smallest value that holds it. */
+static Value bigint_result(BigInt *b) {
+    if (b->nlimbs <= 2) {
+        uint64_t m = b->limbs[0] | (b->nlimbs == 2 ? (uint64_t)b->limbs[1] << 32 : 0);
+        if (m <= (uint64_t)INT48_MAX) return value_int(b->neg ? -(int64_t)m : (int64_t)m);
+    }
+    return value_bigint(b);
+}
+
+/* a // b: the largest whole number not above a / b (-7 // 2 is -4).
+   Exact for integers of any size; for floats, floor(a / b). */
+Value glow_floordiv(Value a, Value b) {
+    if (!is_numeric(a) || !is_numeric(b)) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "Cannot apply '//' to %s and %s", glow_type_name(a), glow_type_name(b));
+        pending_exception = value_string_copy(msg); has_exception = 1; return value_none();
+    }
+    if (val_to_double(b) == 0.0 && !is_bigint(b)) {
+        pending_exception = value_string_copy("Division by zero"); has_exception = 1; return value_none();
+    }
+    int64_t ia, ib;
+    if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && GET_TYPE(a) != VAL_FLOAT && GET_TYPE(b) != VAL_FLOAT) {
+        if (!(ia == INT64_MIN && ib == -1)) {
+            int64_t q = ia / ib;
+            if ((ia % ib != 0) && ((ia < 0) != (ib < 0))) q--;
+            if (q >= (int64_t)INT48_MIN && q <= (int64_t)INT48_MAX) return value_int(q);
+            return value_bigint(bigint_from_int64(q));
+        }
+    }
+    BigInt *ba, *bb;
+    if (as_bigint_operand(a, &ba) && as_bigint_operand(b, &bb)) {
+        BigInt *q, *r;
+        bigint_floor_divmod(ba, bb, &q, &r);
+        return bigint_result(q);
+    }
+    /* Floats, the way Python does it: through the remainder, so that
+       (a // b) * b + a % b == a holds. A plain floor(a / b) can be off by
+       one when the division rounds up (0.5 // 0.1 is 4, not 5). */
+    double x = val_to_double(a), y = val_to_double(b);
+    double mod = fmod(x, y);
+    double div = (x - mod) / y;
+    if (mod != 0.0 && ((y < 0) != (mod < 0))) div -= 1.0;
+    double q;
+    if (div != 0.0) {
+        q = floor(div);
+        if (div - q > 0.5) q += 1.0;
+    } else {
+        q = copysign(0.0, x / y);
+    }
+    return num_from_double(q);
+}
+
+Value native_floordiv(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    return glow_floordiv(args[0], args[1]);
+}
+
 static Value num_mod(Value a, Value b) {
     int64_t ia, ib;
     if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && ib != 0) {
@@ -702,6 +765,13 @@ static Value num_mod(Value a, Value b) {
         if (r != 0 && ((r < 0) != (ib < 0))) r += ib;
         if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
         return value_bigint(bigint_from_int64(r));
+    }
+    /* Integers beyond 64 bits: exact (this used to go through doubles). */
+    BigInt *ba, *bb;
+    if (as_bigint_operand(a, &ba) && as_bigint_operand(b, &bb) && !(bb->nlimbs == 1 && bb->limbs[0] == 0)) {
+        BigInt *q, *r;
+        bigint_floor_divmod(ba, bb, &q, &r);
+        return bigint_result(r);
     }
     double x = val_to_double(a), y = val_to_double(b);
     double r = fmod(x, y);

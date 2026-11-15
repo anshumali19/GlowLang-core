@@ -1,5 +1,5 @@
 
-// Dijkstra Cross-Bench (1000 nodes)
+# Dijkstra Cross-Bench (1000 nodes)
 func minDistance(dist, sptSet, V):
     let min = 999999
     let min_index = 0 - 1
