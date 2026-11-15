@@ -1,0 +1,153 @@
+# Regressions from the language audit: each of these used to give a
+# silently wrong result (or a vague error).
+let passed = 0
+let failed = 0
+
+func same(name, got, want):
+    if got == want and type(got) == type(want):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (got " + str(got) + " " + type(got) + ", wanted " + str(want) + " " + type(want) + ")"
+    end
+end
+
+func fails_with(name, f, text):
+    let msg = ""
+    try:
+        f()
+    catch e:
+        msg = str(e)
+    end
+    if msg.contains(text):
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " (error was: " + msg + ")"
+    end
+end
+
+show "== range"
+same("range(n)", range(4), [0, 1, 2, 3])
+same("range(start, stop)", range(2, 5), [2, 3, 4])
+same("range with a step", range(0, 10, 3), [0, 3, 6, 9])
+same("range counting down", range(5, 0, -1), [5, 4, 3, 2, 1])
+same("range down by 2", range(10, 0, -2), [10, 8, 6, 4, 2])
+same("empty when stop is behind", range(5, 2), [])
+same("empty counting down the wrong way", range(0, 5, -1), [])
+same("range(0)", range(0), [])
+same("negative numbers", range(-3, 0), [-3, -2, -1])
+same("whole floats are fine", range(3.0), [0, 1, 2])
+fails_with("step 0", lambda(): range(1, 5, 0), "must not be 0")
+fails_with("fractions", lambda(): range(2.5), "whole numbers")
+fails_with("no arguments", lambda(): range(), "1 to 3")
+let total = 0
+for each i in range(1, 1001):
+    total = total + i
+end
+same("loop over range", total, 500500)
+
+show "== round and format"
+same("round to 2 places", round(3.14159, 2), 3.14)
+same("round to 0 places", round(2.71828, 0), 3)
+same("round to tens", round(1234, -1), 1230)
+same("round to hundreds", round(1250, -2), 1300)
+same("round without digits", round(2.5), 3)
+same("round negative", round(-2.567, 1), -2.6)
+same("format .2f", format(3.14159, ".2f"), "3.14")
+same("format keeps zeros", format(2, ".2f"), "2.00")
+same("format thousands", format(1234567.891, ",.2f"), "1,234,567.89")
+same("format width right", format(42, "6d"), "    42")
+same("format zero pad", format(-42, "06d"), "-00042")
+same("format left", format("ab", "<5") + "|", "ab   |")
+same("format centre fill", format("ab", "*^6"), "**ab**")
+same("format percent", format(0.256, ".1%"), "25.6%")
+same("format hex", format(255, "x") + format(255, "X"), "ffFF")
+same("format binary", format(5, "08b"), "00000101")
+same("format plus sign", format(5, "+d"), "+5")
+same("format exponent", format(12345.678, ".2e"), "1.23e+04")
+same("format text precision", format("héllo", ".3"), "hél")
+same("format big int with commas", format(12345678901234567890, ","), "12,345,678,901,234,567,890")
+fails_with("bad spec", lambda(): format(1, ".2q"), "bad spec")
+fails_with("d of a fraction", lambda(): format(1.5, "d"), "whole number")
+let price = 1234.5
+same("f-string spec", f"Total: {price:,.2f}", "Total: 1,234.50")
+same("f-string width", f"[{7:>3}]", "[  7]")
+let hw = "hello"
+same("f-string slice still works", f"{hw[1:3]}", "el")
+same("f-string without spec", f"{1 + 2}", "3")
+let fd = {"a": 5}
+let fk = "a"
+same("f-string dict lookup", f"{fd[fk]}", "5")
+fails_with("f-string with a broken expression", lambda(): f"{1 +}", "cannot read the expression")
+
+show "== strings"
+same("split() on whitespace", "  a  b\tc\n d ".split(), ["a", "b", "c", "d"])
+same("split() of blank text", "   ".split(), [])
+same("split(sep) keeps empties", "a,,b".split(","), ["a", "", "b"])
+fails_with("split with a number", lambda(): "a1b".split(1), "must be text")
+same("trim(chars)", "xxhixx".trim("x"), "hi")
+same("trim several chars", "--==hi==--".trim("-="), "hi")
+same("trim_start(chars)", "00042".trim_start("0"), "42")
+same("trim_end(chars)", "path///".trim_end("/"), "path")
+same("trim unicode chars", "★★hi★".trim("★"), "hi")
+same("trim() still trims whitespace", "  hi \n".trim(), "hi")
+fails_with("unknown string method", lambda(): "abc".reverse(), "string has no method 'reverse'")
+fails_with("method of none", lambda(): none.upper(), "of none")
+
+show "== dict keys"
+let d = {1: "one", 2.5: "x", true: "t", "s": "str"}
+same("number key in a literal", d[1], "one")
+same("same entry as its text", d["1"], "one")
+same("float key", d[2.5], "x")
+same("bool key", d[true], "t")
+same("keys are text", d.keys(), ["1", "2.5", "true", "s"])
+let e = {}
+e[2] = "two"
+e[3] = "three"
+same("number keys do not collide", [e[2], e[3]], ["two", "three"])
+same("in with a number", 2 in e, true)
+same("has with a number", e.has(3), true)
+same("get with a number", e.get(9, "none here"), "none here")
+same("remove with a number", e.remove(2), "two")
+same("removed", len(e), 1)
+fails_with("none as a key", lambda(): {"k": 1}[none], "dictionary key")
+fails_with("list as a key", lambda(): {[1]: 2}, "dictionary key")
+func bad_keys():
+    let out = 0
+    every i from 1 to 3000:
+        let k = i
+        if i == 2999:
+            k = none
+        end
+        let m = {k: i}
+        out = out + 1
+    end
+    return out
+end
+fails_with("bad key in a hot loop", bad_keys, "dictionary key")
+same("none is not in a dict", none in {"a": 1}, false)
+
+show "== more builtins"
+same("enumerate", enumerate(["a", "b"]), [[0, "a"], [1, "b"]])
+same("enumerate from 1", enumerate(["a"], 1), [[1, "a"]])
+same("enumerate a string", enumerate("hé"), [[0, "h"], [1, "é"]])
+same("zip", zip([1, 2, 3], ["a", "b"]), [[1, "a"], [2, "b"]])
+same("zip three", zip([1], [2], [3]), [[1, 2, 3]])
+same("zip nothing", zip(), [])
+func named():
+    return 1
+end
+same("type of a function", type(named), "function")
+same("type of a lambda", type(lambda(): 1), "function")
+class K:
+    func m():
+        return 1
+    end
+end
+same("type of a bound method", type(K().m), "method")
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

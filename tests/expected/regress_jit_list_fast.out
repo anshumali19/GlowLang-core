@@ -2,7 +2,7 @@ push returns the list: true
 3000 0 0 0 999 1998 -999
 class push: 301 301
 list push: [1, 2, 3]
-string push: Attempted to call a non-method value
+string push: string has no method 'push'
 dict push: 40
 30 30 [0, 2, 3]
 read error: List index out of range (index 4294967297, length 3)

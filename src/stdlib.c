@@ -733,6 +733,8 @@ Value glow_index_jit(Value coll, Value v_idx) {
         }
         return value_none();
     } else if (GET_TYPE(coll) == VAL_DICT) {
+        /* Number keys and errors go through the interpreter. */
+        if (GET_TYPE(v_idx) != VAL_STRING) return VAL_DEOPT_SENTINEL;
         Value v = dict_get(AS_DICT(coll), AS_STRING(v_idx));
         /* Missing keys that name dict methods produce bound methods in the
            interpreter; let it handle those. */
@@ -1849,6 +1851,40 @@ void format_double(char *buf, size_t n, double d) {
     }
 }
 
+/* Runs a method's FuncEntry on self with nargs arguments, in a fresh
+   frame: register 0 is self, then the parameters (missing ones none,
+   extra ones ignored, as in an ordinary call), then the other locals. */
+Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args) {
+    if (!fe || !fe->body) return value_none();
+    int new_base = vm_stack_top;
+    int needed = new_base + fe->body->local_count + 16;
+    if (needed + 512 >= vm_stack_size || glow_stack_low()) {
+        pending_exception = value_string_copy("Maximum recursion depth exceeded");
+        has_exception = 1;
+        return value_none();
+    }
+    vm_stack[new_base] = self;
+    for (int i = 0; i < fe->param_count; i++) vm_stack[new_base + 1 + i] = i < nargs ? args[i] : value_none();
+    for (int i = 1 + fe->param_count; i < fe->body->local_count; i++) vm_stack[new_base + i] = value_none();
+    int saved_top = vm_stack_top;
+    vm_stack_top = needed;
+    Value r = run_bytecode(fe->body, NULL, NULL, new_base);
+    vm_stack_top = saved_top;
+    return r;
+}
+
+/* The method name on class k or a class it extends, or NULL. */
+FuncEntry *glow_class_method(Class *k, const char *name) {
+    for (; k; k = k->parent) {
+        Value m = dict_get(k->methods, name);
+        if (GET_TYPE(m) == VAL_OBJECT && (m & MASK_PAYLOAD) && GET_OBJ_TYPE(m) == OBJ_BOUND_METHOD && AS_BOUND_METHOD(m)->method)
+            return AS_BOUND_METHOD(m)->method;
+    }
+    return NULL;
+}
+
+static int to_string_depth = 0;
+
 /* Growable output buffer used to render values as text. */
 typedef struct { char *p; size_t n; size_t cap; } DStr;
 
@@ -1901,7 +1937,26 @@ static void ds_value(DStr *d, Value v, int depth) {
         if (!(v & MASK_PAYLOAD)) { ds_puts(d, "none"); return; }
         ObjType ot = GET_OBJ_TYPE(v);
         if (ot == OBJ_CLASS) { ds_puts(d, "<class "); ds_puts(d, AS_CLASS(v)->name); ds_puts(d, ">"); }
-        else if (ot == OBJ_INSTANCE) { ds_puts(d, "<instance of "); ds_puts(d, AS_INSTANCE(v)->klass->name); ds_puts(d, ">"); }
+        else if (ot == OBJ_INSTANCE) {
+            /* An object with a to_string() method shows as what it returns
+               (str(obj), show obj, f-strings, inside lists ...). */
+            FuncEntry *ts = glow_class_method(AS_INSTANCE(v)->klass, "to_string");
+            if (ts && !has_exception && to_string_depth < 16) {
+                to_string_depth++;
+                Value r = glow_call_method_fe(ts, v, 0, NULL);
+                to_string_depth--;
+                if (!has_exception && GET_TYPE(r) == VAL_STRING) { if (r & MASK_PAYLOAD) ds_puts(d, AS_STRING(r)); return; }
+                if (!has_exception) {
+                    char msg[200];
+                    snprintf(msg, sizeof msg, "%.80s.to_string() must return text (it returned %s)", AS_INSTANCE(v)->klass->name, glow_type_name(r));
+                    pending_exception = value_string_copy(msg);
+                    has_exception = 1;
+                }
+                ds_puts(d, "<instance of "); ds_puts(d, AS_INSTANCE(v)->klass->name); ds_puts(d, ">");
+                return;
+            }
+            ds_puts(d, "<instance of "); ds_puts(d, AS_INSTANCE(v)->klass->name); ds_puts(d, ">");
+        }
         else if (ot == OBJ_PACKED_ARRAY) {
             PackedArray *pa = AS_PACKED_ARRAY(v);
             ds_puts(d, "[");
@@ -2094,7 +2149,36 @@ Value native_len(int argc, Value *args) {
     }
     return value_int(0);
 }
-static Value native_range(int argc, Value *args) { int n = (argc > 0) ? (int)AS_INT(args[0]) : 0; List *l = list_new(n); for (int i = 0; i < n; i++) list_push(l, value_int(i)); return value_list(l); }
+/* range(stop), range(start, stop) or range(start, stop, step): whole
+   numbers from start up to (not including) stop. A negative step counts
+   down; a step of 0 is an error. */
+static Value int_value_from_int64(int64_t i);
+static int range_arg(Value v, int64_t *out) {
+    if (GET_TYPE(v) == VAL_INT) { *out = AS_INT(v); return 1; }
+    if (GET_TYPE(v) == VAL_FLOAT && AS_FLOAT(v) == floor(AS_FLOAT(v)) && fabs(AS_FLOAT(v)) < 9e15) { *out = (int64_t)AS_FLOAT(v); return 1; }
+    return 0;
+}
+static Value range_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
+static Value native_range(int argc, Value *args) {
+    int64_t start = 0, stop = 0, step = 1;
+    if (argc < 1 || argc > 3) return range_fail("range() takes 1 to 3 whole numbers: range(stop), range(start, stop) or range(start, stop, step)");
+    for (int i = 0; i < argc; i++) {
+        int64_t x;
+        if (!range_arg(args[i], &x)) return range_fail("range() needs whole numbers");
+        if (argc == 1) stop = x;
+        else if (i == 0) start = x; else if (i == 1) stop = x; else step = x;
+    }
+    if (step == 0) return range_fail("range() step must not be 0");
+    int64_t count = 0;
+    if (step > 0 && stop > start) count = (stop - start + step - 1) / step;
+    else if (step < 0 && stop < start) count = (start - stop + (-step) - 1) / (-step);
+    if (count > 100000000) return range_fail("range() would make more than 100 million numbers");
+    List *l = list_new((int)(count > 0 ? count : 1));
+    Value result = value_list(l);
+    int64_t x = start;
+    for (int64_t i = 0; i < count; i++, x += step) list_push(l, int_value_from_int64(x));
+    return result;
+}
 static Value native_os_gc_info(int argc, Value *args) {
     (void)argc; (void)args;
     Dict *d = dict_new(2);
@@ -2134,7 +2218,216 @@ static Value math_pow(int argc, Value *args) { return argc > 1 ? value_from_doub
    int64 (math.floor(1e20)) was undefined behaviour. */
 static Value math_floor(int argc, Value *args) { return argc > 0 ? value_from_double(floor(val_to_double(args[0]))) : value_none(); }
 static Value math_ceil(int argc, Value *args)  { return argc > 0 ? value_from_double(ceil(val_to_double(args[0])))  : value_none(); }
-static Value math_round(int argc, Value *args) { return argc > 0 ? value_from_double(round(val_to_double(args[0]))) : value_none(); }
+/* round(x) -> the nearest whole number (halves away from zero);
+   round(x, digits) -> x rounded to that many decimal places (negative
+   digits round to tens, hundreds ...). */
+static Value math_round(int argc, Value *args) {
+    if (argc < 1) return value_none();
+    double x = val_to_double(args[0]);
+    if (argc < 2 || GET_TYPE(args[1]) == VAL_NONE) return value_from_double(round(x));
+    if (GET_TYPE(args[1]) != VAL_INT) { pending_exception = value_string_copy("round(x, digits): digits must be a whole number"); has_exception = 1; return value_none(); }
+    int64_t d = AS_INT(args[1]);
+    if (isnan(x) || isinf(x)) return value_from_double(x);
+    if (d > 15) return args[0];
+    if (d >= 0) {
+        /* Through decimal text, so a value rounds the way it prints. */
+        char buf[400];
+        snprintf(buf, sizeof buf, "%.*f", (int)d, x);
+        return value_from_double(strtod(buf, NULL));
+    }
+    if (d < -308) return value_from_double(0.0);
+    double scale = pow(10.0, (double)(-d));
+    return value_from_double(round(x / scale) * scale);
+}
+/* ---- format(value, spec) and f"{value:spec}" ----
+ * spec: [[fill]align][sign][0][width][, or _][.precision][type]
+ *   align  < left, > right, ^ centre, = pad after the sign
+ *   sign   + always, - only when negative (default), space: a space if positive
+ *   type   d whole number, f fixed point, e exponent, g general, % percent,
+ *          x X hex, o octal, b binary, s text
+ * The same mini-language as Python's format(). */
+static Value fmt_fail(const char *spec, const char *why) {
+    char msg[240];
+    snprintf(msg, sizeof msg, "format: bad spec '%.40s': %s", spec, why);
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return value_none();
+}
+static size_t utf8_chars(const char *s) { size_t n = 0; for (; *s; s++) if (((unsigned char)*s & 0xC0) != 0x80) n++; return n; }
+
+Value glow_format_value(Value v, const char *spec) {
+    char fill = ' ', align = 0, sign = '-', type = 0, group = 0;
+    int width = 0, prec = -1, zero = 0;
+    const char *p = spec;
+    if (p[0] && p[1] && strchr("<>^=", p[1])) { fill = p[0]; align = p[1]; p += 2; }
+    else if (p[0] && strchr("<>^=", p[0])) { align = p[0]; p++; }
+    if (*p == '+' || *p == '-' || *p == ' ') sign = *p++;
+    if (*p == '0') { zero = 1; p++; }
+    while (isdigit((unsigned char)*p)) { width = width * 10 + (*p++ - '0'); if (width > 10000) return fmt_fail(spec, "width too large"); }
+    if (*p == ',' || *p == '_') group = *p++;
+    if (*p == '.') {
+        p++;
+        if (!isdigit((unsigned char)*p)) return fmt_fail(spec, "a digit must follow '.'");
+        prec = 0;
+        while (isdigit((unsigned char)*p)) { prec = prec * 10 + (*p++ - '0'); if (prec > 100) return fmt_fail(spec, "precision too large"); }
+    }
+    if (*p && strchr("dfFeEgG%xXobs", *p)) type = *p++;
+    if (*p) return fmt_fail(spec, "unknown part");
+
+    int t = GET_TYPE(v);
+    int is_big = t == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BIGINT;
+    int is_num = t == VAL_INT || t == VAL_FLOAT || is_big;
+    int is_whole = t == VAL_INT || is_big || (t == VAL_FLOAT && AS_FLOAT(v) == floor(AS_FLOAT(v)) && fabs(AS_FLOAT(v)) < 9e15);
+    char body[1200];
+    int neg = 0;
+    if (type == 's' || (!is_num && type == 0)) {
+        if (zero || group || sign != '-') return fmt_fail(spec, "sign, 0 and grouping are for numbers");
+        char *s = value_to_new_cstring(v);
+        if (!s) s = strdup("");
+        size_t n = strlen(s);
+        if (prec >= 0) {   /* the first prec characters */
+            size_t chars = 0, i = 0;
+            while (i < n && chars < (size_t)prec) { i++; while (i < n && ((unsigned char)s[i] & 0xC0) == 0x80) i++; chars++; }
+            n = i;
+        }
+        if (n >= sizeof body) n = sizeof body - 1;
+        memcpy(body, s, n); body[n] = 0;
+        free(s);
+        if (!align) align = '<';
+    } else {
+        if (!is_num) return fmt_fail(spec, "this format needs a number");
+        if (type && strchr("dxXob", type) && !is_whole) return fmt_fail(spec, "d, x, o and b need a whole number");
+        if (type == 0 && prec < 0) {
+            char *s = value_to_new_cstring(v);
+            snprintf(body, sizeof body, "%s", s ? s : "");
+            free(s);
+        } else if (type == 'd') {
+            char *s = value_to_new_cstring((is_big || t == VAL_INT) ? v : int_value_from_int64((int64_t)AS_FLOAT(v)));
+            snprintf(body, sizeof body, "%s", s ? s : "");
+            free(s);
+        } else if (type == 'x' || type == 'X' || type == 'o' || type == 'b') {
+            if (is_big) return fmt_fail(spec, "number too large for x, o or b");
+            int64_t n = t == VAL_INT ? AS_INT(v) : (int64_t)AS_FLOAT(v);
+            uint64_t u = n < 0 ? (uint64_t)(-(n + 1)) + 1 : (uint64_t)n;
+            if (n < 0) neg = 1;
+            if (type == 'b') {
+                char tmp[70]; int k = 0;
+                do { tmp[k++] = (char)('0' + (u & 1)); u >>= 1; } while (u);
+                for (int i = 0; i < k; i++) body[i] = tmp[k - 1 - i];
+                body[k] = 0;
+            } else if (type == 'x') snprintf(body, sizeof body, "%llx", (unsigned long long)u);
+            else if (type == 'X') snprintf(body, sizeof body, "%llX", (unsigned long long)u);
+            else snprintf(body, sizeof body, "%llo", (unsigned long long)u);
+        } else {
+            double x = val_to_double(v);
+            char conv = type == 0 ? 'g' : type == '%' ? 'f' : type;
+            if (type == '%') x *= 100;
+            int pr = prec >= 0 ? prec : 6;
+            if (isnan(x)) snprintf(body, sizeof body, "nan");
+            else if (isinf(x)) snprintf(body, sizeof body, "%sinf", x < 0 ? "-" : "");
+            else {
+                char f[8];
+                snprintf(f, sizeof f, "%%.*%c", conv);
+                snprintf(body, sizeof body, f, pr, x);
+            }
+            if (type == '%') strncat(body, "%", sizeof body - strlen(body) - 1);
+        }
+        if (body[0] == '-') { neg = 1; memmove(body, body + 1, strlen(body)); }
+        if (group) {   /* separators in the whole-number part */
+            char *end = body;
+            while (*end && isdigit((unsigned char)*end)) end++;
+            size_t digits = (size_t)(end - body);
+            if (digits > 3) {
+                char out[1300]; size_t o = 0;
+                for (size_t i = 0; i < digits; i++) { if (i && (digits - i) % 3 == 0) out[o++] = group; out[o++] = body[i]; }
+                snprintf(out + o, sizeof out - o, "%s", end);
+                snprintf(body, sizeof body, "%s", out);
+            }
+        }
+        if (zero) { fill = '0'; if (!align) align = '='; }
+        if (!align) align = '>';
+    }
+    const char *signs = neg ? "-" : (is_num && type != 's' && sign == '+') ? "+" : (is_num && type != 's' && sign == ' ') ? " " : "";
+    size_t len = utf8_chars(body) + strlen(signs);
+    size_t pad = (size_t)width > len ? (size_t)width - len : 0;
+    char *out = malloc(strlen(body) + strlen(signs) + pad + 1);
+    size_t o = 0;
+    size_t left = align == '<' ? 0 : align == '^' ? pad / 2 : pad;
+    size_t right = pad - left;
+    if (align == '=') {
+        o += (size_t)sprintf(out + o, "%s", signs);
+        for (size_t i = 0; i < pad; i++) out[o++] = fill;
+    } else {
+        for (size_t i = 0; i < left; i++) out[o++] = fill;
+        o += (size_t)sprintf(out + o, "%s", signs);
+    }
+    o += (size_t)sprintf(out + o, "%s", body);
+    if (align != '=') for (size_t i = 0; i < right; i++) out[o++] = fill;
+    out[o] = 0;
+    Value r = value_string_copy(out);
+    free(out);
+    return r;
+}
+
+static Value native_format(int argc, Value *args) {
+    if (argc < 1) { pending_exception = value_string_copy("format(value, spec) needs a value"); has_exception = 1; return value_none(); }
+    if (argc < 2 || GET_TYPE(args[1]) == VAL_NONE) return glow_format_value(args[0], "");
+    if (GET_TYPE(args[1]) != VAL_STRING) { pending_exception = value_string_copy("format(value, spec): spec must be text such as \".2f\""); has_exception = 1; return value_none(); }
+    return glow_format_value(args[0], (args[1] & MASK_PAYLOAD) ? AS_STRING(args[1]) : "");
+}
+
+static Value native_fstring_error(int argc, Value *args) {
+    char msg[300];
+    snprintf(msg, sizeof msg, "f-string: cannot read the expression {%.200s}", argc > 0 && GET_TYPE(args[0]) == VAL_STRING ? AS_STRING(args[0]) : "?");
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return value_none();
+}
+
+/* enumerate(items, start) -> [[start, first], [start + 1, second], ...] */
+static Value native_enumerate(int argc, Value *args) {
+    if (argc < 1 || (GET_TYPE(args[0]) != VAL_LIST && GET_TYPE(args[0]) != VAL_STRING)) {
+        pending_exception = value_string_copy("enumerate() needs a list or a string"); has_exception = 1; return value_none();
+    }
+    int64_t start = argc > 1 && GET_TYPE(args[1]) == VAL_INT ? AS_INT(args[1]) : 0;
+    List *out = list_new(4);
+    Value result = value_list(out);
+    if (GET_TYPE(args[0]) == VAL_LIST) {
+        List *l = AS_LIST(args[0]);
+        for (int i = 0; i < l->size; i++) {
+            List *pair = list_new(2); Value pv = value_list(pair);
+            list_push(pair, int_value_from_int64(start + i)); list_push(pair, l->items[i]);
+            list_push(out, pv);
+        }
+    } else {
+        int64_t n = glow_str_len(args[0]);
+        for (int64_t i = 0; i < n; i++) {
+            List *pair = list_new(2); Value pv = value_list(pair);
+            list_push(pair, int_value_from_int64(start + i)); list_push(pair, glow_str_char_at(args[0], i));
+            list_push(out, pv);
+        }
+    }
+    return result;
+}
+
+/* zip(a, b, ...) -> [[a0, b0, ...], [a1, b1, ...], ...], as long as the shortest list. */
+static Value native_zip(int argc, Value *args) {
+    int n = -1;
+    for (int k = 0; k < argc; k++) {
+        if (GET_TYPE(args[k]) != VAL_LIST) { pending_exception = value_string_copy("zip() needs lists"); has_exception = 1; return value_none(); }
+        if (n < 0 || AS_LIST(args[k])->size < n) n = AS_LIST(args[k])->size;
+    }
+    if (n < 0) n = 0;
+    List *out = list_new(n > 0 ? n : 1);
+    Value result = value_list(out);
+    for (int i = 0; i < n; i++) {
+        List *row = list_new(argc > 0 ? argc : 1); Value rv = value_list(row);
+        for (int k = 0; k < argc; k++) list_push(row, AS_LIST(args[k])->items[i]);
+        list_push(out, rv);
+    }
+    return result;
+}
+
 
 /* More of math (corelib.c adds exp, log, the trigonometry and pi, e, inf). */
 #define MATH_FN1(name, expr) static Value math_##name(int argc, Value *args) { \
@@ -2765,11 +3058,9 @@ static Value native_json_stringify(int argc, Value *args) {
 }
 
 Value native_dict_has(int argc, Value *args) {
-    if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT || GET_TYPE(args[1]) != VAL_STRING) {
-        return value_bool(0);
-    }
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT) return value_bool(0);
     /* A key whose value is none (JSON null) is still in the dict. */
-    return value_bool(dict_get_idx(AS_DICT(args[0]), AS_STRING(args[1])) >= 0);
+    return glow_in(args[1], args[0]);
 }
 
 Value native_dict_keys(int argc, Value *args) {
@@ -2801,11 +3092,13 @@ Value native_dict_values(int argc, Value *args) {
 }
 
 Value native_dict_remove(int argc, Value *args) {
-    if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT || GET_TYPE(args[1]) != VAL_STRING) {
-        return value_none();
-    }
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_DICT) return value_none();
+    char *owned;
+    const char *key = glow_dict_key(args[1], &owned);
+    if (!key) return value_none();
     Value val = value_none();
-    dict_remove(AS_DICT(args[0]), AS_STRING(args[1]), &val);
+    dict_remove(AS_DICT(args[0]), key, &val);
+    free(owned);
     return val;
 }
 
@@ -2895,6 +3188,23 @@ Value native_str_split(int argc, Value *args) {
     const char *delim = " ";
     if (argc >= 2 && GET_TYPE(args[1]) == VAL_STRING) {
         delim = AS_STRING(args[1]);
+    } else if (argc >= 2 && GET_TYPE(args[1]) != VAL_NONE) {
+        pending_exception = value_string_copy("split(separator): the separator must be text");
+        has_exception = 1;
+        return value_none();
+    } else {
+        /* No separator: the words, split at any run of spaces, tabs and
+           new lines, with none empty ("  a  b " -> [a, b]). */
+        List *w = list_new(4);
+        Value wv = value_list(w);
+        size_t n = rope_length(args[0]), i = 0;
+        while (i < n) {
+            while (i < n && isspace((unsigned char)s[i])) i++;
+            size_t start = i;
+            while (i < n && !isspace((unsigned char)s[i])) i++;
+            if (i > start) list_push(w, value_string_copy_len(s + start, i - start));
+        }
+        return wv;
     }
 
     List *l = list_new(0);
@@ -6211,7 +6521,9 @@ const char *glow_type_name(Value v) {
         ObjType ot = GET_OBJ_TYPE(v);
         if (ot == OBJ_CLASS) return "class";
         if (ot == OBJ_INSTANCE) return "instance";
-        if (ot == OBJ_BOUND_METHOD) return "method";
+        /* A function is stored like a method with no object attached. */
+        if (ot == OBJ_BOUND_METHOD) return GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE ? "function" : "method";
+        if (ot == OBJ_CLOSURE) return "function";
         if (ot == OBJ_NATIVE_FUNC) return "native_func";
         if (ot == OBJ_PACKED_ARRAY) return "tensor";
         if (ot == OBJ_BIGINT) return "int";
@@ -6219,6 +6531,72 @@ const char *glow_type_name(Value v) {
         return "object";
     }
     return "none";
+}
+
+/* ---- Classes: super, class_name, is_a ---- */
+
+static int is_obj_type(Value v, ObjType t) {
+    return GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == t;
+}
+
+static Value class_error(const char *msg) {
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return value_none();
+}
+
+/* The compiler turns super.m(args) inside a method of a class C that extends
+   P into __glow_super(P, "m", self, args...). It runs P's m, looked up from P
+   upward, on the same self. */
+static Value native_glow_super(int argc, Value *args) {
+    if (argc < 3 || GET_TYPE(args[1]) != VAL_STRING) return class_error("super: bad call");
+    const char *name = AS_STRING(args[1]);
+    if (!is_obj_type(args[0], OBJ_CLASS)) {
+        const char *why = GET_TYPE(args[0]) == VAL_STRING && strcmp(AS_STRING(args[0]), "no-parent") == 0
+            ? "super can only be used in a class that extends another class"
+            : "super can only be used inside a method of a class";
+        char msg[200];
+        snprintf(msg, sizeof msg, "%s (super.%.80s)", why, name);
+        return class_error(msg);
+    }
+    for (Class *k = AS_CLASS(args[0]); k; k = k->parent) {
+        Value m = dict_get(k->methods, name);
+        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body)
+            return glow_call_method_fe(AS_BOUND_METHOD(m)->method, args[2], argc - 3, args + 3);
+    }
+    char msg[240];
+    snprintf(msg, sizeof msg, "super: %.80s and the classes it extends have no method '%.80s'", AS_CLASS(args[0])->name, name);
+    return class_error(msg);
+}
+
+/* class_name(x): the class of an object ("Dog"), a class's own name, or
+   type(x) for anything else. */
+static Value native_class_name(int argc, Value *args) {
+    if (argc < 1) return class_error("class_name(x) needs a value");
+    Value v = args[0];
+    if (is_obj_type(v, OBJ_INSTANCE) && AS_INSTANCE(v)->klass && AS_INSTANCE(v)->klass->name)
+        return value_string_copy(AS_INSTANCE(v)->klass->name);
+    if (is_obj_type(v, OBJ_CLASS) && AS_CLASS(v)->name) return value_string_copy(AS_CLASS(v)->name);
+    return value_string_copy(glow_type_name(v));
+}
+
+/* is_a(x, C): x was made from C or from a class that extends it (or x is C
+   or a subclass of it). C may be the class or its name. A type name such
+   as "int" or "list" checks type(x). */
+static Value native_is_a(int argc, Value *args) {
+    if (argc < 2) return class_error("is_a(x, class) needs a value and a class");
+    Value v = args[0], c = args[1];
+    Class *k = is_obj_type(v, OBJ_INSTANCE) ? AS_INSTANCE(v)->klass : is_obj_type(v, OBJ_CLASS) ? AS_CLASS(v) : NULL;
+    if (is_obj_type(c, OBJ_CLASS)) {
+        for (; k; k = k->parent) if (k == AS_CLASS(c)) return value_bool(1);
+        return value_bool(0);
+    }
+    if (GET_TYPE(c) == VAL_STRING && (c & MASK_PAYLOAD)) {
+        const char *want = AS_STRING(c);
+        for (; k; k = k->parent) if (k->name && strcmp(k->name, want) == 0) return value_bool(1);
+        return value_bool(strcmp(glow_type_name(v), want) == 0);
+    }
+    return class_error("is_a(x, class): the second argument must be a class or a name");
 }
 
 Value native_type(int argc, Value *args) {
@@ -6268,8 +6646,15 @@ static Value native_assert(int argc, Value *args) {
         if (argc > 1 && GET_TYPE(args[1]) == VAL_STRING) {
             msg = AS_STRING(args[1]);
         }
-        fprintf(stderr, "[ASSERTION FAILED] %s\n", msg);
-        exit(1);
+        /* An error like any other: try/catch can handle it, and when nothing
+           does, the program stops with the line and the stack trace. (It
+           used to end the whole program on the spot.) */
+        char buf[600];
+        if (strcmp(msg, "Assertion failed") == 0) snprintf(buf, sizeof buf, "Assertion failed");
+        else snprintf(buf, sizeof buf, "Assertion failed: %.500s", msg);
+        pending_exception = value_string_copy(buf);
+        has_exception = 1;
+        return value_none();
     }
     return value_bool(1);
 }
@@ -6296,7 +6681,15 @@ void std_init(void) {
     var_set("dict", native_func_new("dict", native_dict));
     var_set("len", native_func_new("len", native_len));
     var_set("type", native_func_new("type", native_type));
+    var_set("class_name", native_func_new("class_name", native_class_name));
+    var_set("is_a", native_func_new("is_a", native_is_a));
+    var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
+    var_set("format", native_func_new("format", native_format));
+    var_set("__glow_format", native_func_new("__glow_format", native_format));
+    var_set("__glow_fstring_error", native_func_new("__glow_fstring_error", native_fstring_error));
+    var_set("enumerate", native_func_new("enumerate", native_enumerate));
+    var_set("zip", native_func_new("zip", native_zip));
     var_set("floor", native_func_new("floor", math_floor));
     var_set("ceil", native_func_new("ceil", math_ceil));
     var_set("round", native_func_new("round", math_round));

@@ -11,8 +11,8 @@ let c_abs = libc.function("abs", ["int"], "int")
 show c_abs(-5)                                   # 5
 
 let libm = ffi.open(ffi.libm())
-let cbrt = libm.function("cbrt", ["double"], "double")
-show cbrt(27)                                    # 3
+let c_hypot = libm.function("hypot", ["double", "double"], "double")
+show c_hypot(3, 4)                               # 5
 ```
 
 A declared C function is an ordinary GlowLang function. You can store it in a

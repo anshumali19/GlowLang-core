@@ -1316,8 +1316,12 @@ Value jit_list_literal(Value *regs, int n) {
 /* Keys at regs[2i], values at regs[2i+1]; non-string keys are skipped. */
 Value jit_dict_literal(Value *regs, int n) {
     Dict *d = dict_alloc(n, 0);
-    for (int i = 0; i < n; i++)
-        if (GET_TYPE(regs[2 * i]) == VAL_STRING) dict_set(d, AS_STRING(regs[2 * i]), regs[2 * i + 1]);
+    for (int i = 0; i < n; i++) {
+        char *owned_key;
+        const char *key = glow_dict_key(regs[2 * i], &owned_key);   /* raises for a bad key */
+        if (key) dict_set(d, key, regs[2 * i + 1]);
+        free(owned_key);
+    }
     return value_dict(d);
 }
 
@@ -1392,6 +1396,27 @@ Value jit_iter_pair_second(Value vit) {
 /* `not`, `in` and slicing, shared by the interpreter and compiled code. */
 Value glow_not(Value v) { return value_bool(!value_truthy(v)); }
 
+/* Dicts are keyed by text. A number or bool key is stored under its text
+   form, so d[1] and d["1"] are the same entry (as str(1) is "1"). Any other
+   key (none, a list, a dict, an object) raises. Returns the key text, or
+   NULL with the error raised; *owned is a malloc'd copy for the caller to
+   free (NULL for a string key). */
+const char *glow_dict_key(Value k, char **owned) {
+    *owned = NULL;
+    int t = GET_TYPE(k);
+    if (t == VAL_STRING) return (k & MASK_PAYLOAD) ? AS_STRING(k) : "";
+    if (t == VAL_INT || t == VAL_FLOAT || t == VAL_BOOL ||
+        (t == VAL_OBJECT && (k & MASK_PAYLOAD) && GET_OBJ_TYPE(k) == OBJ_BIGINT)) {
+        *owned = value_to_new_cstring(k);
+        return *owned ? *owned : "";
+    }
+    char msg[160];
+    snprintf(msg, sizeof msg, "a dictionary key must be text, a number or true/false (got %s)", glow_type_name(k));
+    pending_exception = value_string_copy(msg);
+    has_exception = 1;
+    return NULL;
+}
+
 Value glow_in(Value elem, Value coll) {
     int found = 0;
     if (GET_TYPE(coll) == VAL_LIST) {
@@ -1400,8 +1425,16 @@ Value glow_in(Value elem, Value coll) {
             if (val_eq(l->items[i], elem)) { found = 1; break; }
         }
     } else if (GET_TYPE(coll) == VAL_DICT) {
-        /* A key whose value is none (JSON null) is still in the dict. */
-        if (GET_TYPE(elem) == VAL_STRING && dict_get_idx(AS_DICT(coll), AS_STRING(elem)) >= 0) found = 1;
+        /* A key whose value is none (JSON null) is still in the dict. A key
+           that cannot be one (none, a list ...) is simply not in it. */
+        int t = GET_TYPE(elem);
+        if (t == VAL_STRING || t == VAL_INT || t == VAL_FLOAT || t == VAL_BOOL ||
+            (t == VAL_OBJECT && (elem & MASK_PAYLOAD) && GET_OBJ_TYPE(elem) == OBJ_BIGINT)) {
+            char *owned;
+            const char *key = glow_dict_key(elem, &owned);
+            if (key && dict_get_idx(AS_DICT(coll), key) >= 0) found = 1;
+            free(owned);
+        }
     } else if (GET_TYPE(coll) == VAL_STRING) {
         if (GET_TYPE(elem) == VAL_STRING && strstr(AS_STRING(coll), AS_STRING(elem)) != NULL) found = 1;
     }
@@ -2896,7 +2929,10 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 goto l_OP_THROW;
             }
         } else {
-            pending_exception = value_string_copy("Attempted to call a non-method value");
+            char msg[256];
+            if (GET_TYPE(obj) == VAL_NONE) snprintf(msg, sizeof msg, "cannot call method '%.100s' of none", mname ? mname : "?");
+            else snprintf(msg, sizeof msg, "%s has no method '%.100s'", glow_type_name(obj), mname ? mname : "?");
+            pending_exception = value_string_copy(msg);
             has_exception = 1;
             goto l_OP_THROW;
         }
@@ -2925,7 +2961,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 else R(pc->r0) = value_none();
             } else R(pc->r0) = value_none();
         } else if (GET_TYPE(coll) == VAL_DICT) {
-            Value v = dict_get(AS_DICT(coll), AS_STRING(idx_arg));
+            char *owned_key;
+            const char *key = glow_dict_key(idx_arg, &owned_key);
+            if (!key) goto l_OP_THROW;
+            Value v = dict_get(AS_DICT(coll), key);
+            free(owned_key);
             if (GET_TYPE(v) == VAL_NONE && GET_TYPE(idx_arg) == VAL_STRING) {
                 const char *mname = AS_STRING(idx_arg);
                 if (strcmp(mname, "has") == 0) {
@@ -2991,7 +3031,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 }
             }
         } else if (GET_TYPE(coll) == VAL_DICT) {
-            dict_set(AS_DICT(coll), AS_STRING(idx), val);
+            char *owned_key;
+            const char *key = glow_dict_key(idx, &owned_key);
+            if (!key) goto l_OP_THROW;
+            dict_set(AS_DICT(coll), key, val);
+            free(owned_key);
         }
         pc++; goto l_DISPATCH;
     }
@@ -3098,9 +3142,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         for (int i=0; i<n; i++) {
             Value k = R(pc->r1 + i * 2);
             Value v = R(pc->r1 + i * 2 + 1);
-            if (GET_TYPE(k) == VAL_STRING) {
-                dict_set(d, AS_STRING(k), v);
-            }
+            char *owned_key;
+            const char *key = glow_dict_key(k, &owned_key);
+            if (!key) goto l_OP_THROW;
+            dict_set(d, key, v);
+            free(owned_key);
         }
         R(pc->r0) = value_dict(d); pc++; goto l_DISPATCH;
     }
