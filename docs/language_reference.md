@@ -289,6 +289,19 @@ let from2 = nums[2:]         # From index 2 to end
 let to3 = nums[:3]           # From start to index 2
 ```
 
+A third part is the step: `[start:stop:step]` takes every `step`-th item. A
+negative step walks backwards, and start and stop then default to the far
+ends. Slices work the same on strings, by characters, and follow Python's
+rules exactly:
+```glow
+let nums = [0, 1, 2, 3, 4, 5]
+show nums[::2]               # [0, 2, 4]
+show nums[1::2]              # [1, 3, 5]
+show nums[::-1]              # [5, 4, 3, 2, 1, 0]
+show "glow"[::-1]            # wolg
+```
+A step of 0 is an error.
+
 ### List Operations
 ```glow
 nums.push(6)                 # Append (also append(nums, 6))

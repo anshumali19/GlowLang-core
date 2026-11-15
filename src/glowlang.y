@@ -157,7 +157,15 @@ postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left
        | postfix '[' expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }
        | postfix '[' expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; }
        | postfix '[' COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = $4; }
-       | postfix '[' COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = NULL; };
+       | postfix '[' COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = NULL; }
+       | postfix '[' expr COLON expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; $$->comp_expr = $7; }
+       | postfix '[' expr COLON COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; $$->comp_expr = $6; }
+       | postfix '[' COLON expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = $4; $$->comp_expr = $6; }
+       | postfix '[' COLON COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = NULL; $$->comp_expr = $5; }
+       | postfix '[' expr COLON expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }
+       | postfix '[' expr COLON COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; }
+       | postfix '[' COLON expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = $4; }
+       | postfix '[' COLON COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = NULL; };
 member_name: ID { $$ = $1; }
            | WRITE { $$ = intern_string("write"); }
            | SHOW { $$ = intern_string("show"); }

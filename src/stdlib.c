@@ -2196,6 +2196,68 @@ static int range_arg(Value v, int64_t *out) {
     return 0;
 }
 static Value range_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
+
+/* x[start:stop:step] for lists and strings (by characters), with Python's
+   rules: step must not be 0; a negative step walks backwards; missing
+   start/stop (none) mean the far ends for that direction; negative indexes
+   count from the end; out-of-range ones are clamped. */
+static int slice_index_arg(Value v, int64_t *out, int *given) {
+    *given = 0;
+    if (GET_TYPE(v) == VAL_NONE) return 1;
+    if (GET_TYPE(v) == VAL_INT) { *out = AS_INT(v); *given = 1; return 1; }
+    if (GET_TYPE(v) == VAL_FLOAT && AS_FLOAT(v) == floor(AS_FLOAT(v)) && fabs(AS_FLOAT(v)) < 9e15) { *out = (int64_t)AS_FLOAT(v); *given = 1; return 1; }
+    return 0;
+}
+static int64_t slice_clamp(int64_t i, int given, int64_t len, int64_t step, int is_start) {
+    if (!given) return step > 0 ? (is_start ? 0 : len) : (is_start ? len - 1 : -1);
+    if (i < 0) { i += len; if (i < 0) i = step < 0 ? -1 : 0; }
+    else if (i >= len) i = step < 0 ? len - 1 : len;
+    return i;
+}
+static Value slice_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
+static Value native_glow_slice(int argc, Value *args) {
+    if (argc < 4) return slice_fail("slice: bad call");
+    int64_t a = 0, b = 0, step = 0; int ga, gb, gs;
+    if (!slice_index_arg(args[1], &a, &ga) || !slice_index_arg(args[2], &b, &gb)) return slice_fail("slice positions must be whole numbers or none");
+    if (!slice_index_arg(args[3], &step, &gs)) return slice_fail("slice step must be a whole number");
+    if (!gs) step = 1;
+    if (step == 0) return slice_fail("slice step cannot be 0");
+    Value obj = args[0];
+    if (GET_TYPE(obj) == VAL_LIST) {
+        List *l = AS_LIST(obj);
+        int64_t len = l->size;
+        int64_t i = slice_clamp(a, ga, len, step, 1), stop = slice_clamp(b, gb, len, step, 0);
+        List *out = list_new(4);
+        Value result = value_list(out);
+        for (; step > 0 ? i < stop : i > stop; i += step) list_push(out, l->items[i]);
+        return result;
+    }
+    if (GET_TYPE(obj) == VAL_STRING) {
+        const char *p = (obj & MASK_PAYLOAD) ? AS_STRING(obj) : "";
+        size_t n = (obj & MASK_PAYLOAD) ? rope_length(obj) : 0;
+        /* Byte offset of each character, so walking is by characters. */
+        size_t *starts = malloc(sizeof(size_t) * (n + 1));
+        int64_t len = 0;
+        for (size_t k = 0; k < n; ) { starts[len++] = k; k = glow_utf8_step(p, k, n); }
+        starts[len] = n;
+        int64_t i = slice_clamp(a, ga, len, step, 1), stop = slice_clamp(b, gb, len, step, 0);
+        size_t cap = 16, used = 0;
+        char *buf = malloc(cap);
+        for (; step > 0 ? i < stop : i > stop; i += step) {
+            size_t cl = starts[i + 1] - starts[i];
+            if (used + cl + 1 > cap) { while (used + cl + 1 > cap) cap *= 2; buf = realloc(buf, cap); }
+            memcpy(buf + used, p + starts[i], cl);
+            used += cl;
+        }
+        Value r = value_string_copy_len(buf, used);
+        free(buf); free(starts);
+        return r;
+    }
+    char msg[120];
+    snprintf(msg, sizeof msg, "cannot slice a %s (only lists and strings)", glow_type_name(obj));
+    return slice_fail(msg);
+}
+
 static Value native_range(int argc, Value *args) {
     int64_t start = 0, stop = 0, step = 1;
     if (argc < 1 || argc > 3) return range_fail("range() takes 1 to 3 whole numbers: range(stop), range(start, stop) or range(start, stop, step)");
@@ -6722,6 +6784,7 @@ void std_init(void) {
     var_set("is_a", native_func_new("is_a", native_is_a));
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
+    var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
     var_set("format", native_func_new("format", native_format));
     var_set("__glow_format", native_func_new("__glow_format", native_format));
     var_set("__glow_fstring_error", native_func_new("__glow_fstring_error", native_fstring_error));
