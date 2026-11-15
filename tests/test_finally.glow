@@ -316,6 +316,28 @@ func caught_variable_scope():
 end
 same("catch variable usable, finally after", caught_variable_scope(), "v!")
 
+func empty_catch():
+    try:
+        throw "x"
+    catch e:
+        # nothing to do: the error is swallowed
+    end
+    return "swallowed"
+end
+same("an empty catch still catches", empty_catch(), "swallowed")
+
+func empty_catch_with_finally():
+    log = []
+    try:
+        throw "y"
+    catch e:
+    finally:
+        log.push("finally")
+    end
+    return log
+end
+same("an empty catch with finally", empty_catch_with_finally(), ["finally"])
+
 show "== hot code (compiled)"
 func hot_finally():
     let count = 0

@@ -1175,8 +1175,10 @@ static void compile_stmt(Node *n) {
             int jumps[2]; int njumps = 0;
             jumps[njumps++] = bc_emit(compiling_bc, OP_JUMP, 0, 0);
             int h1 = compiling_bc->count;
-            if (n->right) {
-                if (n->name) {
+            /* A catch always names its variable; its body may be empty (only
+               a comment), so test the name, not the body. */
+            if (n->name) {
+                {
                     int var_reg = get_local_reg(n->name);
                     if (compiling_func && var_reg == -1 && !global_is_declared(n->name)) {
                         func_add_local(compiling_func, n->name);
