@@ -1425,6 +1425,19 @@ static int compile_expr(Node *n, int target_reg) {
             break;
         }
         case NODE_SLICE: {
+            if (n->comp_expr) {
+                /* x[start:stop:step]: Python's rules (a negative step walks
+                   backwards; start and stop default to the right ends). */
+                Node **sa = malloc(sizeof(Node*) * 4);
+                sa[0] = n->left;
+                sa[1] = n->right ? n->right : newVarNode(intern_string("none"));
+                sa[2] = n->third ? n->third : newVarNode(intern_string("none"));
+                sa[3] = n->comp_expr;
+                Node *sc = node_new(NODE_CALL);
+                sc->name = intern_string("__glow_slice");
+                sc->call_args = sa; sc->call_arg_count = 4; sc->line = n->line;
+                return compile_expr(sc, reg);
+            }
             int obj = compile_expr(n->left, -1);
             int base = next_free_reg;
             next_free_reg += 2;
