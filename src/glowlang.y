@@ -51,9 +51,18 @@ static Node *attach_else(Node *chain, Node *else_part) {
     last->third = else_part;
     return chain;
 }
+/* A syntax error about a statement that starts on `line`. By the time a
+   rule is reduced the lexer has read past the statement's newline, so
+   yyerror alone would name the next line. */
+static void error_at(int line, const char *msg) {
+    int saved = line_num;
+    if (line > 0) line_num = line;
+    yyerror(msg);
+    line_num = saved;
+}
 /* x op= value for the bitwise operators: x = x op value. */
 static Node *compound_bitop(Node *target, NodeType op, Node *value) {
-    if (target->type != NODE_VAR) { yyerror("Compound assignment target must be a variable"); return NULL; }
+    if (target->type != NODE_VAR) { error_at(target->line, "Compound assignment target must be a variable"); return NULL; }
     return newAssignNode(target->name, newBinOp(op, newVarNode(target->name), value));
 }
 /* `a, b = values` and `let a, b = values`. Each target becomes an ordinary
@@ -64,10 +73,10 @@ static Node *compound_bitop(Node *target, NodeType op, Node *value) {
    need no list at run time. */
 static Node *unpack_node(Node **targets, int count, Node **values, int nvalues, int is_let, int line) {
     char msg[96];
-    if (count > 255) { yyerror("Too many names to unpack (at most 255)"); return NULL; }
+    if (count > 255) { error_at(line, "Too many names to unpack (at most 255)"); return NULL; }
     if (nvalues > 1 && nvalues != count) {
         snprintf(msg, sizeof msg, "%d names but %d values", count, nvalues);
-        yyerror(msg); return NULL;
+        error_at(line, msg); return NULL;
     }
     Node *u = node_new(NODE_UNPACK);
     u->line = line;
@@ -82,7 +91,7 @@ static Node *unpack_node(Node **targets, int count, Node **values, int nvalues, 
         } else if (t->type == NODE_INDEX) {
             s = t; s->type = NODE_INDEX_ASSIGN; s->third = ph;
         } else {
-            yyerror("Can only unpack into names, list items and fields"); return NULL;
+            error_at(line, "Can only unpack into names, list items and fields"); return NULL;
         }
         s->line = line;
         u->elements[i] = s;
