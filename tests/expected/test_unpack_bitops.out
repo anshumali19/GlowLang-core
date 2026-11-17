@@ -1,0 +1,40 @@
+1 2
+2 1
+x y
+2880067194370816120
+[9, 3, 5]
+2 1
+{"k": "K", "n": {"m": "M"}}
+3 10 20
+12
+6
+a 1
+b 2
+4
+6
+0 first
+1 second
+z 26
+32
+[6, 15]
+Cannot unpack 3 items into 2 names
+Cannot unpack 1 item into 2 names
+Cannot unpack int into 2 names: it needs a list
+1 2
+Cannot unpack string into 2 names: it needs a list
+2 7 5 -7 1024 128 -3 -8
+1267650600228229401496703205376 2 1180591620717411303425 0 -18446744073709551617
+4294967296 true
+6 3 0 5
+-1 0 0 0 -1
+6 281474976710655 0 -281474976710655 35184372088831 2251799813685232 int 9007199254740993 2
+2040
+3103644575
+false true 1
+2    16|
+Cannot apply '&' to float and int
+Negative shift count
+Cannot apply '~' to string
+Cannot apply '|' to bool and bool
+Cannot apply '>>' to int and float
+Shift count too large

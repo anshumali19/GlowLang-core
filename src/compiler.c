@@ -1336,6 +1336,49 @@ static void compile_stmt(Node *n) {
                 compiling_bc->code[compiling_bc->count - 1].r2 = 1;
             break;
         }
+        case NODE_UNPACK: {
+            /* Every value is computed into a register of its own before any
+               target is stored, so `a, b = b, a` swaps. Then each target is
+               an ordinary assignment of its register (NODE_REG). */
+            int count = n->element_count;
+            int base = next_free_reg;
+            int *regs = malloc(sizeof(int) * (count > 0 ? count : 1));
+            if (n->call_arg_count) {
+                for (int i = 0; i < count; i++) regs[i] = next_free_reg++;
+                for (int i = 0; i < count; i++) compile_expr(n->call_args[i], regs[i]);
+            } else {
+                /* __glow_unpack(value, count) checks it is a list of that
+                   many items; then item i goes to register i. */
+                Node **args = arena_alloc(sizeof(Node*) * 2);
+                args[0] = n->left;
+                args[1] = newIntNode(count);
+                args[1]->line = n->line;
+                Node *check = node_new(NODE_CALL);
+                check->name = intern_string("__glow_unpack");
+                check->call_args = args; check->call_arg_count = 2; check->line = n->line;
+                int list_reg = next_free_reg++;
+                compile_expr(check, list_reg);
+                for (int i = 0; i < count; i++) regs[i] = next_free_reg++;
+                for (int i = 0; i < count; i++) {
+                    Node *ref = node_new(NODE_REG);
+                    ref->reg = list_reg; ref->line = n->line;
+                    Node *item = node_new(NODE_INDEX);
+                    item->left = ref; item->right = newIntNode(i); item->line = n->line;
+                    item->right->line = n->line;
+                    compile_expr(item, regs[i]);
+                }
+            }
+            note_reg_peak();
+            for (int i = 0; i < count; i++) {
+                Node *s = n->elements[i];
+                Node *ph = s->type == NODE_INDEX_ASSIGN ? s->third : s->left;
+                ph->reg = regs[i];
+                compile_stmt(s);
+            }
+            free(regs);
+            next_free_reg = reg_restore(base);
+            break;
+        }
         case NODE_INDEX_ASSIGN: {
             int val = compile_expr(n->third, -1);
             int obj = compile_expr(n->left, -1);
@@ -1361,6 +1404,12 @@ static int compile_expr(Node *n, int target_reg) {
         return -1;
     }
     compiling_line = n->line;
+    if (n->type == NODE_REG) {
+        /* Already in a register: use it there, or copy it to the target. */
+        if (target_reg == -1 || target_reg == n->reg) return n->reg;
+        bc_emit_reg(compiling_bc, OP_MOVE, target_reg, n->reg, 0);
+        return target_reg;
+    }
     int reg = target_reg;
     if (reg == -1) reg = next_free_reg++;
 
@@ -1459,7 +1508,12 @@ static int compile_expr(Node *n, int target_reg) {
         case NODE_LTE:
         case NODE_GTE:
         case NODE_EQ:
-        case NODE_NEQ: {
+        case NODE_NEQ:
+        case NODE_BITAND:
+        case NODE_BITOR:
+        case NODE_BITXOR:
+        case NODE_SHL:
+        case NODE_SHR: {
             int left = compile_expr(n->left, -1);
             int right = compile_expr(n->right, -1);
             if (target_reg == -1) reg = next_free_reg++;
@@ -1477,6 +1531,11 @@ static int compile_expr(Node *n, int target_reg) {
                 case NODE_GTE: op = OP_GTE; break;
                 case NODE_EQ: op = OP_EQ; break;
                 case NODE_NEQ: op = OP_NEQ; break;
+                case NODE_BITAND: op = OP_BITAND; break;
+                case NODE_BITOR: op = OP_BITOR; break;
+                case NODE_BITXOR: op = OP_BITXOR; break;
+                case NODE_SHL: op = OP_SHL; break;
+                case NODE_SHR: op = OP_SHR; break;
                 default: op = OP_ADD; break;
             }
             bc_emit_reg(compiling_bc, op, reg, left, right);
@@ -1485,6 +1544,11 @@ static int compile_expr(Node *n, int target_reg) {
         case NODE_NOT: {
             int src = compile_expr(n->left, -1);
             bc_emit_reg(compiling_bc, OP_NOT, reg, src, 0);
+            break;
+        }
+        case NODE_BITNOT: {
+            int src = compile_expr(n->left, -1);
+            bc_emit_reg(compiling_bc, OP_BITNOT, reg, src, 0);
             break;
         }
         case NODE_IN: {

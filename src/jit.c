@@ -56,6 +56,17 @@ typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 /* GLOW_JIT_DEBUG=1: report every function compiled, on stderr.
    GLOW_JIT_DUMP=<dir>: also write its machine code to <dir>/<name>.<tier>.bin
    (for `objdump -D -b binary -m i386:x86-64` or `-m aarch64`). */
+/* The runtime helper for a binary bitwise instruction. */
+static uintptr_t jit_bitop_fn(int op) {
+    switch (op) {
+        case OP_BITAND: return (uintptr_t)jit_bitand_helper;
+        case OP_BITOR:  return (uintptr_t)jit_bitor_helper;
+        case OP_BITXOR: return (uintptr_t)jit_bitxor_helper;
+        case OP_SHL:    return (uintptr_t)jit_shl_helper;
+        default:        return (uintptr_t)jit_shr_helper;
+    }
+}
+
 static void jit_debug_compiled(Bytecode *bc, FuncEntry *fe, const char *tier, const void *code, size_t bytes) {
     static const char *dump_dir = NULL;
     static int dump_checked = 0;
@@ -1623,6 +1634,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
             case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -1926,6 +1938,18 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, jit_bitop_fn(pc->op));
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_BITNOT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_bitnot_helper);
+                emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
             case OP_NEG:
                 emit_mov_arg1_reg(&buf, pc->r1);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_neg_helper);
@@ -2083,6 +2107,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
             case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -2377,6 +2402,18 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_MOD: EMIT_MOD(pc, i); break;
             case OP_POW:
                 emit_call_binop_helper(&buf, pc->r1, pc->r2, (uintptr_t)jit_pow_helper);
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR:
+                emit_call_binop_helper(&buf, pc->r1, pc->r2, jit_bitop_fn(pc->op));
+                emit_deopt_check(&buf, i);
+                emit_mov_reg_rax(&buf, pc->r0);
+                break;
+            case OP_BITNOT:
+                emit_mov_arg1_reg(&buf, pc->r1);
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_bitnot_helper);
+                emit_call_rax(&buf);
                 emit_deopt_check(&buf, i);
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
@@ -3087,6 +3124,7 @@ static int a64_supported(OpCode op) {
         case OP_MOD: case OP_POW: case OP_NEG: case OP_CONST_STRING:
         case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
         case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
             return 1;
         default:
             return 0;
@@ -3318,6 +3356,17 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
             case OP_MOD: a64_int_mod(A, pc->r0, pc->r1, pc->r2, i); break;
             case OP_POW:
                 a64_call_binop(A, pc->r1, pc->r2, (const void*)jit_pow_helper);
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR:
+                a64_call_binop(A, pc->r1, pc->r2, (const void*)jit_bitop_fn(pc->op));
+                a64_deopt_check(A, i);
+                a64_store_reg(A, 0, pc->r0);
+                break;
+            case OP_BITNOT:
+                a64_load_reg(A, 0, pc->r1);
+                a64_call(A, (const void*)jit_bitnot_helper);
                 a64_deopt_check(A, i);
                 a64_store_reg(A, 0, pc->r0);
                 break;

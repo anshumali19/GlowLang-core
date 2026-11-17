@@ -83,6 +83,76 @@ static Node *attach_else(Node *chain, Node *else_part) {
     last->third = else_part;
     return chain;
 }
+/* A syntax error about a statement that starts on `line`. By the time a
+   rule is reduced the lexer has read past the statement's newline, so
+   yyerror alone would name the next line. */
+static void error_at(int line, const char *msg) {
+    int saved = line_num;
+    if (line > 0) line_num = line;
+    yyerror(msg);
+    line_num = saved;
+}
+/* x op= value for the bitwise operators: x = x op value. */
+static Node *compound_bitop(Node *target, NodeType op, Node *value) {
+    if (target->type != NODE_VAR) { error_at(target->line, "Compound assignment target must be a variable"); return NULL; }
+    return newAssignNode(target->name, newBinOp(op, newVarNode(target->name), value));
+}
+/* `a, b = values` and `let a, b = values`. Each target becomes an ordinary
+   assignment (or let, or a[i] / obj.x store) of a value the compiler has
+   already placed in a register (NODE_REG), so names follow the usual
+   local/global rules. One value must be a list of exactly that many items;
+   several values (`a, b = b, a`) are all evaluated before any is stored and
+   need no list at run time. */
+static Node *unpack_node(Node **targets, int count, Node **values, int nvalues, int is_let, int line) {
+    char msg[96];
+    if (count > 255) { error_at(line, "Too many names to unpack (at most 255)"); return NULL; }
+    if (nvalues > 1 && nvalues != count) {
+        snprintf(msg, sizeof msg, "%d names but %d values", count, nvalues);
+        error_at(line, msg); return NULL;
+    }
+    Node *u = node_new(NODE_UNPACK);
+    u->line = line;
+    u->elements = arena_alloc(sizeof(Node*) * count);
+    u->element_count = count;
+    for (int i = 0; i < count; i++) {
+        Node *t = targets[i], *ph = node_new(NODE_REG), *s;
+        ph->line = line;
+        if (is_let || t->type == NODE_VAR) {
+            s = node_new(is_let ? NODE_LET : NODE_ASSIGN);
+            s->name = t->name; s->left = ph;
+        } else if (t->type == NODE_INDEX) {
+            s = t; s->type = NODE_INDEX_ASSIGN; s->third = ph;
+        } else {
+            error_at(line, "Can only unpack into names, list items and fields"); return NULL;
+        }
+        s->line = line;
+        u->elements[i] = s;
+    }
+    if (nvalues == 1) u->left = values[0];
+    else { u->call_args = values; u->call_arg_count = nvalues; }
+    return u;
+}
+/* for each [a, b] in items: each item is unpacked into a and b. */
+static Node *unpack_loop(Node **names, int count, Node *coll, Node *body) {
+    static int each_count = 0;
+    char buf[32];
+    snprintf(buf, sizeof buf, "__each_%d", each_count++);
+    const char *item = intern_string(buf);
+    Node **vals = arena_alloc(sizeof(Node*));
+    vals[0] = newVarNode(item);
+    vals[0]->line = coll->line;
+    Node *u = unpack_node(names, count, vals, 1, 0, coll->line);
+    if (!u) return NULL;
+    Node *loop = node_new(NODE_FOR_EACH);
+    loop->name = item; loop->left = coll;
+    loop->right = body ? newSeqNode(u, body) : u;
+    return loop;
+}
+/* A list of two or more names or places, from `a, b` or `x, y, z`. */
+static void list_push_node(Node ***nodes, int *count, Node *n) {
+    *nodes = arena_realloc(*nodes, sizeof(Node*) * (*count), sizeof(Node*) * (*count + 1));
+    (*nodes)[(*count)++] = n;
+}
 %}
 
 %union {
@@ -100,9 +170,10 @@ static Node *attach_else(Node *chain, Node *else_part) {
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
+%token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
-%type <node_list> expr_list arg_list
+%type <node_list> expr_list arg_list target_list name_list
 %type <dict_list> dict_elements
 %type <str_list> param_list param
 %type <str_val> member_name
@@ -112,6 +183,10 @@ static Node *attach_else(Node *chain, Node *else_part) {
 %left AND_OP
 %left EQ NEQ IS IS_NOT IN_KW
 %left LT GT LTE GTE
+%left BITOR
+%left BITXOR
+%left BITAND
+%left SHL SHR
 %left PLUS MINUS
 %left MUL DIV FLOORDIV MOD
 %right POW
@@ -155,6 +230,15 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | postfix DIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_DIV, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | postfix FLOORDIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->name, newFloorDivNode(newVarNode($1->name), $3)); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
     | postfix MOD_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MOD, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
+    | postfix BITAND_ASSIGN expr { $$ = compound_bitop($1, NODE_BITAND, $3); if (!$$) YYERROR; }
+    | postfix BITOR_ASSIGN expr { $$ = compound_bitop($1, NODE_BITOR, $3); if (!$$) YYERROR; }
+    | postfix BITXOR_ASSIGN expr { $$ = compound_bitop($1, NODE_BITXOR, $3); if (!$$) YYERROR; }
+    | postfix SHL_ASSIGN expr { $$ = compound_bitop($1, NODE_SHL, $3); if (!$$) YYERROR; }
+    | postfix SHR_ASSIGN expr { $$ = compound_bitop($1, NODE_SHR, $3); if (!$$) YYERROR; }
+    | target_list ASSIGN expr_list { $$ = unpack_node($1.nodes, $1.count, $3.nodes, $3.count, 0, $1.nodes[0]->line); if (!$$) YYERROR; }
+    | LET name_list ASSIGN expr_list { $$ = unpack_node($2.nodes, $2.count, $4.nodes, $4.count, 1, $2.nodes[0]->line); if (!$$) YYERROR; }
+    | FOR EACH '[' name_list ']' IN_KW expr COLON NEWLINE lines END { $$ = unpack_loop($4.nodes, $4.count, $7, $10); if (!$$) YYERROR; }
+    | FOR '[' name_list ']' IN_KW expr COLON NEWLINE lines END { $$ = unpack_loop($3.nodes, $3.count, $6, $9); if (!$$) YYERROR; }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines FINALLY COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; $$->third = $13; }
     | TRY COLON NEWLINE lines FINALLY COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = NULL; $$->right = NULL; $$->third = $8; }
@@ -167,6 +251,10 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
 
 expr_list: expr { $$.count = 1; $$.nodes = arena_alloc(sizeof(Node*)); $$.nodes[0] = $1; } | expr_list COMMA expr { $$.nodes = arena_realloc($$.nodes, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.nodes[$1.count] = $3; $$.count = $1.count + 1; };
 arg_list: expr_list { $$ = $1; };
+target_list: postfix COMMA postfix { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); list_push_node(&$$.nodes, &$$.count, $3); }
+    | target_list COMMA postfix { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
+name_list: ID COMMA ID { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, newVarNode($1)); list_push_node(&$$.nodes, &$$.count, newVarNode($3)); }
+    | name_list COMMA ID { $$ = $1; list_push_node(&$$.nodes, &$$.count, newVarNode($3)); };
 param_list: param { $$ = $1; }
     | param_list COMMA param {
         int n = $1.count;
@@ -183,9 +271,9 @@ condition: expr;
 eif_chain: eif_chain EIF condition COLON NEWLINE lines { $$ = attach_else($1, newIfNode($3, $6, NULL)); } | { $$ = NULL; };
 otherwise_part: OTHERWISE COLON NEWLINE lines { $$ = $4; } | { $$ = NULL; };
 
-expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr IN_KW expr { $$ = newBinOp(NODE_IN, $1, $3); } | expr NOT_OP IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); } | expr WHEN expr OTHERWISE expr %prec WHEN { $$ = node_new(NODE_COND); $$->left = $3; $$->right = $1; $$->third = $5; };
+expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS expr { $$ = newBinOp(NODE_SUB, $1, $3); } | expr EQ expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr NEQ expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS expr { $$ = newBinOp(NODE_EQ, $1, $3); } | expr IS_NOT expr { $$ = newBinOp(NODE_NEQ, $1, $3); } | expr IS IN_KW expr { $$ = newBinOp(NODE_IN, $1, $4); } | expr IS_NOT IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr IN_KW expr { $$ = newBinOp(NODE_IN, $1, $3); } | expr NOT_OP IN_KW expr { $$ = newBinOp(NODE_NOT, newBinOp(NODE_IN, $1, $4), NULL); } | expr LT expr { $$ = newBinOp(NODE_LT, $1, $3); } | expr GT expr { $$ = newBinOp(NODE_GT, $1, $3); } | expr LTE expr { $$ = newBinOp(NODE_LTE, $1, $3); } | expr GTE expr { $$ = newBinOp(NODE_GTE, $1, $3); } | expr AND_OP expr { $$ = newBinOp(NODE_AND, $1, $3); } | expr OR_OP expr { $$ = newBinOp(NODE_OR, $1, $3); } | expr BITOR expr { $$ = newBinOp(NODE_BITOR, $1, $3); } | expr BITXOR expr { $$ = newBinOp(NODE_BITXOR, $1, $3); } | expr BITAND expr { $$ = newBinOp(NODE_BITAND, $1, $3); } | expr SHL expr { $$ = newBinOp(NODE_SHL, $1, $3); } | expr SHR expr { $$ = newBinOp(NODE_SHR, $1, $3); } | NOT_OP expr { $$ = newBinOp(NODE_NOT, $2, NULL); } | expr WHEN expr OTHERWISE expr %prec WHEN { $$ = node_new(NODE_COND); $$->left = $3; $$->right = $1; $$->third = $5; };
 term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term FLOORDIV unary { $$ = newFloorDivNode($1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
-unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); };
+unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); } | BITNOT unary { $$ = newBinOp(NODE_BITNOT, $2, NULL); };
 power: postfix | postfix POW unary { $$ = newBinOp(NODE_POW, $1, $3); };
 postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
        | postfix '[' expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }

@@ -759,6 +759,119 @@ Value native_floordiv(int argc, Value *args) {
     return glow_floordiv(args[0], args[1]);
 }
 
+/* ---- Bitwise operators: & | ^ << >> ~ ----
+   On whole numbers of any size, with Python's rules: a negative number acts
+   as two's complement with endless sign bits, x >> n rounds down
+   (-5 >> 1 is -3), and x << n never overflows (it grows into a big int).
+   An operand must be what type() calls "int": an inline int, a big int, or
+   a whole number past 2^47 that the numeric tower keeps as an exact double.
+   Anything else (floats, bools, text) raises an error. */
+static int bit_int_operand(Value v) {
+    if (GET_TYPE(v) == VAL_INT || is_bigint(v)) return 1;
+    return GET_TYPE(v) == VAL_FLOAT && strcmp(glow_type_name(v), "int") == 0;
+}
+/* An int64 result in the numeric tower's form, as num_add makes it. */
+static Value int64_result(int64_t r) {
+    if (r >= (int64_t)INT48_MIN && r <= (int64_t)INT48_MAX) return value_int(r);
+    if (r >= -INT53_MAX && r <= INT53_MAX) return value_float((double)r);
+    return value_bigint(bigint_from_int64(r));
+}
+static Value glow_bitop(Value a, Value b, char op) {
+    char name[2] = { op, 0 };
+    if (!bit_int_operand(a) || !bit_int_operand(b)) { arith_type_error(name, a, b); return value_none(); }
+    int64_t x, y;
+    if (value_exact_int64(a, &x) && value_exact_int64(b, &y))
+        return int64_result(op == '&' ? (x & y) : op == '|' ? (x | y) : (x ^ y));
+    return bigint_result(bigint_bitop(value_to_bigint(a), value_to_bigint(b), op));
+}
+/* The largest shift accepted: 2 ** 26 bits is an 8 MB number. */
+#define GLOW_MAX_SHIFT ((int64_t)1 << 26)
+static Value glow_shift(Value a, Value b, int left) {
+    const char *name = left ? "<<" : ">>";
+    if (!bit_int_operand(a) || !bit_int_operand(b)) { arith_type_error(name, a, b); return value_none(); }
+    int64_t x, n;
+    int small_x = value_exact_int64(a, &x);
+    int small_n = value_exact_int64(b, &n);
+    if ((small_n && n < 0) || (!small_n && AS_BIGINT(b)->neg)) {
+        pending_exception = value_string_copy("Negative shift count"); has_exception = 1; return value_none();
+    }
+    if (small_x && x == 0) return value_int(0);
+    if (!left) {
+        if (!small_n || n >= 64) {
+            /* Every bit shifted out: what is left is the sign. */
+            int neg = small_x ? x < 0 : AS_BIGINT(a)->neg;
+            if (small_x || !small_n) return value_int(neg ? -1 : 0);
+        } else if (small_x) {
+            return int64_result(x < 0 ? ~(~x >> n) : (x >> n));
+        }
+        BigInt *q, *r;
+        bigint_floor_divmod(value_to_bigint(a), bigint_pow2(n), &q, &r);
+        return bigint_result(q);
+    }
+    if (!small_n || n > GLOW_MAX_SHIFT) {
+        pending_exception = value_string_copy("Shift count too large"); has_exception = 1; return value_none();
+    }
+    if (small_x && n < 63 && (x >= 0 ? x <= (INT64_MAX >> n) : x >= (INT64_MIN >> n)))
+        return int64_result((int64_t)((uint64_t)x << n));
+    return bigint_result(bigint_mul(value_to_bigint(a), bigint_pow2(n)));
+}
+static Value glow_bitnot(Value v) {
+    if (GET_TYPE(v) == VAL_INT) return value_int(~AS_INT(v));   /* ~x == -x - 1 stays in range */
+    int64_t x;
+    if (bit_int_operand(v) && value_exact_int64(v, &x)) return int64_result(~x);
+    if (is_bigint(v)) return bigint_result(bigint_sub(bigint_negate(AS_BIGINT(v)), bigint_from_int64(1)));
+    Value t = native_type(1, &v); char msg[96];
+    snprintf(msg, sizeof(msg), "Cannot apply '~' to %s", AS_STRING(t));
+    pending_exception = value_string_copy(msg); has_exception = 1;
+    return value_none();
+}
+
+/* x << n and x >> n, with the common small cases inline. */
+static inline Value glow_shl_value(Value a, Value b) {
+    if (IS_INT(a) && IS_INT(b)) {
+        int64_t x = AS_INT(a), n = AS_INT(b);
+        if (n >= 0 && n < 48 && (x >= 0 ? x <= (INT48_MAX >> n) : x >= (INT48_MIN >> n)))
+            return value_int((int64_t)((uint64_t)x << n));
+    }
+    return glow_shift(a, b, 1);
+}
+static inline Value glow_shr_value(Value a, Value b) {
+    if (IS_INT(a) && IS_INT(b)) {
+        int64_t x = AS_INT(a), n = AS_INT(b);
+        if (n >= 0) return value_int(n >= 63 ? (x < 0 ? -1 : 0) : (x < 0 ? ~(~x >> n) : (x >> n)));
+    }
+    return glow_shift(a, b, 0);
+}
+/* The JIT's helpers: an error becomes a deopt, and the interpreter then
+   runs the instruction again and raises it. */
+static Value jit_bit_result(Value r) {
+    if (has_exception) { has_exception = 0; pending_exception = value_none(); return VAL_DEOPT_SENTINEL; }
+    return r;
+}
+Value jit_bitand_helper(Value a, Value b) { return IS_INT(a) && IS_INT(b) ? value_int(AS_INT(a) & AS_INT(b)) : jit_bit_result(glow_bitop(a, b, '&')); }
+Value jit_bitor_helper(Value a, Value b)  { return IS_INT(a) && IS_INT(b) ? value_int(AS_INT(a) | AS_INT(b)) : jit_bit_result(glow_bitop(a, b, '|')); }
+Value jit_bitxor_helper(Value a, Value b) { return IS_INT(a) && IS_INT(b) ? value_int(AS_INT(a) ^ AS_INT(b)) : jit_bit_result(glow_bitop(a, b, '^')); }
+Value jit_shl_helper(Value a, Value b)    { return jit_bit_result(glow_shl_value(a, b)); }
+Value jit_shr_helper(Value a, Value b)    { return jit_bit_result(glow_shr_value(a, b)); }
+Value jit_bitnot_helper(Value v)          { return IS_INT(v) ? value_int(~AS_INT(v)) : jit_bit_result(glow_bitnot(v)); }
+
+/* let a, b = value: value must be a list of exactly n items. */
+Value native_glow_unpack(int argc, Value *args) {
+    if (argc < 2) return value_none();
+    Value v = args[0];
+    int64_t n = AS_INT(args[1]);
+    char msg[160];
+    if (GET_TYPE(v) == VAL_LIST) {
+        int64_t size = AS_LIST(v)->size;
+        if (size == n) return v;
+        snprintf(msg, sizeof msg, "Cannot unpack %lld item%s into %lld names", (long long)size, size == 1 ? "" : "s", (long long)n);
+    } else {
+        snprintf(msg, sizeof msg, "Cannot unpack %s into %lld names: it needs a list", glow_type_name(v), (long long)n);
+    }
+    pending_exception = value_string_copy(msg); has_exception = 1;
+    return value_none();
+}
+
 static Value num_mod(Value a, Value b) {
     int64_t ia, ib;
     if (value_exact_int64(a, &ia) && value_exact_int64(b, &ib) && ib != 0) {
@@ -1098,7 +1211,7 @@ const char *op_names[] = {
     "TRACE_ENTER", "PACKED_ADD", "PACKED_SUB", "PACKED_MUL", "PACKED_LOAD", "PACKED_STORE",
     "PACKED_FUSED_MUL_ADD", "MATRIX_MUL", "SIMD_ADD", "USE_FILE", "ITER_START", "ITER_NEXT",
     "IN", "ADD_INT", "SUB_INT", "MUL_INT", "LT_INT", "GT_INT", "LTE_INT", "GTE_INT", "EQ_INT",
-    "CALL_METHOD"
+    "CALL_METHOD", "ITER_NEXT2", "BITAND", "BITOR", "BITXOR", "SHL", "SHR", "BITNOT"
 };
 
 void print_bytecode(Bytecode *bc) {
@@ -1896,7 +2009,8 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         &&l_OP_ADD_INT, &&l_OP_SUB_INT, &&l_OP_MUL_INT,
         &&l_OP_LT_INT, &&l_OP_GT_INT, &&l_OP_LTE_INT, &&l_OP_GTE_INT, &&l_OP_EQ_INT,
         &&l_OP_CALL_METHOD,
-        &&l_OP_ITER_NEXT2
+        &&l_OP_ITER_NEXT2,
+        &&l_OP_BITAND, &&l_OP_BITOR, &&l_OP_BITXOR, &&l_OP_SHL, &&l_OP_SHR, &&l_OP_BITNOT
     };
 #endif
 
@@ -2053,6 +2167,12 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         case OP_EQ_INT: goto l_OP_EQ_INT; \
         case OP_CALL_METHOD: goto l_OP_CALL_METHOD; \
         case OP_ITER_NEXT2: goto l_OP_ITER_NEXT2; \
+        case OP_BITAND: goto l_OP_BITAND; \
+        case OP_BITOR: goto l_OP_BITOR; \
+        case OP_BITXOR: goto l_OP_BITXOR; \
+        case OP_SHL: goto l_OP_SHL; \
+        case OP_SHR: goto l_OP_SHR; \
+        case OP_BITNOT: goto l_OP_BITNOT; \
     }
 
 #define DISPATCH() { \
@@ -3246,6 +3366,42 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("%", a, b); goto l_OP_THROW; }
         if (val_to_double(b) == 0.0) { pending_exception = value_string_copy("Modulo by zero"); has_exception = 1; goto l_OP_THROW; }
         R(pc->r0) = num_mod(a, b); pc++; goto l_DISPATCH;
+    }
+    /* Bitwise operators: two small ints inline, everything else (big ints,
+       errors) through glow_bitop / glow_shift. */
+    l_OP_BITAND: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (__builtin_expect(IS_INT(a) && IS_INT(b), 1)) R(pc->r0) = value_int(AS_INT(a) & AS_INT(b));
+        else { Value r = glow_bitop(a, b, '&'); if (has_exception) goto l_OP_THROW; R(pc->r0) = r; }
+        pc++; goto l_DISPATCH;
+    }
+    l_OP_BITOR: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (__builtin_expect(IS_INT(a) && IS_INT(b), 1)) R(pc->r0) = value_int(AS_INT(a) | AS_INT(b));
+        else { Value r = glow_bitop(a, b, '|'); if (has_exception) goto l_OP_THROW; R(pc->r0) = r; }
+        pc++; goto l_DISPATCH;
+    }
+    l_OP_BITXOR: {
+        Value a = R(pc->r1), b = R(pc->r2);
+        if (__builtin_expect(IS_INT(a) && IS_INT(b), 1)) R(pc->r0) = value_int(AS_INT(a) ^ AS_INT(b));
+        else { Value r = glow_bitop(a, b, '^'); if (has_exception) goto l_OP_THROW; R(pc->r0) = r; }
+        pc++; goto l_DISPATCH;
+    }
+    l_OP_SHL: {
+        Value r = glow_shl_value(R(pc->r1), R(pc->r2));
+        if (has_exception) goto l_OP_THROW;
+        R(pc->r0) = r; pc++; goto l_DISPATCH;
+    }
+    l_OP_SHR: {
+        Value r = glow_shr_value(R(pc->r1), R(pc->r2));
+        if (has_exception) goto l_OP_THROW;
+        R(pc->r0) = r; pc++; goto l_DISPATCH;
+    }
+    l_OP_BITNOT: {
+        Value v = R(pc->r1);
+        if (__builtin_expect(IS_INT(v), 1)) R(pc->r0) = value_int(~AS_INT(v));
+        else { Value r = glow_bitnot(v); if (has_exception) goto l_OP_THROW; R(pc->r0) = r; }
+        pc++; goto l_DISPATCH;
     }
     l_OP_POW: {
         Value a = R(pc->r1), b = R(pc->r2);
