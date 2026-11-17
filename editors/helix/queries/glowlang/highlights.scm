@@ -53,6 +53,7 @@
 ; Exception handling
 "try" @keyword.control.exception
 "catch" @keyword.control.exception
+"finally" @keyword.control.exception
 "throw" @keyword.control.exception
 
 ; I/O
