@@ -540,6 +540,7 @@ static int values_comparable(Value a, Value b) {
     if (ta == VAL_LIST && tb == VAL_LIST) return 1;
     return 0;
 }
+int glow_values_comparable(Value a, Value b) { return values_comparable(a, b); }
 static inline int value_cmp(Value a, Value b) {
     int64_t ia, ib;
     if (GET_TYPE(a) == VAL_STRING && GET_TYPE(b) == VAL_STRING) {
@@ -1223,6 +1224,7 @@ void print_bytecode(Bytecode *bc) {
 }
 
 #define VM_STACK_HEADROOM_ENTRY 512
+#define GLOW_MAX_BYTECODE (1 << 26)   /* instructions in one function or script */
 #define GLOW_MAX_VM_FRAMES 65536
 
 /* Run a callee's compiled code from the interpreter. The callee gets a fresh
@@ -1736,7 +1738,9 @@ Value glow_slice(Value obj, Value startV, Value endV) {
     call_stack_push(bc->owner, start_pc ? start_pc : bc->code);
     int my_frame_idx = call_stack_ptr - 1;
     int entry_count = bc->count;
-    if (entry_count <= 0 || entry_count > 100000) {
+    /* A sanity check for corrupted bytecode. It used to stop at 100,000
+       instructions, which a script of about 25,000 lines reaches. */
+    if (entry_count <= 0 || entry_count > GLOW_MAX_BYTECODE) {
         fprintf(stderr, "[ENTRY-CORRUPT] bc->count=%d owner=%s call_depth=%d\n", entry_count,
                 (bc->owner && bc->owner->name) ? bc->owner->name : "?", call_depth);
         for (int _s = call_stack_ptr - 1; _s >= 0; _s--)
@@ -1899,7 +1903,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             if (only) { fprintf(stderr, "[GATE] owner=%s only=%s jit_failed_before=%d\n", (bc->owner&&bc->owner->name)?bc->owner->name:"(null)", only, bc->jit_failed); fflush(stderr); }
             if (only && bc->owner && bc->owner->name && strcmp(only, bc->owner->name) != 0) bc->jit_failed = 1;
             if (bc->exec_count > 5) {
-                if (bc->count <= 0 || bc->count > 100000) {
+                if (bc->count <= 0 || bc->count > GLOW_MAX_BYTECODE) {
                     fprintf(stderr, "[CORRUPT] bc->count=%d (entry=%d) owner=%s exec_count=%d\n",
                             bc->count, entry_count, (bc->owner && bc->owner->name) ? bc->owner->name : "?", bc->exec_count);
                     for (int _s = call_stack_ptr - 1; _s >= 0; _s--)

@@ -42,15 +42,6 @@ static Node *with_param_defaults(int count, char **names, struct Node **defaults
     if (!prologue) return body;
     return body ? newSeqNode(prologue, body) : prologue;
 }
-/* Puts else_part at the end of an eif chain: the else branch of its last
-   if. Returns the chain (or else_part when there is no chain). */
-static Node *attach_else(Node *chain, Node *else_part) {
-    if (!chain) return else_part;
-    Node *last = chain;
-    while (last->third) last = last->third;
-    last->third = else_part;
-    return chain;
-}
 /* A syntax error about a statement that starts on `line`. By the time a
    rule is reduced the lexer has read past the statement's newline, so
    yyerror alone would name the next line. */
@@ -59,6 +50,38 @@ static void error_at(int line, const char *msg) {
     if (line > 0) line_num = line;
     yyerror(msg);
     line_num = saved;
+}
+/* target = value. A slice target (xs[1:3] = items) calls the runtime's
+   slice assignment; only names, x[i], x.name and slices can be assigned. */
+static Node *assign_node(Node *target, Node *value) {
+    if (target->type == NODE_VAR) return newAssignNode(target->name, value);
+    if (target->type == NODE_INDEX) {
+        target->type = NODE_INDEX_ASSIGN; target->third = value;
+        return target;
+    }
+    if (target->type == NODE_SLICE) {
+        Node **args = arena_alloc(sizeof(Node*) * 5);
+        args[0] = target->left;
+        args[1] = target->right ? target->right : newVarNode(intern_string("none"));
+        args[2] = target->third ? target->third : newVarNode(intern_string("none"));
+        args[3] = target->comp_expr ? target->comp_expr : newVarNode(intern_string("none"));
+        args[4] = value;
+        Node *call = node_new(NODE_CALL);
+        call->name = intern_string("__glow_slice_set");
+        call->call_args = args; call->call_arg_count = 5; call->line = target->line;
+        return newExprStmtNode(call);
+    }
+    error_at(target->line, "Can only assign to a name, a list item or field (x[i], x.name) or a slice");
+    return NULL;
+}
+/* Puts else_part at the end of an eif chain: the else branch of its last
+   if. Returns the chain (or else_part when there is no chain). */
+static Node *attach_else(Node *chain, Node *else_part) {
+    if (!chain) return else_part;
+    Node *last = chain;
+    while (last->third) last = last->third;
+    last->third = else_part;
+    return chain;
 }
 /* x op= value for the bitwise operators: x = x op value. */
 static Node *compound_bitop(Node *target, NodeType op, Node *value) {
@@ -167,7 +190,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 
 program: lines { root = $1; };
 lines: lines NEWLINE stmt { $$ = newSeqNode($1, $3); } | lines NEWLINE { $$ = $1; } | stmt { $$ = $1; } | { $$ = NULL; };
-stmt: postfix ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->name, $3); else { $$ = $1; $$->type = NODE_INDEX_ASSIGN; $$->third = $3; } }
+stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | IMPORT STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | USE STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | RETURN expr { $$ = newReturnNode($2); }

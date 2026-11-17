@@ -83,6 +83,17 @@ static int sort_list(List *l, Value key_fn, int descending) {
         list_push(key_list, k);
     }
     memcpy(keys, key_list->items, sizeof(Value) * n);
+    /* Keys < cannot order (a number and a string) are an error, as with <;
+       they used to be sorted into some order anyway. */
+    for (int i = 1; i < n; i++) {
+        if (!glow_values_comparable(keys[0], keys[i])) {
+            char m[160];
+            snprintf(m, sizeof m, "Cannot sort %s and %s together: they cannot be compared", glow_type_name(keys[0]), glow_type_name(keys[i]));
+            free(keys); free(ti); free(tk);
+            raise(m);
+            return 0;
+        }
+    }
     merge_sort(l->items, keys, ti, tk, n);
     if (descending) {
         for (int i = 0, j = n - 1; i < j; i++, j--) { Value t = l->items[i]; l->items[i] = l->items[j]; l->items[j] = t; }
@@ -126,13 +137,33 @@ static Value core_abs(int argc, Value *args) {
     return value_from_double(fabs(val_to_double(v)));
 }
 
-/* min/max of the arguments, or of a single list argument. */
+/* min/max of the arguments, or of one list. min(list, key) / max(list, key)
+   compare key(item), as sorted() does, and return the item. Values that <
+   cannot order (a number and a string) raise an error, as < does; this
+   used to return one of them anyway, so max(list, key) gave the list. */
+static int is_callable_obj(Value m);
 static Value extreme(int argc, Value *args, int want, const char *name) {
-    Value *items = args; int n = argc;
-    if (argc == 1 && GET_TYPE(args[0]) == VAL_LIST) { items = AS_LIST(args[0])->items; n = AS_LIST(args[0])->size; }
-    if (n == 0) { char m[64]; snprintf(m, sizeof(m), "%s() of an empty list", name); return raise(m); }
-    Value best = items[0];
-    for (int i = 1; i < n; i++) if (glow_value_cmp(items[i], best) * want > 0) best = items[i];
+    char m[160];
+    List *src = NULL;
+    Value key = value_none();
+    if (argc >= 1 && GET_TYPE(args[0]) == VAL_LIST &&
+        (argc == 1 || (argc == 2 && (is_callable_obj(args[1]) || GET_TYPE(args[1]) == VAL_NONE)))) {
+        src = AS_LIST(args[0]);
+        if (argc == 2) key = args[1];
+    }
+    int n = src ? src->size : argc;
+    if (n == 0) { snprintf(m, sizeof(m), "%s() of an empty list", name); return raise(m); }
+    Value best = src ? src->items[0] : args[0], best_key = best;
+    if (GET_TYPE(key) != VAL_NONE) { best_key = call_value(key, 1, &best); if (has_exception) return value_none(); }
+    for (int i = 1; i < (src ? src->size : n); i++) {
+        Value v = src ? src->items[i] : args[i], k = v;
+        if (GET_TYPE(key) != VAL_NONE) { k = call_value(key, 1, &v); if (has_exception) return value_none(); }
+        if (!glow_values_comparable(k, best_key)) {
+            snprintf(m, sizeof(m), "%s() cannot compare %s and %s", name, glow_type_name(best_key), glow_type_name(k));
+            return raise(m);
+        }
+        if (glow_value_cmp(k, best_key) * want > 0) { best = v; best_key = k; }
+    }
     return best;
 }
 static Value core_min(int argc, Value *args) { return extreme(argc, args, -1, "min"); }
