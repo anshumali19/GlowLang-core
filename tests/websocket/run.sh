@@ -36,7 +36,7 @@ echo "$out"
 echo "$out" | grep -q "failed: 0$" || status=1
 
 if [ "${SKIP_AUTOBAHN:-0}" != "1" ]; then
-    IMAGE=crossbario/autobahn-testsuite:0.8.2
+    IMAGE=crossbario/autobahn-testsuite:25.10.1
     mkdir -p reports
     echo "== 4a. Autobahn fuzzing client -> GlowLang server"
     "$BIN" run autobahn_echo.glow 9001 </dev/null & pids+=($!)
