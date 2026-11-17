@@ -42,7 +42,7 @@ vim.api.nvim_create_autocmd("FileType", {
             syntax keyword glowKeyword show write when whenever eif otherwise
             syntax keyword glowKeyword while until repeat for each in
             syntax keyword glowKeyword func lambda return stop skip end
-            syntax keyword glowKeyword let try catch throw class trait extends
+            syntax keyword glowKeyword let try catch finally throw class trait extends
             syntax keyword glowKeyword use spawn true false times input
             syntax keyword glowKeyword is is_not from to every blueprint action can
             syntax keyword glowKeyword and or not

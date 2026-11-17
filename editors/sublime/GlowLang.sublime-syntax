@@ -161,7 +161,7 @@ contexts:
       scope: keyword.declaration.glowlang
 
     # Error handling
-    - match: '\b(try|catch|throw)\b'
+    - match: '\b(try|catch|finally|throw)\b'
       scope: keyword.control.exception.glowlang
 
     # I/O keywords

@@ -48,7 +48,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.glow",
-                    "match": "\\b(when|if|eif|otherwise|while|until|repeat|times|for|every|each|in|is\\s+not|is|from|to|func|action|can|lambda|let|return|stop|break|skip|continue|try|catch|throw|import|class|blueprint|Blueprint|trait|extends|use|spawn|end)\\b"
+                    "match": "\\b(when|if|eif|otherwise|while|until|repeat|times|for|every|each|in|is\\s+not|is|from|to|func|action|can|lambda|let|return|stop|break|skip|continue|try|catch|finally|throw|import|class|blueprint|Blueprint|trait|extends|use|spawn|end)\\b"
                 },
                 {
                     "name": "keyword.other.glow",
