@@ -124,7 +124,21 @@ x -= 2    # x = x - 2
 x *= 3    # x = x * 3
 x /= 4    # x = x / 4
 x //= 2   # x = x // 2
+x &= 3    # x = x & 3   (also |=, ^=, <<= and >>=)
 ```
+
+### Unpacking
+Several names can be assigned at once. With several values on the right, all
+of them are worked out before any name changes, so `a, b = b, a` swaps:
+```glow
+let a, b = 1, 2
+a, b = b, a                          # a is 2, b is 1
+let name, age = ["Ada", 36]          # one list: its items, in order
+xs[i], xs[j] = xs[j], xs[i]          # list items and fields work too
+self.x, self.y = self.y, self.x
+```
+A single value on the right must be a list with exactly one item per name;
+anything else raises an error (`Cannot unpack 3 items into 2 names`).
 
 ### Undefined Names
 Reading a name that nothing declares is an error, so a typo is reported where
@@ -155,6 +169,23 @@ after that declaration.
 
 Arithmetic on values that are not numbers raises an error (`none * 2` →
 "Cannot apply '*' to none and int"). Division and modulo by zero raise errors.
+
+### Bitwise
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `&` | And | `6 & 3` → `2` |
+| `\|` | Or | `6 \| 3` → `7` |
+| `^` | Exclusive or | `6 ^ 3` → `5` |
+| `~` | Not (`~x` is `-x - 1`) | `~6` → `-7` |
+| `<<` | Shift left (never overflows: the result grows into a big integer) | `1 << 10` → `1024`, `1 << 100` |
+| `>>` | Shift right (rounds down) | `1024 >> 3` → `128`, `-5 >> 1` → `-3` |
+
+They work on whole numbers of any size, the way Python does (a negative
+number acts as two's complement with endless sign bits). Floats, booleans
+and text raise an error, and so does a negative shift count. They bind more
+tightly than comparisons and less tightly than `+` and `-`, from loosest to
+tightest `|`, `^`, `&`, then `<<` / `>>`: `flags & WRITE != 0` means
+`(flags & WRITE) != 0`, and `1 + 2 << 1` is `6`.
 
 ### Comparison
 | Operator | Description | Example |
@@ -451,6 +482,15 @@ for each item in items:
     show item
 end
 ```
+
+With names in brackets, each item (a list) is unpacked into them:
+```glow
+for each [name, score] in zip(names, scores):
+    show name, score
+end
+```
+`for each i, item in list` (no brackets) still gives the index and the item,
+and `for each key, value in dict` the key and the value.
 
 ### Every Loop (Range-based)
 `every i from a to b` counts up from `a` to `b`, both included. When `b` is

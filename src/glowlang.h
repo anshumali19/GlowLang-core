@@ -273,6 +273,8 @@ BigInt* bigint_negate(BigInt *a);
 BigInt* bigint_mul(BigInt *a, BigInt *b);
 double bigint_to_double(BigInt *b);
 int bigint_fits_int64(BigInt *b, int64_t *out);
+BigInt* bigint_pow2(int64_t n);                       /* 2 ** n, n >= 0 */
+BigInt* bigint_bitop(BigInt *a, BigInt *b, char op);  /* '&', '|' or '^' */
 
 typedef uint64_t TypeSignature;
 
@@ -350,6 +352,12 @@ extern Value jit_int_mul(Value a, Value b);
 Value jit_mod_helper(Value a, Value b);
 Value jit_pow_helper(Value a, Value b);
 Value jit_neg_helper(Value v);
+Value jit_bitand_helper(Value a, Value b);
+Value jit_bitor_helper(Value a, Value b);
+Value jit_bitxor_helper(Value a, Value b);
+Value jit_shl_helper(Value a, Value b);
+Value jit_shr_helper(Value a, Value b);
+Value jit_bitnot_helper(Value v);
 Value jit_const_string(const char *s);
 Value jit_list_literal(Value *regs, int n);
 Value jit_dict_literal(Value *regs, int n);
@@ -489,7 +497,13 @@ typedef enum {
     OP_GTE_INT,
     OP_EQ_INT,
     OP_CALL_METHOD,
-    OP_ITER_NEXT2
+    OP_ITER_NEXT2,
+    OP_BITAND,      /* r0 = r1 & r2 */
+    OP_BITOR,       /* r0 = r1 | r2 */
+    OP_BITXOR,      /* r0 = r1 ^ r2 */
+    OP_SHL,         /* r0 = r1 << r2 */
+    OP_SHR,         /* r0 = r1 >> r2 */
+    OP_BITNOT       /* r0 = ~r1 */
 } OpCode;
 
 typedef struct {
@@ -609,7 +623,10 @@ typedef enum {
     NODE_PACKED_ADD,
     NODE_PACKED_SUB,
     NODE_WHENEVER,
-    NODE_COND          /* value when condition otherwise other */
+    NODE_COND,         /* value when condition otherwise other */
+    NODE_UNPACK,       /* let a, b = value / a, b = b, a (see compiler.c) */
+    NODE_BITAND, NODE_BITOR, NODE_BITXOR, NODE_SHL, NODE_SHR, NODE_BITNOT,
+    NODE_REG           /* a value the compiler already holds in register `reg` */
 } NodeType;
 
 struct Node {
@@ -633,6 +650,7 @@ struct Node {
     const char *parent_name;
     Node **methods; int method_count;
     Node **fields; int field_count;
+    int reg;                 /* NODE_REG: the register holding the value */
 };
 
 typedef Value (*NativeFuncPtr)(int argc, Value *args);

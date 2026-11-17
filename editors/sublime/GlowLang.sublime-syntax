@@ -218,8 +218,12 @@ contexts:
   # --------------------------------------------------------
   operators:
     # Compound assignment
-    - match: '//=|[+\-*/%]='
+    - match: '//=|<<=|>>=|[+\-*/%&|^]='
       scope: keyword.operator.assignment.compound.glowlang
+
+    # Bitwise
+    - match: '<<|>>|[&|^~]'
+      scope: keyword.operator.bitwise.glowlang
 
     # Comparison
     - match: '==|!=|<=|>=|<|>'

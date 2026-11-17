@@ -6853,6 +6853,7 @@ void std_init(void) {
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
     var_set("__glow_params", native_func_new("__glow_params", native_glow_params));
     { extern Value native_floordiv(int argc, Value *args); var_set("__glow_floordiv", native_func_new("__glow_floordiv", native_floordiv)); }
+    { extern Value native_glow_unpack(int, Value*); var_set("__glow_unpack", native_func_new("__glow_unpack", native_glow_unpack)); }
     var_set("format", native_func_new("format", native_format));
     var_set("__glow_format", native_func_new("__glow_format", native_format));
     var_set("__glow_fstring_error", native_func_new("__glow_fstring_error", native_fstring_error));

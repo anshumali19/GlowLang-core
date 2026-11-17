@@ -163,6 +163,10 @@
         "operators": {
             "patterns": [
                 {
+                    "name": "keyword.operator.bitwise.glow",
+                    "match": "(<<=|>>=|&=|\\|=|\\^=|<<|>>|&|\\|(?!>)|\\^|~)"
+                },
+                {
                     "name": "keyword.operator.comparison.glow",
                     "match": "(==|!=|<=|>=|<|>)"
                 },

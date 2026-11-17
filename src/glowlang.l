@@ -264,6 +264,17 @@ int lexer_bracket_depth = 0;
 "//="                  { return FLOORDIV_ASSIGN; }
 "/="                   { return DIV_ASSIGN; }
 "%="                   { return MOD_ASSIGN; }
+"&="                   { return BITAND_ASSIGN; }
+"|="                   { return BITOR_ASSIGN; }
+"^="                   { return BITXOR_ASSIGN; }
+"<<="                  { return SHL_ASSIGN; }
+">>="                  { return SHR_ASSIGN; }
+"<<"                   { return SHL; }
+">>"                   { return SHR; }
+"&"                    { return BITAND; }
+"|"                    { return BITOR; }
+"^"                    { return BITXOR; }
+"~"                    { return BITNOT; }
 
 "=="                   { return EQ; }
 "!="                   { return NEQ; }
