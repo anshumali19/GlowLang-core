@@ -154,6 +154,7 @@ The runtime functions under these libraries, in `crypto`:
 | `crypto.unbase64(text)` | Decoded text (either alphabet; must decode to UTF-8 text) |
 | `crypto.random_token(n)` | `n` secure random bytes as base64url, for secrets, states and ids |
 | `crypto.sha256_b64url(text)` | SHA-256 as base64url |
+| `crypto.hmac(key, data, hash, encoding)` | HMAC; `hash` `"sha1"`, `"sha256"` (default), `"sha384"`, `"sha512"`; `encoding` `"hex"` (default), `"base64"`, `"raw"` |
 | `crypto.sign(alg, key, data)` | A JWS signature as base64url |
 | `crypto.verify(alg, key, data, sig)` | `true` or `false` |
 | `crypto.generate_keypair(alg, bits)` | `{"private": PEM, "public": PEM}` for RS* (2048/3072/4096 bits) or ES256/ES384 |

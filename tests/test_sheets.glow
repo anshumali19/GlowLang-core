@@ -1,0 +1,220 @@
+# The Google Sheets client against a mock Google (token endpoint + Sheets
+# API v4) started inside the test. The token endpoint checks the
+# service account's signed JWT with the account's public key.
+use "sheets"
+
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func raises(name, f, part):
+    try:
+        f()
+        failed = failed + 1
+        show "FAIL (no error): " + name
+    catch e:
+        if str(e).contains(part):
+            passed = passed + 1
+        else:
+            failed = failed + 1
+            show "FAIL: " + name + " -> " + str(e)
+        end
+    end
+end
+
+let port = 26000 + int(os.time() * 1000) % 2000
+let base = "http://127.0.0.1:" + str(port)
+let keys = crypto.generate_keypair("RS256")
+let account = {"type": "service_account", "project_id": "glow-test", "private_key_id": "kid-1", "private_key": keys["private"],
+    "client_email": "robot@glow-test.iam.gserviceaccount.com", "token_uri": base + "/token"}
+let state = {"token_calls": 0, "next_token": 1, "expires_in": 3600, "reject_token": "", "last_claims": none, "last_kid": none}
+let seen = {}
+let sid = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+let sp = "/v4/spreadsheets/" + sid
+
+func parse_request(raw):
+    let at = raw.find("\r\n\r\n")
+    let lines = raw[:at].split("\r\n")
+    let parts = lines[0].split(" ")
+    let headers = {}
+    for each line in lines[1:]:
+        let c = line.find(":")
+        headers[line[:c].lower()] = line[c + 1:].trim()
+    end
+    let path = parts[1]
+    let query = ""
+    let q = path.find("?")
+    if q >= 0:
+        query = path[q + 1:]
+        path = path[:q]
+    end
+    return {"method": parts[0], "path": path, "query": query, "headers": headers, "body": raw[at + 4:]}
+end
+
+func respond(client, status, body):
+    http.send(client, "HTTP/1.1 " + str(status) + " X\r\nContent-Type: application/json; charset=UTF-8\r\nContent-Length: " + str(body.byte_len()) + "\r\nConnection: close\r\n\r\n" + body)
+    http.close(client)
+end
+
+func gerr(code, message, status):
+    return json.stringify({"error": {"code": code, "message": message, "status": status}})
+end
+
+func assertion_of(body):
+    for each pair in body.split("&"):
+        if pair.starts_with("assertion="):
+            return pair[10:]
+        end
+    end
+    return ""
+end
+
+func serve(server):
+    while true:
+        let client = http.accept(server)
+        let req = parse_request(http.read(client))
+        let p = req["path"]
+        if p == "/quit":
+            respond(client, 200, "{}")
+            http.close(server)
+            return none
+        end
+        if p == "/token":
+            state["token_calls"] = state["token_calls"] + 1
+            try:
+                let a = assertion_of(req["body"])
+                state["last_kid"] = jwt.header(a).get("kid", none)
+                state["last_claims"] = jwt.decode(a, keys["public"], {"algorithms": ["RS256"], "audience": base + "/token"})
+                if req["body"].contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"):
+                    let tok = "ya29.tok-" + str(state["next_token"])
+                    state["next_token"] = state["next_token"] + 1
+                    respond(client, 200, json.stringify({"access_token": tok, "expires_in": state["expires_in"], "token_type": "Bearer"}))
+                else:
+                    respond(client, 400, json.stringify({"error": "unsupported_grant_type"}))
+                end
+            catch e:
+                respond(client, 400, json.stringify({"error": "invalid_grant", "error_description": "Invalid JWT Signature."}))
+            end
+            continue
+        end
+        seen["last"] = req
+        let auth = req["headers"].get("authorization", "")
+        if not auth.starts_with("Bearer ya29.") or auth == "Bearer " + state["reject_token"]:
+            respond(client, 401, gerr(401, "Request had invalid authentication credentials.", "UNAUTHENTICATED"))
+        eif req["method"] == "GET" and p == sp + "/values/Orders%21A1%3AD":
+            respond(client, 200, json.stringify({"range": "Orders!A1:D5", "majorDimension": "ROWS", "values": [["id", "name", "amount", "status"], ["1041", "Ravi", "250", "paid"], ["1042", "Asha", "499"]]}))
+        eif req["method"] == "GET" and p == sp + "/values/Empty":
+            respond(client, 200, json.stringify({"range": "Empty!A1:Z1000", "majorDimension": "ROWS"}))
+        eif req["method"] == "GET" and p == sp + "/values:batchGet":
+            respond(client, 200, json.stringify({"spreadsheetId": sid, "valueRanges": [{"range": "A!A1:A2", "majorDimension": "ROWS", "values": [["1"], ["2"]]}, {"range": "B!A1:A2", "majorDimension": "ROWS"}]}))
+        eif req["method"] == "PUT" and p == sp + "/values/Summary%21B1":
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"spreadsheetId": sid, "updatedRange": "Summary!B1:C2", "updatedRows": len(b["values"]), "updatedColumns": 2, "updatedCells": 4}))
+        eif req["method"] == "POST" and p == sp + "/values/Orders%21A%3AD:append":
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"spreadsheetId": sid, "tableRange": "Orders!A1:D3", "updates": {"spreadsheetId": sid, "updatedRange": "Orders!A4:D4", "updatedRows": len(b["values"]), "updatedColumns": 4, "updatedCells": 4}}))
+        eif req["method"] == "POST" and p == sp + "/values/Orders%21A2%3AD:clear":
+            respond(client, 200, json.stringify({"spreadsheetId": sid, "clearedRange": "Orders!A2:D1000"}))
+        eif req["method"] == "GET" and p == sp:
+            respond(client, 200, json.stringify({"spreadsheetId": sid, "properties": {"title": "Shop orders"}, "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/" + sid + "/edit",
+                "sheets": [{"properties": {"sheetId": 0, "title": "Orders"}}, {"properties": {"sheetId": 1585, "title": "Summary"}}]}))
+        eif req["method"] == "POST" and p == "/v4/spreadsheets":
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"spreadsheetId": "NEW123", "properties": {"title": b["properties"]["title"]}, "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/NEW123/edit", "sheets": [{"properties": {"sheetId": 0, "title": "Sheet1"}}]}))
+        eif p.starts_with("/v4/spreadsheets/private"):
+            respond(client, 403, gerr(403, "The caller does not have permission", "PERMISSION_DENIED"))
+        else:
+            respond(client, 404, gerr(404, "Requested entity was not found.", "NOT_FOUND"))
+        end
+    end
+end
+
+let server = http.listen(port)
+if server < 0:
+    show "cannot listen on port " + str(port)
+    os.exit(1)
+end
+spawn serve(server)
+
+let gs = sheets.service_account(json.stringify(account), {"base_url": base})
+
+show "== reading"
+let rows = gs.read(sid, "Orders!A1:D")
+ok("rows", len(rows) == 3 and rows[1] == ["1041", "Ravi", "250", "paid"])
+ok("short rows stay short (Google drops empty trailing cells)", rows[2] == ["1042", "Asha", "499"])
+ok("the range is encoded into the path", seen["last"]["path"] == sp + "/values/Orders%21A1%3AD")
+ok("signed in with a bearer token", seen["last"]["headers"]["authorization"] == "Bearer ya29.tok-1")
+let c = state["last_claims"]
+ok("JWT claims: iss, scope, aud", c["iss"] == "robot@glow-test.iam.gserviceaccount.com" and c["scope"] == "https://www.googleapis.com/auth/spreadsheets" and c["aud"] == base + "/token")
+ok("JWT lifetime one hour at most", c["exp"] - c["iat"] <= 3600 and c["exp"] > c["iat"])
+ok("JWT key id from the key file", state["last_kid"] == "kid-1")
+gs.read(sid, "Orders!A1:D", false)
+ok("unformatted values option", seen["last"]["query"] == "valueRenderOption=UNFORMATTED_VALUE")
+ok("token reused while valid", state["token_calls"] == 1)
+ok("an empty range gives []", gs.read(sid, "Empty") == [])
+let recs = gs.records(sid, "Orders!A1:D")
+ok("records keyed by the header row", len(recs) == 2 and recs[0] == {"id": "1041", "name": "Ravi", "amount": "250", "status": "paid"})
+ok("missing cells read as empty text", recs[1]["status"] == "")
+let many = gs.read_many(sid, ["A!A1:A2", "B!A1:A2"])
+ok("several ranges", many == [[["1"], ["2"]], []])
+ok("ranges repeated in the query", seen["last"]["query"] == "ranges=A%21A1%3AA2&ranges=B%21A1%3AA2")
+
+show "== writing"
+let w = gs.write(sid, "Summary!B1", [["Total", "=SUM(Orders!C:C)"], ["Count", 2]])
+ok("write summary", w["updatedRange"] == "Summary!B1:C2" and w["updatedRows"] == 2)
+ok("PUT with USER_ENTERED", seen["last"]["method"] == "PUT" and seen["last"]["query"] == "valueInputOption=USER_ENTERED")
+ok("ValueRange body", json.parse(seen["last"]["body"]) == {"range": "Summary!B1", "majorDimension": "ROWS", "values": [["Total", "=SUM(Orders!C:C)"], ["Count", 2]]})
+gs.write(sid, "Summary!B1", [["=not a formula"]], true)
+ok("raw = true stores values as they are", seen["last"]["query"] == "valueInputOption=RAW")
+let a = gs.append(sid, "Orders!A:D", [["1043", "Meera", 120, "paid"]])
+ok("append", a["updates"]["updatedRange"] == "Orders!A4:D4")
+ok("append inserts rows", seen["last"]["query"] == "valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS")
+ok("clear", gs.clear(sid, "Orders!A2:D")["clearedRange"] == "Orders!A2:D1000")
+raises("rows must be lists of cells", lambda(): gs.append(sid, "Orders!A:D", ["1043", "Meera"]), "sheets: each row must be a list of cells")
+raises("values must be a list", lambda(): gs.write(sid, "Summary!B1", "x"), "sheets: values must be a list of rows")
+
+show "== spreadsheets"
+let info = gs.info(sid)
+ok("title, url and sheets", info["title"] == "Shop orders" and info["url"].ends_with("/edit") and info["sheets"] == [{"title": "Orders", "id": 0}, {"title": "Summary", "id": 1585}])
+ok("only the needed fields asked for", seen["last"]["query"].starts_with("fields="))
+let made = gs.create("Invoices 2026")
+ok("create", made["id"] == "NEW123" and made["title"] == "Invoices 2026" and json.parse(seen["last"]["body"]) == {"properties": {"title": "Invoices 2026"}})
+
+show "== failures and tokens"
+raises("not found", lambda(): gs.read("nope", "A1"), "sheets: Requested entity was not found. (NOT_FOUND)")
+raises("not shared with the robot", lambda(): gs.read("private-1", "A1"), "sheets: The caller does not have permission (PERMISSION_DENIED)")
+ok("last_error", gs.last_error["code"] == 403 and gs.last_error["status"] == "PERMISSION_DENIED")
+state["reject_token"] = "ya29.tok-1"
+raises("a revoked token fails once", lambda(): gs.read(sid, "Orders!A1:D"), "(UNAUTHENTICATED)")
+ok("and the next call signs in again", len(gs.read(sid, "Orders!A1:D")) == 3 and state["token_calls"] == 2 and seen["last"]["headers"]["authorization"] == "Bearer ya29.tok-2")
+state["expires_in"] = 61
+let short = sheets.service_account(account, {"base_url": base})
+short.read(sid, "Empty")
+let calls = state["token_calls"]
+os.sleep(1500)
+short.read(sid, "Empty")
+ok("an expired token is renewed", state["token_calls"] == calls + 1)
+
+let other = crypto.generate_keypair("RS256")
+let forged = {"client_email": "robot@glow-test.iam.gserviceaccount.com", "private_key": other["private"], "token_uri": base + "/token"}
+raises("a key Google does not know", lambda(): sheets.service_account(forged, {"base_url": base}).read(sid, "Empty"), "sheets: signing in as robot@glow-test.iam.gserviceaccount.com failed: the provider refused: invalid_grant: Invalid JWT Signature.")
+raises("not a key file", lambda(): sheets.service_account("{oops"), "sheets: the service account key is not JSON")
+raises("key without private_key", lambda(): sheets.service_account({"client_email": "x"}), "sheets: the service account key needs client_email and private_key")
+raises("spreadsheet id needed", lambda(): gs.read("", "A1"), "sheets: give the spreadsheet id")
+
+let tok = sheets.with_token("ya29.manual", {"base_url": base})
+tok.read(sid, "Empty")
+ok("a ready access token", seen["last"]["headers"]["authorization"] == "Bearer ya29.manual")
+raises("token needed", lambda(): sheets.with_token(""), "sheets: give a service account key or an access token")
+
+http.request("GET", base + "/quit")
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

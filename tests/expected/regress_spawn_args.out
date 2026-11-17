@@ -1,0 +1,11 @@
+f(): [none, none]
+f(1): [1, none]
+f(1, 2): [1, 2]
+method with no arguments: ["box", none, none]
+method with one: ["box", "a", none]
+start(): none
+lambda: [7, none]
+f() takes 2 arguments but 3 were given
+Box.m() takes 2 arguments but 3 were given
+lambda() takes 2 arguments but 3 were given
+done

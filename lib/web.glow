@@ -16,6 +16,14 @@ func _ends_with(s, suffix):
     return tail == suffix
 end
 
+# Calls a handler or hook with the arguments it takes: f(req) or f(req, res).
+func _web_call(f, req, res):
+    when __glow_params(f) == 1:
+        return f(req)
+    end
+    return f(req, res)
+end
+
 # ─── Request Parser ───
 blueprint Request:
     action init(raw):
@@ -108,9 +116,16 @@ blueprint Request:
         end
     end
 
+    # A request header by name, in any case (HTTP header names ignore case).
     action get_header(name):
         when self.headers.has(name):
             return self.headers[name]
+        end
+        let want = name.lower()
+        for each k in self.headers.keys():
+            when k.lower() == want:
+                return self.headers[k]
+            end
         end
         return none
     end
@@ -301,7 +316,7 @@ blueprint MiddlewareChain:
 
     action run_before(req, res):
         for each hook in self.before_hooks:
-            hook(req, res)
+            _web_call(hook, req, res)
             when res.sent:
                 return none
             end
@@ -310,7 +325,7 @@ blueprint MiddlewareChain:
 
     action run_after(req, res):
         for each hook in self.after_hooks:
-            hook(req, res)
+            _web_call(hook, req, res)
         end
     end
 end
@@ -488,7 +503,7 @@ blueprint Server:
                     # A handler may fill in res, or return the response:
                     # a dict or list (sent as JSON) or text (HTML when it
                     # starts with <, JSON when it starts with { or [).
-                    let out = matched.handler(req, res)
+                    let out = _web_call(matched.handler, req, res)
                     when not res.sent and out is not none:
                         when type(out) == "dict" or type(out) == "list":
                             res.send_json(out)

@@ -1,0 +1,44 @@
+# crypto.hmac(key, data, hash, encoding): RFC 2202 / RFC 4231 test case 2
+# for every hash, and values computed with Python's hmac module.
+let passed = 0
+let failed = 0
+func same(name, got, want):
+    if got == want:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name + " got " + str(got)
+    end
+end
+func errs(f):
+    try:
+        f()
+    catch e:
+        return str(e)
+    end
+    return "no error"
+end
+
+let k = "Jefe"
+let m = "what do ya want for nothing?"
+same("default is SHA-256 hex", crypto.hmac(k, m), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+same("hmac_sha256 is the same function", crypto.hmac_sha256(k, m), crypto.hmac(k, m))
+same("sha1 (RFC 2202)", crypto.hmac(k, m, "sha1"), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79")
+same("sha256", crypto.hmac(k, m, "sha256"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+same("sha384 (RFC 4231)", crypto.hmac(k, m, "sha384"), "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649")
+same("sha512 (RFC 4231)", crypto.hmac(k, m, "sha512"), "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737")
+same("hash names ignore case", crypto.hmac(k, m, "SHA1"), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79")
+same("none means the default", crypto.hmac(k, m, none, none), crypto.hmac(k, m))
+same("base64", crypto.hmac(k, m, "sha256", "base64"), "W9zBRr9gdU5qBCQmCJV1x1oAPwidJzmDnexYuWTsOEM=")
+same("raw is the bytes", crypto.hmac(k, m, "sha256", "raw").byte_len(), 32)
+same("raw then base64", crypto.base64(crypto.hmac(k, m, "sha512", "raw")).byte_len(), 88)
+same("UTF-8 key and data", crypto.hmac("कुंजी", "संदेश", "sha1"), "76a3b63a7045ff844814cb0702800d690d791a36")
+same("Twilio's documented example", crypto.hmac("12345", "https://example.com/myapp.php?foo=1&bar=2CallSidCA1234567890ABCDECaller+14158675310Digits1234From+14158675310To+18005551212", "sha1", "base64"), "L/OH5YylLD5NRKLltdqwSvS0BnU=")
+same("unknown hash", errs(lambda(): crypto.hmac(k, m, "md5")), "crypto.hmac: the hash must be \"sha1\", \"sha256\", \"sha384\" or \"sha512\"")
+same("unknown encoding", errs(lambda(): crypto.hmac(k, m, "sha1", "binary")), "crypto.hmac: the encoding must be \"hex\", \"base64\" or \"raw\"")
+same("data must be text", errs(lambda(): crypto.hmac(k, 42)), "crypto.hmac: needs a key and the data, both text")
+same("key must be text", errs(lambda(): crypto.hmac(none, m)), "crypto.hmac: needs a key and the data, both text")
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

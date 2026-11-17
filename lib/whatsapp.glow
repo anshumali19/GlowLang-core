@@ -1,0 +1,243 @@
+# whatsapp.glow: send and receive WhatsApp messages with Meta's WhatsApp
+# Cloud API.
+#
+#   use "whatsapp"
+#   let wa = whatsapp.client(os.getenv("WHATSAPP_TOKEN"), os.getenv("WHATSAPP_PHONE_NUMBER_ID"))
+#   let id = wa.send_text("919876543210", "Your order has shipped!")
+#   wa.send_template("919876543210", "order_update", "en", [{"type": "body", "parameters": [{"type": "text", "text": "1042"}]}])
+#
+#   # Webhooks (in your web server):
+#   # GET  /webhook: answer whatsapp.verify_subscription(query, VERIFY_TOKEN)
+#   # POST /webhook: check whatsapp.verify_signature(raw_body, header, APP_SECRET),
+#   #                then read whatsapp.parse_webhook(raw_body)
+#
+# Numbers are in international format, digits only ("919876543210"); a
+# leading + and spaces are removed. Outside a 24-hour window after the
+# customer last wrote to you, WhatsApp only delivers approved templates.
+# Every failure raises an error starting with "whatsapp:"; the full error is
+# kept in client.last_error.
+use "rest"
+
+func _wa_number(number):
+    let digits = []
+    for each c in str(number):
+        if c >= "0" and c <= "9":
+            digits.push(c)
+        eif c != "+" and c != " " and c != "-" and c != "(" and c != ")":
+            throw "whatsapp: " + str(number) + " is not a phone number"
+        end
+    end
+    if len(digits) < 8 or len(digits) > 15:
+        throw "whatsapp: " + str(number) + " is not a phone number in international format"
+    end
+    return "".join(digits)
+end
+
+blueprint WhatsAppClient:
+    # options: "version" (Graph API version, default "v23.0"), "base_url"
+    # (default https://graph.facebook.com), "timeout" (default 30 seconds).
+    action init(token, phone_number_id, options = none):
+        if type(token) != "string" or token == "":
+            throw "whatsapp: an access token is needed"
+        end
+        if phone_number_id == none or str(phone_number_id) == "":
+            throw "whatsapp: the phone number id is needed (WhatsApp Manager > API Setup)"
+        end
+        self.token = token
+        self.phone_number_id = str(phone_number_id)
+        self.version = "v23.0"
+        self.base_url = "https://graph.facebook.com"
+        self.timeout = 30
+        if options != none:
+            self.version = options.get("version", self.version)
+            self.base_url = options.get("base_url", self.base_url).trim_end("/")
+            self.timeout = options.get("timeout", self.timeout)
+        end
+        self.last_error = none
+    end
+
+    # Any Graph API call; path is relative to the version, e.g. "/12345/messages".
+    action request(method, path, body = none):
+        let headers = {"Authorization": "Bearer " + self.token, "Accept": "application/json"}
+        let text = none
+        if body != none:
+            headers["Content-Type"] = "application/json"
+            text = json.stringify(body)
+        end
+        let r = rest_call("whatsapp", method.upper(), self.base_url + "/" + self.version + path, headers, text, self.timeout)
+        if r["status"] >= 200 and r["status"] < 300 and r["data"] != none:
+            self.last_error = none
+            return r["data"]
+        end
+        let err = none
+        if type(r["data"]) == "dict" and type(r["data"].get("error", none)) == "dict":
+            err = r["data"]["error"]
+        end
+        if err == none:
+            self.last_error = {"status": r["status"]}
+            throw "whatsapp: the API answered " + str(r["status"]) + " without a usable reply"
+        end
+        err["status"] = r["status"]
+        self.last_error = err
+        let msg = "whatsapp: " + str(err.get("message", "error"))
+        if err.has("code"):
+            msg = msg + " (code " + str(err["code"]) + ")"
+        end
+        let data = err.get("error_data", none)
+        if type(data) == "dict" and data.has("details"):
+            msg = msg + ": " + str(data["details"])
+        end
+        throw msg
+    end
+
+    # Sends a message object (the part after "type") and returns its id.
+    action send(number, kind, content):
+        let body = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": _wa_number(number), "type": kind}
+        body[kind] = content
+        let reply = self.request("POST", "/" + self.phone_number_id + "/messages", body)
+        let msgs = reply.get("messages", [])
+        if len(msgs) == 0:
+            throw "whatsapp: the API accepted the message but returned no id"
+        end
+        return msgs[0]["id"]
+    end
+
+    action send_text(number, text, preview_url = false):
+        if type(text) != "string" or text == "":
+            throw "whatsapp: the text must not be empty"
+        end
+        return self.send(number, "text", {"body": text, "preview_url": preview_url})
+    end
+
+    # name and language of an approved template; components fill in its
+    # variables, e.g. [{"type": "body", "parameters": [{"type": "text", "text": "Asha"}]}].
+    action send_template(number, name, language = "en_US", components = none):
+        let t = {"name": name, "language": {"code": language}}
+        if components != none:
+            t["components"] = components
+        end
+        return self.send(number, "template", t)
+    end
+
+    # media: a public https URL, or a media id from the upload API.
+    action send_image(number, media, caption = none):
+        return self.send(number, "image", _wa_media(media, caption, none))
+    end
+
+    action send_document(number, media, filename = none, caption = none):
+        return self.send(number, "document", _wa_media(media, caption, filename))
+    end
+
+    # Shows the blue ticks on a message you received.
+    action mark_read(message_id):
+        return self.request("POST", "/" + self.phone_number_id + "/messages", {"messaging_product": "whatsapp", "status": "read", "message_id": message_id})
+    end
+end
+
+func _wa_media(media, caption, filename):
+    if type(media) != "string" or media == "":
+        throw "whatsapp: give a media URL or media id"
+    end
+    let m = {}
+    if media.starts_with("https://") or media.starts_with("http://"):
+        m["link"] = media
+    else:
+        m["id"] = media
+    end
+    if caption != none:
+        m["caption"] = caption
+    end
+    if filename != none:
+        m["filename"] = filename
+    end
+    return m
+end
+
+blueprint WhatsApp:
+    action client(token, phone_number_id, options = none):
+        return WhatsAppClient(token, phone_number_id, options)
+    end
+
+    # The webhook check Meta makes when you subscribe: query is the request's
+    # query parameters as a dict. Returns the text to answer with (the
+    # challenge), or none when the token is wrong (answer 403 then).
+    action verify_subscription(query, verify_token):
+        if type(query) != "dict":
+            return none
+        end
+        if query.get("hub.mode", "") == "subscribe" and verify_token != none and verify_token != "" and crypto.equal(str(query.get("hub.verify_token", "")), str(verify_token)):
+            return str(query.get("hub.challenge", ""))
+        end
+        return none
+    end
+
+    # true when header (X-Hub-Signature-256, "sha256=...") is the HMAC-SHA256
+    # of the raw request body with your app secret.
+    action verify_signature(body, header, app_secret):
+        if type(body) != "string" or type(header) != "string" or type(app_secret) != "string" or app_secret == "":
+            return false
+        end
+        let h = header.trim()
+        if not h.starts_with("sha256="):
+            return false
+        end
+        return crypto.equal(crypto.hmac(app_secret, body), h[7:].lower())
+    end
+
+    # Flattens a webhook payload (raw text or parsed dict) into
+    # {"messages": [...], "statuses": [...]}. A message has "from", "name",
+    # "id", "timestamp" (a number), "type", "text" (for text messages, else
+    # none), "phone_number_id" and "raw" (the original object). A status has
+    # "id", "status", "recipient", "timestamp", "errors" and "raw".
+    action parse_webhook(payload):
+        let data = payload
+        if type(payload) == "string":
+            try:
+                data = json.parse(payload)
+            catch e:
+                throw "whatsapp: the webhook body is not JSON"
+            end
+        end
+        let out = {"messages": [], "statuses": []}
+        if type(data) != "dict":
+            return out
+        end
+        for each entry in data.get("entry", []):
+            for each change in entry.get("changes", []):
+                let v = change.get("value", {})
+                let names = {}
+                for each c in v.get("contacts", []):
+                    names[str(c.get("wa_id", ""))] = c.get("profile", {}).get("name", none)
+                end
+                let phone_id = v.get("metadata", {}).get("phone_number_id", none)
+                for each m in v.get("messages", []):
+                    let text = none
+                    if m.get("type", "") == "text":
+                        text = m.get("text", {}).get("body", none)
+                    end
+                    out["messages"].push({"from": m.get("from", none), "name": names.get(str(m.get("from", "")), none),
+                        "id": m.get("id", none), "timestamp": _wa_ts(m.get("timestamp", none)), "type": m.get("type", none),
+                        "text": text, "phone_number_id": phone_id, "raw": m})
+                end
+                for each s in v.get("statuses", []):
+                    out["statuses"].push({"id": s.get("id", none), "status": s.get("status", none), "recipient": s.get("recipient_id", none),
+                        "timestamp": _wa_ts(s.get("timestamp", none)), "errors": s.get("errors", []), "raw": s})
+                end
+            end
+        end
+        return out
+    end
+end
+
+func _wa_ts(t):
+    if t == none:
+        return none
+    end
+    try:
+        return int(t)
+    catch e:
+        return none
+    end
+end
+
+let whatsapp = WhatsApp()

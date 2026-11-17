@@ -30,6 +30,12 @@ typedef int ssize_t;
 #define close(s) closesocket(s)
 #define read(s, b, n) recv(s, (char*)(b), n, 0)
 #define write(s, b, n) send(s, (const char*)(b), n, 0)
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
 
 static inline int posix_memalign(void **memptr, size_t alignment, size_t size) {
     *memptr = _aligned_malloc(size, alignment);
@@ -2214,6 +2220,19 @@ static int64_t slice_clamp(int64_t i, int given, int64_t len, int64_t step, int 
     else if (i >= len) i = step < 0 ? len - 1 : len;
     return i;
 }
+/* __glow_params(f): how many parameters f takes (self not counted for a
+   method), or none for a built-in function or anything else. Libraries use
+   it to call a callback with only the arguments it accepts. */
+static Value native_glow_params(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_OBJECT || !(args[0] & MASK_PAYLOAD)) return value_none();
+    ObjType ot = GET_OBJ_TYPE(args[0]);
+    if (ot == OBJ_BOUND_METHOD) {
+        BoundMethod *bm = AS_BOUND_METHOD(args[0]);
+        return bm->method ? value_int(bm->method->param_count) : value_none();
+    }
+    if (ot == OBJ_CLOSURE) return value_int(AS_CLOSURE(args[0])->param_count);
+    return value_none();
+}
 static Value slice_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
 static Value native_glow_slice(int argc, Value *args) {
     if (argc < 4) return slice_fail("slice: bad call");
@@ -2643,14 +2662,52 @@ static Value crypto_sha256(int argc, Value *args) {
     return value_string_copy(out);
 }
 
-/* crypto.hmac(key, data): HMAC-SHA256 as 64 hex digits. */
+static char *b64_encode(const unsigned char *in, size_t n, int url);
+
+static Value crypto_hmac_fail(const char *msg) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "crypto.hmac: %s", msg);
+    pending_exception = value_string_copy(buf);
+    has_exception = 1;
+    return value_none();
+}
+
+/* crypto.hmac(key, data, hash = "sha256", encoding = "hex"): an HMAC of the
+   whole of data (zero bytes included). hash is "sha1", "sha256", "sha384" or
+   "sha512" (SHA-1 only for services that still sign with it, like Twilio);
+   encoding is "hex", "base64" or "raw" (the bytes themselves). */
 static Value crypto_hmac_sha256(int argc, Value *args) {
-    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_none();
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING)
+        return crypto_hmac_fail("needs a key and the data, both text");
+    const EVP_MD *md_type = EVP_sha256();
+    if (argc > 2 && GET_TYPE(args[2]) != VAL_NONE) {
+        const char *h = GET_TYPE(args[2]) == VAL_STRING ? AS_STRING(args[2]) : "";
+        if (strcasecmp(h, "sha1") == 0) md_type = EVP_sha1();
+        else if (strcasecmp(h, "sha256") == 0) md_type = EVP_sha256();
+        else if (strcasecmp(h, "sha384") == 0) md_type = EVP_sha384();
+        else if (strcasecmp(h, "sha512") == 0) md_type = EVP_sha512();
+        else return crypto_hmac_fail("the hash must be \"sha1\", \"sha256\", \"sha384\" or \"sha512\"");
+    }
+    int enc = 0;   /* 0 hex, 1 base64, 2 raw */
+    if (argc > 3 && GET_TYPE(args[3]) != VAL_NONE) {
+        const char *e = GET_TYPE(args[3]) == VAL_STRING ? AS_STRING(args[3]) : "";
+        if (strcasecmp(e, "hex") == 0) enc = 0;
+        else if (strcasecmp(e, "base64") == 0) enc = 1;
+        else if (strcasecmp(e, "raw") == 0) enc = 2;
+        else return crypto_hmac_fail("the encoding must be \"hex\", \"base64\" or \"raw\"");
+    }
     unsigned char md[EVP_MAX_MD_SIZE];
     unsigned int md_len = 0;
-    if (!HMAC(EVP_sha256(), AS_STRING(args[0]), (int)rope_length(args[0]),
+    if (!HMAC(md_type, AS_STRING(args[0]), (int)rope_length(args[0]),
               (const unsigned char*)AS_STRING(args[1]), rope_length(args[1]), md, &md_len)) {
-        return value_none();
+        return crypto_hmac_fail("the HMAC could not be computed");
+    }
+    if (enc == 2) return value_string_copy_len((const char*)md, md_len);
+    if (enc == 1) {
+        char *b = b64_encode(md, md_len, 0);
+        Value v = value_string_copy(b ? b : "");
+        free(b);
+        return v;
     }
     char out[EVP_MAX_MD_SIZE * 2 + 1];
     hex_encode(md, md_len, out);
@@ -6785,6 +6842,7 @@ void std_init(void) {
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
+    var_set("__glow_params", native_func_new("__glow_params", native_glow_params));
     { extern Value native_floordiv(int argc, Value *args); var_set("__glow_floordiv", native_func_new("__glow_floordiv", native_floordiv)); }
     var_set("format", native_func_new("format", native_format));
     var_set("__glow_format", native_func_new("__glow_format", native_format));

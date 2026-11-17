@@ -1,0 +1,44 @@
+# GlowWeb calls handlers and middleware with what they take: f(req) or
+# f(req, res). One-parameter handlers (as in examples/web_server.glow and
+# docs/web_guide.md) answered 500 once extra arguments became an error.
+import "lib/web.glow"
+
+let seen = []
+func home(req):
+    return "<h1>home</h1>"
+end
+func api(req, res):
+    res.send_json({"path": req.path, "header": req.get_header("x-custom-token")})
+end
+func log_one(req):
+    seen.push("before " + req.path)
+end
+func log_two(req, res):
+    seen.push("after " + str(res.status_code))
+end
+
+let port = 29871
+let app = Server(port)
+app.route("/", home)
+app.route("/api", api)
+app.use_before(log_one)
+app.use_after(log_two)
+spawn app.start()
+
+let base = "http://127.0.0.1:" + str(port)
+let r = none
+let tries = 0
+while r == none and tries < 50:
+    try:
+        r = http.request("GET", base + "/")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+show "one-parameter handler:", r["status"], r["body"]
+let r2 = http.request("GET", base + "/api", {"headers": {"X-Custom-Token": "abc"}})
+show "two-parameter handler:", r2["status"], r2["body"]
+show "middleware:", seen
+show "params:", __glow_params(home), __glow_params(api), __glow_params(lambda(): 1), __glow_params(len), __glow_params(5)
+os.exit(0)

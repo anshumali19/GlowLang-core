@@ -1,0 +1,251 @@
+# sheets.glow: read and write Google Sheets.
+#
+#   use "sheets"
+#   # A service account key (Google Cloud console > IAM > Service accounts >
+#   # Keys > JSON). Share the spreadsheet with the account's client_email.
+#   let gs = sheets.service_account(fs.read("service-account.json"))
+#   let id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"   # from the sheet's URL
+#
+#   for each row in gs.read(id, "Orders!A2:D"):
+#       show row
+#   end
+#   gs.append(id, "Orders!A:D", [["1042", "Asha", 499, "paid"]])
+#   gs.write(id, "Summary!B1", [["=SUM(Orders!C:C)"]])
+#   show gs.records(id, "Orders")      # rows as dicts, keyed by the header row
+#
+# Values are written as if typed into the sheet ("USER_ENTERED": formulas
+# run, "12/31" becomes a date); pass raw = true to store them exactly.
+# Google leaves out empty rows and cells at the end of a range, so rows can
+# be shorter than the range. Every failure raises an error starting with
+# "sheets:"; the full error is kept in client.last_error.
+use "rest"
+use "oauth"
+
+let _sh_scope = "https://www.googleapis.com/auth/spreadsheets"
+
+func _sh_rows(rows):
+    if type(rows) != "list":
+        throw "sheets: values must be a list of rows, e.g. [[\"a\", 1], [\"b\", 2]]"
+    end
+    for each row in rows:
+        if type(row) != "list":
+            throw "sheets: each row must be a list of cells, e.g. [[\"a\", 1]] rather than [\"a\", 1]"
+        end
+    end
+    return rows
+end
+
+func _sh_id(id):
+    if type(id) != "string" or id == "":
+        throw "sheets: give the spreadsheet id (the long part of its URL after /d/)"
+    end
+    return rest_enc(id)
+end
+
+func _sh_range(r):
+    if type(r) != "string" or r == "":
+        throw "sheets: give a range such as \"Sheet1!A1:C10\" or \"Sheet1\""
+    end
+    return rest_enc(r)
+end
+
+blueprint SheetsClient:
+    # auth: {"account": service-account key (dict or JSON text)} or
+    # {"token": an OAuth access token}. options: "base_url" (default
+    # https://sheets.googleapis.com), "timeout", "scopes".
+    action init(auth, options = none):
+        self.account = none
+        self.token = none
+        self.expires_at = 0
+        self.base_url = "https://sheets.googleapis.com"
+        self.timeout = 30
+        self.scopes = [_sh_scope]
+        if options != none:
+            self.base_url = options.get("base_url", self.base_url).trim_end("/")
+            self.timeout = options.get("timeout", self.timeout)
+            self.scopes = options.get("scopes", self.scopes)
+        end
+        if auth.get("account", none) != none:
+            let acct = auth["account"]
+            if type(acct) == "string":
+                try:
+                    acct = json.parse(acct)
+                catch e:
+                    throw "sheets: the service account key is not JSON"
+                end
+            end
+            if type(acct) != "dict" or not acct.has("client_email") or not acct.has("private_key"):
+                throw "sheets: the service account key needs client_email and private_key (download it as JSON)"
+            end
+            self.account = acct
+        else:
+            self.token = auth.get("token", none)
+            self.expires_at = 0
+            if type(self.token) != "string" or self.token == "":
+                throw "sheets: give a service account key or an access token"
+            end
+        end
+        self.last_error = none
+    end
+
+    action _access_token():
+        if self.account == none:
+            return self.token
+        end
+        if self.token == none or os.time() >= self.expires_at:
+            let t = none
+            try:
+                t = oauth.google_service_token(self.account, self.scopes)
+            catch e:
+                throw "sheets: signing in as " + str(self.account["client_email"]) + " failed: " + str(e).replace("oauth: ", "")
+            end
+            self.token = t["access_token"]
+            self.expires_at = t["expires_at"]
+        end
+        return self.token
+    end
+
+    # Any Sheets API call; path starts after /v4, e.g. "/spreadsheets/ID".
+    action request(method, path, body = none, query = none):
+        let headers = {"Authorization": "Bearer " + self._access_token(), "Accept": "application/json"}
+        let text = none
+        if body != none:
+            headers["Content-Type"] = "application/json"
+            text = json.stringify(body)
+        end
+        let r = rest_call("sheets", method.upper(), self.base_url + "/v4" + path + rest_query(query), headers, text, self.timeout)
+        if r["status"] >= 200 and r["status"] < 300 and r["data"] != none:
+            self.last_error = none
+            return r["data"]
+        end
+        let err = none
+        if type(r["data"]) == "dict" and type(r["data"].get("error", none)) == "dict":
+            err = r["data"]["error"]
+        end
+        if err == none:
+            self.last_error = {"status": r["status"]}
+            throw "sheets: Google answered " + str(r["status"]) + " without a usable reply"
+        end
+        self.last_error = err
+        if r["status"] == 401 and self.account != none:
+            self.token = none      # sign in again next time
+        end
+        let msg = "sheets: " + str(err.get("message", "error"))
+        if err.has("status"):
+            msg = msg + " (" + str(err["status"]) + ")"
+        end
+        throw msg
+    end
+
+    # The rows of a range: a list of lists ([] when it is empty).
+    action read(spreadsheet_id, range_name, formatted = true):
+        let q = none
+        if not formatted:
+            q = {"valueRenderOption": "UNFORMATTED_VALUE"}
+        end
+        let vr = self.request("GET", "/spreadsheets/" + _sh_id(spreadsheet_id) + "/values/" + _sh_range(range_name), none, q)
+        return vr.get("values", [])
+    end
+
+    # Several ranges in one call: a list with the rows of each, in order.
+    action read_many(spreadsheet_id, ranges):
+        if type(ranges) != "list" or len(ranges) == 0:
+            throw "sheets: give a list of ranges"
+        end
+        let reply = self.request("GET", "/spreadsheets/" + _sh_id(spreadsheet_id) + "/values:batchGet", none, {"ranges": ranges})
+        let out = []
+        for each vr in reply.get("valueRanges", []):
+            out.push(vr.get("values", []))
+        end
+        return out
+    end
+
+    # The rows under a header row, as dicts keyed by the header's cells.
+    action records(spreadsheet_id, range_name):
+        let rows = self.read(spreadsheet_id, range_name)
+        if len(rows) == 0:
+            return []
+        end
+        let header = rows[0]
+        let out = []
+        for each row in rows[1:]:
+            let rec = {}
+            for each i in range(len(header)):
+                let v = ""
+                if i < len(row):
+                    v = row[i]
+                end
+                rec[str(header[i])] = v
+            end
+            out.push(rec)
+        end
+        return out
+    end
+
+    # Overwrites the cells starting at range_name. Returns Google's summary
+    # ("updatedRange", "updatedRows", "updatedCells", ...).
+    action write(spreadsheet_id, range_name, rows, raw = false):
+        let input = "USER_ENTERED"
+        if raw:
+            input = "RAW"
+        end
+        return self.request("PUT", "/spreadsheets/" + _sh_id(spreadsheet_id) + "/values/" + _sh_range(range_name),
+            {"range": range_name, "majorDimension": "ROWS", "values": _sh_rows(rows)}, {"valueInputOption": input})
+    end
+
+    # Adds rows after the table found in range_name (new rows are inserted,
+    # nothing is overwritten). Returns Google's summary; its "updates" has
+    # "updatedRange".
+    action append(spreadsheet_id, range_name, rows, raw = false):
+        let input = "USER_ENTERED"
+        if raw:
+            input = "RAW"
+        end
+        return self.request("POST", "/spreadsheets/" + _sh_id(spreadsheet_id) + "/values/" + _sh_range(range_name) + ":append",
+            {"range": range_name, "majorDimension": "ROWS", "values": _sh_rows(rows)}, {"valueInputOption": input, "insertDataOption": "INSERT_ROWS"})
+    end
+
+    # Empties the cells (formatting stays).
+    action clear(spreadsheet_id, range_name):
+        return self.request("POST", "/spreadsheets/" + _sh_id(spreadsheet_id) + "/values/" + _sh_range(range_name) + ":clear", {})
+    end
+
+    # The spreadsheet's title, sheet names and URL:
+    # {"id", "title", "url", "sheets": [{"title", "id"}, ...]}.
+    action info(spreadsheet_id):
+        let s = self.request("GET", "/spreadsheets/" + _sh_id(spreadsheet_id), none, {"fields": "spreadsheetId,spreadsheetUrl,properties.title,sheets.properties(sheetId,title)"})
+        let tabs = []
+        for each sh in s.get("sheets", []):
+            let p = sh.get("properties", {})
+            tabs.push({"title": p.get("title", none), "id": p.get("sheetId", none)})
+        end
+        return {"id": s.get("spreadsheetId", spreadsheet_id), "title": s.get("properties", {}).get("title", none), "url": s.get("spreadsheetUrl", none), "sheets": tabs}
+    end
+
+    # A new spreadsheet owned by the service account (share it to see it).
+    # Returns {"id", "title", "url", "sheets"}.
+    action create(title):
+        let s = self.request("POST", "/spreadsheets", {"properties": {"title": title}})
+        let tabs = []
+        for each sh in s.get("sheets", []):
+            let p = sh.get("properties", {})
+            tabs.push({"title": p.get("title", none), "id": p.get("sheetId", none)})
+        end
+        return {"id": s.get("spreadsheetId", none), "title": s.get("properties", {}).get("title", title), "url": s.get("spreadsheetUrl", none), "sheets": tabs}
+    end
+end
+
+blueprint Sheets:
+    # key: the service account's JSON key, as text or a parsed dict.
+    action service_account(key, options = none):
+        return SheetsClient({"account": key}, options)
+    end
+
+    # An access token you already have (e.g. from an OAuth login with the
+    # spreadsheets scope).
+    action with_token(access_token, options = none):
+        return SheetsClient({"token": access_token}, options)
+    end
+end
+
+let sheets = Sheets()

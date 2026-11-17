@@ -1,0 +1,30 @@
+# A function kept in an object's field is called with the arguments given.
+# Reading it (h = o.handler) used to bind it to the object, so h(1, 2)
+# called two(o, 1). Methods of the class are still bound.
+func two(a, b):
+    return "two got " + str(a) + " and " + str(b)
+end
+blueprint Holder:
+    action init(h):
+        self.handler = h
+    end
+    action own(x):
+        return "own got " + str(x) + " on " + class_name(self)
+    end
+end
+let o = Holder(two)
+show o.handler(1, 2)
+let h = o.handler
+show type(h), h(1, 2)
+let lam = lambda(a, b): "lambda got " + str(a) + " and " + str(b)
+let h2 = Holder(lam).handler
+show h2(1, 2)
+let m = o.own
+show type(m), m(5)
+let d = {"handler": two}
+let h3 = d["handler"]
+show h3(3, 4)
+func call_twice(f):
+    return [f(1, 2), f("a", "b")]
+end
+show call_twice(o.handler)

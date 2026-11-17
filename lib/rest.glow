@@ -1,0 +1,116 @@
+# rest.glow: small helpers shared by the service clients (razorpay,
+# whatsapp, sms, sheets) and handy for calling any JSON web API.
+#
+#   use "rest"
+#   let r = rest_call("myapi", "GET", "https://api.example.com/v1/items" + rest_query({"page": 2}), {"Authorization": "Bearer " + token}, none, 30)
+#   show r["status"], r["data"]
+#
+# rest_call returns {"status", "headers", "body", "data"}: data is the parsed
+# JSON, or none when the reply is empty or not JSON. It never raises for an
+# HTTP error status (the caller reads the service's own error format); it
+# raises "<service>: ..." only when the request cannot be made at all.
+
+# Percent-encodes everything except the RFC 3986 unreserved characters.
+func rest_enc(text):
+    let hex = "0123456789ABCDEF"
+    let out = []
+    for each b in str(text).bytes():
+        if (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b == 46 or b == 126:
+            out.push(chr(b))
+        else:
+            out.push("%" + hex[floor(b / 16)] + hex[b % 16])
+        end
+    end
+    return "".join(out)
+end
+
+# Turns a value into the text a form or query string carries.
+func _rest_text(v):
+    if v == true:
+        return "true"
+    end
+    if v == false:
+        return "false"
+    end
+    return str(v)
+end
+
+# name=value pairs joined by &, skipping none; a list repeats the name.
+func rest_form(fields):
+    let parts = []
+    if fields == none:
+        return ""
+    end
+    for each k in fields.keys():
+        let v = fields[k]
+        if type(v) == "list":
+            for each item in v:
+                if item != none:
+                    parts.push(rest_enc(k) + "=" + rest_enc(_rest_text(item)))
+                end
+            end
+        eif v != none:
+            parts.push(rest_enc(k) + "=" + rest_enc(_rest_text(v)))
+        end
+    end
+    return "&".join(parts)
+end
+
+# "?a=1&b=2", or "" when there is nothing to send.
+func rest_query(params):
+    let q = rest_form(params)
+    if q == "":
+        return ""
+    end
+    return "?" + q
+end
+
+# The Authorization header value for HTTP Basic authentication.
+func rest_basic(user, password):
+    return "Basic " + crypto.base64(str(user) + ":" + str(password))
+end
+
+func rest_call(service, method, url, headers, body, timeout):
+    let options = {"headers": headers, "timeout": timeout}
+    if body != none:
+        options["body"] = body
+    end
+    let r = none
+    try:
+        r = http.request(method, url, options)
+    catch e:
+        throw service + ": " + str(e).replace("http.request: ", "")
+    end
+    let data = none
+    let text = r["body"].trim()
+    if text.starts_with("{") or text.starts_with("["):
+        try:
+            data = json.parse(text)
+        catch e:
+            data = none
+        end
+    end
+    return {"status": r["status"], "headers": r["headers"], "body": r["body"], "data": data}
+end
+
+# A response header, ignoring case; none when it is missing.
+func rest_header(response, name):
+    let want = name.lower()
+    for each k in response["headers"].keys():
+        if k.lower() == want:
+            return response["headers"][k]
+        end
+    end
+    return none
+end
+
+# A whole number of the smallest currency unit, or an error.
+func rest_whole(service, what, n):
+    if type(n) == "int":
+        return n
+    end
+    if type(n) == "float" and n == floor(n):
+        return int(n)
+    end
+    throw service + ": " + what + " must be a whole number (got " + str(n) + ")"
+end
