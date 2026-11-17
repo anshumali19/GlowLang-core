@@ -627,6 +627,9 @@ typedef enum {
     NODE_UNPACK,       /* let a, b = value / a, b = b, a (see compiler.c) */
     NODE_BITAND, NODE_BITOR, NODE_BITXOR, NODE_SHL, NODE_SHR, NODE_BITNOT,
     NODE_SPREAD,       /* ...expr in a call or list (the parser rewrites it) */
+    NODE_NULLISH,      /* left ?? right */
+    NODE_OPTCHAIN,     /* left?.rest: right is the rest of the chain, built on
+                          the NODE_REG in third; none when left is none */
     NODE_KWARG,        /* name = expr in a call (the parser rewrites it) */
     NODE_REG           /* a value the compiler already holds in register `reg` */
 } NodeType;
@@ -653,6 +656,8 @@ struct Node {
     Node **methods; int method_count;
     Node **fields; int field_count;
     int reg;                 /* NODE_REG: the register holding the value */
+    int closed;              /* NODE_OPTCHAIN: in parentheses, so a later .x
+                                applies to the whole chain */
     int has_rest;            /* function: its last parameter is ...rest;
                                 NODE_UNPACK: 1 + the index of the ...rest name */
 };

@@ -1,0 +1,1 @@
+Can only assign to a name, a list item or field (x[i], x.name) or a slice

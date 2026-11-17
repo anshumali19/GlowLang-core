@@ -284,6 +284,10 @@ int lexer_bracket_depth = 0;
 
 ":"                    { return COLON; }
 "..."                  { return ELLIPSIS; }
+"??="                  { return NULLISH_ASSIGN; }
+"??"                   { return NULLISH; }
+"?."/"["               { return QDOT_INDEX; }   /* a?.[i] and a?.[i:j]: the [ is read next */
+"?."                   { return QDOT; }
 "."                    { return '.'; }
 "<"                    { return LT; }
 ">"                    { return GT; }

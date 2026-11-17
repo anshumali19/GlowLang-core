@@ -1,0 +1,83 @@
+# x ?? default, x?.name / x?.method() / x?.[i], and x ??= value.
+
+# ---- ?? gives the left side unless it is none
+let cfg = {"port": 0, "host": none, "db": {"name": "app"}}
+show cfg.port ?? 80, cfg.host ?? "localhost", cfg.missing ?? "default"
+show none ?? none ?? 3, false ?? 1, "" ?? "x", [] ?? [1]
+
+# the left side runs once; the right side only when needed
+let calls = 0
+func side():
+    calls = calls + 1
+    return 5
+end
+show side() ?? 9, calls
+show 7 ?? side(), calls
+show none ?? side(), calls
+
+# precedence: looser than or, tighter than when/otherwise
+show none or false ?? "fallback", 1 + 2 ?? 0, none ?? 2 * 3
+
+# ---- ?. gives none when the left side is none, and skips the rest
+let user = none
+show user?.name, user?.name.first, user?.[0], user?.greet(1, 2), user?.[1:]
+let u = {"name": {"first": "Ada"}, "tags": ["x", "y"]}
+show u?.name, u?.name.first, u?.tags[1], u?.tags?.[0], u?.nope?.deep, u?.tags?.[1:]
+
+class P:
+    func init(n):
+        self.n = n
+    end
+    func greet(g):
+        return g + " " + str(self.n)
+    end
+    func me():
+        return self
+    end
+end
+let p = P(3)
+let q = none
+show p?.greet("hi"), q?.greet("hi"), p?.me().n, q?.me().n, p?.me()?.n
+show (q?.n) ?? "no n"
+
+let side_calls = 0
+func arg():
+    side_calls = side_calls + 1
+    return "!"
+end
+show q?.greet(arg()), side_calls
+
+# ---- ??=
+let x = none
+x ??= 10
+x ??= 20
+show x
+
+# ---- together, in functions hot enough to be compiled
+func opts(o = none):
+    let timeout = o?.timeout ?? 30
+    let retries = o?.retry?.count ?? 3
+    return [timeout, retries]
+end
+show opts(), opts({"timeout": 5}), opts({"retry": {"count": 1}})
+
+func hot(n):
+    let total = 0
+    let items = [none, {"v": 2}, {"v": none}, {"w": 1}]
+    every i from 1 to n:
+        let it = items[i % 4]
+        total = total + (it?.v ?? 1)
+        let c = none
+        c ??= i % 3
+        total = total + c
+    end
+    return total
+end
+show hot(40000)
+
+# ---- errors
+try:
+    show (q?.n).x
+catch e:
+    show e
+end

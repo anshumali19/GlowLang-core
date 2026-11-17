@@ -125,6 +125,7 @@ x *= 3    # x = x * 3
 x /= 4    # x = x / 4
 x //= 2   # x = x // 2
 x &= 3    # x = x & 3   (also |=, ^=, <<= and >>=)
+x ??= 5   # x = 5 only when x is none
 ```
 
 ### Unpacking
@@ -219,6 +220,25 @@ Ordering values of different kinds (`"a" < 1`) raises an error.
 |----------|-------------|---------|
 | `is` | Same as `==` | `x is true` |
 | `is not` | Same as `!=` | `x is not none` |
+
+### None: `??` and `?.`
+`a ?? b` is `a` unless `a` is `none`, then `b`. Unlike `or`, it keeps
+`0`, `false` and `""`. `b` runs only when it is needed:
+```glow
+let port = cfg.port ?? 80          # 0 stays 0; a missing port gives 80
+let name = user.nick ?? user.name ?? "guest"
+```
+`a?.b`, `a?.method(args)` and `a?.[i]` give `none` when `a` is `none`,
+and skip the rest of the chain, arguments included, so
+`user?.address.city` is `none` for a `none` user instead of an error.
+Parentheses end the chain: `(user?.address).city` fails when the
+inner part is `none`.
+```glow
+let timeout = options?.timeout ?? 30
+show order?.items?.[0]?.name ?? "no items"
+```
+`x ??= value` sets `x` only when it is `none`. `??` binds more loosely than
+`or` and more tightly than `when ... otherwise`.
 
 ### String Concatenation
 ```glow
