@@ -30,6 +30,12 @@ typedef int ssize_t;
 #define close(s) closesocket(s)
 #define read(s, b, n) recv(s, (char*)(b), n, 0)
 #define write(s, b, n) send(s, (const char*)(b), n, 0)
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
 
 static inline int posix_memalign(void **memptr, size_t alignment, size_t size) {
     *memptr = _aligned_malloc(size, alignment);
