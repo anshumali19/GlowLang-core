@@ -268,6 +268,18 @@ FuncEntry main_fe;
 
 const char *compiling_file = NULL;
 
+GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc);
+/* Compiled code calling a function with a ...rest parameter: pack a copy of
+   the arguments here (the buffer lives only on this path, so ordinary calls
+   keep their small stack frames) and make the call. */
+static __attribute__((noinline)) Value jit_call_rest(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
+    Value packed[256];
+    int n = argc > 256 ? 256 : argc;
+    for (int i = 0; i < n; i++) packed[i] = args[i];
+    n = glow_pack_rest(fe, packed, n);
+    (void)pc;
+    return jit_call_helper(fe, n, packed, NULL);
+}
 GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Instruction *pc) {
       (void)argc;
       if (pc && call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
@@ -279,7 +291,7 @@ GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Ins
       /* A function with a ...rest parameter: compiled code (pc set) leaves
          the call to the interpreter, which packs the extra arguments;
          native callers pack them before calling (glow_call_value). */
-      if (fe && fe->rest_param && pc) return VAL_DEOPT_SENTINEL;
+      if (fe && fe->rest_param && pc) return jit_call_rest(fe, argc, args, pc);
       if (fe && fe->body && argc > fe->param_count) { glow_arity_error(fe->name, argc, fe->param_count); return value_none(); }
       if (fe && fe->body) {
           /* Allocate a fresh register frame for the callee instead of reusing the

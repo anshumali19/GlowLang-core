@@ -371,12 +371,34 @@ static Value str_case(Value s, int upper) {
     const unsigned char *src = (const unsigned char*)AS_STRING(s);
     unsigned char lo = upper ? 'a' : 'A', hi = upper ? 'z' : 'Z';
     size_t i = 0;
+    /* Is it ASCII? Eight bytes at a time, then the tail. */
+    while (i + 8 <= n) {
+        uint64_t w;
+        memcpy(&w, src + i, 8);
+        if (w & 0x8080808080808080ULL) break;
+        i += 8;
+    }
     while (i < n && src[i] < 0x80) i++;
     if (i == n) {
         char *out;
         Value r = value_string_alloc(n, &out);
         src = (const unsigned char*)AS_STRING(s);
-        for (i = 0; i < n; i++) {
+        /* Eight ASCII bytes at a time: a byte from lo to hi gets 0x20 flipped.
+           (b + 0x80 - lo) has its top bit set when b >= lo, and
+           (b + 0x80 - hi - 1) when b > hi; no byte carries into the next,
+           since every byte is below 0x80. */
+        const uint64_t ones = 0x0101010101010101ULL;
+        i = 0;
+        for (; i + 8 <= n; i += 8) {
+            uint64_t w;
+            memcpy(&w, src + i, 8);
+            uint64_t ge_lo = w + ones * (uint64_t)(0x80 - lo);
+            uint64_t gt_hi = w + ones * (uint64_t)(0x80 - hi - 1);
+            uint64_t in_range = ge_lo & ~gt_hi & (ones * 0x80);
+            w ^= in_range >> 2;
+            memcpy(out + i, &w, 8);
+        }
+        for (; i < n; i++) {
             unsigned char c = src[i];
             out[i] = (char)(c >= lo && c <= hi ? c ^ 0x20 : c);
         }
@@ -518,8 +540,16 @@ static Value s_count(int argc, Value *args) {
     const char *s = AS_STRING(args[0]); size_t n = rope_length(args[0]);
     const char *sub = AS_STRING(args[1]); size_t m = rope_length(args[1]);
     if (m == 0) return value_from_double(0);
+    /* Jump between places where the first byte matches (memchr is fast);
+       compare the rest only there. Matches do not overlap. */
     int64_t c = 0;
-    for (size_t i = 0; i + m <= n; ) { if (memcmp(s + i, sub, m) == 0) { c++; i += m; } else i++; }
+    size_t i = 0;
+    while (i + m <= n) {
+        const char *hit = memchr(s + i, (unsigned char)sub[0], n - m + 1 - i);
+        if (!hit) break;
+        i = (size_t)(hit - s);
+        if (memcmp(hit, sub, m) == 0) { c++; i += m; } else i++;
+    }
     return value_from_double((double)c);
 }
 

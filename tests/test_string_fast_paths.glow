@@ -1,0 +1,8 @@
+# upper/lower convert eight ASCII bytes at a time and count jumps between
+# candidate first bytes: lengths around 8 and 16, the characters just
+# outside a-z and A-Z, non-ASCII text, and overlapping matches.
+for each s in ["", "a", "@AZ[`az{", "abcdefgh", "abcdefghi", "Hello, World!", "0123456789abcdef", "xyz{|}~@ABCDEFGHIJ", "ünïcödé MIXED text", "zZ" * 9]:
+    show s.upper(), s.lower(), len(s.upper())
+end
+show "aaaa".count("aa"), "aaaaa".count("aa"), "abcabcab".count("abc"), "xxxxxxxxxxxxxxxxxxxxy".count("y")
+show "a,b,,c".count(","), "".count("a"), "abc".count("abcd"), "mississippi".count("ss"), ("ab" * 1000).count("ba")
