@@ -1,0 +1,170 @@
+# Unpacking (let a, b = ...) and the bitwise operators & | ^ << >> ~.
+# The bitwise results match Python's (checked against it, big ints included).
+
+# ---- unpacking
+let a, b = 1, 2
+show a, b
+a, b = b, a
+show a, b
+let pair = ["x", "y"]
+let p, q = pair
+show p, q
+
+func fib(n):
+    let x, y = 0, 1
+    every i from 1 to n:
+        x, y = y, x + y
+    end
+    return x
+end
+show fib(90)
+
+let xs = [5, 3, 9]
+xs[0], xs[2] = xs[2], xs[0]
+show xs
+
+class P:
+    func init():
+        self.x = 1
+        self.y = 2
+    end
+    func flip():
+        self.x, self.y = self.y, self.x
+    end
+end
+let o = P()
+o.flip()
+show o.x, o.y
+
+let d = {"k": 0, "n": {"m": 0}}
+d["k"], d.n.m = "K", "M"
+show d
+
+# globals declared above a function are assigned, the rest are locals
+let g1 = 0
+let g2 = 0
+func set_globals():
+    g1, g2 = 10, 20
+    let l1, l2 = 1, 2
+    return l1 + l2
+end
+show set_globals(), g1, g2
+
+func make():
+    let m, n = [3, 4]
+    return lambda(): m * n
+end
+show make()()
+
+let diff = lambda(xy):
+    let x, y = xy
+    return x - y
+end
+show diff([10, 4])
+
+# for each [a, b] unpacks each item; for each a, b keeps index/item and key/value
+for each [k, v] in [["a", 1], ["b", 2]]:
+    show k, v
+end
+for [m1, m2] in zip([1, 2], [3, 4]):
+    show m1 + m2
+end
+for each i, item in ["first", "second"]:
+    show i, item
+end
+for each key, value in {"z": 26}:
+    show key, value
+end
+
+func loops():
+    let total = 0
+    for each [u, w] in [[1, 2], [3, 4], [5, 6]]:
+        when u == 3:
+            skip
+        end
+        total = total + u * w
+    end
+    return total
+end
+show loops()
+
+func nested():
+    let rows = [[1, [2, 3]], [4, [5, 6]]]
+    let out = []
+    for each [first, rest] in rows:
+        let second, third = rest
+        out.push(first + second + third)
+    end
+    return out
+end
+show nested()
+
+try:
+    let c1, c2 = [1, 2, 3]
+catch e:
+    show e
+end
+try:
+    let c1, c2 = [7]
+catch e:
+    show e
+end
+try:
+    let c1, c2 = 5
+catch e:
+    show e
+end
+try:
+    for each [r1, r2] in [[1, 2], "no"]:
+        show r1, r2
+    end
+catch e:
+    show e
+end
+
+# ---- bitwise operators
+show 6 & 3, 6 | 3, 6 ^ 3, ~6, 1 << 10, 1024 >> 3, -5 >> 1, -1 << 3
+show 1 << 100, (1 << 100) >> 99, (1 << 70) | 1, -(1 << 70) & 255, ~(1 << 64)
+show 2 ** 64 - 1 & 2 ** 32, 5 & 3 == 1
+show 1 + 2 << 1, 1 | 2 ^ 3 & 4, ~-1, ~~5
+show (-1 << 200) >> 300, 7 >> (1 << 80), 0 << (1 << 80), 5 >> 64, -5 >> 64
+
+# whole numbers past 2^47 (kept as exact doubles) are ints too
+let big = 140737488355327 * 2
+show big & 7, big | 1, big ^ big, ~big, big >> 3, big << 3, type(big | 1), (2 ** 53) ^ 1, 3 & big
+
+# compound assignment
+let h = 0
+h ^= 255
+h <<= 4
+h |= 1
+h &= 4095
+h >>= 1
+show h
+
+# a hash loop (compiled by the JIT)
+func fnv(n):
+    let hv = 2166136261
+    every i from 0 to n:
+        hv = (hv ^ (i & 255)) * 16777619 & 4294967295
+    end
+    return hv
+end
+show fnv(100000)
+
+# bit flags
+let READ = 1 << 0
+let WRITE = 1 << 1
+let EXEC = 1 << 2
+let perms = READ | EXEC
+show perms & WRITE != 0, perms & EXEC != 0, perms & ~EXEC
+
+show f"{6 & 3} {1 << 4:>5}|"
+
+for each bad in [lambda(): 1.5 & 1, lambda(): 1 << -1, lambda(): ~"x", lambda(): true | false, lambda(): 1 >> 0.5, lambda(): 1 << (1 << 40)]:
+    try:
+        show bad()
+    catch e:
+        show e
+    end
+end

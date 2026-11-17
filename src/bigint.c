@@ -272,3 +272,52 @@ char* bigint_to_new_string(BigInt *b) {
     buf[tlen] = '\0';
     return buf;
 }
+
+/* 2 ** n (n >= 0). */
+BigInt* bigint_pow2(int64_t n) {
+    BigInt *b = bigint_alloc((int)(n / 32) + 1, 0);
+    b->limbs[n / 32] = (uint32_t)1 << (n % 32);
+    return b;
+}
+
+/* a's two's-complement form in n limbs (n is more than a needs, so the top
+   limb holds only sign bits). */
+static void bi_twos(const BigInt *a, uint32_t *out, int n) {
+    for (int i = 0; i < n; i++) out[i] = i < a->nlimbs ? a->limbs[i] : 0;
+    if (a->neg) {
+        uint64_t carry = 1;
+        for (int i = 0; i < n; i++) {
+            uint64_t t = (uint64_t)(uint32_t)~out[i] + carry;
+            out[i] = (uint32_t)t;
+            carry = t >> 32;
+        }
+    }
+}
+
+/* a & b, a | b or a ^ b (op is '&', '|' or '^'), the way Python does it:
+   a negative number behaves as two's complement with endless sign bits. */
+BigInt* bigint_bitop(BigInt *a, BigInt *b, char op) {
+    int n = (a->nlimbs > b->nlimbs ? a->nlimbs : b->nlimbs) + 1;
+    uint32_t *x = malloc(sizeof(uint32_t) * (size_t)n * 2);
+    if (!x) return bigint_from_int64(0);
+    uint32_t *y = x + n;
+    bi_twos(a, x, n);
+    bi_twos(b, y, n);
+    for (int i = 0; i < n; i++)
+        x[i] = op == '&' ? (x[i] & y[i]) : op == '|' ? (x[i] | y[i]) : (x[i] ^ y[i]);
+    int neg = (int)(x[n - 1] >> 31);
+    BigInt *r = bigint_alloc(n, neg);
+    if (neg) {
+        uint64_t carry = 1;
+        for (int i = 0; i < n; i++) {
+            uint64_t t = (uint64_t)(uint32_t)~x[i] + carry;
+            r->limbs[i] = (uint32_t)t;
+            carry = t >> 32;
+        }
+    } else {
+        for (int i = 0; i < n; i++) r->limbs[i] = x[i];
+    }
+    free(x);
+    bigint_normalize(r);
+    return r;
+}
