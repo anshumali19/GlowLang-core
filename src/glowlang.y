@@ -83,15 +83,6 @@ static Node *attach_else(Node *chain, Node *else_part) {
     last->third = else_part;
     return chain;
 }
-/* A syntax error about a statement that starts on `line`. By the time a
-   rule is reduced the lexer has read past the statement's newline, so
-   yyerror alone would name the next line. */
-static void error_at(int line, const char *msg) {
-    int saved = line_num;
-    if (line > 0) line_num = line;
-    yyerror(msg);
-    line_num = saved;
-}
 /* x op= value for the bitwise operators: x = x op value. */
 static Node *compound_bitop(Node *target, NodeType op, Node *value) {
     if (target->type != NODE_VAR) { error_at(target->line, "Compound assignment target must be a variable"); return NULL; }
