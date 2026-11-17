@@ -4,7 +4,7 @@
 
 GlowLang is implemented in C. A `.glow` file is lexed, parsed to an AST, compiled to register-based
 bytecode, optimized, and run by a virtual machine that compiles hot functions and loops to x86-64
-machine code. Memory is managed by a non-moving mark-and-sweep garbage collector.
+machine code. Memory is managed by a non-moving, generational mark-and-sweep garbage collector.
 
 This document describes what the code does today. Measured performance is in
 [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
@@ -87,7 +87,14 @@ thread's machine stack runs out; both raise a catchable "Maximum recursion depth
 - Roots: globals, every thread's VM register stack, pending exceptions and spawn arguments
   (precise), plus a conservative scan of every thread's native stack and saved registers, so values
   held only in C locals stay alive.
-- A full collection runs when allocation exceeds max(32 MB, 2 × the live size after the last one).
+- Generational: an object that survives two minor collections (or a major one) becomes old. A
+  minor collection runs after every 32 MB of allocation and marks only young objects, from the
+  roots and the remembered set (old objects that may point to young ones, recorded by the write
+  barrier on every store into an existing object). A major collection traces everything; it runs
+  once the heap's footprint has doubled the live data since the last one.
+- `GLOW_GC_VERIFY=1` checks after every minor collection that nothing reachable was missed (it names
+  an old object whose store skipped the barrier); `GLOW_GC_GENERATIONAL=0` makes every collection a
+  major one.
 - Each block has bitmaps of object starts, marks and objects that own memory outside the heap. The
   sweep works on those bitmaps a word at a time: dead objects are dropped by clearing bits, and only
   the ones that own memory (a list or dict that outgrew its inline slots, a closure, ...) are read,

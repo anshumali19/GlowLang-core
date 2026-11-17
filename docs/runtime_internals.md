@@ -239,7 +239,7 @@ raised exception also leaves compiled code this way.
 
 ### Garbage Collector
 
-**Architecture:** non-moving, stop-the-world mark-and-sweep.
+**Architecture:** non-moving, stop-the-world, generational mark-and-sweep.
 
 - Objects smaller than a quarter block are bump-allocated in 1 MB blocks (with a per-block bitmap of
   object starts); larger objects are allocated individually.
@@ -247,8 +247,22 @@ raised exception also leaves compiled code this way.
   arguments of threads that have not started yet (precise), plus a conservative scan of every
   thread's native stack and saved registers. Interior pointers are recognized, so a value held only
   in a C local of a native function stays alive.
-- **Trigger:** when allocated bytes exceed max(32 MB, 2 x the live size after the previous collection).
-  `GLOWLANG_GC_STRESS=1` collects every 64 KB and `GLOW_FORCEFULL=1` on every allocation (testing only).
+- **Generations:** an object that survives two minor collections, or any major one, becomes old
+  (`generation` in its header). Its mark bit then stays set ("sticky" marks), so a minor collection
+  skips it. A young object surviving its first minor collection gets `age` 1 and its mark bit is
+  cleared after the sweep: what the program is building at that moment is usually garbage soon
+  after and should not become old.
+- **Remembered set and write barrier:** every store into an existing object goes through
+  `gc_write_barrier` (lists: `gc_write_barrier_list`, which also records the lowest index written,
+  so a minor collection rescans an old list only from there). An old object stored into joins the
+  remembered set; after a minor collection the set keeps the old objects that still point to a
+  young one (including objects just made old). The x86-64 JIT's inline `xs[i] = v` and `xs.push(v)`
+  check the list's header and leave to the helper any store that needs the barrier.
+- **Trigger:** a minor collection after every 32 MB of allocation (the nursery); a major one, which
+  clears the marks and traces everything, once the heap's footprint (blocks with anything live in
+  them plus large objects) has doubled the live data since the last major one.
+  `GLOWLANG_GC_STRESS=1` collects every 64 KB (every fourth collection major) and `GLOW_FORCEFULL=1`
+  fully on every allocation (testing only). `GLOW_GC_GENERATIONAL=0` makes every collection major.
 - **Bitmap sweep:** each block keeps three bitmaps, one bit per 8-byte granule: object starts, objects
   marked by the current collection, and objects that own memory outside the heap (`finals`). The dead
   objects of a block are `starts & ~marks`; the sweep reads only those that also have a `finals` bit
@@ -256,11 +270,14 @@ raised exception also leaves compiled code this way.
   `finals` bit when its storage outgrows the inline slots (`gc_note_external_storage`); closures,
   classes, tensors, string builders, natives and SQLite handles get it when allocated. Under
   `GLOWLANG_GC_STRESS=1` the sweep also checks that every dead object it skips owned nothing.
-- **Marking** stores the collection's number in each live object's `marked` byte, so live objects
-  never need unmarking. Blocks left with nothing live are kept (up to 32) and reused.
-- `GLOW_GC_STATS=1` prints, at exit, the number of collections and the time spent marking and sweeping.
-- The opt-in generational mode (`GLOW_GC_GENERATIONAL`) was removed: not every store went through the
-  write barrier, and it was slower than full collections.
+- **Marking** sets block objects' bits in the marks bitmap; large objects store the collection's
+  number in their `marked` byte. Blocks left with nothing live are kept (up to 32) and reused;
+  others go back to the system.
+- `GLOW_GC_STATS=1` prints, at exit, the number of collections (and how many were minor) and the
+  time spent marking and sweeping.
+- `GLOW_GC_VERIFY=1` walks everything reachable after each minor collection and stops, naming the
+  objects, if a reachable object was not marked or an old object pointing to a young one is not
+  remembered: a store that skipped the barrier.
 - Finalizers release native resources (SQLite connections and statements, tensor buffers).
 
 ### Guard pages

@@ -87,6 +87,8 @@ typedef struct GCObject {
     /* 1 only in the header of the Dict inside an Instance, which is not a
        GC object of its own: block_ptr then points at that Instance. */
     unsigned char embedded;
+    /* Minor collections this young object has survived (see gc.c). */
+    unsigned char age;
     void *block_ptr;
     size_t sz;
 } GCObject;
@@ -768,6 +770,12 @@ struct List {
     int size;
     int capacity;
     Value *items;
+    /* While an old list is in the remembered set: the lowest index written
+       since the last collection, so a minor collection rescans only the
+       items from there (appending to a big old list does not make every
+       collection walk all of it). Kept after the fields compiled code
+       reads at fixed offsets. */
+    int dirty_from;
 };
 
 /* Insertion-ordered: keys/values are the entries in the order they were
@@ -857,9 +865,29 @@ Node* newCallExprNode(Node *e, Node **as, int c);
 void* gc_alloc(size_t sz, ObjType type);
 void* gc_alloc_stack(size_t sz, ObjType type);
 void gc_free_stack_arena_range(size_t old_used, size_t new_used);
-/* Every collection is a full one, so stores need no barrier; the calls
-   stay at the store sites in case a generational collector returns. */
-static inline void gc_write_barrier(GCObject *src, Value target) { (void)src; (void)target; }
+/* Generational write barrier (see gc.c): storing into an object that
+   survived a collection ("old") puts it in the remembered set, so the next
+   minor collection finds the young objects it may now point to. Every store
+   of a value into an existing heap object must call it (or the list form
+   below). An instance's embedded field dict is old exactly when the
+   instance is, and is remembered on its own (the collector traces it as a
+   dict). */
+void gc_remember(GCObject *o);
+static inline void gc_write_barrier(GCObject *src, Value target) {
+    (void)target;
+    if (src && src->generation && !src->in_remembered_set) gc_remember(src);
+}
+/* Items of a list moved within it from position `from` on (sort, reverse,
+   remove): a young item may now sit below the remembered range. */
+static inline void gc_list_moved(List *l, int from) {
+    if (l->obj.in_remembered_set && from < l->dirty_from) l->dirty_from = from;
+}
+/* The barrier for a store into list item `index` (or several from index on). */
+static inline void gc_write_barrier_list(List *l, int index) {
+    if (!l->obj.generation) return;
+    if (!l->obj.in_remembered_set) { gc_remember(&l->obj); l->dirty_from = index; }
+    else if (index < l->dirty_from) l->dirty_from = index;
+}
 void gc_full_collect(void);
 void gc_minor_collect(void);
 void gc_register_constant_root(Value v);

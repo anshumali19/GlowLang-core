@@ -95,6 +95,7 @@ static int sort_list(List *l, Value key_fn, int descending) {
         }
     }
     merge_sort(l->items, keys, ti, tk, n);
+    gc_list_moved(l, 0);
     if (descending) {
         for (int i = 0, j = n - 1; i < j; i++, j--) { Value t = l->items[i]; l->items[i] = l->items[j]; l->items[j] = t; }
     }
@@ -568,7 +569,10 @@ static Value s_lines(int argc, Value *args) {
     for (int i = 0; i < l->size; i++) {
         Value p = l->items[i];
         size_t n = rope_length(p);
-        if (n && AS_STRING(p)[n - 1] == '\r') l->items[i] = trim_impl(p, 0, 1);
+        if (n && AS_STRING(p)[n - 1] == '\r') {
+            l->items[i] = trim_impl(p, 0, 1);   /* allocates: l may be old by now */
+            gc_write_barrier_list(l, i);
+        }
     }
     if (l->size > 0 && rope_length(l->items[l->size - 1]) == 0) l->size--;
     return parts;
@@ -595,7 +599,7 @@ static Value l_insert(int argc, Value *args) {
     list_push(l, value_none());
     memmove(&l->items[i + 1], &l->items[i], sizeof(Value) * (size_t)(l->size - 1 - i));
     l->items[i] = args[2];
-    gc_write_barrier((GCObject*)l, args[2]);
+    gc_write_barrier_list(l, (int)i);   /* items from i on moved up one */
     return value_none();
 }
 
@@ -612,6 +616,7 @@ static Value l_remove(int argc, Value *args) {
     if (i < 0) return value_bool(0);
     memmove(&l->items[i], &l->items[i + 1], sizeof(Value) * (size_t)(l->size - 1 - i));
     l->size--;
+    gc_list_moved(l, i);
     return value_bool(1);
 }
 
@@ -639,13 +644,14 @@ static Value l_reverse(int argc, Value *args) {
     (void)argc;
     List *l = AS_LIST(args[0]);
     for (int i = 0, j = l->size - 1; i < j; i++, j--) { Value t = l->items[i]; l->items[i] = l->items[j]; l->items[j] = t; }
+    gc_list_moved(l, 0);
     return args[0];
 }
 static Value l_extend(int argc, Value *args) {
     if (argc < 2 || GET_TYPE(args[1]) != VAL_LIST) return raise("extend() needs a list");
     List *l = AS_LIST(args[0]), *src = AS_LIST(args[1]);
     int n = src->size;
-    for (int i = 0; i < n; i++) { list_push(l, src->items[i]); gc_write_barrier((GCObject*)l, src->items[i]); }
+    for (int i = 0; i < n; i++) list_push(l, src->items[i]);   /* list_push runs the barrier */
     return args[0];
 }
 static Value l_copy(int argc, Value *args) { (void)argc; return list_value_copy(AS_LIST(args[0])); }
