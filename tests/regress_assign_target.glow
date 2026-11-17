@@ -1,0 +1,4 @@
+func g():
+    return 1
+end
+g() = 5

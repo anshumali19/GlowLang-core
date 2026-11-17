@@ -509,6 +509,22 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
    bodies are scopes of their own and are not entered. */
 static void hoist_locals(FuncEntry *fe, Node *n) {
     if (!n) return;
+    if (n->type == NODE_SEQ) {
+        /* Statement chains lean left: loop down them (see NODE_SEQ in
+           compile_stmt), keeping the statements' order. */
+        int cap = 64, cnt = 0;
+        Node **rights = malloc(sizeof(Node*) * cap);
+        Node *cur = n;
+        while (cur && cur->type == NODE_SEQ) {
+            if (cnt == cap) { cap *= 2; rights = realloc(rights, sizeof(Node*) * cap); }
+            rights[cnt++] = cur->right;
+            cur = cur->left;
+        }
+        hoist_locals(fe, cur);
+        while (cnt > 0) hoist_locals(fe, rights[--cnt]);
+        free(rights);
+        return;
+    }
     switch (n->type) {
         case NODE_FUNC_DEF:
             /* A nested function is a closure held in a local of this name. */
@@ -607,7 +623,24 @@ static void compile_stmt(Node *n) {
     }
 
     switch (n->type) {
-        case NODE_SEQ: compile_stmt(n->left); compile_stmt(n->right); break;
+        case NODE_SEQ: {
+            /* A body of N statements is a chain of N-1 SEQ nodes leaning
+               left. Recursing down it used a C stack frame per statement, so
+               a script of about 1,750 lines overflowed the stack and
+               crashed; walk it with a loop instead. */
+            int cap = 64, cnt = 0;
+            Node **rights = malloc(sizeof(Node*) * cap);
+            Node *cur = n;
+            while (cur && cur->type == NODE_SEQ) {
+                if (cnt == cap) { cap *= 2; rights = realloc(rights, sizeof(Node*) * cap); }
+                rights[cnt++] = cur->right;
+                cur = cur->left;
+            }
+            compile_stmt(cur);
+            while (cnt > 0) compile_stmt(rights[--cnt]);
+            free(rights);
+            break;
+        }
         case NODE_ASSIGN: {
             int src = compile_expr(n->left, -1);
             int dst = get_local_reg(n->name);

@@ -2277,6 +2277,62 @@ static Value native_glow_slice(int argc, Value *args) {
     return slice_fail(msg);
 }
 
+/* x[start:stop] = items and x[start:stop:step] = items, with Python's
+   rules: a plain slice is replaced by the items (the list can grow or
+   shrink, and an empty slice inserts them); a slice with any other step
+   needs exactly one item per place it covers. Only lists can change. */
+static Value native_glow_slice_set(int argc, Value *args) {
+    if (argc < 5) return slice_fail("slice: bad call");
+    int64_t a = 0, b = 0, step = 0; int ga, gb, gs;
+    if (!slice_index_arg(args[1], &a, &ga) || !slice_index_arg(args[2], &b, &gb)) return slice_fail("slice positions must be whole numbers or none");
+    if (!slice_index_arg(args[3], &step, &gs)) return slice_fail("slice step must be a whole number");
+    if (!gs) step = 1;
+    if (step == 0) return slice_fail("slice step cannot be 0");
+    Value obj = args[0], val = args[4];
+    char msg[160];
+    if (GET_TYPE(obj) == VAL_STRING) return slice_fail("cannot assign to a slice of a string: text cannot be changed in place");
+    if (GET_TYPE(obj) != VAL_LIST) {
+        snprintf(msg, sizeof msg, "cannot assign to a slice of a %s (only lists)", glow_type_name(obj));
+        return slice_fail(msg);
+    }
+    if (GET_TYPE(val) != VAL_LIST) {
+        snprintf(msg, sizeof msg, "a slice can only be given a list, not a %s", glow_type_name(val));
+        return slice_fail(msg);
+    }
+    List *l = AS_LIST(obj), *src = AS_LIST(val);
+    int64_t len = l->size, m = src->size;
+    int64_t i = slice_clamp(a, ga, len, step, 1), stop = slice_clamp(b, gb, len, step, 0);
+    /* Copy the new items first: they may come from the list being changed
+       (xs[1:] = xs). */
+    Value *items = malloc(sizeof(Value) * (size_t)(m > 0 ? m : 1));
+    if (m) memcpy(items, src->items, sizeof(Value) * (size_t)m);
+    if (step == 1) {
+        if (stop < i) stop = i;
+        int64_t tail = len - stop, keep = i;
+        Value *rest = malloc(sizeof(Value) * (size_t)(tail > 0 ? tail : 1));
+        if (tail) memcpy(rest, l->items + stop, sizeof(Value) * (size_t)tail);
+        l->size = (int)keep;
+        for (int64_t k = 0; k < m; k++) list_push(l, items[k]);
+        for (int64_t k = 0; k < tail; k++) list_push(l, rest[k]);
+        free(rest);
+    } else {
+        int64_t count = 0;
+        for (int64_t k = i; step > 0 ? k < stop : k > stop; k += step) count++;
+        if (count != m) {
+            free(items);
+            snprintf(msg, sizeof msg, "cannot assign %lld item%s to a slice of %lld place%s", (long long)m, m == 1 ? "" : "s", (long long)count, count == 1 ? "" : "s");
+            return slice_fail(msg);
+        }
+        int64_t k = i;
+        for (int64_t j = 0; j < m; j++, k += step) {
+            gc_write_barrier((GCObject*)l, items[j]);
+            l->items[k] = items[j];
+        }
+    }
+    free(items);
+    return value_none();
+}
+
 static Value native_range(int argc, Value *args) {
     int64_t start = 0, stop = 0, step = 1;
     if (argc < 1 || argc > 3) return range_fail("range() takes 1 to 3 whole numbers: range(stop), range(start, stop) or range(start, stop, step)");
@@ -6851,6 +6907,7 @@ void std_init(void) {
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("range", native_func_new("range", native_range));
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
+    var_set("__glow_slice_set", native_func_new("__glow_slice_set", native_glow_slice_set));
     var_set("__glow_params", native_func_new("__glow_params", native_glow_params));
     { extern Value native_floordiv(int argc, Value *args); var_set("__glow_floordiv", native_func_new("__glow_floordiv", native_floordiv)); }
     var_set("format", native_func_new("format", native_format));

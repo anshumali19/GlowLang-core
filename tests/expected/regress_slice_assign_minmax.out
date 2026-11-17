@@ -1,0 +1,23 @@
+[1, 9, 4, 5]
+[1, "x", "y", 9, 4, 5]
+[0, 0]
+["a", 1, "b", 3, "c", 5]
+[1, 2, 3, 4, 5, 6]
+[1, 2, 3, 4]
+[1, 2, 3, 4, 99]
+[1, 1, 2, 3]
+[8, 7, 9]
+[[1, 2, 3], [0, 6]]
+cannot assign 1 item to a slice of 3 places
+cannot assign to a slice of a string: text cannot be changed in place
+a slice can only be given a list, not a string
+slice step cannot be 0
+ccc a
+{"n": 5} 2
+3 2 [1, 3] b 7.5
+max() cannot compare int and string
+min() cannot compare int and none
+max() of an empty list
+[1, 2, 3] ["a", "b"] [1, true, 2.5]
+Cannot sort int and string together: they cannot be compared
+Cannot sort none and int together: they cannot be compared

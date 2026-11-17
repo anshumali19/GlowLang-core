@@ -970,6 +970,8 @@ Value native_list_len(int argc, Value *args);
 Value native_val_type(int argc, Value *args);
 Value native_type(int argc, Value *args);
 const char *glow_type_name(Value v);
+/* Can < order a and b? (numbers with numbers, text with text, lists with lists) */
+int glow_values_comparable(Value a, Value b);
 const char *glow_dict_key(Value k, char **owned);
 int glow_arity_error(const char *name, int given, int params);
 Value native_tensor_shape(int argc, Value *args);
