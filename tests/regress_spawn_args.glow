@@ -1,0 +1,73 @@
+# spawn passes arguments like an ordinary call: parameters with no argument
+# are none (they used to hold leftovers: 0, or the method being spawned),
+# and too many arguments raise at the spawn.
+let got = {}
+
+func f(x, y):
+    got["f"] = [x, y]
+end
+
+blueprint Box:
+    action init(label):
+        self.label = label
+    end
+    action m(x, y):
+        got["m"] = [self.label, x, y]
+    end
+    action start(port):
+        got["start"] = port
+    end
+end
+
+let b = Box("box")
+func store_pair(a, b):
+    got["lambda"] = [a, b]
+end
+let lam = lambda(a, b): store_pair(a, b)
+
+spawn f()
+threads.join_all()
+show "f():", got["f"]
+spawn f(1)
+threads.join_all()
+show "f(1):", got["f"]
+spawn f(1, 2)
+threads.join_all()
+show "f(1, 2):", got["f"]
+
+spawn b.m()
+threads.join_all()
+show "method with no arguments:", got["m"]
+spawn b.m("a")
+threads.join_all()
+show "method with one:", got["m"]
+spawn b.start()
+threads.join_all()
+show "start():", got["start"]
+
+spawn lam(7)
+threads.join_all()
+show "lambda:", got["lambda"]
+
+func errs(g):
+    try:
+        g()
+    catch e:
+        return str(e)
+    end
+    return "no error"
+end
+func spawn_f():
+    spawn f(1, 2, 3)
+end
+func spawn_m():
+    spawn b.m(1, 2, 3)
+end
+func spawn_lam():
+    spawn lam(1, 2, 3)
+end
+show errs(spawn_f)
+show errs(spawn_m)
+show errs(spawn_lam)
+threads.join_all()
+show "done"

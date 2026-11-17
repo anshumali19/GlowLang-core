@@ -1140,7 +1140,10 @@ points.
 
 ### Crypto (`crypto.`)
 `sha256(data)`, `hmac(key, data)` / `hmac_sha256` (HMAC-SHA256), `blake3(data)`: hex digests
-of the whole string, including any zero bytes. `random_bytes(n)` and `random_hex(n)`: n bytes
+of the whole string, including any zero bytes. `hmac(key, data, hash, encoding)` takes `hash`
+`"sha1"`, `"sha256"` (the default), `"sha384"` or `"sha512"` and `encoding` `"hex"` (the
+default), `"base64"` or `"raw"` (the bytes themselves); Twilio's webhooks, for example, are
+`crypto.hmac(token, data, "sha1", "base64")`. `random_bytes(n)` and `random_hex(n)`: n bytes
 from the operating system's secure random source, for keys and tokens. `equal(a, b)`: compare
 secrets in constant time. `uuid4()`: a random UUID. For signing messages, see `lib/kavach.glow`.
 

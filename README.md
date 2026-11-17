@@ -226,6 +226,8 @@ The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), 
 - **[Getting Started](docs/getting_started.md)** — Tutorial for beginners
 - **[Language Reference](docs/language_reference.md)** — Syntax reference
 - **[Web Development](docs/web_guide.md)** — HTTP server and APIs
+- **[PostgreSQL](docs/postgres.md)**, **[JWT and OAuth](docs/jwt_oauth.md)** — databases and logins
+- **[Service Clients](docs/services.md)** — Razorpay, WhatsApp, SMS (Twilio) and Google Sheets
 - **[AI/ML Guide](docs/ai_ml_guide.md)** — Tensors and neural networks
 - **[Concurrency Guide](docs/concurrency_guide.md)** — `spawn`, the GIL, `whenever`
 - **[Runtime Internals](docs/runtime_internals.md)** — VM, JIT, GC

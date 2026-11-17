@@ -1,0 +1,213 @@
+# The Razorpay client against a mock Razorpay API started inside the test.
+# The mock checks every request the way Razorpay documents it (Basic auth,
+# JSON bodies, paths, query parameters) and answers with Razorpay's shapes.
+# Signature values were computed independently with Python's hmac module.
+use "razorpay"
+
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func raises(name, f, part):
+    try:
+        f()
+        failed = failed + 1
+        show "FAIL (no error): " + name
+    catch e:
+        if str(e).contains(part):
+            passed = passed + 1
+        else:
+            failed = failed + 1
+            show "FAIL: " + name + " -> " + str(e)
+        end
+    end
+end
+
+# ---- the mock API ----
+let port = 20000 + int(os.time() * 1000) % 2000
+let base = "http://127.0.0.1:" + str(port)
+let seen = {}
+
+func parse_request(raw):
+    let at = raw.find("\r\n\r\n")
+    let head = raw[:at]
+    let body = raw[at + 4:]
+    let lines = head.split("\r\n")
+    let parts = lines[0].split(" ")
+    let headers = {}
+    for each line in lines[1:]:
+        let c = line.find(":")
+        headers[line[:c].lower()] = line[c + 1:].trim()
+    end
+    let target = parts[1]
+    let path = target
+    let query = ""
+    let q = target.find("?")
+    if q >= 0:
+        path = target[:q]
+        query = target[q + 1:]
+    end
+    return {"method": parts[0], "path": path, "query": query, "headers": headers, "body": body}
+end
+
+func respond(client, status, body, ctype = "application/json"):
+    http.send(client, "HTTP/1.1 " + str(status) + " X\r\nContent-Type: " + ctype + "\r\nContent-Length: " + str(body.byte_len()) + "\r\nConnection: close\r\n\r\n" + body)
+    http.close(client)
+end
+
+func rp_error(code, desc, field):
+    return json.stringify({"error": {"code": code, "description": desc, "source": "business", "step": "payment_initiation", "reason": "input_validation_failed", "metadata": {}, "field": field}})
+end
+
+let good_auth = "Basic " + crypto.base64("rzp_test_abc:EnLs21M47BllR3X8PSFtjtbd")
+
+func serve(server):
+    while true:
+        let client = http.accept(server)
+        let req = parse_request(http.read(client))
+        seen["last"] = req
+        let m = req["method"]
+        let p = req["path"]
+        if p == "/quit":
+            respond(client, 200, "{}")
+            http.close(server)
+            return none
+        end
+        if req["headers"].get("authorization", "") != good_auth:
+            respond(client, 401, json.stringify({"error": {"code": "BAD_REQUEST_ERROR", "description": "Authentication failed", "source": "NA", "step": "NA", "reason": "NA", "metadata": {}}}))
+        eif m == "POST" and p == "/v1/orders":
+            let b = json.parse(req["body"])
+            if req["headers"].get("content-type", "") != "application/json":
+                respond(client, 400, rp_error("BAD_REQUEST_ERROR", "not json", none))
+            eif type(b["amount"]) != "int" or b["amount"] < 100:
+                respond(client, 400, rp_error("BAD_REQUEST_ERROR", "The amount must be atleast INR 1.00", "amount"))
+            else:
+                respond(client, 200, json.stringify({"id": "order_9A33XWu170gUtm", "entity": "order", "amount": b["amount"], "amount_paid": 0, "amount_due": b["amount"],
+                    "currency": b["currency"], "receipt": b.get("receipt", none), "offer_id": none, "status": "created", "attempts": 0, "notes": b.get("notes", []), "created_at": 1582628071}))
+            end
+        eif m == "GET" and p == "/v1/orders/order_9A33XWu170gUtm":
+            respond(client, 200, json.stringify({"id": "order_9A33XWu170gUtm", "entity": "order", "amount": 49900, "amount_paid": 49900, "amount_due": 0, "currency": "INR", "status": "paid", "attempts": 1}))
+        eif m == "GET" and p == "/v1/orders/order_9A33XWu170gUtm/payments":
+            respond(client, 200, json.stringify({"entity": "collection", "count": 1, "items": [{"id": "pay_29QQoUBi66xm2f", "entity": "payment", "amount": 49900, "status": "captured", "order_id": "order_9A33XWu170gUtm"}]}))
+        eif m == "GET" and p.starts_with("/v1/orders/"):
+            respond(client, 400, rp_error("BAD_REQUEST_ERROR", "The id provided does not exist", "id"))
+        eif m == "GET" and p == "/v1/payments":
+            respond(client, 200, json.stringify({"entity": "collection", "count": 2, "items": [{"id": "pay_1"}, {"id": "pay_2"}]}))
+        eif m == "GET" and p.starts_with("/v1/payments/") and p.ends_with("/refunds"):
+            respond(client, 200, json.stringify({"entity": "collection", "count": 1, "items": [{"id": "rfnd_1", "amount": 100}]}))
+        eif m == "GET" and p.starts_with("/v1/payments/"):
+            respond(client, 200, json.stringify({"id": p[13:], "entity": "payment", "amount": 49900, "status": "authorized"}))
+        eif m == "POST" and p.ends_with("/capture"):
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"id": "pay_29QQoUBi66xm2f", "entity": "payment", "amount": b["amount"], "currency": b["currency"], "status": "captured", "captured": true}))
+        eif m == "POST" and p.ends_with("/refund"):
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"id": "rfnd_FP8QHiV938haTz", "entity": "refund", "amount": b.get("amount", 49900), "payment_id": "pay_29QQoUBi66xm2f", "status": "processed", "speed_requested": b.get("speed", "normal")}))
+        eif m == "POST" and p == "/v1/payment_links":
+            let b = json.parse(req["body"])
+            respond(client, 200, json.stringify({"id": "plink_ExjpAUN3gVHrPJ", "amount": b["amount"], "currency": b["currency"], "short_url": "https://rzp.io/i/nxrHnLJ", "status": "created", "reference_id": b.get("reference_id", "")}))
+        eif m == "POST" and p == "/v1/payment_links/plink_ExjpAUN3gVHrPJ/cancel":
+            respond(client, 200, json.stringify({"id": "plink_ExjpAUN3gVHrPJ", "status": "cancelled"}))
+        eif m == "GET" and p == "/v1/payment_links/plink_ExjpAUN3gVHrPJ":
+            respond(client, 200, json.stringify({"id": "plink_ExjpAUN3gVHrPJ", "status": "paid", "amount_paid": 1000}))
+        eif p == "/v1/broken":
+            respond(client, 502, "<html>Bad Gateway</html>", "text/html")
+        else:
+            respond(client, 404, rp_error("BAD_REQUEST_ERROR", "The requested URL was not found on the server.", none))
+        end
+    end
+end
+
+let server = http.listen(port)
+if server < 0:
+    show "cannot listen on port " + str(port)
+    os.exit(1)
+end
+spawn serve(server)
+
+let rp = razorpay.client("rzp_test_abc", "EnLs21M47BllR3X8PSFtjtbd", {"base_url": base + "/v1/"})
+
+show "== orders"
+let order = rp.create_order(49900, "INR", {"receipt": "order-1042", "notes": {"customer": "Asha"}})
+ok("order id", order["id"] == "order_9A33XWu170gUtm")
+ok("order status", order["status"] == "created")
+let sent = json.parse(seen["last"]["body"])
+ok("POST /v1/orders", seen["last"]["method"] == "POST" and seen["last"]["path"] == "/v1/orders")
+ok("amount sent as a whole number", sent["amount"] == 49900 and type(sent["amount"]) == "int")
+ok("currency, receipt and notes sent", sent["currency"] == "INR" and sent["receipt"] == "order-1042" and sent["notes"]["customer"] == "Asha")
+ok("JSON content type", seen["last"]["headers"]["content-type"] == "application/json")
+ok("Basic auth with key id and secret", seen["last"]["headers"]["authorization"] == good_auth)
+let o2 = rp.create_order(499.0)
+ok("a whole float amount becomes an int, INR by default", json.parse(seen["last"]["body"])["amount"] == 499 and json.parse(seen["last"]["body"])["currency"] == "INR" and o2["amount"] == 499)
+raises("fractional paise refused before sending", lambda(): rp.create_order(499.5), "razorpay: the amount must be a whole number (got 499.5)")
+raises("Razorpay's error code, description and field", lambda(): rp.create_order(50), "razorpay: BAD_REQUEST_ERROR: The amount must be atleast INR 1.00 (field: amount)")
+ok("last_error keeps the whole error", rp.last_error["field"] == "amount" and rp.last_error["status"] == 400 and rp.last_error["reason"] == "input_validation_failed")
+ok("fetch an order", rp.order("order_9A33XWu170gUtm")["status"] == "paid")
+ok("a success clears last_error", rp.last_error == none)
+let pays = rp.order_payments("order_9A33XWu170gUtm")
+ok("payments of an order (the items list)", type(pays) == "list" and len(pays) == 1 and pays[0]["id"] == "pay_29QQoUBi66xm2f")
+raises("unknown order", lambda(): rp.order("order_nope"), "The id provided does not exist (field: id)")
+raises("empty id refused", lambda(): rp.order(""), "razorpay: the order id must be a non-empty id")
+
+show "== payments"
+let list = rp.payments({"count": 2, "skip": 1, "from": 1700000000})
+ok("list payments", len(list) == 2 and list[1]["id"] == "pay_2")
+ok("filters as a query string", seen["last"]["query"] == "count=2&skip=1&from=1700000000")
+ok("fetch a payment", rp.payment("pay_29QQoUBi66xm2f")["status"] == "authorized")
+rp.payment("pay/../orders")
+ok("ids are encoded into the path", seen["last"]["path"] == "/v1/payments/pay%2F..%2Forders")
+let cap = rp.capture("pay_29QQoUBi66xm2f", 49900)
+ok("capture", cap["status"] == "captured" and cap["captured"] == true)
+ok("capture sends amount and currency", seen["last"]["path"] == "/v1/payments/pay_29QQoUBi66xm2f/capture" and json.parse(seen["last"]["body"]) == {"amount": 49900, "currency": "INR"})
+
+show "== refunds"
+let full = rp.refund("pay_29QQoUBi66xm2f")
+ok("full refund sends no amount", json.parse(seen["last"]["body"]) == {} and full["amount"] == 49900)
+let part = rp.refund("pay_29QQoUBi66xm2f", 100, {"speed": "optimum", "receipt": "r-7"})
+ok("partial refund with options", json.parse(seen["last"]["body"]) == {"amount": 100, "speed": "optimum", "receipt": "r-7"} and part["speed_requested"] == "optimum")
+ok("refunds of a payment", rp.refunds("pay_29QQoUBi66xm2f")[0]["id"] == "rfnd_1")
+
+show "== payment links"
+let link = rp.create_payment_link({"amount": 1000, "description": "Workshop seat", "reference_id": "ref-1042",
+    "customer": {"name": "Asha", "contact": "+919876543210"}, "notify": {"sms": true}, "callback_url": "https://shop.example/paid", "callback_method": "get"})
+ok("link URL", link["short_url"] == "https://rzp.io/i/nxrHnLJ")
+let lb = json.parse(seen["last"]["body"])
+ok("link body", lb["amount"] == 1000 and lb["currency"] == "INR" and lb["customer"]["name"] == "Asha" and lb["notify"]["sms"] == true and lb["callback_method"] == "get")
+raises("a link needs an amount", lambda(): rp.create_payment_link({"description": "x"}), "needs at least an amount")
+ok("fetch a link", rp.payment_link("plink_ExjpAUN3gVHrPJ")["status"] == "paid")
+ok("cancel a link", rp.cancel_payment_link("plink_ExjpAUN3gVHrPJ")["status"] == "cancelled")
+
+show "== failures"
+raises("a non-JSON gateway error", lambda(): rp.request("GET", "/broken"), "razorpay: the API answered 502 without a usable reply")
+let bad = razorpay.client("rzp_test_abc", "wrong-secret", {"base_url": base + "/v1"})
+raises("wrong key secret", lambda(): bad.order("order_9A33XWu170gUtm"), "razorpay: BAD_REQUEST_ERROR: Authentication failed")
+raises("keys are required", lambda(): razorpay.client("", "x"), "razorpay: the key id and key secret are needed")
+let closed = razorpay.client("rzp_test_abc", "s", {"base_url": "http://127.0.0.1:1/v1", "timeout": 3})
+raises("cannot connect", lambda(): closed.order("order_1"), "razorpay: cannot connect to 127.0.0.1:1")
+
+show "== signatures (no network)"
+ok("checkout signature", rp.verify_payment("order_9A33XWu170gUtm", "pay_29QQoUBi66xm2f", "972592aed892074d7fb0c0bb8ee7dd8736eb02d3c281fc503cf6fd8d3af443df"))
+ok("upper-case hex accepted", rp.verify_payment("order_9A33XWu170gUtm", "pay_29QQoUBi66xm2f", "972592AED892074D7FB0C0BB8EE7DD8736EB02D3C281FC503CF6FD8D3AF443DF"))
+ok("other order refused", not rp.verify_payment("order_OTHER", "pay_29QQoUBi66xm2f", "972592aed892074d7fb0c0bb8ee7dd8736eb02d3c281fc503cf6fd8d3af443df"))
+ok("tampered signature refused", not rp.verify_payment("order_9A33XWu170gUtm", "pay_29QQoUBi66xm2f", "072592aed892074d7fb0c0bb8ee7dd8736eb02d3c281fc503cf6fd8d3af443df"))
+ok("empty or missing signature refused", not rp.verify_payment("order_9A33XWu170gUtm", "pay_29QQoUBi66xm2f", "") and not rp.verify_payment("order_9A33XWu170gUtm", "pay_29QQoUBi66xm2f", none))
+ok("payment link signature", rp.verify_payment_link("plink_ExjpAUN3gVHrPJ", "ref-1042", "paid", "pay_ExjpCGWvdxJkVi", "137c2f9607cc48acfa437f961a1463061a3f42bf867b4622725953b9c3af3f45"))
+ok("payment link with another status refused", not rp.verify_payment_link("plink_ExjpAUN3gVHrPJ", "ref-1042", "cancelled", "pay_ExjpCGWvdxJkVi", "137c2f9607cc48acfa437f961a1463061a3f42bf867b4622725953b9c3af3f45"))
+ok("subscription signature (payment id first)", rp.verify_subscription("pay_Kx2bP1x8", "sub_00000000000001", "f34d076b34cff51ce10382dcd1ae1158ba4002c6721a0b7e7dd1f6859efd437f"))
+let hook = "{\"entity\":\"event\",\"account_id\":\"acc_BFQ7uQEaa7j2z7\",\"event\":\"payment.captured\",\"contains\":[\"payment\"]}"
+ok("webhook signature", razorpay.verify_webhook(hook, "fd379e6555b0ce3ec11ffcac8b6c5039c67f5e0912a0c8453eef695c6f90109e", "whsec_test_123"))
+ok("webhook body changed by one character refused", not razorpay.verify_webhook(hook.replace("captured", "Captured"), "fd379e6555b0ce3ec11ffcac8b6c5039c67f5e0912a0c8453eef695c6f90109e", "whsec_test_123"))
+ok("webhook with the key secret instead refused", not razorpay.verify_webhook(hook, "fd379e6555b0ce3ec11ffcac8b6c5039c67f5e0912a0c8453eef695c6f90109e", "EnLs21M47BllR3X8PSFtjtbd"))
+ok("webhook without a secret refused", not razorpay.verify_webhook(hook, "fd379e6555b0ce3ec11ffcac8b6c5039c67f5e0912a0c8453eef695c6f90109e", ""))
+
+http.request("GET", base + "/quit", {"headers": {"Authorization": good_auth}})
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

@@ -1,0 +1,165 @@
+# The WhatsApp Cloud API client against a mock Graph API started inside the
+# test, plus the webhook helpers on Meta's documented payloads. The webhook
+# signature was computed independently with Python's hmac module.
+use "whatsapp"
+
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func raises(name, f, part):
+    try:
+        f()
+        failed = failed + 1
+        show "FAIL (no error): " + name
+    catch e:
+        if str(e).contains(part):
+            passed = passed + 1
+        else:
+            failed = failed + 1
+            show "FAIL: " + name + " -> " + str(e)
+        end
+    end
+end
+
+# ---- the mock Graph API ----
+let port = 22000 + int(os.time() * 1000) % 2000
+let base = "http://127.0.0.1:" + str(port)
+let seen = {}
+
+func parse_request(raw):
+    let at = raw.find("\r\n\r\n")
+    let lines = raw[:at].split("\r\n")
+    let parts = lines[0].split(" ")
+    let headers = {}
+    for each line in lines[1:]:
+        let c = line.find(":")
+        headers[line[:c].lower()] = line[c + 1:].trim()
+    end
+    return {"method": parts[0], "path": parts[1], "headers": headers, "body": raw[at + 4:]}
+end
+
+func respond(client, status, body):
+    http.send(client, "HTTP/1.1 " + str(status) + " X\r\nContent-Type: application/json\r\nContent-Length: " + str(body.byte_len()) + "\r\nConnection: close\r\n\r\n" + body)
+    http.close(client)
+end
+
+func serve(server):
+    while true:
+        let client = http.accept(server)
+        let req = parse_request(http.read(client))
+        seen["last"] = req
+        if req["path"] == "/quit":
+            respond(client, 200, "{}")
+            http.close(server)
+            return none
+        end
+        if req["headers"].get("authorization", "") != "Bearer EAAG-test-token":
+            respond(client, 401, json.stringify({"error": {"message": "Invalid OAuth access token - Cannot parse access token", "type": "OAuthException", "code": 190, "fbtrace_id": "Az8or2yhqkZfEZ-_4Qn_Bam"}}))
+        eif req["method"] == "POST" and req["path"] == "/v23.0/106540352242922/messages":
+            let b = json.parse(req["body"])
+            if b.get("status", "") == "read":
+                respond(client, 200, "{\"success\": true}")
+            eif b["to"] == "15550000000":
+                respond(client, 400, json.stringify({"error": {"message": "(#131030) Recipient phone number not in allowed list", "type": "OAuthException", "code": 131030,
+                    "error_data": {"messaging_product": "whatsapp", "details": "Recipient phone number not in allowed list: Add recipient phone number to recipient list and try again."}, "fbtrace_id": "AI5Ob2z72R0JAUB5zOF-nao"}}))
+            else:
+                respond(client, 200, json.stringify({"messaging_product": "whatsapp", "contacts": [{"input": b["to"], "wa_id": b["to"]}], "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]}))
+            end
+        eif req["path"] == "/v99.0/106540352242922/messages":
+            respond(client, 200, json.stringify({"messaging_product": "whatsapp", "messages": [{"id": "wamid.V99"}]}))
+        else:
+            respond(client, 400, json.stringify({"error": {"message": "Unknown path components", "type": "OAuthException", "code": 2500}}))
+        end
+    end
+end
+
+let server = http.listen(port)
+if server < 0:
+    show "cannot listen on port " + str(port)
+    os.exit(1)
+end
+spawn serve(server)
+
+let wa = whatsapp.client("EAAG-test-token", "106540352242922", {"base_url": base})
+
+show "== sending"
+let id = wa.send_text("+1 (650) 555-1234", "Your order has shipped!")
+ok("message id returned", id == "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA")
+let b = json.parse(seen["last"]["body"])
+ok("POST /v23.0/{phone-number-id}/messages", seen["last"]["method"] == "POST" and seen["last"]["path"] == "/v23.0/106540352242922/messages")
+ok("Bearer token", seen["last"]["headers"]["authorization"] == "Bearer EAAG-test-token")
+ok("JSON content type", seen["last"]["headers"]["content-type"] == "application/json")
+ok("text body as documented", b == {"messaging_product": "whatsapp", "recipient_type": "individual", "to": "16505551234", "type": "text", "text": {"body": "Your order has shipped!", "preview_url": false}})
+wa.send_text("919876543210", "See https://glowlang.dev", true)
+ok("preview_url", json.parse(seen["last"]["body"])["text"]["preview_url"] == true)
+
+wa.send_template("919876543210", "order_update", "en", [{"type": "body", "parameters": [{"type": "text", "text": "1042"}]}])
+let t = json.parse(seen["last"]["body"])
+ok("template body", t["type"] == "template" and t["template"]["name"] == "order_update" and t["template"]["language"] == {"code": "en"} and t["template"]["components"][0]["parameters"][0]["text"] == "1042")
+wa.send_template("919876543210", "hello_world")
+let t2 = json.parse(seen["last"]["body"])["template"]
+ok("template defaults: en_US, no components", t2 == {"name": "hello_world", "language": {"code": "en_US"}})
+
+wa.send_image("919876543210", "https://shop.example/p/42.jpg", "Blue, size M")
+ok("image by link", json.parse(seen["last"]["body"])["image"] == {"link": "https://shop.example/p/42.jpg", "caption": "Blue, size M"})
+wa.send_image("919876543210", "1003383421387256")
+ok("image by media id", json.parse(seen["last"]["body"])["image"] == {"id": "1003383421387256"})
+wa.send_document("919876543210", "https://shop.example/invoice-1042.pdf", "invoice-1042.pdf", "Your invoice")
+ok("document", json.parse(seen["last"]["body"])["document"] == {"link": "https://shop.example/invoice-1042.pdf", "caption": "Your invoice", "filename": "invoice-1042.pdf"})
+let r = wa.mark_read("wamid.IN1")
+ok("mark as read", r["success"] == true and json.parse(seen["last"]["body"]) == {"messaging_product": "whatsapp", "status": "read", "message_id": "wamid.IN1"})
+
+let wa99 = whatsapp.client("EAAG-test-token", 106540352242922, {"base_url": base + "/", "version": "v99.0"})
+ok("API version and a numeric phone number id", wa99.send_text("919876543210", "hi") == "wamid.V99")
+
+show "== failures"
+raises("not a number", lambda(): wa.send_text("call me", "hi"), "whatsapp: call me is not a phone number")
+raises("too short", lambda(): wa.send_text("12345", "hi"), "not a phone number in international format")
+raises("empty text", lambda(): wa.send_text("919876543210", ""), "whatsapp: the text must not be empty")
+raises("Meta's error with its details", lambda(): wa.send_text("15550000000", "hi"), "whatsapp: (#131030) Recipient phone number not in allowed list (code 131030): Recipient phone number not in allowed list: Add recipient")
+ok("last_error", wa.last_error["code"] == 131030 and wa.last_error["status"] == 400 and wa.last_error["fbtrace_id"] == "AI5Ob2z72R0JAUB5zOF-nao")
+let badtok = whatsapp.client("expired", "106540352242922", {"base_url": base})
+raises("bad token", lambda(): badtok.send_text("919876543210", "hi"), "whatsapp: Invalid OAuth access token - Cannot parse access token (code 190)")
+raises("token needed", lambda(): whatsapp.client("", "1"), "whatsapp: an access token is needed")
+raises("phone number id needed", lambda(): whatsapp.client("t", none), "whatsapp: the phone number id is needed")
+
+show "== webhooks"
+ok("subscription check answers the challenge", whatsapp.verify_subscription({"hub.mode": "subscribe", "hub.verify_token": "my-verify", "hub.challenge": "1158201444"}, "my-verify") == "1158201444")
+ok("wrong verify token", whatsapp.verify_subscription({"hub.mode": "subscribe", "hub.verify_token": "guess", "hub.challenge": "1"}, "my-verify") == none)
+ok("wrong mode", whatsapp.verify_subscription({"hub.mode": "unsubscribe", "hub.verify_token": "my-verify", "hub.challenge": "1"}, "my-verify") == none)
+ok("no verify token configured", whatsapp.verify_subscription({"hub.mode": "subscribe", "hub.verify_token": "", "hub.challenge": "1"}, "") == none)
+
+let hook = '{"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[{"value":{"messaging_product":"whatsapp","metadata":{"display_phone_number":"15550783881","phone_number_id":"106540352242922"},"contacts":[{"profile":{"name":"Sheena Nelson"},"wa_id":"16505551234"}],"messages":[{"from":"16505551234","id":"wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=","timestamp":"1749416383","type":"text","text":{"body":"Does it come in another color?"}},{"from":"16505551234","id":"wamid.IMG","timestamp":"1749416390","type":"image","image":{"id":"1003383421387256","mime_type":"image/jpeg"}}]},"field":"messages"},{"value":{"messaging_product":"whatsapp","metadata":{"display_phone_number":"15550783881","phone_number_id":"106540352242922"},"statuses":[{"id":"wamid.OUT1","status":"delivered","timestamp":"1750263773","recipient_id":"16505551234"}]},"field":"messages"}]}]}'
+let sig = "sha256=d768d9f0ff947e97fe7cad722b4c37ec77eb0a4c9c92006bc4da0e92d245e773"
+ok("signature", whatsapp.verify_signature(hook, sig, "app-secret-1"))
+ok("signature with upper-case hex", whatsapp.verify_signature(hook, "sha256=" + sig[7:].upper(), "app-secret-1"))
+ok("tampered body refused", not whatsapp.verify_signature(hook.replace("color", "colour"), sig, "app-secret-1"))
+ok("wrong secret refused", not whatsapp.verify_signature(hook, sig, "app-secret-2"))
+ok("missing sha256= prefix refused", not whatsapp.verify_signature(hook, sig[7:], "app-secret-1"))
+ok("missing header refused", not whatsapp.verify_signature(hook, none, "app-secret-1"))
+
+let ev = whatsapp.parse_webhook(hook)
+ok("two messages and one status", len(ev["messages"]) == 2 and len(ev["statuses"]) == 1)
+let m = ev["messages"][0]
+ok("text message", m["from"] == "16505551234" and m["name"] == "Sheena Nelson" and m["type"] == "text" and m["text"] == "Does it come in another color?")
+ok("timestamp as a number", m["timestamp"] == 1749416383)
+ok("which number it was sent to", m["phone_number_id"] == "106540352242922")
+ok("image message keeps the raw object", ev["messages"][1]["type"] == "image" and ev["messages"][1]["text"] == none and ev["messages"][1]["raw"]["image"]["id"] == "1003383421387256")
+let s = ev["statuses"][0]
+ok("delivery status", s["id"] == "wamid.OUT1" and s["status"] == "delivered" and s["recipient"] == "16505551234" and s["timestamp"] == 1750263773)
+ok("parsed dict accepted too", len(whatsapp.parse_webhook(json.parse(hook))["messages"]) == 2)
+ok("other payloads give empty lists", whatsapp.parse_webhook("{}") == {"messages": [], "statuses": []})
+raises("not JSON", lambda(): whatsapp.parse_webhook("hello"), "whatsapp: the webhook body is not JSON")
+
+http.request("GET", base + "/quit")
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

@@ -1,0 +1,224 @@
+# The SMS client (Twilio) against a mock Twilio API started inside the test,
+# and Twilio's webhook signature check on Twilio's own worked example.
+use "sms"
+
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    if cond:
+        passed = passed + 1
+    else:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func raises(name, f, part):
+    try:
+        f()
+        failed = failed + 1
+        show "FAIL (no error): " + name
+    catch e:
+        if str(e).contains(part):
+            passed = passed + 1
+        else:
+            failed = failed + 1
+            show "FAIL: " + name + " -> " + str(e)
+        end
+    end
+end
+
+# Decodes application/x-www-form-urlencoded text; repeated names become lists.
+func unhex(c):
+    return "0123456789ABCDEF".find(c.upper())
+end
+# Turns UTF-8 bytes back into text.
+func utf8_text(bytes):
+    let s = ""
+    let i = 0
+    while i < len(bytes):
+        let b = bytes[i]
+        if b < 128:
+            s = s + chr(b)
+            i = i + 1
+        eif b < 224:
+            s = s + chr((b - 192) * 64 + (bytes[i + 1] - 128))
+            i = i + 2
+        eif b < 240:
+            s = s + chr((b - 224) * 4096 + (bytes[i + 1] - 128) * 64 + (bytes[i + 2] - 128))
+            i = i + 3
+        else:
+            s = s + chr((b - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + (bytes[i + 3] - 128))
+            i = i + 4
+        end
+    end
+    return s
+end
+
+func form_decode(text):
+    let out = {}
+    if text == "":
+        return out
+    end
+    for each pair in text.split("&"):
+        let eq = pair.find("=")
+        let raw = [pair[:eq], pair[eq + 1:]]
+        let dec = []
+        for each part in raw:
+            let bytes = []
+            let i = 0
+            let b = part.replace("+", " ").bytes()
+            while i < len(b):
+                if b[i] == 37:
+                    bytes.push(unhex(chr(b[i + 1])) * 16 + unhex(chr(b[i + 2])))
+                    i = i + 3
+                else:
+                    bytes.push(b[i])
+                    i = i + 1
+                end
+            end
+            dec.push(utf8_text(bytes))
+        end
+        if out.has(dec[0]):
+            if type(out[dec[0]]) != "list":
+                out[dec[0]] = [out[dec[0]]]
+            end
+            out[dec[0]].push(dec[1])
+        else:
+            out[dec[0]] = dec[1]
+        end
+    end
+    return out
+end
+
+# ---- the mock Twilio API ----
+let port = 24000 + int(os.time() * 1000) % 2000
+let base = "http://127.0.0.1:" + str(port)
+let seen = {}
+let sid = "AC00000000000000000000000000000001"
+let msgs = "/2010-04-01/Accounts/" + sid + "/Messages"
+
+func parse_request(raw):
+    let at = raw.find("\r\n\r\n")
+    let lines = raw[:at].split("\r\n")
+    let parts = lines[0].split(" ")
+    let headers = {}
+    for each line in lines[1:]:
+        let c = line.find(":")
+        headers[line[:c].lower()] = line[c + 1:].trim()
+    end
+    return {"method": parts[0], "path": parts[1], "headers": headers, "body": raw[at + 4:]}
+end
+
+func respond(client, status, body):
+    http.send(client, "HTTP/1.1 " + str(status) + " X\r\nContent-Type: application/json\r\nContent-Length: " + str(body.byte_len()) + "\r\nConnection: close\r\n\r\n" + body)
+    http.close(client)
+end
+
+func twilio_error(code, message, status):
+    return json.stringify({"code": code, "message": message, "more_info": "https://www.twilio.com/docs/errors/" + str(code), "status": status})
+end
+
+func serve(server):
+    let auth_ok = ["Basic " + crypto.base64(sid + ":tok-123"), "Basic " + crypto.base64("SK00000000000000000000000000000009:key-secret")]
+    while true:
+        let client = http.accept(server)
+        let req = parse_request(http.read(client))
+        seen["last"] = req
+        if req["path"] == "/quit":
+            respond(client, 200, "{}")
+            http.close(server)
+            return none
+        end
+        if not auth_ok.contains(req["headers"].get("authorization", "")):
+            respond(client, 401, twilio_error(20003, "Authenticate", 401))
+        eif req["method"] == "POST" and req["path"] == msgs + ".json":
+            let f = form_decode(req["body"])
+            seen["form"] = f
+            if f["To"] == "+15005550001":
+                respond(client, 400, twilio_error(21211, "Invalid 'To' Phone Number: +15005550001", 400))
+            else:
+                let sender = f.get("From", none)
+                respond(client, 201, json.stringify({"sid": "SM1f0e8ae6ade43cb3c0ce4525424e404f", "account_sid": sid, "to": f["To"], "from": sender,
+                    "messaging_service_sid": f.get("MessagingServiceSid", none), "body": f["Body"], "status": "queued", "num_segments": "1",
+                    "error_code": none, "error_message": none, "price": none, "direction": "outbound-api", "date_created": "Tue, 17 Nov 2026 10:00:00 +0000"}))
+            end
+        eif req["method"] == "GET" and req["path"] == msgs + "/SM1f0e8ae6ade43cb3c0ce4525424e404f.json":
+            respond(client, 200, json.stringify({"sid": "SM1f0e8ae6ade43cb3c0ce4525424e404f", "status": "delivered", "price": "-0.00750", "error_code": none}))
+        else:
+            respond(client, 404, twilio_error(20404, "The requested resource " + req["path"] + " was not found", 404))
+        end
+    end
+end
+
+let server = http.listen(port)
+if server < 0:
+    show "cannot listen on port " + str(port)
+    os.exit(1)
+end
+spawn serve(server)
+
+let tw = sms.twilio(sid, "tok-123", "+15005550006", {"base_url": base})
+
+show "== sending"
+let m = tw.send("+919876543210", "Your code is 482913 & valid for 10 min")
+ok("message returned", m["sid"] == "SM1f0e8ae6ade43cb3c0ce4525424e404f" and m["status"] == "queued")
+ok("POST to the account's Messages.json", seen["last"]["method"] == "POST" and seen["last"]["path"] == msgs + ".json")
+ok("form encoded", seen["last"]["headers"]["content-type"] == "application/x-www-form-urlencoded")
+ok("Basic auth with the account SID and auth token", seen["last"]["headers"]["authorization"] == "Basic " + crypto.base64(sid + ":tok-123"))
+ok("To, From and Body (with & and spaces) arrive intact", seen["form"] == {"To": "+919876543210", "Body": "Your code is 482913 & valid for 10 min", "From": "+15005550006"})
+ok("+ is encoded, not sent as a space", seen["last"]["body"].contains("To=%2B919876543210"))
+
+tw.send("+919876543210", "नमस्ते, आपका कोड 1234 है")
+ok("Hindi text arrives intact", seen["form"]["Body"] == "नमस्ते, आपका कोड 1234 है")
+ok("Hindi text percent-encoded as UTF-8 (as Python encodes it)", seen["last"]["body"].contains("Body=%E0%A4%A8%E0%A4%AE%E0%A4%B8%E0%A5%8D%E0%A4%A4%E0%A5%87%2C%20%E0%A4%86%E0%A4%AA%E0%A4%95%E0%A4%BE%20%E0%A4%95%E0%A5%8B%E0%A4%A1%201234%20%E0%A4%B9%E0%A5%88"))
+
+tw.send("+919876543210", "with picture", {"MediaUrl": ["https://a.example/1.png", "https://a.example/2.png"], "StatusCallback": "https://shop.example/sms/status"})
+ok("extra parameters; a list repeats the name", seen["form"]["MediaUrl"] == ["https://a.example/1.png", "https://a.example/2.png"] and seen["form"]["StatusCallback"] == "https://shop.example/sms/status")
+
+let svc = sms.twilio(sid, "tok-123", "MG00000000000000000000000000000002", {"base_url": base})
+let sm = svc.send("+919876543210", "via service")
+ok("a Messaging Service sender", seen["form"].get("MessagingServiceSid", none) == "MG00000000000000000000000000000002" and not seen["form"].has("From") and sm["messaging_service_sid"] == "MG00000000000000000000000000000002")
+let nosender = sms.twilio(sid, "tok-123", none, {"base_url": base})
+nosender.send("+919876543210", "per message", {"From": "+15005550007"})
+ok("From per message", seen["form"]["From"] == "+15005550007")
+raises("no sender at all", lambda(): nosender.send("+919876543210", "x"), "sms: say who sends it")
+
+let st = tw.message("SM1f0e8ae6ade43cb3c0ce4525424e404f")
+ok("fetch a message's status", st["status"] == "delivered" and seen["last"]["method"] == "GET")
+
+let keyed = sms.twilio(sid, none, "+15005550006", {"base_url": base, "api_key": "SK00000000000000000000000000000009", "api_secret": "key-secret"})
+keyed.send("+919876543210", "with an API key")
+ok("API key sign-in", seen["last"]["headers"]["authorization"] == "Basic " + crypto.base64("SK00000000000000000000000000000009:key-secret") and seen["last"]["path"] == msgs + ".json")
+
+show "== failures"
+raises("Twilio's error message and code", lambda(): tw.send("+15005550001", "x"), "sms: Invalid 'To' Phone Number: +15005550001 (Twilio error 21211)")
+ok("last_error", tw.last_error["code"] == 21211 and tw.last_error["status"] == 400 and tw.last_error["more_info"] == "https://www.twilio.com/docs/errors/21211")
+raises("unknown message", lambda(): tw.message("SMnope"), "(Twilio error 20404)")
+let bad = sms.twilio(sid, "wrong", "+15005550006", {"base_url": base})
+raises("wrong auth token", lambda(): bad.send("+919876543210", "x"), "sms: Authenticate (Twilio error 20003)")
+raises("number without +", lambda(): tw.send("9876543210", "x"), "sms: the number must be in international format, starting with + (got 9876543210)")
+raises("empty text", lambda(): tw.send("+919876543210", ""), "sms: the message text must not be empty")
+raises("account SID", lambda(): sms.twilio("12", "t"), "sms: the Twilio account SID (it starts with AC) is needed")
+raises("auth token", lambda(): sms.twilio(sid, ""), "sms: the Twilio auth token (or an API key and secret) is needed")
+
+show "== webhook signatures"
+# Twilio's worked example (twilio.com/docs/usage/security)
+let fields = {"CallSid": "CA1234567890ABCDE", "Caller": "+14158675310", "Digits": "1234", "From": "+14158675310", "To": "+18005551212"}
+let url = "https://example.com/myapp.php?foo=1&bar=2"
+ok("Twilio's documented example", sms.twilio_signature_ok(url, fields, "L/OH5YylLD5NRKLltdqwSvS0BnU=", "12345"))
+let shuffled = {"To": "+18005551212", "Digits": "1234", "From": "+14158675310", "CallSid": "CA1234567890ABCDE", "Caller": "+14158675310"}
+ok("field order does not matter", sms.twilio_signature_ok(url, shuffled, "L/OH5YylLD5NRKLltdqwSvS0BnU=", "12345"))
+ok("another URL refused", not sms.twilio_signature_ok("https://example.com/myapp.php?foo=1&bar=3", fields, "L/OH5YylLD5NRKLltdqwSvS0BnU=", "12345"))
+fields["Digits"] = "1235"
+ok("changed field refused", not sms.twilio_signature_ok(url, fields, "L/OH5YylLD5NRKLltdqwSvS0BnU=", "12345"))
+fields["Digits"] = "1234"
+ok("wrong auth token refused", not sms.twilio_signature_ok(url, fields, "L/OH5YylLD5NRKLltdqwSvS0BnU=", "54321"))
+ok("empty header refused", not sms.twilio_signature_ok(url, fields, "", "12345"))
+# repeated fields: distinct values, sorted (value computed with Python)
+ok("repeated fields", sms.twilio_signature_ok("https://example.com/sms/status", {"To": "+15005550006", "MediaUrl": ["https://a/2", "https://a/1", "https://a/1"], "Body": "hi"}, "PBgpuk7qLraoP7hfNlkfedO0o2Y=", "tok"))
+
+http.request("GET", base + "/quit")
+show "passed: " + str(passed) + "   failed: " + str(failed)
+if failed > 0:
+    os.exit(1)
+end

@@ -1,0 +1,211 @@
+# razorpay.glow: accept payments in India with Razorpay.
+#
+#   use "razorpay"
+#   let rp = razorpay.client(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))
+#
+#   # 1. Create an order on your server; give order["id"] to Razorpay Checkout.
+#   let order = rp.create_order(49900, "INR", {"receipt": "order-1042"})   # Rs 499.00
+#
+#   # 2. Checkout hands your page razorpay_payment_id, razorpay_order_id and
+#   #    razorpay_signature. Check them against the order id YOU stored:
+#   if rp.verify_payment(order["id"], payment_id, signature):
+#       # paid: mark the order as paid
+#   end
+#
+#   # Webhooks: check X-Razorpay-Signature against the raw request body.
+#   razorpay.verify_webhook(raw_body, signature_header, os.getenv("RAZORPAY_WEBHOOK_SECRET"))
+#
+# Amounts are whole numbers in the smallest unit (paise for INR). Every
+# failure raises an error starting with "razorpay:", with Razorpay's error
+# code and description; the full error is also kept in client.last_error.
+use "rest"
+
+func _rp_id(id, what):
+    if type(id) != "string" or id == "":
+        throw "razorpay: " + what + " must be a non-empty id"
+    end
+    return rest_enc(id)
+end
+
+blueprint RazorpayClient:
+    # options: "base_url" (default https://api.razorpay.com/v1), "timeout"
+    # in seconds (default 30).
+    action init(key_id, key_secret, options = none):
+        if type(key_id) != "string" or key_id == "" or type(key_secret) != "string" or key_secret == "":
+            throw "razorpay: the key id and key secret are needed (Dashboard > Account & Settings > API Keys)"
+        end
+        self.key_id = key_id
+        self.key_secret = key_secret
+        self.base_url = "https://api.razorpay.com/v1"
+        self.timeout = 30
+        if options != none:
+            self.base_url = options.get("base_url", self.base_url).trim_end("/")
+            self.timeout = options.get("timeout", self.timeout)
+        end
+        self.last_error = none
+    end
+
+    # Any API call: method, a path like "/orders", and a body (a dict, sent
+    # as JSON) or query parameters for GET. Returns the parsed reply.
+    action request(method, path, body = none, query = none):
+        let headers = {"Authorization": rest_basic(self.key_id, self.key_secret), "Accept": "application/json"}
+        let text = none
+        if body != none:
+            headers["Content-Type"] = "application/json"
+            text = json.stringify(body)
+        end
+        let r = rest_call("razorpay", method.upper(), self.base_url + path + rest_query(query), headers, text, self.timeout)
+        if r["status"] >= 200 and r["status"] < 300 and r["data"] != none:
+            self.last_error = none
+            return r["data"]
+        end
+        let err = none
+        if type(r["data"]) == "dict" and type(r["data"].get("error", none)) == "dict":
+            err = r["data"]["error"]
+        end
+        if err == none:
+            self.last_error = {"status": r["status"]}
+            throw "razorpay: the API answered " + str(r["status"]) + " without a usable reply"
+        end
+        err["status"] = r["status"]
+        self.last_error = err
+        let msg = "razorpay: " + str(err.get("code", "ERROR")) + ": " + str(err.get("description", "no description"))
+        let field = err.get("field", none)
+        if field != none and field != "":
+            msg = msg + " (field: " + str(field) + ")"
+        end
+        throw msg
+    end
+
+    # ---- orders ----
+    # extra: "receipt" (your reference, unique, up to 40 characters),
+    # "notes" (up to 15 key/value pairs), "partial_payment",
+    # "first_payment_min_amount".
+    action create_order(amount, currency = "INR", extra = none):
+        let body = {"amount": rest_whole("razorpay", "the amount", amount), "currency": currency}
+        if extra != none:
+            for each k in extra.keys():
+                body[k] = extra[k]
+            end
+        end
+        return self.request("POST", "/orders", body)
+    end
+
+    action order(order_id):
+        return self.request("GET", "/orders/" + _rp_id(order_id, "the order id"))
+    end
+
+    # The payments made for an order (a list).
+    action order_payments(order_id):
+        return self.request("GET", "/orders/" + _rp_id(order_id, "the order id") + "/payments")["items"]
+    end
+
+    # ---- payments ----
+    action payment(payment_id):
+        return self.request("GET", "/payments/" + _rp_id(payment_id, "the payment id"))
+    end
+
+    # filters: "from", "to" (Unix seconds), "count" (up to 100), "skip".
+    # Returns the list of payments.
+    action payments(filters = none):
+        return self.request("GET", "/payments", none, filters)["items"]
+    end
+
+    # Captures an authorized payment; the amount must be the authorized amount.
+    action capture(payment_id, amount, currency = "INR"):
+        return self.request("POST", "/payments/" + _rp_id(payment_id, "the payment id") + "/capture", {"amount": rest_whole("razorpay", "the amount", amount), "currency": currency})
+    end
+
+    # Refunds a payment: the whole of it when amount is none. extra: "speed"
+    # ("normal" or "optimum"), "notes", "receipt".
+    action refund(payment_id, amount = none, extra = none):
+        let body = {}
+        if amount != none:
+            body["amount"] = rest_whole("razorpay", "the amount", amount)
+        end
+        if extra != none:
+            for each k in extra.keys():
+                body[k] = extra[k]
+            end
+        end
+        return self.request("POST", "/payments/" + _rp_id(payment_id, "the payment id") + "/refund", body)
+    end
+
+    action refunds(payment_id):
+        return self.request("GET", "/payments/" + _rp_id(payment_id, "the payment id") + "/refunds")["items"]
+    end
+
+    # ---- payment links ----
+    # link: "amount" (required), "currency", "description", "reference_id",
+    # "customer" ({"name", "email", "contact"}), "notify" ({"sms", "email"}),
+    # "reminder_enable", "expire_by", "callback_url", "callback_method": "get",
+    # "notes". The reply's "short_url" is the link to send to the customer.
+    action create_payment_link(link):
+        if type(link) != "dict" or not link.has("amount"):
+            throw "razorpay: a payment link needs at least an amount"
+        end
+        let body = {}
+        for each k in link.keys():
+            body[k] = link[k]
+        end
+        body["amount"] = rest_whole("razorpay", "the amount", link["amount"])
+        if not body.has("currency"):
+            body["currency"] = "INR"
+        end
+        return self.request("POST", "/payment_links", body)
+    end
+
+    action payment_link(link_id):
+        return self.request("GET", "/payment_links/" + _rp_id(link_id, "the payment link id"))
+    end
+
+    action cancel_payment_link(link_id):
+        return self.request("POST", "/payment_links/" + _rp_id(link_id, "the payment link id") + "/cancel", {})
+    end
+
+    # ---- signatures (no network) ----
+    # After Checkout: true when signature is Razorpay's for this payment of
+    # the order. Use the order id stored on your server, not the one the
+    # browser sent back.
+    action verify_payment(order_id, payment_id, signature):
+        return _rp_check(str(order_id) + "|" + str(payment_id), signature, self.key_secret)
+    end
+
+    # After a payment link's callback_url redirect: the razorpay_payment_link_id,
+    # razorpay_payment_link_reference_id, razorpay_payment_link_status,
+    # razorpay_payment_id and razorpay_signature query parameters.
+    action verify_payment_link(link_id, reference_id, status, payment_id, signature):
+        return _rp_check(str(link_id) + "|" + str(reference_id) + "|" + str(status) + "|" + str(payment_id), signature, self.key_secret)
+    end
+
+    # After a subscription's first payment: razorpay_payment_id,
+    # razorpay_subscription_id and razorpay_signature.
+    action verify_subscription(payment_id, subscription_id, signature):
+        return _rp_check(str(payment_id) + "|" + str(subscription_id), signature, self.key_secret)
+    end
+end
+
+func _rp_check(message, signature, secret):
+    if type(signature) != "string" or signature == "" or type(secret) != "string" or secret == "":
+        return false
+    end
+    return crypto.equal(crypto.hmac(secret, message), signature.trim().lower())
+end
+
+blueprint Razorpay:
+    action client(key_id, key_secret, options = none):
+        return RazorpayClient(key_id, key_secret, options)
+    end
+
+    # Webhooks: body is the raw request body exactly as received (do not
+    # parse and re-encode it), signature the X-Razorpay-Signature header, and
+    # secret the webhook secret you set in the Dashboard (not the key secret).
+    action verify_webhook(body, signature, secret):
+        if type(body) != "string":
+            return false
+        end
+        return _rp_check(body, signature, secret)
+    end
+end
+
+let razorpay = Razorpay()

@@ -880,6 +880,34 @@ static inline void self_set(Value v) {
 }
 
 
+/* What a spawned callee runs: its bytecode, how many parameters it takes and
+   its name (for arity errors). body is NULL for a native function, or when
+   nothing callable was found. */
+static Bytecode *spawn_target(Value callee, const char *name, int *params, const char **fname) {
+    *params = -1; *fname = name ? name : "function";
+    if (GET_TYPE(callee) == VAL_OBJECT && (callee & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(callee);
+        if (ot == OBJ_BOUND_METHOD) {
+            BoundMethod *bm = AS_BOUND_METHOD(callee);
+            if (!bm->method || !bm->method->body) return NULL;
+            *params = bm->method->param_count; *fname = bm->method->name;
+            return bm->method->body;
+        }
+        if (ot == OBJ_CLOSURE) {
+            Closure *c = AS_CLOSURE(callee);
+            if (!c->body) return NULL;
+            *params = c->param_count; *fname = c->body->owner ? c->body->owner->name : "function";
+            return c->body;
+        }
+        return NULL;
+    }
+    if (name) {
+        FuncEntry *fe = func_get(name);
+        if (fe && fe->body) { *params = fe->param_count; *fname = fe->name; return fe->body; }
+    }
+    return NULL;
+}
+
 static void* thread_wrapper(void *arg) {
     ThreadData *td = (ThreadData*)arg;
     /* All VM and heap state is shared, so a spawned thread runs only while it
@@ -904,11 +932,22 @@ static void* thread_wrapper(void *arg) {
             vm_stack[i] = td->args[i];
         }
     }
+    /* Parameters that got no argument are none, as in an ordinary call
+       (they used to keep whatever the register held: 0, or the callee). */
+    int has_self = GET_TYPE(td->callee) == VAL_OBJECT && (td->callee & MASK_PAYLOAD) &&
+                   GET_OBJ_TYPE(td->callee) == OBJ_BOUND_METHOD &&
+                   GET_TYPE(AS_BOUND_METHOD(td->callee)->instance) != VAL_NONE;
+    int sp_params; const char *sp_name;
+    Bytecode *sp_body = spawn_target(td->callee, td->name, &sp_params, &sp_name);
+    int filled = td->argc + (has_self ? 1 : 0);
+    int locals = sp_body ? sp_body->preserved_locals : 0;
+    for (int k = filled; k < locals; k++) vm_stack[k] = value_none();
     /* The callee and arguments are now rooted by this thread's VM stack (and
        the callee by td, which stays on our C stack), so stop treating them as
-       pending roots. */
-    vm_stack[td->argc + 1] = td->callee;
-    vm_stack_top = td->argc + 2;
+       pending roots. The callee goes above the parameters and locals. */
+    int root = (locals > filled ? locals : filled) + 1;
+    vm_stack[root] = td->callee;
+    vm_stack_top = root + 1;
     pending_spawn_remove(td);
 
     if (GET_TYPE(td->callee) == VAL_OBJECT && (td->callee & MASK_PAYLOAD)) {
@@ -1197,6 +1236,7 @@ Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing) {
         Dict *d = inst->properties;
         intptr_t idx = (pc && pc->cache[0].val) ? pc->cache[0].val - 1 : -1;
         Value v;
+        int from_class = 0;
         if (idx >= 0 && idx < d->capacity && GET_TYPE(d->keys[idx]) == VAL_STRING && pc->cache[0].key == (void*)(uintptr_t)(d->keys[idx] & MASK_PAYLOAD)) {
             v = d->values[idx];
         } else {
@@ -1210,9 +1250,13 @@ Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing) {
             } else {
                 v = class_get_method(inst->klass, n);
                 if (GET_TYPE(v) == VAL_NONE) { *missing = 1; return v; }
+                from_class = 1;
             }
         }
-        if (GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
+        /* A method of the class is bound to the object. A function kept in a
+           field (self.handler = some_function) is returned as it is: binding
+           it made h = o.handler; h(1, 2) call some_function(o, 1). */
+        if (from_class && GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BOUND_METHOD && GET_TYPE(AS_BOUND_METHOD(v)->instance) == VAL_NONE) {
             v = bound_method_new(o, AS_BOUND_METHOD(v)->method);
         }
         return v;
@@ -3157,6 +3201,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             pending_exception = value_string_copy("Runtime Error: too many threads");
             has_exception = 1;
             goto l_OP_THROW;
+        }
+        {   /* too many arguments: raise here, where the spawn is written */
+            int sp_params; const char *sp_name;
+            if (spawn_target(callee, (const char*)pc->ptr, &sp_params, &sp_name) && sp_params >= 0)
+                CHECK_ARITY(sp_name, ac, sp_params);
         }
         ThreadData *td = malloc(sizeof(ThreadData)); td->callee = callee; td->argc = ac; td->name = (const char*)pc->ptr;
         td->daemon = pc->r2 == 1;

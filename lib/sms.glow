@@ -1,0 +1,161 @@
+# sms.glow: send text messages. Provider: Twilio.
+#
+#   use "sms"
+#   let tw = sms.twilio(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"), "+15005550006")
+#   let msg = tw.send("+919876543210", "Your code is 482913")
+#   show msg["sid"], msg["status"]          # "SM...", "queued"
+#   show tw.message(msg["sid"])["status"]   # later: "delivered", "failed", ...
+#
+#   # Twilio's webhooks (status callbacks, incoming SMS): check the
+#   # X-Twilio-Signature header against the full URL and the POST fields.
+#   sms.twilio_signature_ok(url, form_fields, header, os.getenv("TWILIO_AUTH_TOKEN"))
+#
+# Numbers are E.164 ("+919876543210"). The sender is a Twilio number, or a
+# Messaging Service ("MG..."). Every failure raises an error starting with
+# "sms:" and Twilio's error code; the full error is in client.last_error.
+use "rest"
+
+blueprint TwilioClient:
+    # sender: a Twilio phone number or a Messaging Service SID ("MG...").
+    # options: "base_url" (default https://api.twilio.com), "timeout",
+    # "api_key" and "api_secret" (sign in with an API key instead of the
+    # auth token).
+    action init(account_sid, auth_token, sender = none, options = none):
+        if type(account_sid) != "string" or not account_sid.starts_with("AC"):
+            throw "sms: the Twilio account SID (it starts with AC) is needed"
+        end
+        self.account_sid = account_sid
+        self.auth_token = auth_token
+        self.sender = sender
+        self.base_url = "https://api.twilio.com"
+        self.timeout = 30
+        self.user = account_sid
+        self.password = auth_token
+        if options != none:
+            self.base_url = options.get("base_url", self.base_url).trim_end("/")
+            self.timeout = options.get("timeout", self.timeout)
+            if options.get("api_key", none) != none:
+                self.user = options["api_key"]
+                self.password = options.get("api_secret", "")
+            end
+        end
+        if type(self.password) != "string" or self.password == "":
+            throw "sms: the Twilio auth token (or an API key and secret) is needed"
+        end
+        self.last_error = none
+    end
+
+    action request(method, path, form = none):
+        let headers = {"Authorization": rest_basic(self.user, self.password), "Accept": "application/json"}
+        let body = none
+        if form != none:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            body = rest_form(form)
+        end
+        let url = self.base_url + "/2010-04-01/Accounts/" + rest_enc(self.account_sid) + path
+        let r = rest_call("sms", method.upper(), url, headers, body, self.timeout)
+        if r["status"] >= 200 and r["status"] < 300 and r["data"] != none:
+            self.last_error = none
+            return r["data"]
+        end
+        let err = r["data"]
+        if type(err) != "dict":
+            self.last_error = {"status": r["status"]}
+            throw "sms: Twilio answered " + str(r["status"]) + " without a usable reply"
+        end
+        self.last_error = err
+        let msg = "sms: " + str(err.get("message", "error"))
+        if err.get("code", none) != none:
+            msg = msg + " (Twilio error " + str(err["code"]) + ")"
+        end
+        throw msg
+    end
+
+    # Sends body to number. extra: any other Twilio message
+    # parameter, e.g. {"StatusCallback": "https://...", "MediaUrl": [...]}.
+    # Returns Twilio's message: "sid", "status", "to", "from", "num_segments",
+    # "error_code", "error_message", ...
+    action send(number, body, extra = none):
+        if type(number) != "string" or not number.starts_with("+"):
+            throw "sms: the number must be in international format, starting with + (got " + str(number) + ")"
+        end
+        if type(body) != "string" or body == "":
+            throw "sms: the message text must not be empty"
+        end
+        let form = {"To": number, "Body": body}
+        let sender = self.sender
+        if extra != none and extra.get("From", none) != none:
+            sender = extra["From"]
+        end
+        if sender == none:
+            if extra == none or extra.get("MessagingServiceSid", none) == none:
+                throw "sms: say who sends it: a Twilio number or a Messaging Service SID"
+            end
+        eif str(sender).starts_with("MG"):
+            form["MessagingServiceSid"] = sender
+        else:
+            form["From"] = sender
+        end
+        if extra != none:
+            for each k in extra.keys():
+                if k != "From":
+                    form[k] = extra[k]
+                end
+            end
+        end
+        return self.request("POST", "/Messages.json", form)
+    end
+
+    # A message by its SID, with its current status.
+    action message(sid):
+        if type(sid) != "string" or sid == "":
+            throw "sms: give a message SID"
+        end
+        return self.request("GET", "/Messages/" + rest_enc(sid) + ".json")
+    end
+end
+
+blueprint Sms:
+    action twilio(account_sid, auth_token, sender = none, options = none):
+        return TwilioClient(account_sid, auth_token, sender, options)
+    end
+
+    # Checks a Twilio webhook. url is the full URL Twilio called (scheme,
+    # host, port, path and query exactly as configured in Twilio), fields the
+    # POST form fields as a dict (none or {} for a GET), header the
+    # X-Twilio-Signature value. Twilio's algorithm: the URL followed by each
+    # field name and value, sorted by name, signed with HMAC-SHA1 under the
+    # auth token, in base64.
+    action twilio_signature_ok(url, fields, header, auth_token):
+        if type(url) != "string" or type(header) != "string" or header == "" or type(auth_token) != "string" or auth_token == "":
+            return false
+        end
+        let data = url
+        if fields != none:
+            let names = fields.keys()
+            names.sort()
+            for each k in names:
+                let v = fields[k]
+                if type(v) == "list":
+                    # repeated fields: each distinct value once, sorted (as
+                    # Twilio's own libraries do)
+                    let values = []
+                    for each item in v:
+                        if not values.contains(str(item)):
+                            values.push(str(item))
+                        end
+                    end
+                    values.sort()
+                    for each item in values:
+                        data = data + k + item
+                    end
+                else:
+                    data = data + k + str(v)
+                end
+            end
+        end
+        return crypto.equal(crypto.hmac(auth_token, data, "sha1", "base64"), header.trim())
+    end
+end
+
+let sms = Sms()

@@ -1,0 +1,5 @@
+[GlowWeb] Starting server on port 29871
+one-parameter handler: 200 <h1>home</h1>
+two-parameter handler: 200 {"path": "/api", "header": "abc"}
+middleware: ["before /", "after 200", "before /api", "after 200"]
+params: 1 2 0 none none
