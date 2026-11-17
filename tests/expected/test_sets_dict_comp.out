@@ -1,0 +1,18 @@
+{3, 1, 2} 3 set true false set() {}
+{1, 2, 5} true [1, 2, 5] [1, 2, 5] 1 5 8
+{1, 2, 3, 4} {3} {1, 2} {1, 2, 4} {1, 2, 3, 9} {3} {1, 2} {1, 2, 4}
+true false {1, "1"} {true, 1} {none}
+true true true
+{"h", "e", "l", "o"} {"a", "b"} {1, 2, 3, 4}
+{4, 1, 0}
+{0, 2, 4, 6, 8}
+{"a": 1, "bb": 2, "ccc": 3} {"bb": 20, "ccc": 30}
+60
+{1, 2, 3} {1, 2, 3, 100}
+set() true
+true true true
+2 true
+100
+A set cannot hold a list (a value that can change); use numbers, text, true/false, none or objects
+remove(): 77 is not in the set
+Cannot apply '-' to set and list

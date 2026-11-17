@@ -2029,6 +2029,18 @@ static void ds_value(DStr *d, Value v, int depth) {
             ds_puts(d, "]");
         }
         else if (ot == OBJ_BIGINT) { char *bb = bigint_to_new_string(AS_BIGINT(v)); ds_puts(d, bb); free(bb); }
+        else if (ot == OBJ_SET) {
+            Dict *m = AS_DICT(AS_SET(v)->map);
+            if (m->size == 0) { ds_puts(d, "set()"); return; }
+            ds_puts(d, "{");
+            int printed = 0;
+            for (int i = 0; i < m->capacity; i++) {
+                if (GET_TYPE(m->keys[i]) == VAL_NONE) continue;
+                if (printed++) ds_puts(d, ", ");
+                ds_value(d, m->values[i], depth + 1);
+            }
+            ds_puts(d, "}");
+        }
         else ds_puts(d, "<object>");
     } else ds_puts(d, "none");
 }
@@ -2204,6 +2216,7 @@ Value native_len(int argc, Value *args) {
     if (GET_TYPE(v) == VAL_STRING) return value_int(glow_str_len(v));
     if (GET_TYPE(v) == VAL_LIST) return value_int(AS_LIST(v)->size);
     if (GET_TYPE(v) == VAL_DICT) return value_int(AS_DICT(v)->size);
+    if (is_set(v)) return value_int(glow_set_size(v));
     if (GET_TYPE(v) == VAL_OBJECT) {
         if ((v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_PACKED_ARRAY) return value_int(AS_PACKED_ARRAY(v)->size);
     }
@@ -6753,6 +6766,7 @@ const char *glow_type_name(Value v) {
     if (t == VAL_STRING) return "string";
     if (t == VAL_LIST) return "list";
     if (t == VAL_DICT) return "dict";
+    if (is_set(v)) return "set";
     if (t == VAL_NONE) return "none";
     if (t == VAL_OBJECT) {
         if (!(v & MASK_PAYLOAD)) return "object";
@@ -6883,9 +6897,10 @@ static Value native_glow_call(int argc, Value *args) {
 static Value native_glow_concat(int argc, Value *args) {
     int total = 0;
     for (int i = 0; i < argc; i++) {
+        if (is_set(args[i])) args[i] = glow_set_to_list(args[i]);   /* a set spreads its items */
         if (GET_TYPE(args[i]) != VAL_LIST) {
             char msg[160];
-            snprintf(msg, sizeof msg, "Cannot spread %s with ...: it needs a list", glow_type_name(args[i]));
+            snprintf(msg, sizeof msg, "Cannot spread %s with ...: it needs a list or a set", glow_type_name(args[i]));
             return glow_call_fail(msg);
         }
         total += AS_LIST(args[i])->size;

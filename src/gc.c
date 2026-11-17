@@ -367,6 +367,7 @@ static void gc_trace_object(GCObject *obj) {
     switch (obj->type) {
         case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) mark_value(l->items[i]); break; }
         case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; mark_value(it->iterable); break; }
+        case OBJ_SET: mark_value(((GlowSet*)obj)->map); break;
         case OBJ_DICT: {
             Dict *d = (Dict*)obj;
             for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { mark_value(d->values[i]); } }

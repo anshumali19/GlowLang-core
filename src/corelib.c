@@ -146,6 +146,13 @@ static Value extreme(int argc, Value *args, int want, const char *name) {
     char m[160];
     List *src = NULL;
     Value key = value_none();
+    Value set_items[2];
+    if (argc >= 1 && argc <= 2 && is_set(args[0])) {
+        /* min / max of a set: of its items. */
+        set_items[0] = glow_set_to_list(args[0]);
+        if (argc == 2) set_items[1] = args[1];
+        args = set_items;
+    }
     if (argc >= 1 && GET_TYPE(args[0]) == VAL_LIST &&
         (argc == 1 || (argc == 2 && (is_callable_obj(args[1]) || GET_TYPE(args[1]) == VAL_NONE)))) {
         src = AS_LIST(args[0]);
@@ -170,6 +177,8 @@ static Value core_min(int argc, Value *args) { return extreme(argc, args, -1, "m
 static Value core_max(int argc, Value *args) { return extreme(argc, args, 1, "max"); }
 
 static Value core_sum(int argc, Value *args) {
+    Value as_list;
+    if (argc >= 1 && is_set(args[0])) { as_list = glow_set_to_list(args[0]); args = &as_list; }
     if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return raise("sum() needs a list");
     List *l = AS_LIST(args[0]);
     int all_int = 1; int64_t isum = 0; double fsum = 0;
@@ -193,6 +202,13 @@ static Value core_sum(int argc, Value *args) {
 
 /* sorted(list, key, descending): a new sorted list. */
 static Value core_sorted(int argc, Value *args) {
+    if (argc >= 1 && is_set(args[0])) {
+        /* sorted(a_set): a list of its items. */
+        Value copy = glow_set_to_list(args[0]);
+        Value key = argc >= 2 ? args[1] : value_none();
+        if (!sort_list(AS_LIST(copy), key, argc >= 3 && value_truthy(args[2]))) return value_none();
+        return copy;
+    }
     if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return raise("sorted() needs a list");
     Value copy = list_value_copy(AS_LIST(args[0]));
     Value key = argc >= 2 ? args[1] : value_none();
@@ -696,6 +712,247 @@ static Value d_copy(int argc, Value *args) {
 }
 static Value d_is_empty(int argc, Value *args) { (void)argc; return value_bool(AS_DICT(args[0])->size == 0); }
 
+/* ---- sets ---- */
+
+/* The dict key a set files x under, or NULL with an error for a value a set
+   cannot hold (a list, dict or set, which can change). Equal values get the
+   same key: 1, 1.0 and a big int of the same value all give "i1". *owned is
+   set when the key was allocated. */
+static const char *set_key(Value x, char *buf, size_t n, char **owned) {
+    *owned = NULL;
+    int t = GET_TYPE(x);
+    if (t == VAL_NONE) return "n";
+    if (t == VAL_BOOL) return AS_BOOL(x) ? "b1" : "b0";
+    if (t == VAL_INT) { snprintf(buf, n, "i%lld", (long long)AS_INT(x)); return buf; }
+    if (t == VAL_FLOAT) {
+        double d = AS_FLOAT(x);
+        if (isfinite(d) && d == floor(d)) {
+            if (fabs(d) < 9.2e18) snprintf(buf, n, "i%lld", (long long)d);
+            else snprintf(buf, n, "i%.0f", d);
+        } else {
+            snprintf(buf, n, "f%.17g", d);
+        }
+        return buf;
+    }
+    if (t == VAL_STRING) {
+        const char *s = (x & MASK_PAYLOAD) ? AS_STRING(x) : "";
+        size_t len = strlen(s);
+        char *k = malloc(len + 2);
+        k[0] = 's'; memcpy(k + 1, s, len + 1);
+        *owned = k;
+        return k;
+    }
+    if (t == VAL_OBJECT && (x & MASK_PAYLOAD)) {
+        ObjType ot = GET_OBJ_TYPE(x);
+        if (ot == OBJ_BIGINT) {
+            char *dec = bigint_to_new_string(AS_BIGINT(x));
+            size_t len = strlen(dec);
+            char *k = malloc(len + 2);
+            k[0] = 'i'; memcpy(k + 1, dec, len + 1);
+            free(dec);
+            *owned = k;
+            return k;
+        }
+        if (ot != OBJ_SET) {
+            /* Objects, classes and functions: one entry per object, as == does. */
+            snprintf(buf, n, "o%p", (void*)(uintptr_t)(x & MASK_PAYLOAD));
+            return buf;
+        }
+    }
+    char msg[160];
+    snprintf(msg, sizeof msg, "A set cannot hold a %s (a value that can change); use numbers, text, true/false, none or objects", glow_type_name(x));
+    raise(msg);
+    return NULL;
+}
+
+Value glow_set_new(void) {
+    Value map = value_dict(dict_new(8));
+    GlowSet *s = (GlowSet*)gc_alloc(sizeof(GlowSet), OBJ_SET);
+    s->map = map;
+    return make_value(VAL_OBJECT, (uint64_t)(uintptr_t)s);
+}
+int glow_set_add(Value s, Value x) {
+    char buf[64], *owned;
+    const char *k = set_key(x, buf, sizeof buf, &owned);
+    if (!k) return 0;
+    Dict *d = AS_DICT(AS_SET(s)->map);
+    if (dict_get_idx(d, k) < 0) dict_set(d, k, x);
+    free(owned);
+    return 1;
+}
+int glow_set_has(Value s, Value x) {
+    int t = GET_TYPE(x);
+    if (t == VAL_LIST || t == VAL_DICT || is_set(x)) return 0;
+    char buf[64], *owned;
+    const char *k = set_key(x, buf, sizeof buf, &owned);
+    if (!k) { has_exception = 0; pending_exception = value_none(); return 0; }
+    int found = dict_get_idx(AS_DICT(AS_SET(s)->map), k) >= 0;
+    free(owned);
+    return found;
+}
+static int set_remove(Value s, Value x) {
+    char buf[64], *owned;
+    const char *k = set_key(x, buf, sizeof buf, &owned);
+    if (!k) { has_exception = 0; pending_exception = value_none(); return 0; }
+    int removed = dict_remove(AS_DICT(AS_SET(s)->map), k, NULL);
+    free(owned);
+    return removed;
+}
+int glow_set_size(Value s) { return AS_DICT(AS_SET(s)->map)->size; }
+
+/* The items, in the order they were added. */
+Value glow_set_to_list(Value s) {
+    Dict *d = AS_DICT(AS_SET(s)->map);
+    List *l = list_new(d->size > 0 ? d->size : 1);
+    Value lv = value_list(l);
+    for (int i = 0; i < d->capacity; i++)
+        if (GET_TYPE(d->keys[i]) != VAL_NONE) list_push(l, d->values[i]);
+    return lv;
+}
+int glow_set_eq(Value a, Value b) {
+    if (glow_set_size(a) != glow_set_size(b)) return 0;
+    Dict *d = AS_DICT(AS_SET(a)->map), *e = AS_DICT(AS_SET(b)->map);
+    for (int i = 0; i < d->capacity; i++) {
+        if (GET_TYPE(d->keys[i]) == VAL_NONE) continue;
+        if (dict_get_idx(e, (const char*)(uintptr_t)(d->keys[i] & MASK_PAYLOAD)) < 0) return 0;
+    }
+    return 1;
+}
+/* a | b, a & b, a - b, a ^ b: a new set, items in a's order, then b's. */
+Value glow_set_op(Value a, Value b, char op) {
+    Value out = glow_set_new();
+    Dict *da = AS_DICT(AS_SET(a)->map), *db = AS_DICT(AS_SET(b)->map), *dout = AS_DICT(AS_SET(out)->map);
+    for (int i = 0; i < da->capacity; i++) {
+        if (GET_TYPE(da->keys[i]) == VAL_NONE) continue;
+        const char *k = (const char*)(uintptr_t)(da->keys[i] & MASK_PAYLOAD);
+        int in_b = dict_get_idx(db, k) >= 0;
+        if (op == '|' || (op == '&' && in_b) || ((op == '-' || op == '^') && !in_b)) dict_set(dout, k, da->values[i]);
+    }
+    if (op == '|' || op == '^') {
+        for (int i = 0; i < db->capacity; i++) {
+            if (GET_TYPE(db->keys[i]) == VAL_NONE) continue;
+            const char *k = (const char*)(uintptr_t)(db->keys[i] & MASK_PAYLOAD);
+            if (dict_get_idx(da, k) < 0) dict_set(dout, k, db->values[i]);
+        }
+    }
+    return out;
+}
+
+/* Items from a list, a string (its characters), a set or a dict (its keys). */
+static int set_add_all(Value s, Value src) {
+    if (GET_TYPE(src) == VAL_LIST) {
+        List *l = AS_LIST(src);
+        for (int i = 0; i < l->size; i++) if (!glow_set_add(s, l->items[i])) return 0;
+        return 1;
+    }
+    if (GET_TYPE(src) == VAL_STRING) {
+        const char *p = (src & MASK_PAYLOAD) ? AS_STRING(src) : "";
+        size_t len = (src & MASK_PAYLOAD) ? rope_length(src) : 0;
+        for (size_t k = 0; k < len; ) {
+            size_t next = glow_utf8_step(p, k, len);
+            if (!glow_set_add(s, value_string_copy_len(p + k, next - k))) return 0;
+            k = next;
+        }
+        return 1;
+    }
+    if (is_set(src) || GET_TYPE(src) == VAL_DICT) {
+        Value items;
+        if (is_set(src)) items = glow_set_to_list(src);
+        else { Value a[1] = { src }; items = native_dict_keys(1, a); }
+        return set_add_all(s, items);
+    }
+    char msg[120];
+    snprintf(msg, sizeof msg, "set() needs a list, string, set or dict, not a %s", glow_type_name(src));
+    raise(msg);
+    return 0;
+}
+/* set() or set(items) */
+static Value core_set(int argc, Value *args) {
+    Value s = glow_set_new();
+    if (argc >= 1 && GET_TYPE(args[0]) != VAL_NONE && !set_add_all(s, args[0])) return value_none();
+    return s;
+}
+/* {a, b, ...items}: the parser makes __glow_set_from(list). */
+static Value core_set_from(int argc, Value *args) {
+    Value s = glow_set_new();
+    if (argc >= 1 && !set_add_all(s, args[0])) return value_none();
+    return s;
+}
+/* {k: v for each x in xs}: the parser makes __glow_dict_from_pairs([[k, v], ...]). */
+static Value core_dict_from_pairs(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return raise("dict comprehension: bad call");
+    List *l = AS_LIST(args[0]);
+    Value out = value_dict(dict_new(l->size > 4 ? l->size * 2 : 8));
+    for (int i = 0; i < l->size; i++) {
+        List *pair = AS_LIST(l->items[i]);
+        char *owned;
+        const char *key = glow_dict_key(pair->items[0], &owned);
+        if (!key) return value_none();
+        dict_set(AS_DICT(out), key, pair->items[1]);
+        free(owned);
+    }
+    return out;
+}
+
+static Value need_set(Value v, const char *method) {
+    if (is_set(v)) return v;
+    char msg[160];
+    snprintf(msg, sizeof msg, "%s() needs a set (make one with set(items)), not a %s", method, glow_type_name(v));
+    return raise(msg);
+}
+static Value set_m_add(int argc, Value *args) {
+    for (int i = 1; i < argc; i++) if (!glow_set_add(args[0], args[i])) return value_none();
+    return value_none();
+}
+static Value set_m_remove(int argc, Value *args) {
+    if (argc < 2) return raise("remove() needs an item");
+    if (!set_remove(args[0], args[1])) {
+        char *t = value_to_new_cstring(args[1]);
+        char msg[200];
+        snprintf(msg, sizeof msg, "remove(): %.120s is not in the set", t);
+        free(t);
+        return raise(msg);
+    }
+    return value_none();
+}
+static Value set_m_discard(int argc, Value *args) { if (argc >= 2) set_remove(args[0], args[1]); return value_none(); }
+static Value set_m_has(int argc, Value *args) { return value_bool(argc >= 2 && glow_set_has(args[0], args[1])); }
+static Value set_binary(int argc, Value *args, char op, const char *name) {
+    if (argc < 2) { char msg[80]; snprintf(msg, sizeof msg, "%s() needs another set", name); return raise(msg); }
+    Value other = args[1];
+    if (!is_set(other)) {
+        other = glow_set_new();
+        if (!set_add_all(other, args[1])) return value_none();
+    }
+    return glow_set_op(args[0], other, op);
+}
+static Value set_m_union(int argc, Value *args) { return set_binary(argc, args, '|', "union"); }
+static Value set_m_intersection(int argc, Value *args) { return set_binary(argc, args, '&', "intersection"); }
+static Value set_m_difference(int argc, Value *args) { return set_binary(argc, args, '-', "difference"); }
+static Value set_m_symmetric(int argc, Value *args) { return set_binary(argc, args, '^', "symmetric_difference"); }
+static Value set_m_is_subset(int argc, Value *args) {
+    if (argc < 2 || is_set(need_set(args[1], "is_subset")) == 0) return value_none();
+    return value_bool(glow_set_size(glow_set_op(args[0], args[1], '-')) == 0);
+}
+static Value set_m_is_superset(int argc, Value *args) {
+    if (argc < 2 || is_set(need_set(args[1], "is_superset")) == 0) return value_none();
+    return value_bool(glow_set_size(glow_set_op(args[1], args[0], '-')) == 0);
+}
+static Value set_m_is_disjoint(int argc, Value *args) {
+    if (argc < 2 || is_set(need_set(args[1], "is_disjoint")) == 0) return value_none();
+    return value_bool(glow_set_size(glow_set_op(args[0], args[1], '&')) == 0);
+}
+static Value set_m_copy(int argc, Value *args) { (void)argc; return glow_set_op(args[0], args[0], '|'); }
+static Value set_m_clear(int argc, Value *args) {
+    (void)argc;
+    AS_SET(args[0])->map = value_dict(dict_new(8));
+    gc_write_barrier((GCObject*)AS_SET(args[0]), AS_SET(args[0])->map);
+    return value_none();
+}
+static Value set_m_to_list(int argc, Value *args) { (void)argc; return glow_set_to_list(args[0]); }
+static Value set_m_len(int argc, Value *args) { (void)argc; return value_int(glow_set_size(args[0])); }
+static Value set_m_is_empty(int argc, Value *args) { (void)argc; return value_bool(glow_set_size(args[0]) == 0); }
+
 /* ---- method table ---- */
 
 typedef struct { const char *name; NativeFuncPtr fn; } MethodEntry;
@@ -716,6 +973,15 @@ static const MethodEntry list_methods[] = {
     {"copy", l_copy}, {"clear", l_clear}, {"first", l_first}, {"last", l_last},
     {"is_empty", l_is_empty}, {"map", l_map}, {"filter", l_filter}, {"each", l_each},
     {"reduce", l_reduce}, {NULL, NULL}
+};
+static const MethodEntry set_methods[] = {
+    {"add", set_m_add}, {"remove", set_m_remove}, {"discard", set_m_discard},
+    {"has", set_m_has}, {"contains", set_m_has}, {"union", set_m_union},
+    {"intersection", set_m_intersection}, {"difference", set_m_difference},
+    {"symmetric_difference", set_m_symmetric}, {"is_subset", set_m_is_subset},
+    {"is_superset", set_m_is_superset}, {"is_disjoint", set_m_is_disjoint},
+    {"copy", set_m_copy}, {"clear", set_m_clear}, {"to_list", set_m_to_list},
+    {"len", set_m_len}, {"is_empty", set_m_is_empty}, {NULL, NULL}
 };
 static const MethodEntry dict_methods[] = {
     {"has", native_dict_has}, {"keys", native_dict_keys}, {"values", native_dict_values},
@@ -743,7 +1009,7 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name) {
             }
             return find_method(dict_methods, name);
         }
-        default: return NULL;
+        default: return is_set(v) ? find_method(set_methods, name) : NULL;
     }
 }
 
@@ -758,7 +1024,7 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name) {
    A callable dict member wins over a built-in of the same name (fs.remove,
    os.exit) and is returned in *member (and NULL); so is a
    non-callable member when there is no built-in by that name. */
-static const char kind_string, kind_list, kind_dict;
+static const char kind_string, kind_list, kind_dict, kind_set;
 
 static int is_callable_obj(Value m) {
     if (GET_TYPE(m) != VAL_OBJECT || !(m & MASK_PAYLOAD)) return 0;
@@ -793,7 +1059,7 @@ NativeFuncPtr glow_method_lookup(Value v, const char *name, Instruction *pc, Val
             if (!fn && e >= 0) *member = d->values[e];
             return fn;
         }
-        default: return NULL;
+        default: return is_set(v) ? cached_find(pc, &kind_set, set_methods, name) : NULL;
     }
 }
 
@@ -829,6 +1095,9 @@ void glow_corelib_init(void) {
     var_set("max", native_func_new("max", core_max));
     var_set("sum", native_func_new("sum", core_sum));
     var_set("sorted", native_func_new("sorted", core_sorted));
+    var_set("set", native_func_new("set", core_set));
+    var_set("__glow_set_from", native_func_new("__glow_set_from", core_set_from));
+    var_set("__glow_dict_from_pairs", native_func_new("__glow_dict_from_pairs", core_dict_from_pairs));
     var_set("reversed", native_func_new("reversed", core_reversed));
     var_set("float", native_func_new("float", core_float));
     var_set("chr", native_func_new("chr", core_chr));
