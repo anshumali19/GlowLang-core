@@ -7362,9 +7362,14 @@ void std_cleanup(void) {
         global_table.values[i] = value_none();
     }
 
-    // 2. Clear VM stack values and reset top to allow them to be GC'd
+    // 2. Clear VM stack values and reset top to allow them to be GC'd.
+    // Only the slots the collector scans (the used part and 64K above it);
+    // writing all 1M slots touched 8 MB the program never used, which made
+    // every run's peak memory 18 MB instead of 11.
     if (vm_stack) {
-        for (int i = 0; i < vm_stack_size; i++) {
+        int lim = vm_stack_top + 65536;
+        if (lim > vm_stack_size) lim = vm_stack_size;
+        for (int i = 0; i < lim; i++) {
             vm_stack[i] = value_none();
         }
     }

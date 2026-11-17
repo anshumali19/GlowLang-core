@@ -1669,6 +1669,16 @@ int glow_pack_rest(FuncEntry *fe, Value *args, int argc) {
     return r + 1;
 }
 
+/* Clear a C array of values a call path used. The collector scans the
+   interpreter's C stack conservatively, and run_bytecode's frame lives as
+   long as the program: a stale copy left in one of these arrays kept what
+   it pointed to alive (binary_trees kept a 29 MB tree for its whole run).
+   Volatile, so the compiler cannot drop the stores as dead. */
+static inline void glow_wipe_values(Value *p, int n) {
+    volatile Value *v = p;
+    for (int i = 0; i < n; i++) v[i] = 0;
+}
+
 int glow_arity_error(const char *name, int given, int params) {
     char shown[160];
     const char *n = name ? name : "function";
@@ -2644,16 +2654,17 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         if (ife) { PACK_REST(ife, temp, count); CHECK_ARITY(ife->name, count, ife->param_count); }
                         vm_stack[callee_base] = inst; // self
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        glow_wipe_values(temp, count);
                         if (ife) {
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = self_get();
-                        self_set(inst);
+                        /* init gets the object in its own register 0. (This used to set the
+                           global `self` first, and the restore after the jump never ran, so
+                           the global kept the last object made here alive for good.) */
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        self_set(old_self);
                     }
                 }
                 else if (ot == OBJ_BOUND_METHOD) {
@@ -2668,6 +2679,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                             args[i + 1] = R(pc->r2 + start_offset + i);
                         }
                         R(pc->r0) = bm->native_method(count + 1, args);
+                        glow_wipe_values(args, count + 1);
                     } else if (bm->method && bm->method->body) {
                         // Calling a bound method held as a value: the method body
                         // expects self at R0 and args at R1.., so lay out the callee
@@ -2687,6 +2699,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         PACK_REST(bm->method, temp, count);
                         CHECK_ARITY(bm->method->name, count, bm->method->param_count);
                         for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
+                        glow_wipe_values(temp, count);
                         CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                         DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                     }
@@ -2784,6 +2797,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                             args[i + 1] = R(pc->r2 + start_offset + i);
                         }
                         R(pc->r0) = bm->native_method(count + 1, args);
+                        glow_wipe_values(args, count + 1);
                         goto l_OP_RETURN;
                     } else {
                         fe = bm->method;
@@ -2816,16 +2830,17 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         if (ife) { PACK_REST(ife, temp, count); CHECK_ARITY(ife->name, count, ife->param_count); }
                         vm_stack[callee_base] = inst; // self at R0
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        glow_wipe_values(temp, count);
                         if (ife) {
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = self_get();
-                        self_set(inst);
+                        /* init gets the object in its own register 0. (This used to set the
+                           global `self` first, and the restore after the jump never ran, so
+                           the global kept the last object made here alive for good.) */
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        self_set(old_self);
                     }
                     R(pc->r0) = inst;
                     goto l_OP_RETURN;
@@ -2894,6 +2909,17 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             call_stack_pop();
             if (stack_arena_used > old_arena_used) gc_free_stack_arena_range(old_arena_used, stack_arena_used);
             stack_arena_used = old_arena_used;
+            /* Clear the returning frame's registers. It sits in the caller's
+               argument slots and free temporaries, which the collector scans
+               as part of the caller's frame: values left there kept whatever
+               they pointed to alive until the slots were reused (in
+               binary_trees, half of a 29 MB tree for the whole run). The
+               return value is already in ret_val. */
+            {
+                Value *frame = &vm_stack[base_reg];
+                int n = bc->local_count;
+                for (int i = 0; i < n; i++) frame[i] = value_none();
+            }
             vm_stack_top = old_top;
 
             internal_depth--;
@@ -3046,16 +3072,17 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         if (ife) { PACK_REST(ife, temp, count); CHECK_ARITY(ife->name, count, ife->param_count); }
                     vm_stack[callee_base] = inst; // self at R0
                     for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        glow_wipe_values(temp, count);
                     if (ife) {
                         for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                     }
 
-                    Value old_self = self_get();
-                    self_set(inst);
+                    /* init gets the object in its own register 0. (This used to set the
+                       global `self` first, and the restore after the jump never ran, so
+                       the global kept the last object made here alive for good.) */
                     if (ife && ife->body) {
                         DO_CALL(ife->body, NULL, callee_base, -1);
                     }
-                    self_set(old_self);
                 }
             }
             else if(ot==OBJ_BOUND_METHOD) {
@@ -3070,6 +3097,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         args[i + 1] = R(pc->r2 + start_offset + i);
                     }
                     R(pc->r0) = bm->native_method(count + 1, args);
+                        glow_wipe_values(args, count + 1);
                 } else if(bm->method && bm->method->body) {
                     // Copy incoming args before we overwrite the stack: when the
                     // bound method carries a self, it goes in R0 and the args must
@@ -3090,6 +3118,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                     PACK_REST(bm->method, temp, count);
                         CHECK_ARITY(bm->method->name, count, bm->method->param_count);
                     for (int i = 0; i < count; i++) vm_stack[slot + i] = temp[i];
+                        glow_wipe_values(temp, count);
                     CLEAR_MISSING_ARGS(callee_base, slot - callee_base + count, bm->method->body->preserved_locals);
                     DO_CALL(bm->method->body, NULL, callee_base, pc->r0);
                 } else R(pc->r0) = value_none();
@@ -3187,6 +3216,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 args[i + 1] = R(pc->r2 + start_offset + i);
             }
             R(pc->r0) = native_fe(count + 1, args);
+            glow_wipe_values(args, count + 1);
         } else if (GET_TYPE(fallback_callee) != VAL_NONE) {
             // Fallback: it's not a devirtualized method, just call it normally as a value
             if (GET_TYPE(fallback_callee) == VAL_OBJECT && (fallback_callee & MASK_PAYLOAD)) {
@@ -3216,6 +3246,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         int start_offset = pc->is_method ? 1 : 0;
                         for (int i = 0; i < count; i++) args[i + 1] = R(pc->r2 + start_offset + i);
                         R(pc->r0) = bm->native_method(count + 1, args);
+                        glow_wipe_values(args, count + 1);
                     } else if (bm->method && bm->method->body) {
                         // A real bound method reuses the receiver slot for self; a bare
                         // function reference (no bound instance) is a plain function, so
@@ -3251,16 +3282,17 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                         if (ife) { PACK_REST(ife, temp, count); CHECK_ARITY(ife->name, count, ife->param_count); }
                         vm_stack[callee_base] = inst; // self at R0
                         for (int i=0; i<count && (!ife || i<ife->param_count); i++) vm_stack[callee_base + i + 1] = temp[i];
+                        glow_wipe_values(temp, count);
                         if (ife) {
                             for (int i=count; i<ife->param_count; i++) vm_stack[callee_base + i + 1] = value_none();
                         }
 
-                        Value old_self = self_get();
-                        self_set(inst);
+                        /* init gets the object in its own register 0. (This used to set the
+                           global `self` first, and the restore after the jump never ran, so
+                           the global kept the last object made here alive for good.) */
                         if (ife && ife->body) {
                             DO_CALL(ife->body, NULL, callee_base, -1);
                         }
-                        self_set(old_self);
                     }
                 } else {
                     pending_exception = value_string_copy("Object is not callable");
