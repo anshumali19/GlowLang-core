@@ -1492,6 +1492,38 @@ static int compile_expr(Node *n, int target_reg) {
             compiling_bc->code[j].arg = compiling_bc->count;
             break;
         }
+        case NODE_NULLISH: {
+            /* left ?? right: left unless it is none. right runs only then. */
+            int left = compile_expr(n->left, reg);
+            if (left != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
+            int none_reg = compile_expr(newVarNode(intern_string("none")), -1);
+            int is_none = next_free_reg++;
+            bc_emit_reg(compiling_bc, OP_EQ, is_none, reg, none_reg);
+            int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+            compiling_bc->code[jf].r0 = is_none;
+            int right = compile_expr(n->right, reg);
+            if (right != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, right, 0);
+            compiling_bc->code[jf].arg = compiling_bc->count;
+            break;
+        }
+        case NODE_OPTCHAIN: {
+            /* obj?.rest: none when obj is none, otherwise rest (built on the
+               placeholder in third) with obj's value. */
+            int obj = compile_expr(n->left, -1);
+            int none_reg = compile_expr(newVarNode(intern_string("none")), -1);
+            int is_none = next_free_reg++;
+            bc_emit_reg(compiling_bc, OP_EQ, is_none, obj, none_reg);
+            int jf = bc_emit(compiling_bc, OP_JUMP_IF_FALSE, 0, 0);
+            compiling_bc->code[jf].r0 = is_none;
+            bc_emit_reg(compiling_bc, OP_MOVE, reg, none_reg, 0);
+            int jend = bc_emit(compiling_bc, OP_JUMP, 0, 0);
+            compiling_bc->code[jf].arg = compiling_bc->count;
+            n->third->reg = obj;
+            int r = compile_expr(n->right, reg);
+            if (r != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, r, 0);
+            compiling_bc->code[jend].arg = compiling_bc->count;
+            break;
+        }
         case NODE_OR: {
             int left = compile_expr(n->left, reg);
             if (left != reg) bc_emit_reg(compiling_bc, OP_MOVE, reg, left, 0);
