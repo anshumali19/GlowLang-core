@@ -596,6 +596,25 @@ static Node *parse_fstring_expr(const char *src) {
     return (r && r->type == NODE_ASSIGN) ? r->left : NULL;
 }
 
+/* Parse a piece of GlowLang the compiler writes itself (an enum's class),
+   as parse_fstring_expr does. Returns its statements, or NULL. */
+static Node *parse_snippet(const char *code) {
+    Node *saved_root = root;
+    int saved_line = line_num;
+    YY_BUFFER_STATE old = get_current_buffer();
+    YY_BUFFER_STATE b = yy_scan_string(code);
+    root = NULL;
+    quiet_parse = 1;
+    int rc = yyparse();
+    quiet_parse = 0;
+    yy_delete_buffer(b);
+    if (old) yy_switch_to_buffer(old);
+    Node *r = root;
+    root = saved_root;
+    line_num = saved_line;
+    return rc == 0 ? r : NULL;
+}
+
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
@@ -1382,6 +1401,48 @@ static void compile_stmt(Node *n) {
             }
             free(regs);
             next_free_reg = reg_restore(base);
+            break;
+        }
+        case NODE_ENUM: {
+            /* enum Color: RED, GREEN = 5 end becomes a class Color whose
+               objects have a name and a value and show as Color.RED, then
+               Color = __glow_enum(Color, ["RED", "GREEN"], [none, 5]): a dict
+               from each name to its member (none: the previous value + 1,
+               starting at 0). */
+            char code[1024];
+            snprintf(code, sizeof code,
+                "class %s:\n"
+                "    func init(name, value):\n"
+                "        self.name = name\n"
+                "        self.value = value\n"
+                "    end\n"
+                "    func to_string():\n"
+                "        return \"%s.\" + self.name\n"
+                "    end\n"
+                "end\n", n->name, n->name);
+            Node *cls = parse_snippet(code);
+            if (!cls) break;
+            int line = n->line;
+            compile_stmt(cls);
+            int count = 0;
+            for (Node *m = n->left; m; m = m->third) count++;
+            Node **names = arena_alloc(sizeof(Node*) * (count > 0 ? count : 1));
+            Node **vals = arena_alloc(sizeof(Node*) * (count > 0 ? count : 1));
+            int i = 0;
+            for (Node *m = n->left; m; m = m->third, i++) {
+                names[i] = newStringNode(m->name);
+                vals[i] = m->left ? m->left : newVarNode(intern_string("none"));
+            }
+            Node *nl = node_new(NODE_LIST_LITERAL); nl->elements = names; nl->element_count = count;
+            Node *vl = node_new(NODE_LIST_LITERAL); vl->elements = vals; vl->element_count = count;
+            Node **args = arena_alloc(sizeof(Node*) * 3);
+            args[0] = newVarNode(n->name); args[1] = nl; args[2] = vl;
+            Node *call = node_new(NODE_CALL);
+            call->name = intern_string("__glow_enum");
+            call->call_args = args; call->call_arg_count = 3;
+            Node *assign = newAssignNode(n->name, call);
+            call->line = nl->line = vl->line = args[0]->line = assign->line = line;
+            compile_stmt(assign);
             break;
         }
         case NODE_INDEX_ASSIGN: {

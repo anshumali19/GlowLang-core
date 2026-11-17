@@ -1,0 +1,5 @@
+let x = 1
+match x:
+    case a, b:
+        show a
+end

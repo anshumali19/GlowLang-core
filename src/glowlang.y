@@ -97,6 +97,139 @@ static Node *opt_start(Node *obj, Node *access) {
     opt->left = obj; opt->right = access; opt->third = access->left; opt->line = obj->line;
     return opt;
 }
+/* ---- match ----
+   match subject:
+       case pattern, pattern when guard:
+           body
+       otherwise:
+           body
+   end
+   becomes ordinary statements: the subject is computed once into a hidden
+   variable, and each case is `if not matched and <pattern test>:`, which
+   binds the pattern's names, checks the guard, then sets matched and runs
+   its body. As in Python, a bare name captures the value (`none` is the
+   value none), `_` matches anything, a list pattern [a, 0, ...rest, z]
+   checks the items and captures its names, and anything else (a number,
+   text, Color.RED, an expression) is compared with ==. */
+static int match_count = 0;
+static Node *helper_call(const char *fn, Node **args, int count, int line);
+static Node *and_node(Node *a, Node *b) { return !a ? b : !b ? a : newBinOp(NODE_AND, a, b); }
+static Node *index_node(Node *coll, Node *idx) {
+    Node *n = node_new(NODE_INDEX); n->left = coll; n->right = idx; n->line = coll->line;
+    return n;
+}
+static int is_wildcard(Node *p) { return p->type == NODE_VAR && strcmp(p->name, "_") == 0; }
+static int is_capture(Node *p) { return p->type == NODE_VAR && strcmp(p->name, "_") != 0 && strcmp(p->name, "none") != 0; }
+/* The items of a list pattern, or NULL when p is not one. */
+static Node **list_pattern_items(Node *p, int *count) {
+    if (p->type == NODE_LIST_LITERAL) { *count = p->element_count; return p->elements; }
+    if (p->type == NODE_CALL && p->name && strcmp(p->name, "__glow_concat") == 0 && p->elements) {
+        *count = p->element_count; return p->elements;
+    }
+    return NULL;
+}
+/* The test for pattern p against the value subj (NULL means always), and
+   the assignments its names make (appended to *binds). */
+static Node *pattern_test(Node *p, Node *subj, Node **binds) {
+    int count;
+    Node **items = list_pattern_items(p, &count);
+    if (!items) {
+        if (is_wildcard(p)) return NULL;
+        if (is_capture(p)) { *binds = newSeqNode(*binds, newAssignNode(p->name, subj)); return NULL; }
+        return newBinOp(NODE_EQ, subj, p);
+    }
+    int rest = -1;
+    for (int i = 0; i < count; i++) {
+        if (items[i]->type == NODE_SPREAD) {
+            if (rest >= 0 || items[i]->left->type != NODE_VAR) { error_at(p->line, "A list pattern can have one ...name"); return NULL; }
+            rest = i;
+        }
+    }
+    int fixed = rest >= 0 ? count - 1 : count;
+    /* __glow_list_len(x): len(x) for a list, -1 for anything else. */
+    Node **la = arena_alloc(sizeof(Node*));
+    la[0] = subj;
+    Node *len = helper_call("__glow_list_len", la, 1, p->line);
+    Node *test = newBinOp(rest >= 0 ? NODE_GTE : NODE_EQ, len, newIntNode(fixed));
+    for (int i = 0; i < count; i++) {
+        if (i == rest) {
+            Node *name = items[i]->left;
+            if (is_wildcard(name)) continue;
+            int after = count - 1 - rest;
+            Node *sl = node_new(NODE_SLICE);
+            sl->left = subj; sl->right = newIntNode(rest);
+            sl->third = after > 0 ? newIntNode(-after) : NULL;
+            *binds = newSeqNode(*binds, newAssignNode(name->name, sl));
+            continue;
+        }
+        Node *elem = index_node(subj, newIntNode(rest >= 0 && i > rest ? i - count : i));
+        Node *it = items[i];
+        if (is_wildcard(it)) continue;
+        if (is_capture(it)) { *binds = newSeqNode(*binds, newAssignNode(it->name, elem)); continue; }
+        test = and_node(test, pattern_test(it, elem, binds));
+    }
+    return test;
+}
+/* One case: its patterns (a list node of them), guard and body. */
+static Node *case_node(Node **pats, int npats, Node *guard, Node *body, int line) {
+    Node *c = node_new(NODE_SEQ);   /* a holder; match_node takes it apart */
+    c->elements = pats; c->element_count = npats; c->comp_filter = guard; c->right = body; c->line = line;
+    return c;
+}
+static Node *match_node(Node *subject, Node *cases, Node *otherwise_body, int line) {
+    char buf[48];
+    snprintf(buf, sizeof buf, "__match_%d", match_count);
+    const char *sv = intern_string(buf);
+    snprintf(buf, sizeof buf, "__matched_%d", match_count++);
+    const char *mv = intern_string(buf);
+    Node *setup = node_new(NODE_LET); setup->name = sv; setup->left = subject; setup->line = line;
+    Node *flag = node_new(NODE_LET); flag->name = mv; flag->left = newBoolNode(0); flag->line = line;
+    Node *out = newSeqNode(setup, flag);
+    for (Node *c = cases; c; c = c->third) {
+        Node *test = NULL, *binds = NULL;
+        int always = 0;
+        for (int i = 0; i < c->element_count; i++) {
+            Node *b = NULL;
+            Node *t = pattern_test(c->elements[i], newVarNode(sv), &b);
+            if (b && c->element_count > 1) { error_at(c->line, "A case with several patterns cannot capture names"); return NULL; }
+            binds = newSeqNode(binds, b);
+            if (!t) always = 1;
+            else test = test ? newBinOp(NODE_OR, test, t) : t;
+        }
+        if (always) test = NULL;
+        Node *mark = newAssignNode(mv, newBoolNode(1));
+        Node *run = newSeqNode(mark, c->right);
+        Node *body = newSeqNode(binds, c->comp_filter ? newIfNode(c->comp_filter, run, NULL) : run);
+        Node *not_done = newBinOp(NODE_NOT, newVarNode(mv), NULL);
+        out = newSeqNode(out, newIfNode(and_node(not_done, test), body, NULL));
+    }
+    if (otherwise_body) out = newSeqNode(out, newIfNode(newBinOp(NODE_NOT, newVarNode(mv), NULL), otherwise_body, NULL));
+    return out;
+}
+/* Adds a case at the end of the chain (linked through third). */
+static Node *add_case(Node *chain, Node *c) {
+    if (!chain) return c;
+    Node *last = chain;
+    while (last->third) last = last->third;
+    last->third = c;
+    return chain;
+}
+
+/* enum name: members (chained through third, each with its value or NULL
+   in left). The names must differ. */
+static Node *enum_node(const char *name, Node *members) {
+    for (Node *a = members; a; a = a->third)
+        for (Node *b = a->third; b; b = b->third)
+            if (strcmp(a->name, b->name) == 0) {
+                char msg[160];
+                snprintf(msg, sizeof msg, "enum %.60s has %.60s twice", name, a->name);
+                error_at(a->line, msg);
+                return NULL;
+            }
+    Node *e = node_new(NODE_ENUM);
+    e->name = intern_string(name); e->left = members; e->line = members ? members->line : line_num;
+    return e;
+}
 /* x op= value for the bitwise operators: x = x op value. */
 static Node *compound_bitop(Node *target, NodeType op, Node *value) {
     if (target->type != NODE_VAR) { error_at(target->line, "Compound assignment target must be a variable"); return NULL; }
@@ -189,7 +322,9 @@ static Node *list_node(Node **items, int count, int line) {
         l->elements = chunk; l->element_count = nchunk; l->line = line;
         list_push_node(&parts, &nparts, l);
     }
-    return helper_call("__glow_concat", parts, nparts, line);
+    Node *c = helper_call("__glow_concat", parts, nparts, line);
+    c->elements = items; c->element_count = count;   /* for a `case [a, ...rest]` pattern */
+    return c;
 }
 /* [expr for each var in coll when filter] (filter may be NULL). */
 static Node *comp_node(Node *expr, const char *var, Node *coll, Node *filter) {
@@ -289,12 +424,12 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
-%token ELLIPSIS NULLISH NULLISH_ASSIGN QDOT QDOT_INDEX
+%token ELLIPSIS NULLISH NULLISH_ASSIGN QDOT QDOT_INDEX MATCH CASE ENUM
 %token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
-%type <node_list> expr_list arg_list target_list name_list item_list
-%type <node> item target name_item
+%type <node_list> expr_list arg_list target_list name_list item_list case_pats
+%type <node> item target name_item match_cases case_clause enum_members enum_member case_pat enum_inline
 %type <dict_list> dict_elements
 %type <str_list> param_list param
 %type <str_val> member_name
@@ -315,7 +450,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %nonassoc NOT_OP
 
 /* Brackets left open by an earlier, failed parse must not swallow newlines. */
-%initial-action { extern int lexer_bracket_depth; lexer_bracket_depth = 0; }
+%initial-action { extern int lexer_bracket_depth, lexer_at_stmt_start; lexer_bracket_depth = 0; lexer_at_stmt_start = 1; }
 
 %%
 
@@ -362,6 +497,9 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | LET name_list ASSIGN expr_list { $$ = unpack_node($2.nodes, $2.count, $4.nodes, $4.count, 1, $2.nodes[0]->line); if (!$$) YYERROR; }
     | FOR EACH '[' name_list ']' IN_KW expr COLON NEWLINE lines END { $$ = unpack_loop($4.nodes, $4.count, $7, $10); if (!$$) YYERROR; }
     | FOR '[' name_list ']' IN_KW expr COLON NEWLINE lines END { $$ = unpack_loop($3.nodes, $3.count, $6, $9); if (!$$) YYERROR; }
+    | MATCH expr COLON NEWLINE opt_newlines match_cases otherwise_part END { $$ = match_node($2, $6, $7, $2->line); if (!$$) YYERROR; }
+    | ENUM ID COLON NEWLINE opt_newlines enum_members END { $$ = enum_node($2, $6); if (!$$) YYERROR; }
+    | ENUM ID COLON enum_inline { $$ = enum_node($2, $4); if (!$$) YYERROR; }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; }
     | TRY COLON NEWLINE lines CATCH ID COLON NEWLINE lines FINALLY COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = $6; $$->right = $9; $$->third = $13; }
     | TRY COLON NEWLINE lines FINALLY COLON NEWLINE lines END { $$ = node_new(NODE_TRY_CATCH); $$->left = $4; $$->name = NULL; $$->right = NULL; $$->third = $8; }
@@ -404,6 +542,25 @@ param: ID { $$.count = 1; $$.rest = 0; $$.names = arena_alloc(sizeof(char*)); $$
        which the default gives: a call with no extras leaves it none). */
     | ELLIPSIS ID { $$.count = 1; $$.rest = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($2); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = node_new(NODE_LIST_LITERAL); };
 condition: expr;
+opt_newlines: opt_newlines NEWLINE | ;
+match_cases: case_clause { $$ = $1; } | match_cases case_clause { $$ = add_case($1, $2); };
+case_clause: CASE case_pats COLON NEWLINE lines { $$ = case_node($2.nodes, $2.count, NULL, $5, $2.nodes[0]->line); }
+    | CASE case_pats WHEN expr COLON NEWLINE lines { $$ = case_node($2.nodes, $2.count, $4, $7, $2.nodes[0]->line); };
+case_pats: case_pat { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); }
+    | case_pats COMMA case_pat { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
+/* In a case, `when` after a pattern starts the guard, not a
+   `value when condition otherwise other` expression: the reduction
+   outranks WHEN. */
+case_pat: expr %prec NULLISH { $$ = $1; };
+/* Members, one per line or separated by commas; NAME or NAME = value. */
+enum_members: enum_member { $$ = $1; }
+    | enum_members NEWLINE enum_member { $$ = add_case($1, $3); }
+    | enum_members COMMA enum_member { $$ = add_case($1, $3); }
+    | enum_members NEWLINE { $$ = $1; };
+/* enum Dir: UP, DOWN on one line */
+enum_inline: enum_member { $$ = $1; } | enum_inline COMMA enum_member { $$ = add_case($1, $3); };
+enum_member: ID { $$ = node_new(NODE_VAR); $$->name = intern_string($1); }
+    | ID ASSIGN expr { $$ = node_new(NODE_VAR); $$->name = intern_string($1); $$->left = $3; };
 /* Each eif is the else branch of the one before it, so only the first
    true branch runs (they used to run as separate ifs, and the otherwise
    block ran even when an eif matched). */

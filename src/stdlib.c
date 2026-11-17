@@ -6892,6 +6892,32 @@ static Value native_glow_call(int argc, Value *args) {
     return r;
 }
 
+/* For a `case [a, b]` pattern: len(x) when x is a list, -1 otherwise. */
+static Value native_glow_list_len(int argc, Value *args) {
+    return value_int(argc >= 1 && GET_TYPE(args[0]) == VAL_LIST ? AS_LIST(args[0])->size : -1);
+}
+
+/* enum Name: ... end (see NODE_ENUM in compiler.c): a dict from each name to
+   a member made by the enum's class. A member left without a value gets the
+   previous whole-number value + 1 (the first gets 0). */
+static Value native_glow_enum(int argc, Value *args) {
+    if (argc < 3 || GET_TYPE(args[1]) != VAL_LIST || GET_TYPE(args[2]) != VAL_LIST)
+        return glow_call_fail("enum: bad call");
+    List *names = AS_LIST(args[1]), *vals = AS_LIST(args[2]);
+    Value out = value_dict(dict_new(names->size > 4 ? names->size * 2 : 8));
+    int64_t next = 0;
+    for (int i = 0; i < names->size && i < vals->size; i++) {
+        Value v = vals->items[i];
+        if (GET_TYPE(v) == VAL_NONE) v = value_int(next);
+        if (GET_TYPE(v) == VAL_INT) next = AS_INT(v) + 1;
+        Value ctor_args[2] = { names->items[i], v };
+        Value member = glow_call_value(args[0], 2, ctor_args);
+        if (has_exception) return value_none();
+        dict_set(AS_DICT(out), AS_STRING(names->items[i]), member);
+    }
+    return out;
+}
+
 /* [a, ...b, c]: the parser makes __glow_concat([a], b, [c]). Every part is a
    list; one that is not came from a ...spread. */
 static Value native_glow_concat(int argc, Value *args) {
@@ -7090,6 +7116,8 @@ void std_init(void) {
     var_set("__glow_super_bind", native_func_new("__glow_super_bind", native_glow_super_bind));
     var_set("__glow_call", native_func_new("__glow_call", native_glow_call));
     var_set("__glow_concat", native_func_new("__glow_concat", native_glow_concat));
+    var_set("__glow_list_len", native_func_new("__glow_list_len", native_glow_list_len));
+    var_set("__glow_enum", native_func_new("__glow_enum", native_glow_enum));
     var_set("range", native_func_new("range", native_range));
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
     var_set("__glow_slice_set", native_func_new("__glow_slice_set", native_glow_slice_set));

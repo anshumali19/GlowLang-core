@@ -636,6 +636,7 @@ typedef enum {
     NODE_BITAND, NODE_BITOR, NODE_BITXOR, NODE_SHL, NODE_SHR, NODE_BITNOT,
     NODE_SPREAD,       /* ...expr in a call or list (the parser rewrites it) */
     NODE_NULLISH,      /* left ?? right */
+    NODE_ENUM,         /* enum Name: members end (compiled in compiler.c) */
     NODE_OPTCHAIN,     /* left?.rest: right is the rest of the chain, built on
                           the NODE_REG in third; none when left is none */
     NODE_KWARG,        /* name = expr in a call (the parser rewrites it) */
