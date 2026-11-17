@@ -521,6 +521,30 @@ func absval(v):
 end
 ```
 
+### Match
+`match` runs the first `case` whose pattern fits the value, or the
+`otherwise` block when none does:
+```glow
+match command:
+    case "start", "go":              # equal to any of these
+        start()
+    case ["move", x, y]:             # a list of three: captures x and y
+        move(x, y)
+    case ["say", ...words]:          # ...words gets the rest of the list
+        show " ".join(words)
+    case n when type(n) == "int" and n > 100:   # a bare name captures; when adds a test
+        show "big number", n
+    case _:                          # anything
+        show "unknown"
+end
+```
+In a pattern, a bare name captures the value and `_` matches anything.
+`none`, numbers, text, dotted names such as `Color.RED`, and other expressions
+are compared with `==`. To compare with a variable, use a guard:
+`case v when v == limit:`. `stop`, `skip` and `return` inside a case work as
+anywhere else. `match`, `case` and `enum` remain ordinary names outside
+these statements.
+
 ### While Loop
 ```glow
 let count = 0
@@ -886,6 +910,27 @@ show is_a(p, "Animal")      # true: a class name works too
 ```
 
 ---
+
+### Enums
+```glow
+enum Color:
+    RED
+    GREEN
+    BLUE = 10        # members without a value count on from the one before
+end
+enum Dir: UP, DOWN   # on one line
+
+show Color.RED, Color.GREEN.value, Color.BLUE.name    # Color.RED 1 BLUE
+show Color.RED == Color.RED, Color["GREEN"]           # true Color.GREEN
+for each name, member in Color:
+    show name, member.value
+end
+```
+An enum is a dict from each name to its member. Each member has a `name`
+and a `value` and shows as `Color.RED`. Members are equal only to
+themselves, work in `match` (`case Color.RED:`) and in sets, and
+`class_name(Color.RED)` is `"Color"`. The first member's default value is
+0.
 
 ## 12. Traits
 

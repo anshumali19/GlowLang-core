@@ -1,0 +1,96 @@
+# match / case (values, several values, _, captures, list patterns with
+# ...rest, guards, otherwise) and enum. match, case and enum stay usable
+# as names everywhere else.
+func describe(x):
+    let out = ""
+    match x:
+        case 0:
+            out = "zero"
+        case 1, 2, 3:
+            out = "small"
+        case "hi":
+            out = "greeting"
+        case [a, b]:
+            out = "pair " + str(a) + "," + str(b)
+        case [first, ...rest] when len(rest) > 2:
+            out = "long list from " + str(first) + " with " + str(len(rest)) + " more"
+        case [0, _, z]:
+            out = "starts with 0, ends with " + str(z)
+        case n when type(n) == "int" and n > 100:
+            out = "big"
+        otherwise:
+            out = "other"
+    end
+    return out
+end
+for each v in [0, 2, "hi", [1, 2], [9, 8, 7, 6], [0, 5, 6], [1, 5, 6], 500, 50, none, [[1, 2], 3]]:
+    show describe(v)
+end
+
+let match = "still a name"
+let case = 3
+show match, case
+if match:
+    show "if match: still works"
+end
+
+enum Color:
+    RED
+    GREEN
+    BLUE = 10
+    PINK
+end
+show Color.RED, Color.GREEN.value, Color.BLUE.value, Color.PINK.value, Color.RED.name
+show Color.RED == Color.RED, Color.RED == Color.GREEN, len(Color), Color.keys()
+show Color["BLUE"], class_name(Color.PINK), [Color.RED, Color.GREEN]
+for each name, member in Color:
+    show name, member.value
+end
+enum Dir: UP, DOWN
+show Dir.UP, Dir.DOWN.value, {Dir.UP, Dir.UP, Dir.DOWN}
+
+func paint(c):
+    match c:
+        case Color.RED:
+            return "warm"
+        case Color.BLUE, Color.GREEN:
+            return "cool"
+        otherwise:
+            return "other"
+    end
+end
+show paint(Color.RED), paint(Color.GREEN), paint(Color.PINK)
+
+let total = 0
+every i from 1 to 20:
+    match i % 5:
+        case 0:
+            skip
+        case 4:
+            total = total + 100
+        otherwise:
+            total = total + i
+    end
+    when i == 18:
+        stop
+    end
+end
+show total
+
+func hot(n):
+    let s = 0
+    every i from 1 to n:
+        match [i % 3, i % 2]:
+            case [0, 0]:
+                s = s + 6
+            case [0, _]:
+                s = s + 3
+            case [_, 0]:
+                s = s + 2
+            otherwise:
+                s = s + 1
+        end
+    end
+    return s
+end
+show hot(60000)

@@ -201,6 +201,19 @@ int line_num = 1;
 /* Open (, [ and { not yet closed: newlines inside them do not end the
    statement, so literals and calls can span lines. Reset by the parser. */
 int lexer_bracket_depth = 0;
+/* Whether the next token starts a statement (the line's first token, outside
+   brackets). match, case and enum are keywords only there, on a line that
+   ends with a colon, so programs that use them as names keep working:
+   `let match = re.match(p, s)`, `if match:`. Whitespace and comments leave
+   the flag as it was; every other token clears it (YY_USER_ACTION runs
+   before each rule). */
+int lexer_at_stmt_start = 1;
+static int lexer_prev_start = 1;
+#define YY_USER_ACTION { lexer_prev_start = lexer_at_stmt_start; lexer_at_stmt_start = 0; }
+static int lex_identifier(void) {
+    yylval.str_val = (const char *)intern_string(yytext);
+    return ID;
+}
 %}
 
 %option noinput nounput nounistd noyywrap
@@ -208,6 +221,9 @@ int lexer_bracket_depth = 0;
 
 %%
 
+"match"/[ \t]+[^\n]*":"[ \t\r]*("#"[^\n]*)?\n  { return lexer_prev_start ? MATCH : lex_identifier(); }
+"case"/[ \t]+[^\n]*":"[ \t\r]*("#"[^\n]*)?\n   { return lexer_prev_start ? CASE : lex_identifier(); }
+"enum"/[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*":"  { return lexer_prev_start ? ENUM : lex_identifier(); }
 "show"                 { return SHOW; }
 "print"                { return SHOW; }
 "write"                { return WRITE; }
@@ -409,19 +425,19 @@ f\"([^"\\]|\\.)*\" {
     return ID;
 }
 
-\n                     { line_num++; if (lexer_bracket_depth == 0) return NEWLINE; }
-[ \t\r]+               ;
+\n                     { line_num++; if (lexer_bracket_depth == 0) { lexer_at_stmt_start = 1; return NEWLINE; } }
+[ \t\r]+               { lexer_at_stmt_start = lexer_prev_start; }
  /* The UTF-8 byte order mark that Notepad and PowerShell 5 put at the start
     of files: skip it like whitespace (outside strings) wherever it appears,
     so files from every entry point (run, import, eval) read the same. */
-"\xEF\xBB\xBF"         ;
+"\xEF\xBB\xBF"         { lexer_at_stmt_start = lexer_prev_start; }
 
-"#"[^\n]*              ;
+"#"[^\n]*              { lexer_at_stmt_start = lexer_prev_start; }
 
-"/*"                   { BEGIN(COMMENT); }
-<COMMENT>"*/"          { BEGIN(INITIAL); }
-<COMMENT>\n            { line_num++; }
-<COMMENT>.             ;
+"/*"                   { lexer_at_stmt_start = lexer_prev_start; BEGIN(COMMENT); }
+<COMMENT>"*/"          { lexer_at_stmt_start = lexer_prev_start; BEGIN(INITIAL); }
+<COMMENT>\n            { lexer_at_stmt_start = lexer_prev_start; line_num++; }
+<COMMENT>.             { lexer_at_stmt_start = lexer_prev_start; }
 
 .                      { printf("Warning: unknown char '%c' (0x%02x) at line %d\n", *yytext, (unsigned char)*yytext, line_num); }
 

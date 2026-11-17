@@ -1,0 +1,24 @@
+zero
+small
+greeting
+pair 1,2
+long list from 9 with 3 more
+starts with 0, ends with 6
+other
+big
+other
+other
+pair [1, 2],3
+still a name 3
+if match: still works
+Color.RED 1 10 11 RED
+true false 4 ["RED", "GREEN", "BLUE", "PINK"]
+Color.BLUE Color [Color.RED, Color.GREEN]
+RED 0
+GREEN 1
+BLUE 10
+PINK 11
+Dir.UP 1 {Dir.UP, Dir.DOWN}
+warm cool other
+414
+150000
