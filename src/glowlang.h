@@ -72,7 +72,8 @@ typedef struct { Value callee; int argc; Value *args; const char *name; int daem
  *  GC & OBJECTS
  * ================================================================ */
 typedef enum {
-    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_BIGINT, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE
+    OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_BIGINT, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE,
+    OBJ_SET
 } ObjType;
 
 typedef struct GCObject {
@@ -89,6 +90,13 @@ typedef struct GCObject {
     void *block_ptr;
     size_t sz;
 } GCObject;
+
+/* A set: map is a dict from a key that identifies each item (equal items,
+   such as 1 and 1.0, share one) to the item itself, in insertion order. */
+typedef struct GlowSet {
+    GCObject obj;
+    Value map;
+} GlowSet;
 
 typedef struct {
     GCObject obj;
@@ -998,6 +1006,16 @@ Value native_list_len(int argc, Value *args);
 Value native_val_type(int argc, Value *args);
 Value native_type(int argc, Value *args);
 const char *glow_type_name(Value v);
+/* Sets (corelib.c). */
+#define AS_SET(v) ((GlowSet*)(uintptr_t)((v) & MASK_PAYLOAD))
+static inline int is_set(Value v) { return GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_SET; }
+Value glow_set_new(void);
+int glow_set_add(Value s, Value x);          /* 0 (with an error) for an item a set cannot hold */
+int glow_set_has(Value s, Value x);
+int glow_set_size(Value s);
+int glow_set_eq(Value a, Value b);
+Value glow_set_op(Value a, Value b, char op); /* '|' union, '&' intersection, '-' difference, '^' symmetric */
+Value glow_set_to_list(Value s);
 /* Can < order a and b? (numbers with numbers, text with text, lists with lists) */
 int glow_values_comparable(Value a, Value b);
 /* Calls and functions with a ...rest parameter (see PACK_REST in vm.c). */

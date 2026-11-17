@@ -452,6 +452,35 @@ property a string, list, number, object or `none` does not have is an error:
 none.name            # error: cannot read property 'name' of none
 ```
 
+### Sets
+A set holds each item once, in the order the items were first added.
+`{a, b}` makes one (`{}` is still an empty dict), and so does `set(items)`
+from a list, the characters of a string, a dict's keys or another set:
+```glow
+let tags = {"red", "green"}
+let seen = set([3, 1, 3, 2])     # {3, 1, 2}
+tags.add("blue")
+show "red" in tags, len(seen)    # true 3
+for each t in tags:
+    show t
+end
+```
+| Operation | Result |
+|-----------|--------|
+| `a \| b`, `a.union(b)` | Items in either |
+| `a & b`, `a.intersection(b)` | Items in both |
+| `a - b`, `a.difference(b)` | Items in `a` but not `b` |
+| `a ^ b`, `a.symmetric_difference(b)` | Items in exactly one |
+| `add(x, ...)`, `remove(x)` (error if missing), `discard(x)`, `clear()` | Change the set |
+| `has(x)` / `contains(x)`, `is_subset(b)`, `is_superset(b)`, `is_disjoint(b)` | `true` / `false` |
+| `copy()`, `to_list()`, `is_empty()`, `len(s)` | |
+
+The methods also take a list where they need another set. Equal numbers
+are one item (`{1, 1.0}` is `{1}`), but `1`, `"1"` and `true` are three.
+Lists, dicts and sets cannot be items, because they can change; objects
+can, and each object is its own item. `==` compares the items, and
+`sorted`, `min`, `max`, `sum` and `...spread` accept sets.
+
 ---
 
 ## 8. Control Flow
@@ -647,7 +676,7 @@ let more = [0, ...nums, 8]   # [0, 5, 6, 7, 8]
 let copy = [...nums]         # a new list
 super.init(...parts)         # inside a method
 ```
-Spreading anything other than a list is an error.
+Spreading anything other than a list or a set is an error.
 
 ### Recursive Functions
 ```glow
@@ -1109,6 +1138,14 @@ let chars = [c for each c in "hello"]
 show chars   # ["h", "e", "l", "l", "o"]
 ```
 
+### Dict and Set Comprehensions
+The same form in braces makes a dict (with `key: value`) or a set:
+```glow
+let lengths = {w: len(w) for each w in ["a", "bb", "ccc"]}   # {"a": 1, "bb": 2, "ccc": 3}
+let big = {k: lengths[k] for each k in lengths.keys() when lengths[k] > 1}
+let squares = {x * x for each x in [-2, -1, 0, 1, 2]}          # {4, 1, 0}
+```
+
 ---
 
 ## 18. Standard Library
@@ -1136,6 +1173,7 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 | `input(prompt)` / `ask(prompt)` | Read a line from standard input (`none` at end of input) |
 | `assert(condition, message)` | Raise an error ("Assertion failed: message") when the condition is false; `try`/`catch` can handle it |
 | `dict()` | Empty dictionary |
+| `set()`, `set(items)` | A set (see Sets) |
 
 ### Math (`math.`)
 `sqrt`, `pow`, `exp`, `log(x, base)` (an error for x <= 0), `log2`, `log10`, `sin`, `cos`, `tan`,

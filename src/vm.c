@@ -433,6 +433,7 @@ int val_eq(Value a, Value b) {
        limit stops self-referencing structures from recursing forever. */
     static THREAD_LOCAL int eq_depth = 0;
     if (eq_depth > 200) return 0;
+    if (is_set(a) && is_set(b)) return glow_set_eq(a, b);
     if (ta == VAL_LIST && tb == VAL_LIST) {
         List *la = AS_LIST(a), *lb = AS_LIST(b);
         if (la->size != lb->size) return 0;
@@ -778,6 +779,7 @@ static Value int64_result(int64_t r) {
 }
 static Value glow_bitop(Value a, Value b, char op) {
     char name[2] = { op, 0 };
+    if (is_set(a) && is_set(b)) return glow_set_op(a, b, op);   /* union, intersection, symmetric difference */
     if (!bit_int_operand(a) || !bit_int_operand(b)) { arith_type_error(name, a, b); return value_none(); }
     int64_t x, y;
     if (value_exact_int64(a, &x) && value_exact_int64(b, &y))
@@ -928,6 +930,7 @@ Value jit_int_add(Value a, Value b) {
     return num_add(a, b);
 }
 Value jit_int_sub(Value a, Value b) {
+    if (is_set(a) && is_set(b)) return glow_set_op(a, b, '-');
     if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
     return num_sub(a, b);
 }
@@ -1412,7 +1415,7 @@ Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing) {
     if (GET_TYPE(o) == VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o) == OBJ_PACKED_ARRAY && strcmp(n, "shape") == 0) {
         return native_tensor_shape(1, &o); /* t.shape, as tensor.shape(t) */
     }
-    if (GET_TYPE(o) == VAL_LIST) {
+    if (GET_TYPE(o) == VAL_LIST || is_set(o)) {
         NativeFuncPtr bfn = glow_builtin_method(o, n);
         if (bfn) return bound_native_method_new(o, bfn);
     } else if (GET_TYPE(o) == VAL_STRING) {
@@ -1599,6 +1602,11 @@ Value jit_iter_next(Value vit) {
             Dict *d = AS_DICT(coll);
             while (it->index < d->capacity && (d->keys[it->index] == 0 || GET_TYPE(d->keys[it->index]) == VAL_NONE)) it->index++;
             if (it->index < d->capacity) return value_string_copy((const char*)(uintptr_t)(d->keys[it->index++] & MASK_PAYLOAD));
+        } else if (is_set(coll)) {
+            /* The items in the order they were added. */
+            Dict *d = AS_DICT(AS_SET(coll)->map);
+            while (it->index < d->capacity && (d->keys[it->index] == 0 || GET_TYPE(d->keys[it->index]) == VAL_NONE)) it->index++;
+            if (it->index < d->capacity) return d->values[it->index++];
         } else if (type == VAL_STRING) {
             /* One character per step; it->index is a byte offset. */
             const char *s = AS_STRING(coll);
@@ -1716,6 +1724,8 @@ Value glow_in(Value elem, Value coll) {
         }
     } else if (GET_TYPE(coll) == VAL_STRING) {
         if (GET_TYPE(elem) == VAL_STRING && strstr(AS_STRING(coll), AS_STRING(elem)) != NULL) found = 1;
+    } else if (is_set(coll)) {
+        found = glow_set_has(coll, elem);
     }
     return value_bool(found);
 }
@@ -2378,6 +2388,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 goto l_DISPATCH;
             }
         }
+        if (is_set(a) && is_set(b)) { R(pc->r0) = glow_set_op(a, b, '-'); pc++; goto l_DISPATCH; }
         if (!is_numeric(a) || !is_numeric(b)) { arith_type_error("-", a, b); goto l_OP_THROW; }
         R(pc->r0) = num_sub(a, b);
         pc++;
@@ -3415,7 +3426,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         }
         pthread_detach(t); pc++; goto l_DISPATCH;
     }
-    l_OP_LEN: { Value v = R(pc->r1); if(GET_TYPE(v)==VAL_STRING) R(pc->r0) = value_int(glow_str_len(v)); else if(GET_TYPE(v)==VAL_LIST) R(pc->r0) = value_int(AS_LIST(v)->size); else R(pc->r0) = value_int(0); pc++; goto l_DISPATCH; }
+    l_OP_LEN: { Value v = R(pc->r1); if(GET_TYPE(v)==VAL_STRING) R(pc->r0) = value_int(glow_str_len(v)); else if(GET_TYPE(v)==VAL_LIST) R(pc->r0) = value_int(AS_LIST(v)->size); else if (is_set(v)) R(pc->r0) = value_int(glow_set_size(v)); else R(pc->r0) = value_int(0); pc++; goto l_DISPATCH; }
     l_OP_RANGE: { int n = (int)AS_INT(R(pc->r1)); if (n < 0 || n > 10000000) n = 0; List *l = list_new(n); for(int i=0; i<n; i++) list_push(l, value_int(i)); R(pc->r0) = value_list(l); pc++; goto l_DISPATCH; }
     l_OP_APPEND: { Value v = R(pc->r1), l = R(pc->r0); if(GET_TYPE(l)==VAL_LIST) list_push(AS_LIST(l), v); pc++; goto l_DISPATCH; }
     l_OP_TYPE: {

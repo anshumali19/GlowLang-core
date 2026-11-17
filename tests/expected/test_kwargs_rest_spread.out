@@ -33,7 +33,7 @@ greet() has no parameter named 'nope'
 greet() got two values for 'name'
 total(): ...rest collects the extra arguments, so it cannot be given by name
 len() does not take name = value arguments
-Cannot spread int with ...: it needs a list
-Cannot spread int with ...: it needs a list
+Cannot spread int with ...: it needs a list or a set
+Cannot spread int with ...: it needs a list or a set
 greet() takes 3 arguments but 4 were given
 Cannot unpack 1 item: the names besides ...rest need 2

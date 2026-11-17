@@ -191,6 +191,30 @@ static Node *list_node(Node **items, int count, int line) {
     }
     return helper_call("__glow_concat", parts, nparts, line);
 }
+/* [expr for each var in coll when filter] (filter may be NULL). */
+static Node *comp_node(Node *expr, const char *var, Node *coll, Node *filter) {
+    Node *c = node_new(NODE_LIST_COMP);
+    c->comp_expr = expr; c->comp_var = var; c->left = coll; c->comp_filter = filter;
+    return c;
+}
+/* {k: v for each var in coll when filter}: __glow_dict_from_pairs of the
+   list comprehension of [k, v] pairs. */
+static Node *dict_comp(Node *k, Node *v, const char *var, Node *coll, Node *filter) {
+    Node **kv = arena_alloc(sizeof(Node*) * 2);
+    kv[0] = k; kv[1] = v;
+    Node *pair = node_new(NODE_LIST_LITERAL);
+    pair->elements = kv; pair->element_count = 2; pair->line = k->line;
+    Node **a = arena_alloc(sizeof(Node*));
+    a[0] = comp_node(pair, var, coll, filter);
+    return helper_call("__glow_dict_from_pairs", a, 1, k->line);
+}
+/* {x for each var in coll} and {a, b, ...more}: a set from a list. */
+static Node *set_of(Node *list, int line) {
+    if (!list) return NULL;
+    Node **a = arena_alloc(sizeof(Node*));
+    a[0] = list;
+    return helper_call("__glow_set_from", a, 1, line);
+}
 /* callee(items): with a ...spread or name = value argument the call becomes
    __glow_call(callee, positional list, [names], [values]), which matches
    names to parameters at run time; otherwise it is an ordinary call.
@@ -441,7 +465,16 @@ primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); } | STR
     $$->comp_var = $4;
     $$->left = $6;
     $$->comp_filter = $8;
-} | '[' item_list ']' { $$ = list_node($2.nodes, $2.count, line_num); if (!$$) YYERROR; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
+} | '[' item_list ']' { $$ = list_node($2.nodes, $2.count, line_num); if (!$$) YYERROR; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' item_list '}' { $$ = set_of(list_node($2.nodes, $2.count, line_num), line_num); if (!$$) YYERROR; }
+    | '{' expr COLON expr FOR EACH ID IN_KW expr '}' { $$ = dict_comp($2, $4, intern_string($7), $9, NULL); }
+    | '{' expr COLON expr FOR EACH ID IN_KW expr WHEN expr '}' { $$ = dict_comp($2, $4, intern_string($7), $9, $11); }
+    | '{' expr COLON expr FOR ID IN_KW expr '}' { $$ = dict_comp($2, $4, intern_string($6), $8, NULL); }
+    | '{' expr COLON expr FOR ID IN_KW expr WHEN expr '}' { $$ = dict_comp($2, $4, intern_string($6), $8, $10); }
+    | '{' expr FOR EACH ID IN_KW expr '}' { $$ = set_of(comp_node($2, intern_string($5), $7, NULL), line_num); }
+    | '{' expr FOR EACH ID IN_KW expr WHEN expr '}' { $$ = set_of(comp_node($2, intern_string($5), $7, $9), line_num); }
+    | '{' expr FOR ID IN_KW expr '}' { $$ = set_of(comp_node($2, intern_string($4), $6, NULL), line_num); }
+    | '{' expr FOR ID IN_KW expr WHEN expr '}' { $$ = set_of(comp_node($2, intern_string($4), $6, $8), line_num); }
+    | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
 
 dict_elements: expr COLON expr { $$.count = 1; $$.keys = arena_alloc(sizeof(Node*)); $$.keys[0] = $1; $$.values = arena_alloc(sizeof(Node*)); $$.values[0] = $3; } | dict_elements COMMA expr COLON expr { $$.keys = arena_realloc($$.keys, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.keys[$1.count] = $3; $$.values = arena_realloc($$.values, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.values[$1.count] = $5; $$.count = $1.count + 1; };
 
