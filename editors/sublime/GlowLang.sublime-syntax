@@ -164,6 +164,14 @@ contexts:
     - match: '\b(try|catch|finally|throw)\b'
       scope: keyword.control.exception.glowlang
 
+    # match / case / enum: keywords only at the start of a statement line
+    - match: '^\s*(match|case)\b(?=\s.*:\s*(#.*)?$)'
+      captures:
+        1: keyword.control.match.glowlang
+    - match: '^\s*(enum)\b(?=\s+\w+\s*:)'
+      captures:
+        1: keyword.declaration.enum.glowlang
+
     # I/O keywords
     - match: '\b(show|write|input)\b'
       scope: keyword.other.io.glowlang
@@ -220,6 +228,12 @@ contexts:
     # Compound assignment
     - match: '//=|<<=|>>=|[+\-*/%&|^]='
       scope: keyword.operator.assignment.compound.glowlang
+
+    # None-aware and spread
+    - match: '\?\?=|\?\?|\?\.'
+      scope: keyword.operator.glowlang
+    - match: '\.\.\.'
+      scope: keyword.operator.spread.glowlang
 
     # Bitwise
     - match: '<<|>>|[&|^~]'
