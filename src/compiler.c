@@ -1054,6 +1054,7 @@ static void compile_stmt(Node *n) {
             fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
 
             fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
+            fe->rest_param = n->has_rest;
             Bytecode *p = compiling_bc; compiling_bc = fe->body;
             FuncEntry *pf = compiling_func; compiling_func = fe;
             push_outer(is_method ? NULL : pf);
@@ -1349,13 +1350,17 @@ static void compile_stmt(Node *n) {
             } else {
                 /* __glow_unpack(value, count) checks it is a list of that
                    many items; then item i goes to register i. */
-                Node **args = arena_alloc(sizeof(Node*) * 2);
+                /* With a ...rest name, __glow_unpack(value, count, i) gives
+                   the list its items rearranged: item i is the list of the
+                   ones the other names leave. */
+                Node **args = arena_alloc(sizeof(Node*) * 3);
                 args[0] = n->left;
                 args[1] = newIntNode(count);
                 args[1]->line = n->line;
+                if (n->has_rest) { args[2] = newIntNode(n->has_rest - 1); args[2]->line = n->line; }
                 Node *check = node_new(NODE_CALL);
                 check->name = intern_string("__glow_unpack");
-                check->call_args = args; check->call_arg_count = 2; check->line = n->line;
+                check->call_args = args; check->call_arg_count = n->has_rest ? 3 : 2; check->line = n->line;
                 int list_reg = next_free_reg++;
                 compile_expr(check, list_reg);
                 for (int i = 0; i < count; i++) regs[i] = next_free_reg++;
@@ -1567,6 +1572,21 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_CALL_EXPR:
         case NODE_CALL: {
+            if (n->type == NODE_CALL && n->name && strcmp(n->name, "__glow_call") == 0 && n->call_arg_count >= 1) {
+                Node *cal = n->call_args[0];
+                if (cal && cal->type == NODE_INDEX && cal->name && cal->left && cal->left->type == NODE_VAR &&
+                    cal->left->name && strcmp(cal->left->name, "super") == 0 && get_local_reg("super") == -1) {
+                    int ok_ctx = in_method_body && method_parent_name;
+                    Node **ba = arena_alloc(sizeof(Node*) * 3);
+                    ba[0] = ok_ctx ? newVarNode(method_parent_name) : newStringNode(in_method_body ? "no-parent" : "not-in-method");
+                    ba[1] = newStringNode(cal->name);
+                    ba[2] = ok_ctx ? newVarNode(intern_string("self")) : newStringNode("");
+                    Node *bind = node_new(NODE_CALL);
+                    bind->name = intern_string("__glow_super_bind");
+                    bind->call_args = ba; bind->call_arg_count = 3; bind->line = n->line;
+                    n->call_args[0] = bind;
+                }
+            }
             /* super.m(args) -> __glow_super(Parent, "m", self, args...): calls
                the parent class's m (found up its chain) on the current self.
                Outside a method of a class that extends another, the helper
@@ -1895,6 +1915,7 @@ static int compile_expr(Node *n, int target_reg) {
             if (fe->local_regs) free(fe->local_regs);
             fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
             fe->param_count = n->func_param_count;
+            fe->rest_param = n->has_rest;
             fe->params = n->func_params;
             fe->body = bc_new(fe);
             Bytecode *p = compiling_bc; compiling_bc = fe->body; FuncEntry *pf = compiling_func; compiling_func = fe;

@@ -139,6 +139,11 @@ self.x, self.y = self.y, self.x
 ```
 A single value on the right must be a list with exactly one item per name;
 anything else raises an error (`Cannot unpack 3 items into 2 names`).
+One name may be `...rest`: it gets the items the others leave, as a list:
+```glow
+let first, ...others = [1, 2, 3, 4]    # 1 and [2, 3, 4]
+let ...init, last = [1, 2, 3]          # [1, 2] and 3
+```
 
 ### Undefined Names
 Reading a name that nothing declares is an error, so a typo is reported where
@@ -308,6 +313,7 @@ as plain text: `show "hi"` prints `hi`.
 let empty = []
 let nums = [1, 2, 3, 4, 5]
 let mixed = [1, "two", 3.0, true]
+let joined = [0, ...nums, 6]     # ...spreads another list's items in
 ```
 
 ### Access and Modification
@@ -583,6 +589,45 @@ add(1)                    # 11
 
 The default is evaluated each time the function is called, so `items = []`
 gives every call its own new list.
+
+### Named Arguments
+An argument can be passed by its parameter's name, after the positional
+ones. Parameters left out in between get their defaults:
+```glow
+greet("Ana", mark = ".")           # Hello, Ana.
+greet(mark = "?", name = "Bo")     # Hello, Bo?
+let p = Point(y = 5)               # constructors (init's parameters) too
+```
+A name that is not a parameter, or one that a positional argument already
+filled, is an error (`greet() has no parameter named 'nope'`,
+`greet() got two values for 'name'`). Built-in functions take positional
+arguments only.
+
+### Any Number of Arguments: `...rest`
+A last parameter written `...name` collects the extra arguments into a list
+(empty when there are none). It works for functions, lambdas, methods and
+`init`:
+```glow
+func total(first, ...rest):
+    return first + sum(rest)
+end
+total(1)            # 1, rest is []
+total(1, 2, 3)      # 6, rest is [2, 3]
+let count = lambda(...xs): len(xs)
+```
+
+### Spreading a List: `...list`
+`...list` in a call passes the list's items as separate arguments; in a list
+literal it puts them in place:
+```glow
+let nums = [5, 6, 7]
+total(...nums)          # total(5, 6, 7)
+max(...nums, 10)
+let more = [0, ...nums, 8]   # [0, 5, 6, 7, 8]
+let copy = [...nums]         # a new list
+super.init(...parts)         # inside a method
+```
+Spreading anything other than a list is an error.
 
 ### Recursive Functions
 ```glow
