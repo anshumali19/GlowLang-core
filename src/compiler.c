@@ -43,10 +43,19 @@ static const char *compiling_trait_name = NULL;
 Node* node_new(NodeType t) { Node *n = arena_alloc(sizeof(Node)); memset(n, 0, sizeof(Node)); n->type = t; n->line = line_num; return n; }
 /* Build an integer literal Value via the numeric tower: inline 48-bit int ->
    double (exact to 2^53) -> heap big-int (exact beyond 2^53). */
+/* A big-int literal lives in the syntax tree, which the collector does not
+   scan, from parsing until the compiled code uses it, so it becomes a
+   permanent root as soon as it is made. (Rooting it only at compile time
+   let a collection during parsing free it.) */
+static Value rooted_bigint(BigInt *b) {
+    Value v = value_bigint(b);
+    gc_register_constant_root(v);
+    return v;
+}
 static inline Value int_literal_value(int64_t v) {
     if (fits_int48(v)) return value_int(v);
     if (v >= -INT53_MAX && v <= INT53_MAX) return value_float((double)v);
-    return value_bigint(bigint_from_int64(v));
+    return rooted_bigint(bigint_from_int64(v));
 }
 Node* newIntNode(int64_t v) { Node *n = node_new(NODE_INT_LIT); n->value = int_literal_value(v); return n; }
 Node* newIntNodeStr(const char *s) {
@@ -58,7 +67,7 @@ Node* newIntNodeStr(const char *s) {
     /* Otherwise (literal beyond 2^63) keep it exact as a heap big-int. */
     BigInt *b = bigint_from_string(s);
     Node *n = node_new(NODE_INT_LIT);
-    n->value = value_bigint(b);
+    n->value = rooted_bigint(b);
     return n;
 }
 Node* newFloatNode(double v) { Node *n = node_new(NODE_FLOAT_LIT); n->value = value_float(v); return n; }
@@ -1495,7 +1504,7 @@ static int compile_expr(Node *n, int target_reg) {
                 *vp = lit;
                 int idx = bc_emit(compiling_bc, OP_CONST_FLOAT, 0, (intptr_t)vp);
                 compiling_bc->code[idx].r0 = reg;
-                if (is_bigint(lit)) gc_register_constant_root(lit);
+                /* (a big-int literal was rooted when it was parsed) */
             }
             break;
         }
