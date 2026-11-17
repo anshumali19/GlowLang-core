@@ -53,6 +53,14 @@
                 {
                     "name": "keyword.other.glow",
                     "match": "\\b(show|print|write|input|ask)\\b"
+                },
+                {
+                    "name": "keyword.control.glow",
+                    "match": "^\\s*(match|case)\\b(?=\\s.*:\\s*(#.*)?$)"
+                },
+                {
+                    "name": "keyword.control.glow",
+                    "match": "^\\s*(enum)\\b(?=\\s+\\w+\\s*:)"
                 }
             ]
         },

@@ -46,6 +46,9 @@ vim.api.nvim_create_autocmd("FileType", {
             syntax keyword glowKeyword use spawn true false times input
             syntax keyword glowKeyword is is_not from to every blueprint action can
             syntax keyword glowKeyword and or not
+            " match / case / enum only at the start of a statement line
+            syntax match glowKeyword /^\s*\zs\(match\|case\)\ze\s.*:\s*\(#.*\)\=$/
+            syntax match glowKeyword /^\s*\zsenum\ze\s\+\w\+\s*:/
 
             " Built-in functions
             syntax keyword glowBuiltin len type range append push pop sort reverse
