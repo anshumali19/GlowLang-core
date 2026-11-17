@@ -3628,6 +3628,15 @@ static SSL_CTX *http_get_ssl_ctx(void) {
     return ctx;
 }
 
+/* For websocket.c: connect with a timeout (a socket, or -1 with err set) and
+   the client TLS context. Call glow_tls_client_ctx with the GIL held: it
+   creates the context the first time. */
+intptr_t glow_net_connect(const char *host, int port, double seconds, char *err, size_t errsz) {
+    http_sock_t s = http_connect(host, port, seconds, err, errsz);
+    return s == HTTP_BAD_SOCK ? -1 : (intptr_t)s;
+}
+void *glow_tls_client_ctx(void) { return http_get_ssl_ctx(); }
+
 typedef struct { int status; HttpBuf headers_raw; HttpBuf body; } HttpResult;
 
 /* Decodes a chunked body in place; returns 0 if it is malformed. */
@@ -7019,6 +7028,7 @@ void std_init(void) {
     dict_set(pg, "server_version", native_func_new("server_version", pg_server_version_native));
     dict_set(pg, "close", native_func_new("close", pg_close_native));
     var_set("pg", value_dict(pg));
+    glow_websocket_init();
     Dict *net = dict_new(4); dict_set(net, "listen", native_func_new("listen", net_listen)); dict_set(net, "close", native_func_new("close", net_close)); var_set("net", value_dict(net));
     Dict *http = dict_new(4);
     dict_set(http, "listen", native_func_new("listen", http_listen));

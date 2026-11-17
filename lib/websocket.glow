@@ -1,0 +1,187 @@
+# websocket.glow: WebSocket connections (RFC 6455), client and server.
+#
+#   use "websocket"
+#
+#   # Client
+#   let ws = websocket.connect("wss://chat.example.com/socket")
+#   ws.send("hello")
+#   let msg = ws.receive()             # {"type": "text", "data": "..."}
+#   show msg["data"]
+#   ws.close()
+#
+#   # Server: handler runs in its own thread for each connection
+#   func echo(ws):
+#       while true:
+#           let msg = ws.receive()
+#           when msg["type"] == "close":
+#               stop
+#           end
+#           ws.send(msg["data"])
+#       end
+#   end
+#   websocket.serve(8765, echo)
+#
+# receive() returns a dict: {"type": "text", "data": text},
+# {"type": "binary", "data": bytes} or, once the connection has ended,
+# {"type": "close", "code": 1000, "reason": "..."} (every time after that).
+# receive(seconds) gives none if nothing arrived in time. Pings are
+# answered by receive() automatically.
+#
+# One thread can receive while others send on the same connection. Errors
+# raise text starting with "websocket:". wss:// checks the server's
+# certificate (options {"verify": false} turns that off, for testing only).
+# For a wss:// server, put the plain server behind a TLS proxy (nginx, Caddy).
+
+blueprint WebSocket:
+    action init(id, url):
+        self.id = id
+        self.url = url
+        self.closed = none
+        self.request = none
+        self.protocol = ws_native.info(id).get("protocol", "")
+    end
+
+    # Sends text, or bytes with send_bytes. Raises when the connection is closed.
+    action send(text):
+        self._send(str(text), false)
+    end
+
+    action send_bytes(data):
+        self._send(data, true)
+    end
+
+    # Sends a dict or list as JSON text.
+    action send_json(value):
+        self._send(json.stringify(value), false)
+    end
+
+    action _send(data, binary):
+        when self.closed != none:
+            throw "websocket: the connection is closed (" + str(self.closed["code"]) + ")"
+        end
+        try:
+            ws_native.send(self.id, data, binary)
+        catch e:
+            # receive() then tells why: the other side's close, or 1006
+            throw str(e).replace("websocket.send: ", "websocket: ")
+        end
+    end
+
+    # The next message (see above); seconds = none waits as long as it takes.
+    action receive(seconds = none):
+        when self.closed != none:
+            return self.closed
+        end
+        let msg = none
+        try:
+            msg = ws_native.recv(self.id, seconds)
+        catch e:
+            self.closed = {"type": "close", "code": 1006, "reason": "the connection was lost"}
+            return self.closed
+        end
+        when msg != none and msg["type"] == "close":
+            self.closed = msg
+        end
+        return msg
+    end
+
+    # The next text message parsed as JSON (none when it timed out; raises
+    # if the connection closed or the text is not JSON).
+    action receive_json(seconds = none):
+        let msg = self.receive(seconds)
+        when msg == none:
+            return none
+        end
+        when msg["type"] == "close":
+            throw "websocket: the connection closed (" + str(msg["code"]) + ")"
+        end
+        try:
+            return json.parse(msg["data"])
+        catch e:
+            throw "websocket: the message is not JSON"
+        end
+    end
+
+    action ping(data = ""):
+        ws_native.ping(self.id, data)
+    end
+
+    # Closes the connection (code 1000 = normal), waiting briefly for the
+    # other side to agree. Closing twice is fine.
+    action close(code = 1000, reason = ""):
+        when self.closed == none:
+            self.closed = {"type": "close", "code": code, "reason": reason}
+        end
+        ws_native.close(self.id, code, reason)
+    end
+
+    action is_open():
+        return self.closed == none and ws_native.info(self.id)["open"]
+    end
+end
+
+func _ws_serve_one(client, handler, options):
+    let ws = none
+    try:
+        ws = WebSocket(ws_native.accept(client, none, options), "")
+    catch e:
+        http.close(client)
+        return none
+    end
+    try:
+        handler(ws)
+    catch e:
+        show "[websocket] handler error: " + str(e)
+        ws.close(1011, "internal error")
+        return none
+    end
+    ws.close()
+end
+
+blueprint WebSocketModule:
+    # url: ws://host[:port]/path or wss://... options: "headers" (dict),
+    # "protocols" (subprotocols to offer), "timeout" (seconds to connect,
+    # default 30), "verify" (check the TLS certificate, default true),
+    # "max_message" (bytes, default 16 MiB), "send_timeout" (default 30).
+    action connect(url, options = none):
+        let id = none
+        try:
+            id = ws_native.connect(url, options)
+        catch e:
+            throw str(e).replace("websocket.connect: ", "websocket: ")
+        end
+        return WebSocket(id, url)
+    end
+
+    # Takes over a connection from http.accept: answers the upgrade request
+    # (request: what http.read returned, or none to read it here). Raises,
+    # after answering 400, when it is not a WebSocket request; close the
+    # connection yourself then. options: "protocols" (the subprotocols this
+    # server speaks, preferred first), "max_message", "send_timeout".
+    action accept(client, request = none, options = none):
+        let id = none
+        try:
+            id = ws_native.accept(client, request, options)
+        catch e:
+            throw str(e).replace("websocket.accept: ", "websocket: ")
+        end
+        return WebSocket(id, "")
+    end
+
+    # Listens on port and runs handler(ws) in a thread for each connection;
+    # the connection is closed when the handler returns. Runs forever.
+    action serve(port, handler, options = none):
+        let listener = http.listen(port)
+        when listener < 0:
+            throw "websocket: cannot listen on port " + str(port)
+        end
+        while true:
+            let client = http.accept(listener)
+            when client >= 0:
+                spawn _ws_serve_one(client, handler, options)
+            end
+        end
+    end
+end
+
+let websocket = WebSocketModule()

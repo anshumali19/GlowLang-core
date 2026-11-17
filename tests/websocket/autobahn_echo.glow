@@ -1,0 +1,20 @@
+# Echo server for the Autobahn test suite's fuzzing client (tests the server).
+use "websocket"
+func echo(ws):
+    while true:
+        let m = ws.receive()
+        when m["type"] == "close":
+            stop
+        end
+        try:
+            when m["type"] == "binary":
+                ws.send_bytes(m["data"])
+            otherwise:
+                ws.send(m["data"])
+            end
+        catch e:
+            # the peer may already be closing; receive() reports how
+        end
+    end
+end
+websocket.serve(int(os.args[0]), echo)

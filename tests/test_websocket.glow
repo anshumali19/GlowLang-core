@@ -1,0 +1,198 @@
+# WebSocket client and server against each other, in one program.
+# Malformed frames, other implementations (Node, Python) and the Autobahn
+# test suite are run by tests/websocket/run.sh in CI.
+use "websocket"
+
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    when cond:
+        passed = passed + 1
+    otherwise:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func errs(f):
+    try:
+        f()
+    catch e:
+        return str(e)
+    end
+    return "no error"
+end
+
+let port = 21000 + int(os.time() * 1000) % 2000
+let url = "ws://127.0.0.1:" + str(port)
+let events = []
+
+func handler(ws):
+    while true:
+        let m = ws.receive()
+        when m["type"] == "close":
+            events.push("server saw close " + str(m["code"]) + " " + m["reason"])
+            stop
+        end
+        when m["type"] == "binary":
+            ws.send_bytes(m["data"])
+        eif m["data"] == "close 4000":
+            ws.close(4000, "server says bye")
+            stop
+        eif m["data"] == "json":
+            ws.send_json({"ok": true, "n": [1, 2, 3]})
+        eif m["data"] == "protocol":
+            ws.send("protocol=" + ws.protocol)
+        eif m["data"] == "burst":
+            for each i in range(50):
+                ws.send("b" + str(i))
+            end
+        otherwise:
+            ws.send(m["data"])
+        end
+    end
+end
+
+spawn websocket.serve(port, handler, {"protocols": ["chat.v2", "chat.v1"], "max_message": 2097152})
+let ws = none
+let tries = 0
+while ws == none and tries < 50:
+    try:
+        ws = websocket.connect(url + "/room?id=7")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+
+show "== messages"
+ws.send("hello")
+ok("text echo", ws.receive(10) == {"type": "text", "data": "hello"})
+ws.send("नमस्ते दुनिया 🌏")
+ok("unicode echo", ws.receive(10)["data"] == "नमस्ते दुनिया 🌏")
+ws.send("")
+ok("empty message", ws.receive(10) == {"type": "text", "data": ""})
+for each n in [125, 126, 65535, 65536, 1000000]:
+    let s = "a" * n
+    ws.send(s)
+    ok("length " + str(n), ws.receive(10)["data"] == s)
+end
+let raw = crypto.random_bytes(4096)
+ws.send_bytes(raw)
+let back = ws.receive(10)
+ok("binary with every kind of byte", back["type"] == "binary" and back["data"] == raw and back["data"].byte_len() == 4096)
+ws.send(42)
+ok("numbers are sent as text", ws.receive(10)["data"] == "42")
+ws.send("json")
+ok("receive_json", ws.receive_json(10) == {"ok": true, "n": [1, 2, 3]})
+ws.send_json({"a": "b"})
+ok("send_json", ws.receive(10)["data"] == "{\"a\": \"b\"}")
+ws.send("burst")
+let all = true
+for each i in range(50):
+    all = all and ws.receive(10)["data"] == "b" + str(i)
+end
+ok("50 messages in order", all)
+ws.ping("are you there")
+ws.send("after ping")
+ok("pong handled inside receive", ws.receive(10)["data"] == "after ping")
+ok("timeout gives none", ws.receive(0.2) == none)
+ok("bytes that are not UTF-8 cannot go as text", errs(lambda(): ws.send(raw)).contains("websocket: the text is not valid UTF-8 (send bytes with binary = true)"))
+ok("no subprotocol asked, none chosen", ws.protocol == "")
+ok("open", ws.is_open())
+
+show "== threads"
+# The server runs forever, so wait for these threads by counting them
+# rather than with threads.join_all().
+let finished = {"n": 0}
+func wait_for(n):
+    let waited = 0
+    while finished["n"] < n and waited < 300:
+        os.sleep(50)
+        waited = waited + 1
+    end
+    finished["n"] = 0
+end
+func sender(conn, tag):
+    for each i in range(20):
+        conn.send(tag + str(i))
+    end
+    finished["n"] = finished["n"] + 1
+end
+spawn sender(ws, "x")
+spawn sender(ws, "y")
+let got = {}
+for each i in range(40):
+    let m = ws.receive(10)
+    got[m["data"]] = true
+end
+wait_for(2)
+ok("two threads sending while one receives: all 40 arrive whole", len(got.keys()) == 40 and got.has("x19") and got.has("y0"))
+
+func client_run(n, results):
+    let c = websocket.connect(url)
+    c.send("client " + str(n))
+    results[str(n)] = c.receive(10)["data"]
+    c.close()
+    finished["n"] = finished["n"] + 1
+end
+let results = {}
+for each i in range(20):
+    spawn client_run(i, results)
+end
+wait_for(20)
+let right = true
+for each i in range(20):
+    right = right and results.get(str(i), "") == "client " + str(i)
+end
+ok("20 clients at once", right)
+
+show "== subprotocols and limits"
+let p = websocket.connect(url, {"protocols": ["chat.v1", "chat.v2"]})
+ok("server picks its preferred subprotocol", p.protocol == "chat.v2")
+p.send("protocol")
+ok("server side sees it too", p.receive(10)["data"] == "protocol=chat.v2")
+p.close()
+let big = websocket.connect(url)
+big.send("z" * 2097153)
+let bm = big.receive(10)
+ok("over the server's max_message -> 1009", bm["type"] == "close" and bm["code"] == 1009 and bm["reason"] == "message too big")
+let small = websocket.connect(url, {"max_message": 1000})
+small.send("y" * 1001)
+let sm = small.receive(10)
+ok("over the client's own max_message -> 1009", sm["type"] == "close" and sm["code"] == 1009)
+
+show "== closing"
+let c1 = websocket.connect(url)
+c1.send("close 4000")
+let cm = c1.receive(10)
+ok("server closes with a code and reason", cm == {"type": "close", "code": 4000, "reason": "server says bye"})
+ok("closed afterwards", not c1.is_open())
+ok("receive keeps returning the close", c1.receive() == cm)
+ok("sending after close raises", errs(lambda(): c1.send("x")).contains("websocket: the connection is closed (4000)"))
+c1.close()
+ok("closing twice is fine", true)
+
+let c2 = websocket.connect(url)
+c2.close(3001, "done here")
+ok("own close reported by receive", c2.receive() == {"type": "close", "code": 3001, "reason": "done here"})
+ok("bad close code refused", errs(lambda(): websocket.connect(url).close(1005)).contains("the code must be 1000-1003, 1007-1014 or 3000-4999"))
+ok("too long reason refused", errs(lambda(): websocket.connect(url).close(1000, "r" * 124)).contains("at most 123 bytes"))
+
+show "== errors"
+ok("http URL refused", errs(lambda(): websocket.connect("http://127.0.0.1:" + str(port))).contains("websocket: the URL must start with ws:// or wss://"))
+ok("nothing listening", errs(lambda(): websocket.connect("ws://127.0.0.1:1/", {"timeout": 3})).contains("websocket: cannot connect to 127.0.0.1:1"))
+let plain = http.request("GET", "http://127.0.0.1:" + str(port) + "/")
+ok("a plain HTTP request gets 400", plain["status"] == 400 and plain["body"] == "the request has no \"Upgrade: websocket\"")
+ok("ping data limited to 125 bytes", errs(lambda(): ws.ping("p" * 126)).contains("at most 125 bytes"))
+
+ws.close(1000, "bye")
+ok("normal close", ws.receive()["code"] == 1000)
+os.sleep(300)
+events.sort()
+ok("the server saw the clients' closes", events.contains("server saw close 1000 bye") and events.contains("server saw close 3001 done here"))
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+when failed > 0:
+    os.exit(1)
+end
+os.exit(0)

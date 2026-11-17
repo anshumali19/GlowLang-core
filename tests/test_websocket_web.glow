@@ -1,0 +1,54 @@
+# A GlowWeb server with a WebSocket route next to ordinary routes.
+import "lib/web.glow"
+
+func home(req, res):
+    res.text("plain page")
+end
+
+func chat(ws):
+    ws.send("hello " + ws.request.query_params.get("name", "?") + " on " + ws.request.path)
+    while true:
+        let m = ws.receive()
+        when m["type"] == "close":
+            stop
+        end
+        ws.send("you said: " + m["data"])
+    end
+end
+
+func broken(ws):
+    throw "oops"
+end
+
+let port = 29877
+let app = Server(port)
+app.get("/", home)
+app.websocket("/chat", chat)
+app.websocket("/broken", broken)
+spawn app.start(port)
+
+let ws = none
+let tries = 0
+while ws == none and tries < 50:
+    try:
+        ws = websocket.connect("ws://127.0.0.1:" + str(port) + "/chat?name=Asha")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+show ws.receive(10)["data"]
+ws.send("namaste")
+show ws.receive(10)["data"]
+ws.close()
+show "closed:", ws.receive()["code"]
+
+let page = http.request("GET", "http://127.0.0.1:" + str(port) + "/")
+show "plain route:", page["status"], page["body"]
+let notws = http.request("GET", "http://127.0.0.1:" + str(port) + "/chat")
+show "WebSocket path without an upgrade:", notws["status"]
+
+let b = websocket.connect("ws://127.0.0.1:" + str(port) + "/broken")
+let bm = b.receive(10)
+show "handler error closes with:", bm["code"], bm["reason"]
+os.exit(0)

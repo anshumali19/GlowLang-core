@@ -1,0 +1,11 @@
+use "websocket"
+func handle(ws):
+    while true:
+        let m = ws.receive()
+        when m["type"] == "close":
+            stop
+        end
+        ws.send("echo: " + m["data"])
+    end
+end
+websocket.serve(int(os.args[0]), handle, {"max_message": 1048576})
