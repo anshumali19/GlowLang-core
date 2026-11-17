@@ -1,0 +1,8 @@
+[GlowWeb] Starting server on port 29877
+hello Asha on /chat
+you said: namaste
+closed: 1000
+plain route: 200 plain page
+WebSocket path without an upgrade: 404
+[GlowWeb] WebSocket error: oops
+handler error closes with: 1011 internal error

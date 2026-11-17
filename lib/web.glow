@@ -5,6 +5,8 @@
 # Caddy) for TLS, compression and load balancing.
 # String methods: .split() .contains() .find() .slice()
 
+use "websocket"
+
 # ─── String Helpers ───
 func _ends_with(s, suffix):
     let slen = len(s)
@@ -403,6 +405,35 @@ blueprint Server:
         self.middleware = MiddlewareChain()
         self.running = false
         self.static_dir = none
+        self.ws_routes = {}
+    end
+
+    # A WebSocket endpoint: handler(ws) gets the connection (see
+    # lib/websocket.glow), with the HTTP request as ws.request. It runs in
+    # the connection's thread; the connection closes when it returns.
+    action websocket(path, handler):
+        self.ws_routes[path] = handler
+        return self
+    end
+
+    action _websocket(client, raw, req):
+        let ws = none
+        try:
+            ws = websocket.accept(client, raw)
+        catch err:
+            http.close(client)
+            return none
+        end
+        ws.request = req
+        try:
+            let handler = self.ws_routes[req.path]
+            handler(ws)
+        catch err:
+            show "[GlowWeb] WebSocket error: " + str(err)
+            ws.close(1011, "internal error")
+            return none
+        end
+        ws.close()
     end
 
     action route(path, handler):
@@ -475,6 +506,16 @@ blueprint Server:
     action handle_client(client):
         let raw = http.read(client)
         let req = Request(raw)
+
+        # An upgrade to a WebSocket route: the connection is the handler's.
+        when self.ws_routes.has(req.path):
+            for each k in req.headers.keys():
+                when k.lower() == "upgrade" and req.headers[k].lower() == "websocket":
+                    self._websocket(client, raw, req)
+                    return none
+                end
+            end
+        end
         let res = Response()
 
         # Run before middleware

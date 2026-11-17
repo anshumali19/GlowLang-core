@@ -1021,6 +1021,7 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name);
 NativeFuncPtr glow_method_lookup(Value v, const char *name, struct Instruction *pc, Value *member);
 void glow_corelib_init(void);
 void glow_datetime_init(void);
+void glow_websocket_init(void);
 /* process module (process.c): run and talk to other programs. */
 void glow_process_init(void);
 /* ffi module (ffi.c): call functions in C libraries. */

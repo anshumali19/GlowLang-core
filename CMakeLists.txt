@@ -89,6 +89,7 @@ set(GLOW_SOURCES
     src/ffi.c
     src/datetime.c
     src/blake3.c
+    src/websocket.c
 )
 
 if(CUDAToolkit_FOUND)

@@ -228,6 +228,7 @@ The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), 
 - **[Web Development](docs/web_guide.md)** — HTTP server and APIs
 - **[AI/ML Guide](docs/ai_ml_guide.md)** — Tensors and neural networks
 - **[Concurrency Guide](docs/concurrency_guide.md)** — `spawn`, the GIL, `whenever`
+- **[WebSockets](docs/websocket.md)** — live two-way connections, client and server
 - **[Runtime Internals](docs/runtime_internals.md)** — VM, JIT, GC
 - **[Architecture](ARCHITECTURE.md)** — Components and build system
 - **[Deployment Guide](docs/deployment_guide.md)** and **[Production Deployment](docs/production_deployment.md)**

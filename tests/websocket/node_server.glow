@@ -1,0 +1,20 @@
+use "websocket"
+let seen = []
+func handle(ws):
+    while true:
+        let m = ws.receive()
+        when m["type"] == "close":
+            seen.push("closed " + str(m["code"]) + " " + m["reason"])
+            stop
+        end
+        when m["type"] == "binary":
+            ws.send_bytes(m["data"])
+        eif m["data"] == "close please":
+            ws.close(4001, "bye from glow")
+            stop
+        otherwise:
+            ws.send("glow: " + m["data"])
+        end
+    end
+end
+websocket.serve(int(os.args[0]), handle, {"protocols": ["chat.v1", "chat.v2"], "max_message": 8388608})

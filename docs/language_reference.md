@@ -1180,6 +1180,14 @@ month is Feb 28 or 29). Format codes: `%Y %y %m %d %e %H %I %p %M %S %f %B
 not supported; use offsets. Parsing and formatting are built in, so they
 behave the same on every platform.
 
+### WebSockets (`use "websocket"`)
+`websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
+`websocket.serve(port, handler)` runs `handler(ws)` for each connection
+(GlowWeb: `app.websocket(path, handler)`). A connection has `send`,
+`send_bytes`, `send_json`, `receive(seconds)` (a dict with `type` "text",
+"binary" or "close"), `receive_json`, `ping`, `close(code, reason)` and
+`is_open`. See [WebSockets](websocket.md).
+
 ### Other modules
 `gui` (X11: `open`, `clear`, `draw_rect`, `poll`), `collision.aabb(...)`, `crypto`, `net`, `ssl`.
 

@@ -1,0 +1,91 @@
+use "websocket"
+let plain = "ws://127.0.0.1:" + os.args[0]
+let tls = "wss://localhost:" + os.args[1]
+let passed = 0
+let failed = 0
+func ok(name, cond):
+    when cond:
+        passed = passed + 1
+    otherwise:
+        failed = failed + 1
+        show "FAIL: " + name
+    end
+end
+func errs(f):
+    try:
+        f()
+    catch e:
+        return str(e)
+    end
+    return "no error"
+end
+
+let ws = websocket.connect(plain + "/echo")
+ws.send("hi")
+ok("echo through an independent server (lower-case answer headers)", ws.receive(5) == {"type": "text", "data": "hi"})
+ws.ping("x")
+ws.send_bytes("raw" + chr(200))
+ok("binary echo, pong skipped", ws.receive(5)["type"] == "binary")
+ws.close()
+ok("close", ws.receive() == {"type": "close", "code": 1000, "reason": ""})
+
+let e = websocket.connect(plain + "/eager")
+ok("frames in the same packet as the handshake", e.receive(5)["data"] == "right away")
+ok("ping between messages answered, next message read", e.receive(5)["data"] == "second")
+e.close()
+
+let f = websocket.connect(plain + "/fragments")
+ok("fragmented message with a ping in the middle", f.receive(5) == {"type": "text", "data": "fragmented"})
+f.close()
+
+let m = websocket.connect(plain + "/masked")
+let mm = m.receive(5)
+ok("masked frame from a server -> 1002", mm["type"] == "close" and mm["code"] == 1002)
+ok("send after a failed connection raises", errs(lambda(): m.send("x")).contains("websocket: the connection is closed"))
+
+let u = websocket.connect(plain + "/badutf8")
+ok("invalid UTF-8 from a server -> 1007", u.receive(5)["code"] == 1007)
+
+let sc = websocket.connect(plain + "/servercloses")
+let scm = sc.receive(5)
+ok("server-initiated close with a UTF-8 reason", scm == {"type": "close", "code": 1001, "reason": "going away — bye"})
+ok("closed after that", not sc.is_open())
+ok("receive keeps returning the close", sc.receive() == scm)
+
+let d = websocket.connect(plain + "/drop")
+ok("message before the drop", d.receive(5)["data"] == "one")
+ok("dropped connection -> 1006", d.receive(5)["code"] == 1006)
+
+let s = websocket.connect(plain + "/silent")
+ok("timeout gives none", s.receive(0.3) == none)
+s.close()
+
+let h = websocket.connect(plain + "/headers", {"headers": {"Authorization": "Bearer t0k"}})
+ok("custom headers and Host sent", h.receive(5)["data"] == "auth=Bearer t0k ua=GlowLang host=127.0.0.1:" + os.args[0])
+h.close()
+let p = websocket.connect(plain + "/echo", {"protocols": ["a.v1", "b.v2"]})
+ok("subprotocol taken from the server", p.protocol == "b.v2")
+p.close()
+
+ok("404 instead of upgrading", errs(lambda(): websocket.connect(plain + "/http404")).contains("websocket: the server answered \"HTTP/1.1 404 Not Found\" instead of switching to WebSocket"))
+ok("wrong accept key", errs(lambda(): websocket.connect(plain + "/badaccept")).contains("Sec-WebSocket-Accept is wrong"))
+ok("subprotocol not offered", errs(lambda(): websocket.connect(plain + "/badproto", {"protocols": ["mine"]})).contains("chose the subprotocol \"other\", which was not offered"))
+ok("extension not offered", errs(lambda(): websocket.connect(plain + "/ext")).contains("chose extensions (permessage-deflate)"))
+ok("nothing listening", errs(lambda(): websocket.connect("ws://127.0.0.1:1/x", {"timeout": 3})).contains("websocket: cannot connect to 127.0.0.1:1"))
+ok("not a ws URL", errs(lambda(): websocket.connect("http://example.com")).contains("must start with ws:// or wss://"))
+ok("bad port", errs(lambda(): websocket.connect("ws://localhost:99999/")).contains("bad port"))
+ok("header injection refused", errs(lambda(): websocket.connect(plain + "/echo", {"headers": {"X": "a\r\nEvil: 1"}})).contains("line break"))
+
+show "== TLS"
+ok("self-signed certificate refused", errs(lambda(): websocket.connect(tls + "/echo")).contains("TLS certificate of localhost not trusted"))
+let t = websocket.connect(tls + "/echo", {"verify": false})
+t.send("over tls")
+ok("wss echo", t.receive(5) == {"type": "text", "data": "over tls"})
+let bigt = "t" * 300000
+t.send(bigt)
+ok("wss 300 KB message", t.receive(5)["data"] == bigt)
+t.close()
+ok("wss close", t.receive()["code"] == 1000)
+
+show "passed: " + str(passed) + "   failed: " + str(failed)
+os.exit(0)

@@ -1,0 +1,34 @@
+# Client for the Autobahn test suite's fuzzing server (tests the client):
+# runs every case, echoing what the server sends, then asks for the report.
+use "websocket"
+let base = os.args[0]
+let count = int(websocket.connect(base + "/getCaseCount").receive(30)["data"])
+show "Autobahn cases: " + str(count)
+for each i in range(1, count + 1):
+    let ws = none
+    try:
+        ws = websocket.connect(base + "/runCase?case=" + str(i) + "&agent=GlowLang", {"timeout": 30})
+    catch e:
+        show "case " + str(i) + ": " + str(e)
+        continue
+    end
+    while true:
+        let m = ws.receive(60)
+        when m == none or m["type"] == "close":
+            stop
+        end
+        try:
+            when m["type"] == "binary":
+                ws.send_bytes(m["data"])
+            otherwise:
+                ws.send(m["data"])
+            end
+        catch e:
+            # the server may already be closing; receive() reports how
+        end
+    end
+    ws.close()
+end
+let r = websocket.connect(base + "/updateReports?agent=GlowLang")
+r.receive(60)
+show "reports written"
