@@ -332,6 +332,11 @@ static inline void push_grey(GCObject *obj) {
             if (g < GC_BITMAP_WORDS * 64) b->marks[g / 64] |= (uint64_t)1 << (g % 64);
         }
     }
+    /* Strings and big ints refer to nothing, so tracing them does nothing:
+       leave them off the grey stack. Popping them later touched each one a
+       second time, usually after it had left the cache (a list of a
+       million strings pushes them all before popping any). */
+    if (obj->type == OBJ_STRING || obj->type == OBJ_BIGINT) return;
     grey_push_raw(obj);
 }
 static void push_grey_fn(GCObject *obj) { push_grey(obj); }
@@ -361,16 +366,36 @@ static void gc_mark_root_checked(Value v) {
     if (o && (uintptr_t)o == p) push_grey(o);
 }
 
+/* Ask for v's header ahead of marking it: the items of a big list or dict
+   are scattered through the heap, and marking reads each one's header. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GC_PREFETCH_VALUE(v) do { if (value_is_heap_ref(v)) __builtin_prefetch((const void*)(uintptr_t)((v) & MASK_PAYLOAD)); } while (0)
+#else
+#define GC_PREFETCH_VALUE(v) ((void)0)
+#endif
+#define GC_PREFETCH_AHEAD 8
+
 #define mark_value gc_mark_value
 #define mark_obj push_grey
 static void gc_trace_object(GCObject *obj) {
     switch (obj->type) {
-        case OBJ_LIST: { List *l = (List*)obj; for (int i=0; i<l->size; i++) mark_value(l->items[i]); break; }
+        case OBJ_LIST: {
+            List *l = (List*)obj;
+            int n = l->size;
+            for (int i = 0; i < n; i++) {
+                if (i + GC_PREFETCH_AHEAD < n) GC_PREFETCH_VALUE(l->items[i + GC_PREFETCH_AHEAD]);
+                mark_value(l->items[i]);
+            }
+            break;
+        }
         case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; mark_value(it->iterable); break; }
         case OBJ_SET: mark_value(((GlowSet*)obj)->map); break;
         case OBJ_DICT: {
             Dict *d = (Dict*)obj;
-            for (int i=0; i<d->capacity; i++) { if (GET_TYPE(d->keys[i]) != VAL_NONE) { mark_value(d->values[i]); } }
+            for (int i=0; i<d->capacity; i++) {
+                if (i + GC_PREFETCH_AHEAD < d->capacity) GC_PREFETCH_VALUE(d->values[i + GC_PREFETCH_AHEAD]);
+                if (GET_TYPE(d->keys[i]) != VAL_NONE) { mark_value(d->values[i]); }
+            }
             gc_mark_dict_keys(d);
             break;
         }
@@ -518,6 +543,17 @@ static void gc_sweep_blocks(void) {
                         int bit = gc_lowest_bit(rest);
                         rest &= rest - 1;
                         gc_check_skipped((GCObject*)(b->data + (w * 64 + (size_t)bit) * GC_GRANULE));
+                    }
+                    /* Overwrite every dead object, so that anything still
+                       using one (a value the collector could not see) fails
+                       at once instead of reading stale contents. Without
+                       this, such a bug only shows when the space is reused. */
+                    uint64_t all = dead;
+                    while (all) {
+                        int bit = gc_lowest_bit(all);
+                        all &= all - 1;
+                        GCObject *o = (GCObject*)(b->data + (w * 64 + (size_t)bit) * GC_GRANULE);
+                        memset(o, 0xDB, o->sz);
                     }
                 }
                 b->starts[w] &= m;
