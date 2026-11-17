@@ -94,9 +94,29 @@ static Node *compound_bitop(Node *target, NodeType op, Node *value) {
    local/global rules. One value must be a list of exactly that many items;
    several values (`a, b = b, a`) are all evaluated before any is stored and
    need no list at run time. */
+static Node *list_node(Node **items, int count, int line);
 static Node *unpack_node(Node **targets, int count, Node **values, int nvalues, int is_let, int line) {
     char msg[96];
     if (count > 255) { error_at(line, "Too many names to unpack (at most 255)"); return NULL; }
+    /* One name may be ...rest: it gets the items the others leave. */
+    int rest = -1;
+    for (int i = 0; i < count; i++) {
+        if (targets[i]->type != NODE_SPREAD) continue;
+        if (rest >= 0) { error_at(line, "Only one name can be ...rest"); return NULL; }
+        rest = i;
+        targets[i] = targets[i]->left;
+    }
+    if (rest >= 0 && nvalues > 1) {
+        /* a, ...b = 1, 2, 3: the values become one list (made from a copy:
+           the list must not hold itself). */
+        Node **items = arena_alloc(sizeof(Node*) * nvalues);
+        for (int i = 0; i < nvalues; i++) items[i] = values[i];
+        Node *whole = list_node(items, nvalues, line);
+        if (!whole) return NULL;
+        values = arena_alloc(sizeof(Node*));
+        values[0] = whole;
+        nvalues = 1;
+    }
     if (nvalues > 1 && nvalues != count) {
         snprintf(msg, sizeof msg, "%d names but %d values", count, nvalues);
         error_at(line, msg); return NULL;
@@ -121,7 +141,77 @@ static Node *unpack_node(Node **targets, int count, Node **values, int nvalues, 
     }
     if (nvalues == 1) u->left = values[0];
     else { u->call_args = values; u->call_arg_count = nvalues; }
+    u->has_rest = rest + 1;
     return u;
+}
+static void list_push_node(Node ***nodes, int *count, Node *n);
+/* A call of runtime helper fn with the given arguments. */
+static Node *helper_call(const char *fn, Node **args, int count, int line) {
+    Node *n = node_new(NODE_CALL);
+    n->name = intern_string(fn);
+    n->call_args = args; n->call_arg_count = count; n->line = line;
+    return n;
+}
+/* A list literal whose items may include ...spread: [a, ...b, c] becomes
+   __glow_concat([a], b, [c]), which checks that b is a list. Without a
+   spread it is an ordinary list literal. */
+static Node *list_node(Node **items, int count, int line) {
+    int spreads = 0;
+    for (int i = 0; i < count; i++) {
+        if (items[i]->type == NODE_KWARG) { error_at(items[i]->line, "name = value only works in a call's arguments"); return NULL; }
+        if (items[i]->type == NODE_SPREAD) spreads++;
+    }
+    if (!spreads) {
+        Node *l = node_new(NODE_LIST_LITERAL);
+        l->elements = items; l->element_count = count; l->line = line;
+        return l;
+    }
+    Node **parts = NULL; int nparts = 0;
+    for (int i = 0; i < count; ) {
+        if (items[i]->type == NODE_SPREAD) { list_push_node(&parts, &nparts, items[i]->left); i++; continue; }
+        Node **chunk = NULL; int nchunk = 0;
+        while (i < count && items[i]->type != NODE_SPREAD) list_push_node(&chunk, &nchunk, items[i++]);
+        Node *l = node_new(NODE_LIST_LITERAL);
+        l->elements = chunk; l->element_count = nchunk; l->line = line;
+        list_push_node(&parts, &nparts, l);
+    }
+    return helper_call("__glow_concat", parts, nparts, line);
+}
+/* callee(items): with a ...spread or name = value argument the call becomes
+   __glow_call(callee, positional list, [names], [values]), which matches
+   names to parameters at run time; otherwise it is an ordinary call.
+   Positional arguments come first, and a name can be given only once. */
+static Node *call_node(Node *callee, Node **items, int count) {
+    int special = 0, seen_kw = 0, line = callee->line;
+    Node **pos = NULL, **names = NULL, **vals = NULL; int npos = 0, nkw = 0, nvals = 0;
+    for (int i = 0; i < count; i++) {
+        Node *it = items[i];
+        if (it->type == NODE_KWARG) {
+            special = seen_kw = 1;
+            for (int j = 0; j < nkw; j++) {
+                if (strcmp(names[j]->name, it->name) == 0) {
+                    char msg[160];
+                    snprintf(msg, sizeof msg, "Argument '%.80s' is given twice", it->name);
+                    error_at(it->line, msg); return NULL;
+                }
+            }
+            list_push_node(&names, &nkw, newStringNode(it->name));
+            list_push_node(&vals, &nvals, it->left);
+            continue;
+        }
+        if (seen_kw) { error_at(it->line, "A positional argument cannot come after a name = value argument"); return NULL; }
+        if (it->type == NODE_SPREAD) special = 1;
+        list_push_node(&pos, &npos, it);
+    }
+    if (!special) return newCallExprNode(callee, items, count);
+    Node **args = arena_alloc(sizeof(Node*) * 4);
+    args[0] = callee;
+    args[1] = list_node(pos, npos, line);
+    if (!args[1]) return NULL;
+    Node *nl = node_new(NODE_LIST_LITERAL); nl->elements = names; nl->element_count = nkw; nl->line = line;
+    Node *vl = node_new(NODE_LIST_LITERAL); vl->elements = vals; vl->element_count = nkw; vl->line = line;
+    args[2] = nl; args[3] = vl;
+    return helper_call("__glow_call", args, 4, line);
 }
 /* for each [a, b] in items: each item is unpacked into a and b. */
 static Node *unpack_loop(Node **names, int count, Node *coll, Node *body) {
@@ -153,7 +243,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
     struct Node *node;
     struct { struct Node **nodes; int count; } node_list;
     struct { struct Node **keys; struct Node **values; int count; } dict_list;
-    struct { char **names; struct Node **defaults; int count; } str_list;
+    struct { char **names; struct Node **defaults; int count; int rest; } str_list;
 }
 
 %token <str_val> INT_LIT
@@ -161,10 +251,12 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
+%token ELLIPSIS
 %token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
-%type <node_list> expr_list arg_list target_list name_list
+%type <node_list> expr_list arg_list target_list name_list item_list
+%type <node> item target name_item
 %type <dict_list> dict_elements
 %type <str_list> param_list param
 %type <str_val> member_name
@@ -204,7 +296,7 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | FOR ID FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $4; $$->right = $6; $$->third = $9; }
     | FOR ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $2; $$->left = $5; $$->right = $7; $$->third = $10; }
     | FOR EACH ID IN_KW FROM expr TO expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_RANGE); $$->name = $3; $$->left = $6; $$->right = $8; $$->third = $11; }
-    | FUNC member_name '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, with_param_defaults($4.count, $4.names, $4.defaults, $8)); }
+    | FUNC member_name '(' param_list ')' COLON NEWLINE lines END { $$ = newFuncNode($2, $4.count, $4.names, with_param_defaults($4.count, $4.names, $4.defaults, $8)); $$->has_rest = $4.rest; }
     | FUNC member_name '(' ')' COLON NEWLINE lines END { $$ = newFuncNode($2, 0, NULL, $7); }
     | CLASS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->left = $5; }
     | CLASS ID EXTENDS ID COLON NEWLINE lines END { $$ = node_new(NODE_CLASS); $$->name = $2; $$->parent_name = $4; $$->left = $7; }
@@ -241,20 +333,36 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | expr { $$ = newExprStmtNode($1); };
 
 expr_list: expr { $$.count = 1; $$.nodes = arena_alloc(sizeof(Node*)); $$.nodes[0] = $1; } | expr_list COMMA expr { $$.nodes = arena_realloc($$.nodes, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.nodes[$1.count] = $3; $$.count = $1.count + 1; };
-arg_list: expr_list { $$ = $1; };
-target_list: postfix COMMA postfix { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); list_push_node(&$$.nodes, &$$.count, $3); }
-    | target_list COMMA postfix { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
-name_list: ID COMMA ID { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, newVarNode($1)); list_push_node(&$$.nodes, &$$.count, newVarNode($3)); }
-    | name_list COMMA ID { $$ = $1; list_push_node(&$$.nodes, &$$.count, newVarNode($3)); };
+arg_list: item_list { $$ = $1; };
+/* Call arguments and list items: an expression, ...spread, or (only in a
+   call) name = value. */
+item_list: item { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); }
+    | item_list COMMA item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
+item: expr { $$ = $1; }
+    | ELLIPSIS expr { $$ = node_new(NODE_SPREAD); $$->left = $2; $$->line = $2->line; }
+    | ID ASSIGN expr { $$ = node_new(NODE_KWARG); $$->name = intern_string($1); $$->left = $3; $$->line = $3->line; };
+target: postfix { $$ = $1; }
+    | ELLIPSIS postfix { $$ = node_new(NODE_SPREAD); $$->left = $2; $$->line = $2->line; };
+target_list: target COMMA target { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); list_push_node(&$$.nodes, &$$.count, $3); }
+    | target_list COMMA target { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
+name_item: ID { $$ = newVarNode($1); }
+    | ELLIPSIS ID { $$ = node_new(NODE_SPREAD); $$->left = newVarNode($2); $$->line = $$->left->line; };
+name_list: name_item COMMA name_item { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); list_push_node(&$$.nodes, &$$.count, $3); }
+    | name_list COMMA name_item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
 param_list: param { $$ = $1; }
     | param_list COMMA param {
+        if ($1.rest) { error_at(line_num, "The ...rest parameter must be the last one"); YYERROR; }
         int n = $1.count;
         $$.names = arena_realloc($1.names, sizeof(char*)*n, sizeof(char*)*(n+1)); $$.names[n] = $3.names[0];
         $$.defaults = arena_realloc($1.defaults, sizeof(Node*)*n, sizeof(Node*)*(n+1)); $$.defaults[n] = $3.defaults[0];
         $$.count = n + 1;
+        $$.rest = $3.rest;
     };
-param: ID { $$.count = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = NULL; }
-    | ID ASSIGN expr { $$.count = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = $3; };
+param: ID { $$.count = 1; $$.rest = 0; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = NULL; }
+    | ID ASSIGN expr { $$.count = 1; $$.rest = 0; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = $3; }
+    /* ...rest: the extra arguments, as a list (empty when there are none,
+       which the default gives: a call with no extras leaves it none). */
+    | ELLIPSIS ID { $$.count = 1; $$.rest = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($2); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = node_new(NODE_LIST_LITERAL); };
 condition: expr;
 /* Each eif is the else branch of the one before it, so only the first
    true branch runs (they used to run as separate ifs, and the otherwise
@@ -266,7 +374,7 @@ expr: term | expr PLUS expr { $$ = newBinOp(NODE_ADD, $1, $3); } | expr MINUS ex
 term: unary | term MUL unary { $$ = newBinOp(NODE_MUL, $1, $3); } | term DIV unary { $$ = newBinOp(NODE_DIV, $1, $3); } | term FLOORDIV unary { $$ = newFloorDivNode($1, $3); } | term MOD unary { $$ = newBinOp(NODE_MOD, $1, $3); };
 unary: power | MINUS unary { $$ = newBinOp(NODE_NEG, $2, NULL); } | BITNOT unary { $$ = newBinOp(NODE_BITNOT, $2, NULL); };
 power: postfix | postfix POW unary { $$ = newBinOp(NODE_POW, $1, $3); };
-postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = newCallExprNode($1, $3.nodes, $3.count); } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
+postfix: primary | postfix '.' member_name { $$ = node_new(NODE_INDEX); $$->left = $1; $$->name = $3; } | postfix '(' arg_list ')' { $$ = call_node($1, $3.nodes, $3.count); if (!$$) YYERROR; } | postfix '(' ')' { $$ = newCallExprNode($1, NULL, 0); } | postfix '[' expr ']' { $$ = node_new(NODE_INDEX); $$->left = $1; $$->right = $3; }
        | postfix '[' expr COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = $5; }
        | postfix '[' expr COLON ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = $3; $$->third = NULL; }
        | postfix '[' COLON expr ']' { $$ = node_new(NODE_SLICE); $$->left = $1; $$->right = NULL; $$->third = $4; }
@@ -309,7 +417,7 @@ primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); } | STR
     $$->comp_var = $4;
     $$->left = $6;
     $$->comp_filter = $8;
-} | '[' expr_list ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = $2.nodes; $$->element_count = $2.count; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
+} | '[' item_list ']' { $$ = list_node($2.nodes, $2.count, line_num); if (!$$) YYERROR; } | '[' ']' { $$ = node_new(NODE_LIST_LITERAL); $$->elements = NULL; $$->element_count = 0; } | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
 
 dict_elements: expr COLON expr { $$.count = 1; $$.keys = arena_alloc(sizeof(Node*)); $$.keys[0] = $1; $$.values = arena_alloc(sizeof(Node*)); $$.values[0] = $3; } | dict_elements COMMA expr COLON expr { $$.keys = arena_realloc($$.keys, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.keys[$1.count] = $3; $$.values = arena_realloc($$.values, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.values[$1.count] = $5; $$.count = $1.count + 1; };
 

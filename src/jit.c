@@ -56,6 +56,21 @@ typedef struct { uint8_t *code; size_t size; size_t capacity; } JITBuffer;
 /* GLOW_JIT_DEBUG=1: report every function compiled, on stderr.
    GLOW_JIT_DUMP=<dir>: also write its machine code to <dir>/<name>.<tier>.bin
    (for `objdump -D -b binary -m i386:x86-64` or `-m aarch64`). */
+/* Does the code tail-call a function with a ...rest parameter? Compiled
+   tail calls jump straight to the helper, which leaves such calls to the
+   interpreter, so the function stays interpreted. (The optimizer makes no
+   such tail calls; this covers a function redefined after the caller.) */
+static int jit_tail_calls_rest(const Bytecode *bc) {
+    for (int i = 0; i < bc->count; i++) {
+        const Instruction *p = &bc->code[i];
+        if (p->op == OP_TAIL_CALL && p->ptr) {
+            FuncEntry *t = func_get((const char*)p->ptr);
+            if (t && t->rest_param) return 1;
+        }
+    }
+    return 0;
+}
+
 /* The runtime helper for a binary bitwise instruction. */
 static uintptr_t jit_bitop_fn(int op) {
     switch (op) {
@@ -800,7 +815,7 @@ static void emit_self_call_direct(JITBuffer *buf, FuncEntry *fe, Instruction *pc
    The argument count must be exactly the parameter count: the helper copes
    with any other, and stays the path for those. */
 static int jit_direct_target(const Instruction *pc, const FuncEntry *target) {
-    return pc->op == OP_CALL && !pc->is_method && target && target->body &&
+    return pc->op == OP_CALL && !pc->is_method && target && target->body && !target->rest_param &&
            pc->arg == target->param_count && target->param_count <= 16;
 }
 
@@ -1615,6 +1630,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
     if (!fe) fe = bc->owner;
     if (bc->jit_code || bc->jit_failed) return;
 
+    if (jit_tail_calls_rest(bc)) { jit_debug_skipped(bc, fe, "tail call to a ...rest function", OP_TAIL_CALL); bc->jit_failed = 1; return; }
     for (int i = 0; i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
         switch (pc->op) {
@@ -2088,6 +2104,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
         if (bc->osr_entries || bc->osr_failed) return;
     } else if (bc->baseline_jit_code || bc->jit_failed) return;
 
+    if (jit_tail_calls_rest(bc)) { jit_debug_skipped(bc, fe, "tail call to a ...rest function", OP_TAIL_CALL); bc->jit_failed = 1; return; }
     for (int i = 0; !osr_mode && i < bc->count; i++) {
         Instruction *pc = &bc->code[i];
         switch (pc->op) {
@@ -3146,6 +3163,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
     else { if (bc->jit_code || bc->jit_failed) return; }
 
     if (!osr) {
+        if (jit_tail_calls_rest(bc)) { jit_debug_skipped(bc, fe, "tail call to a ...rest function", OP_TAIL_CALL); bc->jit_failed = 1; return; }
         for (int i = 0; i < bc->count; i++) {
             OpCode op = bc->code[i].op;
             if (!a64_supported(op)) { jit_debug_skipped(bc, fe, "unsupported", op); bc->jit_failed = 1; return; }

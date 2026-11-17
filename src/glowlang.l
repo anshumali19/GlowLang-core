@@ -283,6 +283,7 @@ int lexer_bracket_depth = 0;
 "**"                   { return POW; }
 
 ":"                    { return COLON; }
+"..."                  { return ELLIPSIS; }
 "."                    { return '.'; }
 "<"                    { return LT; }
 ">"                    { return GT; }

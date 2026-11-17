@@ -626,6 +626,8 @@ typedef enum {
     NODE_COND,         /* value when condition otherwise other */
     NODE_UNPACK,       /* let a, b = value / a, b = b, a (see compiler.c) */
     NODE_BITAND, NODE_BITOR, NODE_BITXOR, NODE_SHL, NODE_SHR, NODE_BITNOT,
+    NODE_SPREAD,       /* ...expr in a call or list (the parser rewrites it) */
+    NODE_KWARG,        /* name = expr in a call (the parser rewrites it) */
     NODE_REG           /* a value the compiler already holds in register `reg` */
 } NodeType;
 
@@ -651,6 +653,8 @@ struct Node {
     Node **methods; int method_count;
     Node **fields; int field_count;
     int reg;                 /* NODE_REG: the register holding the value */
+    int has_rest;            /* function: its last parameter is ...rest;
+                                NODE_UNPACK: 1 + the index of the ...rest name */
 };
 
 typedef Value (*NativeFuncPtr)(int argc, Value *args);
@@ -689,6 +693,7 @@ typedef struct {
 struct FuncEntry {
     const char *name;
     int param_count;
+    int rest_param;   /* the last parameter is ...rest: extra arguments arrive as a list there */
     char **params;
     Bytecode *body;
     int used;
@@ -990,6 +995,10 @@ Value native_type(int argc, Value *args);
 const char *glow_type_name(Value v);
 /* Can < order a and b? (numbers with numbers, text with text, lists with lists) */
 int glow_values_comparable(Value a, Value b);
+/* Calls and functions with a ...rest parameter (see PACK_REST in vm.c). */
+int glow_pack_rest(FuncEntry *fe, Value *args, int argc);
+Value glow_call_value(Value fn, int argc, Value *args);
+Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args);
 const char *glow_dict_key(Value k, char **owned);
 int glow_arity_error(const char *name, int given, int params);
 Value native_tensor_shape(int argc, Value *args);

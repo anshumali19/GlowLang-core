@@ -37,7 +37,7 @@ static int arg_is(int argc, Value *args, int i, ValueType t) {
 
 /* Call a GlowLang function value with the given arguments. */
 static Value call_value(Value fn, int argc, Value *args) {
-    Value r = jit_call_helper_val(fn, argc, args, NULL);
+    Value r = glow_call_value(fn, argc, args);
     if (IS_DEOPT(r)) return raise("Expected a function");
     return r;
 }

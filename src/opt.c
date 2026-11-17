@@ -307,11 +307,13 @@ void optimize_bytecode(Bytecode *bc) {
                 /* Fast paths copy at most param_count arguments without a
                    check, so a call with too many stays an ordinary call,
                    which reports the error. */
+                /* A function with a ...rest parameter is called the ordinary
+                   way, which packs its extra arguments. */
                 if (pc->op == OP_CALL_SELF_FAST) {
-                    tco_safe = bc->owner && pc->arg <= bc->owner->param_count;
+                    tco_safe = bc->owner && !bc->owner->rest_param && pc->arg <= bc->owner->param_count;
                 } else if (pc->op == OP_CALL && pc->ptr) {
                     FuncEntry *fe = func_get((const char*)pc->ptr);
-                    if (fe && fe->body && pc->arg <= fe->param_count) tco_safe = 1;
+                    if (fe && fe->body && !fe->rest_param && pc->arg <= fe->param_count) tco_safe = 1;
                 }
                 if (tco_safe && !opt_in_try(bc, i)) {
                     pc->op = OP_TAIL_CALL;
@@ -324,7 +326,7 @@ void optimize_bytecode(Bytecode *bc) {
         // 2. Self-Call Fast Path (if not already TCO'd)
         if (pc->op == OP_CALL) {
              const char *name = (const char*)pc->ptr;
-             if (name && bc->owner && bc->owner->name && strcmp(name, bc->owner->name) == 0 && pc->arg <= bc->owner->param_count) {
+             if (name && bc->owner && bc->owner->name && strcmp(name, bc->owner->name) == 0 && !bc->owner->rest_param && pc->arg <= bc->owner->param_count) {
                  pc->op = OP_CALL_SELF_FAST;
                  
                  // Re-check for TCO after patching to SELF_FAST

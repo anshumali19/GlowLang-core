@@ -276,6 +276,10 @@ GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Ins
           has_exception = 1;
           return value_none();
       }
+      /* A function with a ...rest parameter: compiled code (pc set) leaves
+         the call to the interpreter, which packs the extra arguments;
+         native callers pack them before calling (glow_call_value). */
+      if (fe && fe->rest_param && pc) return VAL_DEOPT_SENTINEL;
       if (fe && fe->body && argc > fe->param_count) { glow_arity_error(fe->name, argc, fe->param_count); return value_none(); }
       if (fe && fe->body) {
           /* Allocate a fresh register frame for the callee instead of reusing the
@@ -436,6 +440,7 @@ static Value jit_construct(Class *k, int argc, Value *args, Instruction *pc) {
         if (!ife || !ife->body || AS_BOUND_METHOD(init)->native_method) return VAL_DEOPT_SENTINEL;
     }
     if (!ife) return value_instance(instance_new(k));
+    if (ife->rest_param && pc) return VAL_DEOPT_SENTINEL;
     if (argc > ife->param_count) { glow_arity_error(ife->name, argc, ife->param_count); return value_none(); }
 
     Bytecode *body = ife->body;
@@ -508,11 +513,19 @@ GLOW_PLAIN_LOOPS Value jit_call_helper_val(Value callee, int argc, Value *args, 
                 }
                 return bm->native_method(count + 1, temp_args);
             }
+            /* A method bound to an object runs with that object as self.
+               (jit_call_helper alone took the first argument as self, so
+               [1, 2].map(obj.method) and a stored obj.method failed.) */
+            if (GET_TYPE(bm->instance) != VAL_NONE && bm->method) {
+                if (pc && bm->method->rest_param) return VAL_DEOPT_SENTINEL;
+                return glow_call_method_fe(bm->method, bm->instance, argc, args + ((pc && pc->is_method) ? 1 : 0));
+            }
             return jit_call_helper(bm->method, argc, args, pc);
         }
         if (ot == OBJ_CLOSURE) {
             Closure *c = AS_CLOSURE(callee);
             if (!c->body) return value_none();
+            if (c->body->owner && c->body->owner->rest_param && pc) return VAL_DEOPT_SENTINEL;
             if (argc > c->param_count) { glow_arity_error(c->body->owner ? c->body->owner->name : "function", argc, c->param_count); return value_none(); }
             if (c->captured_count == 0) return jit_call_helper(c->body->owner, argc, args, pc);
             /* Run with the closure attached so captured variables resolve. */
@@ -581,6 +594,7 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
             Instance *inst = AS_INSTANCE(obj);
             if (pc && pc->cache[0].key == inst->klass && pc->cache[1].key == (void*)1) {
                 FuncEntry *arity_fe = (FuncEntry*)pc->cache[0].val;
+                if (arity_fe->rest_param) return VAL_DEOPT_SENTINEL;
                 if (argc > arity_fe->param_count) { glow_arity_error(arity_fe->name, argc, arity_fe->param_count); return value_none(); }
                 if (call_stack_ptr > 0) call_stack[call_stack_ptr - 1].pc = pc;
                 g_dbg_pc = pc;
@@ -649,6 +663,7 @@ GLOW_PLAIN_LOOPS Value jit_call_method_helper(Value obj, const char *n, int argc
     if (curr_offset + 256 > vm_stack_top) vm_stack_top = curr_offset + 256;
 
     Value final_res = value_none();
+    if (fe && fe->rest_param) { vm_stack_top = old_top; return VAL_DEOPT_SENTINEL; }
     if (fe && fe->body && argc > fe->param_count) { glow_arity_error(fe->name, argc, fe->param_count); return value_none(); }
     if (fe && fe->body) {
         g_dbg_bc = fe->body;
@@ -1866,6 +1881,8 @@ void format_double(char *buf, size_t n, double d) {
 /* Runs a method's FuncEntry on self with nargs arguments, in a fresh
    frame: register 0 is self, then the parameters (missing ones none,
    extra ones ignored, as in an ordinary call), then the other locals. */
+/* Run method fe on self. The arguments must already be packed for a
+   ...rest parameter (glow_call_value and super do that). */
 Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args) {
     if (!fe || !fe->body) return value_none();
     if (nargs > fe->param_count) { glow_arity_error(fe->name, nargs, fe->param_count); return value_none(); }
@@ -6766,6 +6783,146 @@ static Value class_error(const char *msg) {
     return value_none();
 }
 
+/* The GlowLang function a callable value runs (for a class, its init), or
+   NULL for a native function or anything else. */
+static FuncEntry *callee_function(Value f) {
+    if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) return NULL;
+    ObjType ot = GET_OBJ_TYPE(f);
+    if (ot == OBJ_CLOSURE) return AS_CLOSURE(f)->body ? AS_CLOSURE(f)->body->owner : NULL;
+    if (ot == OBJ_BOUND_METHOD) return AS_BOUND_METHOD(f)->native_method ? NULL : AS_BOUND_METHOD(f)->method;
+    if (ot == OBJ_CLASS) {
+        Value init = class_init_method(AS_CLASS(f));
+        if (is_obj_type(init, OBJ_BOUND_METHOD) && !AS_BOUND_METHOD(init)->native_method) return AS_BOUND_METHOD(init)->method;
+    }
+    return NULL;
+}
+/* A function's name for messages: "area" rather than "Shape::area". */
+static const char *callee_label(FuncEntry *fe, Value f) {
+    if (fe && fe->name) {
+        const char *c = strstr(fe->name, "::");
+        if (c) return strcmp(c + 2, "init") == 0 && is_obj_type(f, OBJ_CLASS) ? AS_CLASS(f)->name : c + 2;
+        if (strncmp(fe->name, "lambda_", 7) == 0) return "lambda";
+        return fe->name;
+    }
+    if (is_obj_type(f, OBJ_NATIVE_FUNC) && AS_NATIVE_FUNC(f)->name) return AS_NATIVE_FUNC(f)->name;
+    if (is_obj_type(f, OBJ_CLASS) && AS_CLASS(f)->name) return AS_CLASS(f)->name;
+    return "function";
+}
+
+/* Call any callable value from native code: a function with a ...rest
+   parameter gets its extra arguments packed first (compiled code never
+   reaches it with them unpacked: it hands such calls to the interpreter). */
+Value glow_call_value(Value fn, int argc, Value *args) {
+    FuncEntry *fe = callee_function(fn);
+    Value packed[256];
+    if (fe && fe->rest_param) {
+        int n = argc > 256 ? 256 : argc;
+        for (int i = 0; i < n; i++) packed[i] = args[i];
+        argc = glow_pack_rest(fe, packed, n);
+        args = packed;
+    }
+    return jit_call_helper_val(fn, argc, args, NULL);
+}
+
+/* f(...items, name = value): the parser turns a call with a spread or named
+   argument into __glow_call(f, positional, [names], [values]). Each name
+   goes to the parameter of that name; parameters left between are none, so
+   their defaults apply, as when they are left out. */
+static Value glow_call_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
+static Value native_glow_call(int argc, Value *args) {
+    if (argc < 4 || GET_TYPE(args[1]) != VAL_LIST || GET_TYPE(args[2]) != VAL_LIST || GET_TYPE(args[3]) != VAL_LIST)
+        return glow_call_fail("call: bad arguments");
+    Value f = args[0];
+    List *pos = AS_LIST(args[1]), *names = AS_LIST(args[2]), *vals = AS_LIST(args[3]);
+    char msg[240];
+    if (pos->size > 255) return glow_call_fail("A call can pass at most 255 arguments");
+    Value buf[256];
+    int n = pos->size;
+    for (int i = 0; i < n; i++) buf[i] = pos->items[i];
+    if (names->size > 0) {
+        FuncEntry *fe = callee_function(f);
+        const char *label = callee_label(fe, f);
+        if (!fe || (fe->param_count > 0 && !fe->params)) {
+            if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) {
+                snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
+                return glow_call_fail(msg);
+            }
+            snprintf(msg, sizeof msg, "%.80s() does not take name = value arguments", label);
+            return glow_call_fail(msg);
+        }
+        int fixed = fe->param_count - (fe->rest_param ? 1 : 0);
+        for (int k = 0; k < names->size && k < vals->size; k++) {
+            const char *nm = AS_STRING(names->items[k]);
+            int idx = -1;
+            for (int j = 0; j < fixed; j++) if (fe->params[j] && strcmp(fe->params[j], nm) == 0) { idx = j; break; }
+            if (idx < 0) {
+                if (fe->rest_param && fe->params[fixed] && strcmp(fe->params[fixed], nm) == 0)
+                    snprintf(msg, sizeof msg, "%.80s(): ...%.80s collects the extra arguments, so it cannot be given by name", label, nm);
+                else
+                    snprintf(msg, sizeof msg, "%.80s() has no parameter named '%.80s'", label, nm);
+                return glow_call_fail(msg);
+            }
+            if (idx < pos->size) {
+                snprintf(msg, sizeof msg, "%.80s() got two values for '%.80s'", label, nm);
+                return glow_call_fail(msg);
+            }
+            while (n <= idx) buf[n++] = value_none();
+            buf[idx] = vals->items[k];
+        }
+    }
+    Value r = glow_call_value(f, n, buf);
+    if (IS_DEOPT(r)) {
+        snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
+        return glow_call_fail(msg);
+    }
+    return r;
+}
+
+/* [a, ...b, c]: the parser makes __glow_concat([a], b, [c]). Every part is a
+   list; one that is not came from a ...spread. */
+static Value native_glow_concat(int argc, Value *args) {
+    int total = 0;
+    for (int i = 0; i < argc; i++) {
+        if (GET_TYPE(args[i]) != VAL_LIST) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "Cannot spread %s with ...: it needs a list", glow_type_name(args[i]));
+            return glow_call_fail(msg);
+        }
+        total += AS_LIST(args[i])->size;
+    }
+    List *out = list_new(total > 0 ? total : 1);
+    Value r = value_list(out);
+    for (int i = 0; i < argc; i++) {
+        List *l = AS_LIST(args[i]);
+        int size = l->size;
+        for (int j = 0; j < size && j < l->size; j++) list_push(out, l->items[j]);
+    }
+    return r;
+}
+
+/* super.m with ...spread or name = value arguments: the parent's method m
+   (found from the parent upward) bound to self, for __glow_call. */
+static Value native_glow_super_bind(int argc, Value *args) {
+    if (argc < 3 || GET_TYPE(args[1]) != VAL_STRING) return class_error("super: bad call");
+    const char *name = AS_STRING(args[1]);
+    if (!is_obj_type(args[0], OBJ_CLASS)) {
+        const char *why = GET_TYPE(args[0]) == VAL_STRING && strcmp(AS_STRING(args[0]), "no-parent") == 0
+            ? "super can only be used in a class that extends another class"
+            : "super can only be used inside a method of a class";
+        char msg[200];
+        snprintf(msg, sizeof msg, "%s (super.%.80s)", why, name);
+        return class_error(msg);
+    }
+    for (Class *k = AS_CLASS(args[0]); k; k = k->parent) {
+        Value m = dict_get(k->methods, name);
+        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body)
+            return bound_method_new(args[2], AS_BOUND_METHOD(m)->method);
+    }
+    char msg[240];
+    snprintf(msg, sizeof msg, "super: %.80s and the classes it extends have no method '%.80s'", AS_CLASS(args[0])->name, name);
+    return class_error(msg);
+}
+
 /* The compiler turns super.m(args) inside a method of a class C that extends
    P into __glow_super(P, "m", self, args...). It runs P's m, looked up from P
    upward, on the same self. */
@@ -6782,8 +6939,18 @@ static Value native_glow_super(int argc, Value *args) {
     }
     for (Class *k = AS_CLASS(args[0]); k; k = k->parent) {
         Value m = dict_get(k->methods, name);
-        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body)
-            return glow_call_method_fe(AS_BOUND_METHOD(m)->method, args[2], argc - 3, args + 3);
+        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body) {
+            FuncEntry *fe = AS_BOUND_METHOD(m)->method;
+            Value packed[256];
+            int n = argc - 3 > 256 ? 256 : argc - 3;
+            Value *a = args + 3;
+            if (fe->rest_param) {
+                for (int i = 0; i < n; i++) packed[i] = a[i];
+                n = glow_pack_rest(fe, packed, n);
+                a = packed;
+            }
+            return glow_call_method_fe(fe, args[2], n, a);
+        }
     }
     char msg[240];
     snprintf(msg, sizeof msg, "super: %.80s and the classes it extends have no method '%.80s'", AS_CLASS(args[0])->name, name);
@@ -6905,6 +7072,9 @@ void std_init(void) {
     var_set("class_name", native_func_new("class_name", native_class_name));
     var_set("is_a", native_func_new("is_a", native_is_a));
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
+    var_set("__glow_super_bind", native_func_new("__glow_super_bind", native_glow_super_bind));
+    var_set("__glow_call", native_func_new("__glow_call", native_glow_call));
+    var_set("__glow_concat", native_func_new("__glow_concat", native_glow_concat));
     var_set("range", native_func_new("range", native_range));
     var_set("__glow_slice", native_func_new("__glow_slice", native_glow_slice));
     var_set("__glow_slice_set", native_func_new("__glow_slice_set", native_glow_slice_set));

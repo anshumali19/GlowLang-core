@@ -1,0 +1,188 @@
+# name = value arguments, ...rest parameters and ...spread, through every
+# kind of call: by name, as a value, as a method or constructor, stored in a
+# field, recursive, tail calls, spawned, from map/sorted, through super, and
+# from loops hot enough for the JIT to compile the caller.
+
+# ---- name = value arguments
+func greet(name, greeting = "Hello", mark = "!"):
+    return greeting + ", " + name + mark
+end
+show greet("Ana", mark = ".")
+show greet(mark = "?", name = "Bo")
+show greet("Cy", greeting = "Hi")
+show greet("Di", none, mark = "...")
+
+func box(w, h = 1, d = 1):
+    return w * h * d
+end
+let bl = lambda(x, y = 10): x - y
+show box(2, d = 5), bl(3, y = 1), bl(y = 0, x = 7)
+
+# ---- ...rest parameters
+func total(first, ...rest):
+    let t = first
+    for each r in rest:
+        t = t + r
+    end
+    return [first, rest, t]
+end
+show total(1), total(1, 2), total(1, 2, 3, 4)
+show total(first = 9)
+
+let count_args = lambda(...xs): len(xs)
+show count_args(), count_args(1, 2, 3), count_args(none, none)
+
+# ---- ...spread
+let nums = [5, 6, 7]
+show total(...nums), total(0, ...nums, 10), count_args(...[], ...nums)
+show [...nums, 8, ...[9, 10]], [...[]], max(...nums), min(...nums, 1)
+show greet(...["Ed", "Hey"], mark = "?")
+let copy = [...nums]
+copy.push(99)
+show nums, copy
+
+# ---- unpacking with ...rest
+let first, ...others = [1, 2, 3, 4]
+show first, others
+let ...init, last = [1, 2, 3]
+show init, last
+let a, ...mid, z = [1, 2]
+show a, mid, z
+let h, ...t = 1, 2, 3
+show h, t
+
+# ---- methods, constructors, bound methods, fields
+class V:
+    func init(...parts):
+        self.parts = parts
+    end
+    func add(...more):
+        return self.parts + more
+    end
+    func scaled(by = 1, extra = 0):
+        return [p * by + extra for each p in self.parts]
+    end
+end
+let v = V(1, 2)
+show v.parts, v.add(3, 4), v.add(), v.scaled(extra = 1), v.scaled(by = 10)
+let bound = v.add
+show bound(9), bound(...nums)
+let holder = {"f": lambda(x, ...ys): [x, ys]}
+show holder.f(1, 2, 3)
+
+class W extends V:
+    func init(...parts):
+        super.init(...parts, "w")
+    end
+    func add(...more):
+        return super.add(...more, "!")
+    end
+end
+let w = W(1)
+show w.parts, w.add(2)
+
+class Point:
+    func init(x = 0, y = 0, label = "p"):
+        self.x = x
+        self.y = y
+        self.label = label
+    end
+    func to_string():
+        return self.label + "(" + str(self.x) + ", " + str(self.y) + ")"
+    end
+end
+class Empty:
+    func hello():
+        return "hi"
+    end
+end
+show Point(y = 5), Point(1, label = "q"), Point(...[3, 4])
+try:
+    show Empty(size = 1)
+catch e:
+    show e
+end
+
+# ---- callbacks from native code (map, filter, sorted)
+show [1, 2, 3].map(lambda(x, ...ys): [x, ys])
+show sorted([3, 1, 2], lambda(x, ...ys): -x)
+show [1, 2, 3].map(v.add)
+
+class Scale:
+    func init(k):
+        self.k = k
+    end
+    func by(x):
+        return x * self.k
+    end
+end
+let sc = Scale(10)
+show [1, 2, 3].map(sc.by), sorted([3, 1, 2], sc.by)
+
+# ---- recursion and tail calls
+func collect(n, ...acc):
+    if n == 0:
+        return acc
+    end
+    return collect(n - 1, ...acc, n)
+end
+show collect(5)
+func depth(n, ...xs):
+    if n == 0:
+        return len(xs)
+    end
+    return depth(n - 1, n, n)
+end
+show depth(3)
+func calls_later(n):
+    return later(n, n, n)
+end
+func later(...xs):
+    return len(xs)
+end
+show calls_later(1)
+
+# ---- hot loops: the callers get compiled
+func vsum(...xs):
+    let s = 0
+    for each x in xs:
+        s = s + x
+    end
+    return s
+end
+func hot(n):
+    let acc = 0
+    let f = lambda(a, ...b): a + len(b)
+    let obj = V(1)
+    let bm = obj.add
+    every i from 1 to n:
+        acc = acc + vsum(i, 1, 1) + vsum() + f(i, i, i) + len(obj.add(i, i)) + len(V(i, i).parts)
+        acc = acc + len(bm(i)) + box(i, d = 2) + vsum(...[i, i]) + holder.f(i, i)[0]
+    end
+    return acc
+end
+show hot(2000)
+
+# ---- spawn
+let results = []
+func spawned(tag, ...xs):
+    results.push([tag, len(xs)])
+end
+spawn spawned("a", 1, 2, 3)
+spawn spawned("b")
+threads.join_all()
+show sorted(results, lambda(r): r[0])
+
+# ---- errors
+for each bad in [lambda(): greet("x", nope = 1), lambda(): greet("x", name = "y"), lambda(): total(1, rest = [2]), lambda(): len(x = 1), lambda(): [...5], lambda(): total(...7), lambda(): greet(1, 2, 3, 4)]:
+    try:
+        show bad()
+    catch e:
+        show e
+    end
+end
+try:
+    let p, ...q, r = [1]
+catch e:
+    show e
+end

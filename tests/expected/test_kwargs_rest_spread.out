@@ -1,0 +1,39 @@
+Hello, Ana.
+Hello, Bo?
+Hi, Cy!
+Hello, Di...
+10 2 7
+[1, [], 1] [1, [2], 3] [1, [2, 3, 4], 10]
+[9, [], 9]
+0 3 2
+[5, [6, 7], 18] [0, [5, 6, 7, 10], 28] 3
+[5, 6, 7, 8, 9, 10] [] 7 1
+Hey, Ed?
+[5, 6, 7] [5, 6, 7, 99]
+1 [2, 3, 4]
+[1, 2] 3
+1 [] 2
+1 [2, 3]
+[1, 2] [1, 2, 3, 4] [1, 2] [2, 3] [10, 20]
+[1, 2, 9] [1, 2, 5, 6, 7]
+[1, [2, 3]]
+[1, "w"] [1, "w", 2, "!"]
+p(0, 5) q(1, 0) p(3, 4)
+Empty() does not take name = value arguments
+[[1, []], [2, []], [3, []]]
+[3, 2, 1]
+[[1, 2, 1], [1, 2, 2], [1, 2, 3]]
+[10, 20, 30] [1, 2, 3]
+[5, 4, 3, 2, 1]
+2
+3
+14029000
+[["a", 3], ["b", 0]]
+greet() has no parameter named 'nope'
+greet() got two values for 'name'
+total(): ...rest collects the extra arguments, so it cannot be given by name
+len() does not take name = value arguments
+Cannot spread int with ...: it needs a list
+Cannot spread int with ...: it needs a list
+greet() takes 3 arguments but 4 were given
+Cannot unpack 1 item: the names besides ...rest need 2
