@@ -1,0 +1,20 @@
+42 c!
+12.5
+14
+4
+8
+13
+14
+224
+56
+fallback
+[11, 2, 21]
+{"a": 3, "b": 1, "c": 1}
+[[1, 20], [-2, 4]]
+[{"age": 30}, {"age": 42}]
+4 [11, 6, 21] ["object", "value", "index", "value"]
+caught missing key
+caught index out of range
+12
+[7, -1]
+[12502500, [2500, 2500]]

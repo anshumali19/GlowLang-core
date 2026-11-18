@@ -1,0 +1,6 @@
+func g():
+    return 1
+end
+let x = 1
+g() += 5
+show "not reached"

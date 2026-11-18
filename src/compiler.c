@@ -1454,6 +1454,24 @@ static void compile_stmt(Node *n) {
             compile_stmt(assign);
             break;
         }
+        case NODE_COMPOUND_INDEX: {
+            /* x.name op= v / x[i] op= v (see compound_assign in glowlang.y):
+               x and i go into registers first, so each is worked out once;
+               the store (third) then reads the old value through them. */
+            int base = next_free_reg;
+            int obj = next_free_reg++;
+            compile_expr(n->left, obj);
+            n->comp_expr->reg = obj;
+            if (n->comp_filter) {
+                int key = next_free_reg++;
+                compile_expr(n->right, key);
+                n->comp_filter->reg = key;
+            }
+            note_reg_peak();
+            compile_stmt(n->third);
+            next_free_reg = reg_restore(base);
+            break;
+        }
         case NODE_INDEX_ASSIGN: {
             int val = compile_expr(n->third, -1);
             int obj = compile_expr(n->left, -1);

@@ -128,6 +128,10 @@ x &= 3    # x = x & 3   (also |=, ^=, <<= and >>=)
 x ??= 5   # x = 5 only when x is none
 ```
 
+They work on fields and items too: `self.count += 1`, `counts[word] += 1`,
+`grid[r][c] -= 1`. The object and the index are worked out once, as in Python,
+so `next_item().total += 5` calls `next_item()` a single time.
+
 ### Unpacking
 Several names can be assigned at once. With several values on the right, all
 of them are worked out before any name changes, so `a, b = b, a` swaps:

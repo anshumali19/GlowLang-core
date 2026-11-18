@@ -642,7 +642,10 @@ typedef enum {
     NODE_OPTCHAIN,     /* left?.rest: right is the rest of the chain, built on
                           the NODE_REG in third; none when left is none */
     NODE_KWARG,        /* name = expr in a call (the parser rewrites it) */
-    NODE_REG           /* a value the compiler already holds in register `reg` */
+    NODE_REG,          /* a value the compiler already holds in register `reg` */
+    NODE_COMPOUND_INDEX /* x.name op= v / x[i] op= v: left is x, right is i (NULL
+                          for a field), third the store, written with the
+                          NODE_REGs in comp_expr (x) and comp_filter (i) */
 } NodeType;
 
 struct Node {

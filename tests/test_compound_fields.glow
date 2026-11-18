@@ -1,0 +1,132 @@
+# x.name op= v and x[i] op= v: every operator, on fields, items and
+# nested items; x and i are worked out once, in Python's order.
+
+class Counter:
+    func init(start):
+        self.count = start
+        self.name = "c"
+    end
+    func tick(step = 1):
+        self.count += step
+        return self.count
+    end
+end
+
+let c = Counter(10)
+c.tick()
+c.tick(5)
+c.count -= 2
+c.count *= 3
+c.name += "!"
+show c.count, c.name
+
+# every operator on a field
+let o = Counter(100)
+o.count /= 8
+show o.count
+o.count = 100
+o.count //= 7
+show o.count
+o.count %= 5
+show o.count
+o.count = 12
+o.count &= 10
+show o.count
+o.count |= 5
+show o.count
+o.count ^= 3
+show o.count
+o.count <<= 4
+show o.count
+o.count >>= 2
+show o.count
+o.name = none
+o.name ??= "fallback"
+o.name ??= "ignored"
+show o.name
+
+# items of lists and dicts, nested items
+let xs = [1, 2, 3]
+xs[0] += 10
+xs[-1] *= 7
+show xs
+let counts = {}
+for each w in ["a", "b", "a", "c", "a"]:
+    counts[w] = counts.get(w, 0)
+    counts[w] += 1
+end
+show counts
+let grid = [[1, 2], [3, 4]]
+grid[1][0] -= 5
+grid[0][1] *= 10
+show grid
+let people = [{"age": 30}, {"age": 41}]
+people[1]["age"] += 1
+show people
+
+# the object and the index are worked out once, then the old value, then v
+let log = []
+let holder = Counter(0)
+func get_holder():
+    log.push("object")
+    return holder
+end
+func index():
+    log.push("index")
+    return 1
+end
+func amount():
+    log.push("value")
+    return 4
+end
+get_holder().count += amount()
+xs[index()] += amount()
+show holder.count, xs, log
+
+# a missing key or an index out of range raises, as reading it would
+try:
+    let d = {}
+    d["missing"] += 1
+catch e:
+    show "caught missing key"
+end
+try:
+    xs[10] += 1
+catch e:
+    show "caught index out of range"
+end
+
+# inside closures and functions with locals
+func make_acc():
+    let box = {"total": 0}
+    func add(v):
+        box["total"] += v
+        return box["total"]
+    end
+    return add
+end
+let acc = make_acc()
+acc(5)
+show acc(7)
+func local_case():
+    let p = Counter(1)
+    let ys = [5]
+    every i from 1 to 3:
+        p.count += i
+        ys[0] -= i
+    end
+    return [p.count, ys[0]]
+end
+show local_case()
+
+# hot loops get compiled: the result must not change
+func hot():
+    let k = Counter(0)
+    let arr = [0, 0]
+    every i from 1 to 5000:
+        k.count += i
+        arr[i % 2] += 1
+    end
+    return [k.count, arr]
+end
+show hot()
