@@ -1871,8 +1871,10 @@ static int compile_expr(Node *n, int target_reg) {
                 compile_expr(n->left, callee_obj_reg);
             }
 
-            // 4. Emit the call
-            int idx = bc_emit(compiling_bc, is_method ? OP_CALL_METHOD : ((n->type == NODE_CALL) ? OP_CALL : OP_CALL_VALUE), ac, is_method ? (intptr_t)intern_string(n->left->name) : ((intptr_t)n->name));
+            // 4. Emit the call. A name the program assigns to is called
+            //    through its variable (see collect_assigned).
+            int by_name = (n->type == NODE_CALL) && !(n->name && glow_name_reassigned(n->name));
+            int idx = bc_emit(compiling_bc, is_method ? OP_CALL_METHOD : (by_name ? OP_CALL : OP_CALL_VALUE), ac, is_method ? (intptr_t)intern_string(n->left->name) : ((intptr_t)n->name));
             compiling_bc->code[idx].r0 = reg;
             compiling_bc->code[idx].r1 = callee_obj_reg;
             compiling_bc->code[idx].r2 = callee_frame_base;
@@ -2185,7 +2187,75 @@ static int compile_expr(Node *n, int target_reg) {
     return reg;
 }
 
+/* Names the program assigns with `name = value` (or `let name = value`).
+   A call by name normally goes straight to the function defined with that
+   name, which is fast but ignores the variable: after `f = wrap(f)` (or
+   `fib = cache(fib)`) calls to f still ran the old function. Calls to a
+   name in this set go through the variable instead (OP_CALL_VALUE), so they
+   reach whatever it holds now; calls to functions never assigned to stay
+   direct. The set only grows: a module or REPL input compiled later adds
+   to it. */
+static const char **assigned_names = NULL;
+static int assigned_cap = 0, assigned_count = 0;
+
+static unsigned name_hash(const char *s) {
+    unsigned h = 2166136261u;
+    while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+    return h;
+}
+
+int glow_name_reassigned(const char *name) {
+    if (!name || !assigned_count) return 0;
+    for (unsigned i = name_hash(name) & (unsigned)(assigned_cap - 1);; i = (i + 1) & (unsigned)(assigned_cap - 1)) {
+        if (!assigned_names[i]) return 0;
+        if (assigned_names[i] == name || strcmp(assigned_names[i], name) == 0) return 1;
+    }
+}
+
+static void assigned_add(const char *name) {
+    if (!name || glow_name_reassigned(name)) return;
+    if ((assigned_count + 1) * 2 > assigned_cap) {
+        int old_cap = assigned_cap;
+        const char **old = assigned_names;
+        assigned_cap = old_cap ? old_cap * 2 : 64;
+        assigned_names = calloc((size_t)assigned_cap, sizeof(char *));
+        for (int i = 0; i < old_cap; i++) {
+            if (!old[i]) continue;
+            unsigned j = name_hash(old[i]) & (unsigned)(assigned_cap - 1);
+            while (assigned_names[j]) j = (j + 1) & (unsigned)(assigned_cap - 1);
+            assigned_names[j] = old[i];
+        }
+        free(old);
+    }
+    unsigned j = name_hash(name) & (unsigned)(assigned_cap - 1);
+    while (assigned_names[j]) j = (j + 1) & (unsigned)(assigned_cap - 1);
+    assigned_names[j] = name;
+    assigned_count++;
+}
+
+static void collect_assigned(Node *n) {
+    while (n) {
+        if (n->type == NODE_SEQ) {
+            /* Statement chains lean left (see hoist_locals): walk the left
+               spine without recursion. */
+            collect_assigned(n->right);
+            n = n->left;
+            continue;
+        }
+        if ((n->type == NODE_ASSIGN || n->type == NODE_LET) && n->name) assigned_add(n->name);
+        collect_assigned(n->right); collect_assigned(n->third);
+        collect_assigned(n->comp_expr); collect_assigned(n->comp_filter);
+        for (int i = 0; i < n->element_count; i++) collect_assigned(n->elements[i]);
+        for (int i = 0; i < n->print_count; i++) collect_assigned(n->print_items[i]);
+        for (int i = 0; i < n->dict_count; i++) { collect_assigned(n->dict_keys[i]); collect_assigned(n->dict_values[i]); }
+        for (int i = 0; i < n->call_arg_count; i++) collect_assigned(n->call_args[i]);
+        for (int i = 0; i < n->fstring_part_count; i++) collect_assigned(n->fstring_parts[i]);
+        n = n->left;
+    }
+}
+
 void compile(Node *n) {
+    collect_assigned(n);
     compile_stmt(n);
 }
 
