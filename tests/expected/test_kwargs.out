@@ -1,0 +1,34 @@
+a [] {}
+b [1, 2] {}
+c [1] {"size": 3, "color": "red"}
+d [] {"x": 1}
+{}
+{"a": 1, "b": [2]}
+{}
+2x1 {}
+2x5 {"border": "thin"}
+4x3 {}
+1x7 {"shade": "dark"}
+9x1 {}
+15
+12
+calling with ["ann"] {}
+hello, ann
+calling with ["bo"] {"greeting": "hi"}
+hi, bo
+<p {"id": "x"}>
+button {"label": "OK"}
+{"label": "OK", "enabled": true}
+error: two() has no parameter named 'c'
+error: two() got two values for 'b'
+error: Cannot spread list with **: it needs a dict
+error: two() has no parameter named '1'
+error: only_opts() takes 0 arguments but 1 was given
+error: box() takes 2 arguments but 3 were given
+6
+6
+6
+6
+6
+6
+4
