@@ -1,0 +1,101 @@
+# A lambda whose body is a block (lambda(x): ... end) can be written inside
+# a call's parentheses, a list or a dict, not only on its own line.
+
+let nums = [3, 1, 2]
+
+# as a call argument
+show nums.map(lambda(x):
+    let sq = x * x
+    return sq + 1
+end)
+
+# with more arguments after it, continuing on the next lines
+func apply(f, v, w):
+    return f(v) + w
+end
+show apply(lambda(x):
+    return x * 10
+end, 4,
+    5)
+
+# two in one call
+func both(f, g, v):
+    return [f(v), g(v)]
+end
+show both(lambda(a):
+    return a + 1
+end, lambda(b):
+    return b * 2
+end, 7)
+
+# as dict values and list items
+let handlers = {
+    "double": lambda(x):
+        return x * 2
+    end,
+    "label": lambda(x):
+        when x > 2:
+            return "big"
+        end
+        return "small"
+    end
+}
+show handlers["double"](21), handlers["label"](5), handlers["label"](1)
+let steps = [lambda(x):
+    return x + 1
+end, lambda(x): x * 3]
+show steps[0](1), steps[1](2)
+
+# bodies with their own blocks, multi-line brackets and match
+show sorted(["pear", "fig", "banana"], lambda(w):
+    let score = 0
+    every ch in w:
+        when ch in ["a", "e", "i", "o", "u"]:
+            score += 1
+        end
+    end
+    let extra = [
+        len(w),
+        score
+    ]
+    match score:
+        case 1:
+            return extra[0]
+        otherwise:
+            return -extra[1]
+    end
+end)
+
+# nested: a block lambda inside a block lambda inside a call
+show nums.map(lambda(x):
+    let inner = [x, x + 1].map(lambda(y):
+        return y * 100
+    end)
+    return inner[0] + inner[1]
+end)
+
+# closures, and a space before the colon
+let base = 1000
+show nums.filter(lambda(x) :
+    return x + base > 1001
+end)
+func make_counter():
+    let state = {"n": 0}
+    return lambda():
+        state["n"] += 1
+        return state["n"]
+    end
+end
+let tick = make_counter()
+tick()
+show tick()
+
+# the usual forms are unchanged
+show nums.map(lambda(x): x - 1)
+let d = {"a":
+    1, "b": 2}
+show d
+let f = lambda(x):
+    return x * 4
+end
+show f(2)
