@@ -808,6 +808,9 @@ show hi()                        # ["HI!", "HI!"]
 
 - Several decorators are worked out top to bottom, then applied bottom up
   (the one nearest the `func` first), as in Python.
+- `@d` is short for writing `name = d(name)` after the function; that works
+  too (`fib = cache(fib)`), and every call to the name, from anywhere, runs
+  what it holds now.
 - A wrapper written as `lambda(...args)` passes on positional arguments;
   there is no way yet to collect `name = value` arguments.
 - `cache` compares numbers, text, `true` / `false` and `none` by value and

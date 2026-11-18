@@ -278,7 +278,9 @@ void optimize_bytecode(Bytecode *bc) {
         if (load->op == OP_LOAD_VAR && call->op == OP_CALL_VALUE && load->r0 == call->r1) {
             const char *name = global_table.names[load->arg];
             FuncEntry *fe = func_get(name);
-            if (fe && fe->body) {
+            /* Not for a name the program assigns to: the variable may hold
+               something else than the function by the time this runs. */
+            if (fe && fe->body && !glow_name_reassigned(name)) {
                 call->op = OP_CALL;
                 call->ptr = (intptr_t)name;
                 load->op = OP_NOP;
