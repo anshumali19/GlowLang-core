@@ -1924,6 +1924,7 @@ static Value fs_glob(int argc, Value *args) {
         } else glob_walk(&g, ".", 0, 0);
     }
     qsort(g.out->items, (size_t)g.out->size, sizeof(Value), cmp_values_str);
+    gc_list_moved(g.out, 0);   /* sorted in place: see gc_list_moved */
     free(g.segs);
     free(copy);
     return value_list(g.out);
@@ -1950,6 +1951,7 @@ static Value fs_walk(int argc, Value *args) {
     WalkCtx w = { list_new(16) };
     walk_dir(&w, dir);
     qsort(w.out->items, (size_t)w.out->size, sizeof(Value), cmp_values_str);
+    gc_list_moved(w.out, 0);   /* sorted in place: see gc_list_moved */
     return value_list(w.out);
 }
 

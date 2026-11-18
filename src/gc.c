@@ -9,6 +9,7 @@
 #include "win_pthread.h"
 #else
 #include <pthread.h>
+#include <sys/mman.h>
 #endif
 #include <sqlite3.h>
 
@@ -36,12 +37,33 @@
  *  nothing per object; a block with nothing live goes back to a pool.
  *  Large objects are kept on a list (gc_large_objects) and swept one by one.
  *
- *  An object's `marked` byte holds the number of the collection that last
- *  marked it (gc_epoch), so live objects never need unmarking.
+ *  Generational, without moving anything. An object that survives two
+ *  minor collections (or any major one) becomes old: its header's
+ *  `generation`, and its mark bit, which stays set ("sticky" marks). Most
+ *  collections are minor: they mark only young objects, starting from the
+ *  roots and from the remembered set, treat every old object as live, and
+ *  free only young garbage. A young object that survives its first minor
+ *  collection stays young for one more (its `age` is 1 and its mark bit is
+ *  cleared after the sweep), so the data a program is building at the
+ *  moment of a collection, usually garbage soon after, is not made old.
  *
- *  (The opt-in generational mode, GLOW_GC_GENERATIONAL, is gone: it was
- *  incomplete, because not every store goes through gc_write_barrier, and
- *  slower than full collections. gc_write_barrier is now a no-op.)
+ *  The remembered set holds every old object that may point to a young
+ *  one: those written to since the last collection (gc_write_barrier), and
+ *  those that still point to a young object after one (an old object kept
+ *  from the set, or one just made old, whose child stays young). A major
+ *  collection (once the heap's footprint has doubled the live data) clears
+ *  the marks, traces everything and makes every survivor old, as the
+ *  collector always used to.
+ *
+ *  A store into an old object that skips the barrier would let a minor
+ *  collection free a young object still in use. GLOW_GC_VERIFY=1 checks
+ *  after every minor collection that every reachable object was marked and
+ *  that every old object pointing to a young one is in the remembered set,
+ *  and names the object whose store missed the barrier.
+ *  GLOW_GC_GENERATIONAL=0 makes every collection a major one.
+ *
+ *  Large objects keep the number of the collection that marked them in
+ *  their `marked` byte (gc_epoch); block objects use the marks bitmap.
  * ================================================================ */
 
 #if defined(__clang__) || defined(__GNUC__)
@@ -64,6 +86,62 @@ size_t gc_threshold = GC_MIN_THRESHOLD;
 size_t gc_allocated_at_last_gc = 0;
 
 static int gc_stress = 0;          /* GLOWLANG_GC_STRESS=1: collect very often */
+int gc_generational = 1;           /* GLOW_GC_GENERATIONAL=0: every collection is major */
+static int gc_minor = 0;           /* a minor collection is marking */
+static int gc_verify = 0;          /* GLOW_GC_VERIFY=1 */
+static int gc_verifying = 0;       /* the verify walk is running */
+static size_t gc_old_bytes = 0;    /* bytes that survived (estimate between majors) */
+/* The memory the heap holds on to after a sweep: blocks with anything live
+   in them (a block of mostly garbage still costs all of it: only its free
+   tail is allocated from) plus the large objects. Minor collections keep
+   short-lived survivors in otherwise empty blocks, so this, not the bytes
+   that survived, is what decides when to run a major collection. */
+static size_t gc_footprint = 0;
+static size_t gc_major_threshold = (size_t)32 * 1024 * 1024;
+static long gc_collections = 0;
+/* Old objects written to since the last collection (gc_write_barrier). */
+static GCObject **gc_remset = NULL;
+static int gc_remset_len = 0, gc_remset_cap = 0;
+/* Built during a minor collection: the old objects that will still point
+   to a young object after it (the remembered set from then on). */
+static GCObject **gc_remset_next = NULL;
+static int gc_remset_next_len = 0, gc_remset_next_cap = 0;
+/* Minor collection: the object being traced points to a young object that
+   stays young. */
+static int gc_young_child = 0;
+/* Block objects that survived their first minor collection this time:
+   their mark bits are cleared after the sweep, so they stay young. */
+static GCObject **gc_aged = NULL;
+static size_t gc_aged_len = 0, gc_aged_cap = 0;
+static size_t gc_aged_bytes = 0;
+static void gc_remset_keep(GCObject *o) {
+    if (gc_remset_next_len == gc_remset_next_cap) {
+        gc_remset_next_cap = gc_remset_next_cap ? gc_remset_next_cap * 2 : 1024;
+        gc_remset_next = realloc(gc_remset_next, sizeof(GCObject*) * (size_t)gc_remset_next_cap);
+        if (!gc_remset_next) { fprintf(stderr, "Fatal: out of memory (remembered set)\n"); abort(); }
+    }
+    gc_remset_next[gc_remset_next_len++] = o;
+}
+static void gc_aged_push(GCObject *o) {
+    if (gc_aged_len == gc_aged_cap) {
+        gc_aged_cap = gc_aged_cap ? gc_aged_cap * 2 : 4096;
+        gc_aged = realloc(gc_aged, sizeof(GCObject*) * gc_aged_cap);
+        if (!gc_aged) { fprintf(stderr, "Fatal: out of memory (GC)\n"); abort(); }
+    }
+    gc_aged[gc_aged_len++] = o;
+}
+void gc_remember(GCObject *o) {
+    o->in_remembered_set = 1;
+    /* A list remembered without an index is rescanned whole;
+       gc_write_barrier_list narrows this after calling here. */
+    if (o->type == OBJ_LIST) ((List*)o)->dirty_from = 0;
+    if (gc_remset_len == gc_remset_cap) {
+        gc_remset_cap = gc_remset_cap ? gc_remset_cap * 2 : 1024;
+        gc_remset = realloc(gc_remset, sizeof(GCObject*) * (size_t)gc_remset_cap);
+        if (!gc_remset) { fprintf(stderr, "Fatal: out of memory (remembered set)\n"); abort(); }
+    }
+    gc_remset[gc_remset_len++] = o;
+}
 static int gc_in_collection = 0;
 static unsigned char gc_epoch = 1; /* number (1..254) of the current collection */
 static size_t gc_live_bytes = 0;   /* bytes marked by the current collection */
@@ -73,16 +151,16 @@ extern void gc_mark_pending_spawn_roots(void (*mark)(Value));
 /* GLOW_GC_STATS=1: at exit, print how many collections ran and where their
    time went, on stderr. */
 static int gc_stats = 0;
-static struct { long full; double roots, mark, sweep; long long freed, kept; } gc_st;
+static struct { long full, minor; double roots, mark, sweep; long long freed, kept; } gc_st;
 static double gc_now(void) {
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 static void gc_print_stats(void) {
-    fprintf(stderr, "[gc] %ld collections: roots %.3fs, mark %.3fs, sweep %.3fs; "
+    fprintf(stderr, "[gc] %ld collections (%ld minor): roots %.3fs, mark %.3fs, sweep %.3fs; "
             "%lld objects freed, %lld kept (summed over collections); %zu bytes live\n",
-            gc_st.full, gc_st.roots, gc_st.mark, gc_st.sweep, gc_st.freed, gc_st.kept, gc_allocated);
+            gc_st.full + gc_st.minor, gc_st.minor, gc_st.roots, gc_st.mark, gc_st.sweep, gc_st.freed, gc_st.kept, gc_allocated);
 }
 
 /* ---- Heap blocks -------------------------------------------------------
@@ -253,8 +331,29 @@ void gc_register_constant_root(Value v) {
     pthread_mutex_unlock(&gc_mutex);
 }
 
+/* Blocks come straight from the system and go straight back to it. Through
+   malloc, glibc keeps freed blocks (after the first one is freed it raises
+   its mmap threshold, so later ones come from the main heap), and the
+   process kept the memory of every block it ever had at once. (Windows'
+   heap hands allocations this large back on its own.) */
+static void *gc_block_os_alloc(void) {
+#ifdef _WIN32
+    return malloc(GC_BLOCK_BYTES);
+#else
+    void *p = mmap(NULL, GC_BLOCK_BYTES, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+#endif
+}
+static void gc_block_os_free(void *p) {
+#ifdef _WIN32
+    free(p);
+#else
+    munmap(p, GC_BLOCK_BYTES);
+#endif
+}
+
 static GCBlock* gc_block_new(void) {
-    GCBlock *b = malloc(GC_BLOCK_BYTES);
+    GCBlock *b = gc_block_os_alloc();
     if (!b) { fprintf(stderr, "Fatal: out of memory allocating GC block\n"); abort(); }
     b->size = GC_BLOCK_DATA_SIZE;
     b->used = 0;
@@ -285,8 +384,11 @@ static GCBlock* gc_block_find_fit(size_t sz) {
 static void gc_reclaim_empty_blocks(void) {
     GCBlock **pp = &gc_block_list;
     int changed = 0, kept = 0;
+    size_t footprint = 0;
+    for (GCObject *o = gc_large_objects; o; o = o->next) footprint += o->sz;
     while (*pp) {
         GCBlock *b = *pp;
+        if (b->live_count) footprint += b->used;
         if (b->live_count == 0 && kept < GC_KEEP_EMPTY_BLOCKS) {
             b->used = 0;
             kept++;
@@ -295,7 +397,7 @@ static void gc_reclaim_empty_blocks(void) {
             if (b == gc_current_block) gc_current_block = NULL;
             *pp = b->next;
             addr_index_remove(&gc_block_index, (uintptr_t)b);
-            free(b);
+            gc_block_os_free(b);
             changed = 1;
         } else {
             pp = &b->next;
@@ -303,6 +405,7 @@ static void gc_reclaim_empty_blocks(void) {
     }
     if (!gc_current_block && gc_block_list) gc_current_block = gc_block_list;
     if (changed) gc_update_heap_bounds();
+    gc_footprint = footprint;
 }
 
 static GCObject **grey_stack = NULL;
@@ -321,17 +424,42 @@ static void grey_push_raw(GCObject *obj) {
    object also gets its bit in the block's marks bitmap, which is what the
    sweep reads. (The bounds check only guards against a stray pointer: a
    real block is always inside the heap.) */
+static void gc_verify_visit(GCObject *obj);
 static inline void push_grey(GCObject *obj) {
-    if (!obj || obj->marked == gc_epoch) return;
-    obj->marked = gc_epoch;
-    gc_live_bytes += obj->sz;
+    if (!obj) return;
+    if (__builtin_expect(gc_verifying, 0)) { gc_verify_visit(obj); return; }
+    /* A minor collection takes old objects as live; the young objects they
+       point to are reached through the remembered set. */
+    if (gc_minor && obj->generation) return;
+    int marked = 0;
     if (obj->is_block_allocated) {
         GCBlock *b = (GCBlock*)obj->block_ptr;
         if ((uintptr_t)b >= gc_heap_lo && (uintptr_t)b < gc_heap_hi) {
             size_t g = (size_t)((char*)obj - b->data) / GC_GRANULE;
-            if (g < GC_BITMAP_WORDS * 64) b->marks[g / 64] |= (uint64_t)1 << (g % 64);
+            if (g < GC_BITMAP_WORDS * 64) {
+                uint64_t bit = (uint64_t)1 << (g % 64), *w = &b->marks[g / 64];
+                if (*w & bit) { if (!obj->generation) gc_young_child = 1; return; }
+                *w |= bit;
+                marked = 1;
+            }
         }
     }
+    if (!marked) {
+        if (obj->marked == gc_epoch) { if (!obj->generation) gc_young_child = 1; return; }
+        obj->marked = gc_epoch;
+    }
+    if (gc_minor && !obj->age) {
+        /* First survival: young one more time. */
+        obj->age = 1;
+        gc_young_child = 1;
+        if (marked) gc_aged_push(obj);
+        gc_aged_bytes += obj->sz;
+    } else {
+        obj->generation = (unsigned char)gc_generational;   /* old from now on */
+        /* Its field dict too: stores into it check the dict's own header. */
+        if (obj->type == OBJ_INSTANCE) ((Instance*)obj)->fields.obj.generation = obj->generation;
+    }
+    gc_live_bytes += obj->sz;
     /* Strings and big ints refer to nothing, so tracing them does nothing:
        leave them off the grey stack. Popping them later touched each one a
        second time, usually after it had left the cache (a list of a
@@ -457,9 +585,19 @@ static void gc_trace_object(GCObject *obj) {
 #undef mark_obj
 
 static void process_grey_stack(void) {
+    if (!gc_minor) {
+        while (grey_count > 0) gc_trace_object(grey_stack[--grey_count]);
+        return;
+    }
     while (grey_count > 0) {
         GCObject *obj = grey_stack[--grey_count];
+        gc_young_child = 0;
         gc_trace_object(obj);
+        /* Made old just now, still pointing to a young object. */
+        if (gc_young_child && obj->generation) {
+            if (obj->type == OBJ_LIST) ((List*)obj)->dirty_from = 0;
+            gc_remset_keep(obj);
+        }
     }
 }
 
@@ -562,7 +700,6 @@ static void gc_sweep_blocks(void) {
             }
             if (m) {
                 live += (size_t)gc_popcount(m);
-                b->marks[w] = 0;
             }
         }
         b->live_count = live;
@@ -570,11 +707,11 @@ static void gc_sweep_blocks(void) {
     }
 }
 
-static void gc_sweep_large(void) {
+static void gc_sweep_large(int major) {
     GCObject **p = &gc_large_objects;
     while (*p) {
         GCObject *obj = *p;
-        if (obj->marked != gc_epoch) {
+        if (obj->marked != gc_epoch && (major || !obj->generation)) {
             *p = obj->next;
             gc_free_object_payload(obj);
             addr_index_remove(&gc_large_index, (uintptr_t)obj);
@@ -632,55 +769,231 @@ static void gc_mark_precise_roots(void (*mark_root)(Value)) {
     }
 }
 
+/* After a collection: the next one starts once GC_MIN_THRESHOLD more bytes
+   (the nursery) have been allocated, or, collecting only fully, once the
+   heap has doubled. */
 static void gc_set_next_threshold(void) {
     gc_allocated_at_last_gc = gc_allocated;
     if (gc_stress) { gc_threshold = gc_allocated + 64 * 1024; return; }
+    if (gc_generational) { gc_threshold = gc_allocated + GC_MIN_THRESHOLD; return; }
     size_t next_threshold = gc_allocated * 2;
     if (next_threshold < GC_MIN_THRESHOLD) next_threshold = GC_MIN_THRESHOLD;
     gc_threshold = next_threshold;
 }
 
-GC_NOINLINE static void gc_full_collect_impl(void) {
+/* ---- GLOW_GC_VERIFY: after a minor collection, walk everything reachable
+   and stop at any young object the collection did not mark (it would be
+   freed while in use): the old object pointing to it was written to
+   without gc_write_barrier. Slow; for finding missing barriers. */
+static GCObject **gcv_seen = NULL;      /* open-addressing set of visited objects */
+static size_t gcv_cap = 0, gcv_count = 0;
+static GCObject **gcv_stack = NULL;
+static size_t gcv_len = 0, gcv_stack_cap = 0;
+static GCObject *gcv_parent = NULL;
+static const char *gc_obj_type_name(int t) {
+    static const char *names[] = { "string", "rope", "list", "dict", "closure", "class", "instance",
+        "bound method", "shape", "trait", "native function", "packed array", "iterator",
+        "string builder", "big int", "sqlite iterator", "sqlite handle", "set" };
+    return t >= 0 && t < (int)(sizeof names / sizeof names[0]) ? names[t] : "object";
+}
+static int gcv_insert(GCObject *o) {
+    if (gcv_count * 2 >= gcv_cap) {
+        size_t ncap = gcv_cap ? gcv_cap * 2 : 1 << 16;
+        GCObject **n = calloc(ncap, sizeof(GCObject*));
+        for (size_t i = 0; i < gcv_cap; i++) {
+            if (!gcv_seen[i]) continue;
+            size_t h = ((uintptr_t)gcv_seen[i] >> 3) & (ncap - 1);
+            while (n[h]) h = (h + 1) & (ncap - 1);
+            n[h] = gcv_seen[i];
+        }
+        free(gcv_seen); gcv_seen = n; gcv_cap = ncap;
+    }
+    size_t h = ((uintptr_t)o >> 3) & (gcv_cap - 1);
+    while (gcv_seen[h]) { if (gcv_seen[h] == o) return 0; h = (h + 1) & (gcv_cap - 1); }
+    gcv_seen[h] = o; gcv_count++;
+    return 1;
+}
+static int gc_marked_now(GCObject *o) {
+    if (o->generation) return 1;
+    if (o->is_block_allocated) {
+        GCBlock *b = (GCBlock*)o->block_ptr;
+        size_t g = (size_t)((char*)o - b->data) / GC_GRANULE;
+        return (b->marks[g / 64] >> (g % 64)) & 1;
+    }
+    return o->marked == gc_epoch;
+}
+static void gc_verify_visit(GCObject *obj) {
+    GCObject *p = gcv_parent;
+    if (p && p->generation && !obj->generation && !p->in_remembered_set &&
+        !(p->type == OBJ_INSTANCE && ((Instance*)p)->fields.obj.in_remembered_set)) {
+        fprintf(stderr, "GC verify: the old %s (%p) points to the young %s (%p) but is not in the remembered set.\n",
+                gc_obj_type_name(p->type), (void*)p, gc_obj_type_name(obj->type), (void*)obj);
+        abort();
+    }
+    if (!gcv_insert(obj)) return;
+    if (!gc_marked_now(obj)) {
+        fprintf(stderr, "GC verify: a young %s (%p) is reachable from %s %s (%p) but a minor collection did not mark it.\n"
+                "The store that put it there missed gc_write_barrier.\n",
+                gc_obj_type_name(obj->type), (void*)obj, p ? "the" : "a",
+                p ? gc_obj_type_name(p->type) : "root", (void*)p);
+        abort();
+    }
+    if (gcv_len == gcv_stack_cap) {
+        gcv_stack_cap = gcv_stack_cap ? gcv_stack_cap * 2 : 4096;
+        gcv_stack = realloc(gcv_stack, sizeof(GCObject*) * gcv_stack_cap);
+    }
+    gcv_stack[gcv_len++] = obj;
+}
+static void gc_verify_minor(void) {
+    gc_verifying = 1;
+    gcv_count = 0; if (gcv_seen) memset(gcv_seen, 0, sizeof(GCObject*) * gcv_cap);
+    gcv_len = 0; gcv_parent = NULL;
+    char *marker = GLOW_STACK_POS();
+    gc_mark_precise_roots(gc_mark_root_checked);
+    gc_scan_native_stacks(marker, push_grey_fn);
+    while (gcv_len > 0) {
+        GCObject *o = gcv_stack[--gcv_len];
+        gcv_parent = o;
+        /* A remembered list is rescanned only from dirty_from. */
+        if (o->type == OBJ_LIST && o->generation && o->in_remembered_set) {
+            List *l = (List*)o;
+            for (int j = 0; j < l->dirty_from && j < l->size; j++) {
+                Value v = l->items[j];
+                if (value_is_heap_ref(v) && !((GCObject*)(uintptr_t)(v & MASK_PAYLOAD))->generation) {
+                    fprintf(stderr, "GC verify: the old list %p holds a young object at index %d, below where it is rescanned (%d).\n",
+                            (void*)l, j, l->dirty_from);
+                    abort();
+                }
+            }
+        }
+        gc_trace_object(o);
+    }
+    gcv_parent = NULL;
+    gc_verifying = 0;
+}
+
+/* Mark what the remembered set's old objects point to (a minor
+   collection), keeping those that still point to a young object. A list
+   keeps its dirty_from: its young items are all at or after it. */
+static void gc_mark_remembered(void) {
+    for (int i = 0; i < gc_remset_len; i++) {
+        GCObject *o = gc_remset[i];
+        gc_young_child = 0;
+        if (o->type == OBJ_LIST) {
+            List *l = (List*)o;
+            int from = l->dirty_from < 0 ? 0 : l->dirty_from;
+            for (int j = from; j < l->size; j++) gc_mark_value(l->items[j]);
+        } else {
+            gc_trace_object(o);
+        }
+        if (gc_young_child) gc_remset_keep(o);
+    }
+}
+static void gc_clear_remembered(void) {
+    for (int i = 0; i < gc_remset_len; i++) gc_remset[i]->in_remembered_set = 0;
+    gc_remset_len = 0;
+}
+/* After a minor collection's marking: the kept objects are the set. */
+static void gc_remset_rebuild(void) {
+    gc_clear_remembered();
+    GCObject **t = gc_remset; int tc = gc_remset_cap;
+    gc_remset = gc_remset_next; gc_remset_cap = gc_remset_next_cap; gc_remset_len = gc_remset_next_len;
+    gc_remset_next = t; gc_remset_next_cap = tc; gc_remset_next_len = 0;
+    for (int i = 0; i < gc_remset_len; i++) gc_remset[i]->in_remembered_set = 1;
+}
+/* After the sweep: objects that survived their first minor collection lose
+   their mark bits again (a set bit means old). */
+static void gc_unmark_aged(void) {
+    for (size_t i = 0; i < gc_aged_len; i++) {
+        GCObject *o = gc_aged[i];
+        GCBlock *b = (GCBlock*)o->block_ptr;
+        size_t g = (size_t)((char*)o - b->data) / GC_GRANULE;
+        b->marks[g / 64] &= ~((uint64_t)1 << (g % 64));
+    }
+    gc_aged_len = 0;
+}
+
+GC_NOINLINE static void gc_collect_impl(int major) {
     double t0 = gc_stats ? gc_now() : 0, t1 = 0, t2 = 0;
-    /* A new number for this collection: whatever the last one marked now
-       reads as unmarked, without touching it. */
+    /* A new number for this collection (large objects compare against it). */
     gc_epoch = gc_epoch >= 254 ? 1 : (unsigned char)(gc_epoch + 1);
     gc_live_bytes = 0;
+    gc_aged_bytes = 0;
+    if (major) {
+        /* Start from nothing marked: clear the sticky marks and the large
+           objects' numbers (one could equal this epoch after wrapping), and
+           forget the remembered set, which a full trace does not need. */
+        for (GCBlock *b = gc_block_list; b; b = b->next) {
+            size_t words = (b->used / GC_GRANULE + 63) / 64;
+            memset(b->marks, 0, words * sizeof(uint64_t));
+        }
+        for (GCObject *o = gc_large_objects; o; o = o->next) o->marked = 0;
+        gc_clear_remembered();
+    }
+    gc_minor = !major;
     char *stack_marker = GLOW_STACK_POS();
     gc_mark_precise_roots(gc_mark_root_checked);
     gc_scan_native_stacks(stack_marker, push_grey_fn);
+    if (!major) gc_mark_remembered();
     if (gc_stats) t1 = gc_now();
     process_grey_stack();
+    gc_minor = 0;
     if (gc_stats) t2 = gc_now();
+    if (major) gc_clear_remembered(); else gc_remset_rebuild();
+    if (!major && gc_verify) gc_verify_minor();
 
     gc_sweep_blocks();
-    gc_sweep_large();
-    intern_sweep();
+    gc_unmark_aged();
+    gc_sweep_large(major);
+    if (major) intern_sweep();   /* a minor collection does not see old dicts' keys */
     glow_str_cursor_reset();
     gc_reclaim_empty_blocks();
-    gc_allocated = gc_live_bytes;
+    if (major) {
+        gc_old_bytes = gc_live_bytes;
+        /* The next major once the footprint doubles the live data (and grows
+           by half from now, so a fragmented heap does not collect fully
+           every time). */
+        size_t next = gc_old_bytes * 2;
+        if (next < gc_footprint + gc_footprint / 2) next = gc_footprint + gc_footprint / 2;
+        gc_major_threshold = next > GC_MIN_THRESHOLD ? next : GC_MIN_THRESHOLD;
+    } else {
+        gc_old_bytes += gc_live_bytes - gc_aged_bytes;   /* made old now */
+    }
+    gc_allocated = gc_old_bytes + gc_aged_bytes;
     gc_set_next_threshold();
+    gc_collections++;
     if (gc_stats) {
         double t3 = gc_now();
-        gc_st.full++; gc_st.roots += t1 - t0; gc_st.mark += t2 - t1; gc_st.sweep += t3 - t2;
+        if (major) gc_st.full++; else gc_st.minor++;
+        gc_st.roots += t1 - t0; gc_st.mark += t2 - t1; gc_st.sweep += t3 - t2;
     }
 }
 
-void gc_full_collect(void) {
+static void gc_collect(int major) {
     if (gc_in_collection) return;
     gc_in_collection = 1;
     /* Spill callee-saved registers into this frame so the conservative scan
        of the current thread's stack sees values that only live in registers. */
     jmp_buf regs;
     setjmp(regs);
-    gc_full_collect_impl();
+    gc_collect_impl(major);
     /* Keep `regs` observably live across the call. */
     if (((volatile char*)&regs)[0] == 0x7f && gc_in_collection == 2) abort();
     gc_in_collection = 0;
 }
 
-/* Kept for callers: there is only one kind of collection now. */
-void gc_minor_collect(void) { gc_full_collect(); }
+void gc_full_collect(void) { gc_collect(1); }
+
+/* The collection gc_alloc starts: minor, unless the heap's footprint has
+   doubled the live data since the last major one (or generations are off).
+   Under GLOWLANG_GC_STRESS every fourth one is major, so both kinds run
+   often. */
+static void gc_collect_auto(void) {
+    int major = !gc_generational || gc_footprint > gc_major_threshold || (gc_stress && gc_collections % 4 == 3);
+    gc_collect(major);
+}
+
+void gc_minor_collect(void) { gc_collect_auto(); }
 
 void* gc_alloc(size_t sz, ObjType type) {
     static int gc_env_checked = 0, gc_nogc = 0, gc_forcefull = 0;
@@ -692,9 +1005,13 @@ void* gc_alloc(size_t sz, ObjType type) {
         gc_forcefull = getenv("GLOW_FORCEFULL") != NULL;
         gc_stats = getenv("GLOW_GC_STATS") != NULL;
         if (gc_stats) atexit(gc_print_stats);
+        const char *gen = getenv("GLOW_GC_GENERATIONAL");
+        if (gen && strcmp(gen, "0") == 0) gc_generational = 0;
+        gc_verify = getenv("GLOW_GC_VERIFY") != NULL;
     }
     if (!gc_nogc && !gc_in_collection) {
-        if (gc_forcefull || gc_allocated > gc_threshold) gc_full_collect();
+        if (gc_forcefull) gc_full_collect();
+        else if (gc_allocated > gc_threshold) gc_collect_auto();
     }
 
     sz = (sz + (GC_GRANULE - 1)) & ~(size_t)(GC_GRANULE - 1);

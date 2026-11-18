@@ -898,6 +898,14 @@ static void emit_fast_index(JITBuffer *buf, Instruction *pc, int i) {
     *(uint32_t*)&buf->code[jmp_done + 1] = done_pos - (jmp_done + 5);
 }
 
+/* Offsets the inline list stores read (the write barrier's fields). */
+#define JIT_OFF_GENERATION 11
+#define JIT_OFF_REMEMBERED 12
+#define JIT_OFF_DIRTY_FROM 56
+_Static_assert(offsetof(GCObject, generation) == JIT_OFF_GENERATION, "GCObject.generation moved");
+_Static_assert(offsetof(GCObject, in_remembered_set) == JIT_OFF_REMEMBERED, "GCObject.in_remembered_set moved");
+_Static_assert(offsetof(List, dirty_from) == JIT_OFF_DIRTY_FROM, "List.dirty_from moved");
+_Static_assert(offsetof(List, size) == 36 && offsetof(List, capacity) == 40 && offsetof(List, items) == 48, "List layout moved");
 static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
     emit_mov_rax_reg(buf, pc->r0); // RAX = coll
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0xc2); // mov rdx, rax
@@ -922,6 +930,18 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd1); // cmp rcx, rdx (negative or >= size: slow path)
     uint32_t jae_bounds = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);
 
+    /* Write barrier (see gc.c): a young list, or an old one already
+       remembered from an index at or below i, takes the store here; any
+       other old list goes to the helper, which remembers it. */
+    jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0x78); jit_emit_byte(buf, JIT_OFF_GENERATION); jit_emit_byte(buf, 0x00); // cmp byte [rax + generation], 0
+    uint32_t je_young = buf->size; jit_emit_byte(buf, 0x74); jit_emit_byte(buf, 0x00);                                     // je young
+    jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0x78); jit_emit_byte(buf, JIT_OFF_REMEMBERED); jit_emit_byte(buf, 0x00); // cmp byte [rax + in_remembered_set], 0
+    uint32_t je_not_rem = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);            // je slow
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x63); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, JIT_OFF_DIRTY_FROM);  // movsxd rdx, dword [rax + dirty_from]
+    jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x39); jit_emit_byte(buf, 0xd1);                                          // cmp rcx, rdx
+    uint32_t jl_below = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0);              // jl slow
+    buf->code[je_young + 1] = (uint8_t)(buf->size - (je_young + 2));
+
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x50); jit_emit_byte(buf, 0x30); // mov rdx, [rax + 48] (items)
     emit_mov_rax_reg(buf, pc->r2); // load val into RAX
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x04); jit_emit_byte(buf, 0xca); // mov [rdx + rcx*8], rax
@@ -932,6 +952,8 @@ static void emit_fast_store_index(JITBuffer *buf, Instruction *pc, int i) {
     *(uint32_t*)&buf->code[jne_list + 2] = fb_pos - (jne_list + 6);
     *(uint32_t*)&buf->code[jne_int + 2] = fb_pos - (jne_int + 6);
     *(uint32_t*)&buf->code[jae_bounds + 2] = fb_pos - (jae_bounds + 6);
+    *(uint32_t*)&buf->code[je_not_rem + 2] = fb_pos - (je_not_rem + 6);
+    *(uint32_t*)&buf->code[jl_below + 2] = fb_pos - (jl_below + 6);
 
     emit_mov_arg1_reg(buf, pc->r0); emit_mov_arg2_reg(buf, pc->r1); emit_mov_arg3_reg(buf, pc->r2);
     emit_mov_rax_imm64(buf, (uintptr_t)glow_store_index_jit);
@@ -965,6 +987,15 @@ static void emit_list_append_fast(JITBuffer *buf, Instruction *pc, uint32_t *jne
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x4a); jit_emit_byte(buf, 0x24); // mov ecx, [r10 + 36] (size)
     jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x4a); jit_emit_byte(buf, 0x28); // cmp ecx, [r10 + 40] (capacity)
     *jae_full = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x83); jit_emit_u32(buf, 0);
+    /* Write barrier: a young list, or an old one remembered from an index
+       at or below its size, appends here; otherwise the method call does. */
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0x7a); jit_emit_byte(buf, JIT_OFF_GENERATION); jit_emit_byte(buf, 0x00); // cmp byte [r10 + generation], 0
+    uint32_t je_young = buf->size; jit_emit_byte(buf, 0x74); jit_emit_byte(buf, 0x00);                                   // je young
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x80); jit_emit_byte(buf, 0x7a); jit_emit_byte(buf, JIT_OFF_REMEMBERED); jit_emit_byte(buf, 0x00); // cmp byte [r10 + in_remembered_set], 0
+    uint32_t je_not_rem = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x84); jit_emit_u32(buf, 0);          // je slow
+    jit_emit_byte(buf, 0x41); jit_emit_byte(buf, 0x3b); jit_emit_byte(buf, 0x4a); jit_emit_byte(buf, JIT_OFF_DIRTY_FROM); // cmp ecx, [r10 + dirty_from]
+    uint32_t jl_below = buf->size; jit_emit_byte(buf, 0x0f); jit_emit_byte(buf, 0x8c); jit_emit_u32(buf, 0);            // jl slow
+    buf->code[je_young + 1] = (uint8_t)(buf->size - (je_young + 2));
     jit_emit_byte(buf, 0x49); jit_emit_byte(buf, 0x8b); jit_emit_byte(buf, 0x52); jit_emit_byte(buf, 0x30); // mov rdx, [r10 + 48] (items)
     emit_mov_rax_reg(buf, val_reg);
     jit_emit_byte(buf, 0x48); jit_emit_byte(buf, 0x89); jit_emit_byte(buf, 0x04); jit_emit_byte(buf, 0xca); // mov [rdx + rcx*8], rax
@@ -974,6 +1005,8 @@ static void emit_list_append_fast(JITBuffer *buf, Instruction *pc, uint32_t *jne
     *jmp_done = buf->size; jit_emit_byte(buf, 0xe9); jit_emit_u32(buf, 0);
     *(uint32_t*)&buf->code[*jne_list + 2] = buf->size - (*jne_list + 6);
     *(uint32_t*)&buf->code[*jae_full + 2] = buf->size - (*jae_full + 6);
+    *(uint32_t*)&buf->code[je_not_rem + 2] = buf->size - (je_not_rem + 6);
+    *(uint32_t*)&buf->code[jl_below + 2] = buf->size - (jl_below + 6);
 }
 
 /* len(xs) with xs a list, without a call. Instruction i calls the value the

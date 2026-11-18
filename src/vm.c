@@ -2337,6 +2337,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 for (int i = 0; i < current_closure->captured_count; i++) {
                     if (strcmp(current_closure->captured_names[i], var_name) == 0) {
                         current_closure->captured_values[i] = R(pc->r0);
+                        gc_write_barrier((GCObject*)current_closure, R(pc->r0));
                         found_in_closure = true;
                         break;
                     }
@@ -3396,7 +3397,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             int64_t size = AS_LIST(coll)->size;
             if (i < 0) i += size;
             if (i < 0 || i >= size) { index_error("List index out of range", i < 0 ? i - size : i, size); goto l_OP_THROW; }
-            gc_write_barrier((GCObject*)AS_LIST(coll), val);
+            gc_write_barrier_list(AS_LIST(coll), (int)i);
             AS_LIST(coll)->items[i] = val;
         } else if (GET_TYPE(coll) == VAL_OBJECT) {
             if ((coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {

@@ -800,7 +800,7 @@ Value glow_store_index_jit(Value coll, Value v_idx, Value v_val) {
         if (i < 0) i += l->size;
         if (i < 0 || i >= l->size) return VAL_DEOPT_SENTINEL;
         l->items[i] = v_val;
-        gc_write_barrier((GCObject*)l, v_val);
+        gc_write_barrier_list(l, (int)i);
     } else if (GET_TYPE(coll) == VAL_OBJECT && (coll & MASK_PAYLOAD) && GET_OBJ_TYPE(coll) == OBJ_PACKED_ARRAY) {
         packed_array_set_jit(coll, v_idx, v_val);
     } else if (GET_TYPE(coll) == VAL_DICT && GET_TYPE(v_idx) == VAL_STRING) {
@@ -1059,6 +1059,7 @@ const char* rope_flatten(Value v) {
         gs->chars[rn->length] = '\0';
         rn->is_leaf = true;
         rn->leaf.flat_string = make_value(VAL_STRING, (uint64_t)(uintptr_t)gs);
+        gc_write_barrier(&rn->obj, rn->leaf.flat_string);
         rn->leaf.offset = 0;
         return gs->chars;
     }
@@ -1470,6 +1471,7 @@ static void dict_set_interned(Dict *d, const char *interned, uint32_t h, Value v
    (fields of one class usually sit at the same entry in every instance);
    pc->cache[1].key holds the interned name, looked up once, so adding a
    field to a new object hashes nothing. */
+static GLOW_NOINLINE void instance_set_cached_miss(Instance *inst, const char *n, Value v, Instruction *pc);
 void instance_set_cached(Instance *inst, const char *n, Value v, Instruction *pc) {
     Dict *d = inst->properties;
     intptr_t idx = pc ? pc->cache[0].val - 1 : -1;
@@ -1479,6 +1481,10 @@ void instance_set_cached(Instance *inst, const char *n, Value v, Instruction *pc
         gc_write_barrier((GCObject*)inst, v);
         return;
     }
+    instance_set_cached_miss(inst, n, v, pc);
+}
+static GLOW_NOINLINE void instance_set_cached_miss(Instance *inst, const char *n, Value v, Instruction *pc) {
+    Dict *d = inst->properties;
     if (!pc || !n) { instance_set(inst, n, v); return; }
     if (!pc->cache[1].key || pc->cache[1].val != (intptr_t)n) {
         pc->cache[1].key = (void*)intern_string(n);
@@ -1592,7 +1598,7 @@ void list_free_storage(List *l) {
     l->items = NULL;
 }
 void list_push(List *l, Value v) {
-    gc_write_barrier((GCObject*)l, v);
+    gc_write_barrier_list(l, l->size);
     if (l->size >= l->capacity) {
         int cap = l->capacity < 4 ? 8 : l->capacity * 2;
         Value *items;
@@ -1774,6 +1780,7 @@ static Shape* shape_new(Shape *p, const char *n, int o) {
     s->transitions = NULL;
     vm_stack[vm_stack_top++] = value_obj(s);
     s->transitions = dict_new(4);
+    gc_write_barrier(&s->obj, value_dict(s->transitions));   /* s may be old by now */
     vm_stack_top--;
     return s;
 }
@@ -1798,8 +1805,10 @@ Class* class_new(const char *name, Class *parent) {
 
     vm_stack[vm_stack_top++] = value_class(c);
     c->methods = dict_new(8);
+    gc_write_barrier(&c->obj, value_dict(c->methods));   /* c may be old by now */
     vm_stack[vm_stack_top++] = value_dict(c->methods);
     c->root_shape = shape_new(NULL, "__root__", -1);
+    gc_write_barrier(&c->obj, value_obj(c->root_shape));
     vm_stack_top -= 2;
     return c;
 }
@@ -1861,6 +1870,7 @@ Trait* trait_new(const char *name) {
     t->methods = NULL;
     vm_stack[vm_stack_top++] = value_trait(t);
     t->methods = dict_new(8);
+    gc_write_barrier(&t->obj, value_dict(t->methods));   /* t may be old by now */
     vm_stack_top--;
     return t;
 }
@@ -2367,7 +2377,7 @@ static Value native_glow_slice_set(int argc, Value *args) {
         }
         int64_t k = i;
         for (int64_t j = 0; j < m; j++, k += step) {
-            gc_write_barrier((GCObject*)l, items[j]);
+            gc_write_barrier_list(l, (int)k);
             l->items[k] = items[j];
         }
     }
