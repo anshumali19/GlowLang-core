@@ -41,7 +41,7 @@ let langs = ["C", "Python", "GlowLang"]
 langs.append("Rust")
 show langs[2]          # GlowLang
 show len(langs)        # 4
-show langs[1:3]        # [Python, GlowLang]
+show langs[1:3]        # ["Python", "GlowLang"]
 
 let ages = {"ada": 36, "linus": 21}
 ages["grace"] = 85
@@ -96,8 +96,9 @@ show double(21)            # 42
 ```
 
 `action` and `can` mean the same as `func`. Hot functions are compiled to
-machine code automatically, with nothing for you to switch on. Across our 10
-benchmarks, GlowLang is about 1.8x faster than CPython 3.14.
+machine code automatically, with nothing for you to switch on: on the
+[benchmarks in the README](../README.md#-performance) GlowLang finishes 1.4x to
+8x sooner than CPython 3.14.
 
 ## 6. Classes
 
@@ -131,7 +132,59 @@ catch e:
 end
 ```
 
-## 8. Batteries included
+## 8. More of the language
+
+```glow
+# Named arguments, ...rest and ...spread
+func label(text, size = 12, bold = false):
+    return f"{text} ({size}px, bold: {bold})"
+end
+show label("Title", bold = true)    # Title (12px, bold: true)
+
+func total(first, ...rest):
+    return first + sum(rest)
+end
+let more = [2, 3, 4]
+show total(1, ...more)              # 10
+
+# Unpacking
+let a, b = 1, 2
+a, b = b, a
+show a, b                           # 2 1
+
+# match / case and enum
+enum Color: RED, GREEN, BLUE
+func kind(x):
+    match x:
+        case 0:
+            return "zero"
+        case [head, ...tail]:
+            return f"list starting {head}"
+        otherwise:
+            return "other"
+    end
+end
+show kind(0), kind([7, 8]), Color.GREEN    # zero list starting 7 Color.GREEN
+
+# Sets
+let seen = {1, 2, 3}
+show seen | {3, 4}, 2 in seen       # {1, 2, 3, 4} true
+
+# none-safe access and defaults
+let user = none
+show user?.name ?? "guest"          # guest
+
+# finally runs however the try is left
+try:
+    show 7 // 2, -7 // 2            # 3 -4
+finally:
+    show "cleaned up"
+end
+```
+
+`//` is floor division, as in Python; comments start with `#`.
+
+## 9. Batteries included
 
 `use "name"` loads a library from `lib/`. These come with the language: HTTP
 servers, SQLite, JSON, regex, a C FFI and five machine-learning libraries
@@ -143,7 +196,7 @@ show gnum.dot([[1, 2], [3, 4]], [[1], [1]])    # [[3], [7]]
 
 use "glowtext"
 show most_common(tokenize("the cat and the hat and the bat"), 2)
-# [[the, 3], [and, 2]]
+# [["the", 3], ["and", 2]]
 ```
 
 ## Where next

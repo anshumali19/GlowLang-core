@@ -23,9 +23,28 @@ gdu --version
 
 Then skip ahead to [Your First Program](#your-first-program).
 
-## Install on Linux or macOS
+## Install on Linux
 
-Download the archive for your platform from the [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest) and unpack it, keeping the `lib/` folder next to `glowlang`. Or build from source as described below (also the way to work on GlowLang itself, on any platform).
+```bash
+mkdir -p ~/glowlang
+curl -fsSL https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-linux-x64.tar.gz | tar -xz -C ~/glowlang
+echo 'export PATH="$HOME/glowlang:$PATH"' >> ~/.bashrc && export PATH="$HOME/glowlang:$PATH"
+glowlang --version
+```
+
+The Linux build runs on x64 with glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+) and needs libX11 and SQLite, which most systems have (`sudo apt-get install libx11-6 libsqlite3-0` if not).
+
+## Install on macOS
+
+```bash
+arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64)
+mkdir -p ~/glowlang
+curl -fsSL https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-macos-$arch.tar.gz | tar -xz -C ~/glowlang
+echo 'export PATH="$HOME/glowlang:$PATH"' >> ~/.zshrc && export PATH="$HOME/glowlang:$PATH"
+glowlang --version
+```
+
+This picks the Apple silicon or Intel build. Each archive holds `glowlang`, `gdu` and the standard libraries in `lib/`; keep `lib/` next to `glowlang`. All downloads, with SHA-256 checksums, are on the [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest). To work on GlowLang itself, build from source as described below.
 
 ---
 
