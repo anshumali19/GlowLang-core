@@ -307,13 +307,15 @@ GLOW_PLAIN_LOOPS Value jit_call_helper(FuncEntry *fe, int argc, Value *args, Ins
                has_exception = 1;
                return value_none();
            }
-           Value temp_args[16];
+          /* Every argument goes into the new frame. They may overlap it,
+             so copy from the far end when the frame is above them. (A
+             16-slot copy used to drop every argument after the 16th, so
+             spread and name = value calls, and callbacks from map / sorted,
+             lost them.) */
           int copy_count = fe->param_count < argc ? fe->param_count : argc;
-          if (copy_count > 16) copy_count = 16;
-          for (int _i = 0; _i < copy_count; _i++)
-              temp_args[_i] = args[_i];
-          for (int _i = 0; _i < copy_count; _i++)
-              vm_stack[new_base + _i] = temp_args[_i];
+          Value *dst = &vm_stack[new_base];
+          if (dst > args) { for (int _i = copy_count - 1; _i >= 0; _i--) dst[_i] = args[_i]; }
+          else if (dst != args) { for (int _i = 0; _i < copy_count; _i++) dst[_i] = args[_i]; }
           /* Parameters the call gave no argument for are none (the callee
              fills in its defaults), like every other local. */
           for (int _i = copy_count; _i < fe->body->local_count; _i++)
@@ -6832,8 +6834,9 @@ static FuncEntry *callee_function(Value f) {
     }
     return NULL;
 }
-/* A function's name for messages: "area" rather than "Shape::area". */
-static const char *callee_label(FuncEntry *fe, Value f) {
+/* A function's name for messages: "area" rather than "Shape::area". Only
+   errors use it, so it is kept out of the hot code. */
+static __attribute__((cold, noinline)) const char *callee_label(FuncEntry *fe, Value f) {
     if (fe && fe->name) {
         const char *c = strstr(fe->name, "::");
         if (c) return strcmp(c + 2, "init") == 0 && is_obj_type(f, OBJ_CLASS) ? AS_CLASS(f)->name : c + 2;
@@ -6860,54 +6863,111 @@ Value glow_call_value(Value fn, int argc, Value *args) {
     return jit_call_helper_val(fn, argc, args, NULL);
 }
 
-/* f(...items, name = value): the parser turns a call with a spread or named
-   argument into __glow_call(f, positional, [names], [values]). Each name
-   goes to the parameter of that name; parameters left between are none, so
-   their defaults apply, as when they are left out. */
 static Value glow_call_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals);
+/* A call with very many ...spread or name = value arguments:
+   __glow_call(f, positional, [names], [values]) (see call_node in
+   glowlang.y; __glow_callv below is the usual form). */
 static Value native_glow_call(int argc, Value *args) {
     if (argc < 4 || GET_TYPE(args[1]) != VAL_LIST || GET_TYPE(args[2]) != VAL_LIST || GET_TYPE(args[3]) != VAL_LIST)
         return glow_call_fail("call: bad arguments");
     Value f = args[0];
     List *pos = AS_LIST(args[1]), *names = AS_LIST(args[2]), *vals = AS_LIST(args[3]);
-    char msg[240];
     if (pos->size > 255) return glow_call_fail("A call can pass at most 255 arguments");
     Value buf[256];
     int n = pos->size;
     for (int i = 0; i < n; i++) buf[i] = pos->items[i];
-    if (names->size > 0) {
-        FuncEntry *fe = callee_function(f);
-        const char *label = callee_label(fe, f);
-        if (!fe || (fe->param_count > 0 && !fe->params)) {
-            if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) {
-                snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
-                return glow_call_fail(msg);
-            }
-            snprintf(msg, sizeof msg, "%.80s() does not take name = value arguments", label);
-            return glow_call_fail(msg);
-        }
-        int fixed = fe->param_count - (fe->rest_param ? 1 : 0);
-        for (int k = 0; k < names->size && k < vals->size; k++) {
-            const char *nm = AS_STRING(names->items[k]);
-            int idx = -1;
-            for (int j = 0; j < fixed; j++) if (fe->params[j] && strcmp(fe->params[j], nm) == 0) { idx = j; break; }
-            if (idx < 0) {
-                if (fe->rest_param && fe->params[fixed] && strcmp(fe->params[fixed], nm) == 0)
-                    snprintf(msg, sizeof msg, "%.80s(): ...%.80s collects the extra arguments, so it cannot be given by name", label, nm);
-                else
-                    snprintf(msg, sizeof msg, "%.80s() has no parameter named '%.80s'", label, nm);
-                return glow_call_fail(msg);
-            }
-            if (idx < pos->size) {
-                snprintf(msg, sizeof msg, "%.80s() got two values for '%.80s'", label, nm);
-                return glow_call_fail(msg);
-            }
-            while (n <= idx) buf[n++] = value_none();
-            buf[idx] = vals->items[k];
-        }
-    }
+    int nkw = names->size < vals->size ? names->size : vals->size;
+    if (nkw && !glow_place_named(f, buf, &n, nkw, names->items, vals->items)) return value_none();
     Value r = glow_call_value(f, n, buf);
     if (IS_DEOPT(r)) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
+        return glow_call_fail(msg);
+    }
+    return r;
+}
+
+/* Put the name = value arguments of a call into buf: each goes to the
+   parameter of that name, and parameters left between get none, so their
+   defaults apply. *n is the count of positional arguments on entry and the
+   count of arguments on return; 0 means an error was raised. */
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals) {
+    char msg[240];
+    FuncEntry *fe = callee_function(f);
+    if (!fe || (fe->param_count > 0 && !fe->params)) {
+        if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
+        else snprintf(msg, sizeof msg, "%.80s() does not take name = value arguments", callee_label(fe, f));
+        glow_call_fail(msg);
+        return 0;
+    }
+    int fixed = fe->param_count - (fe->rest_param ? 1 : 0), npos = *n;
+    for (int k = 0; k < nkw; k++) {
+        const char *nm = AS_STRING(knames[k]);
+        int idx = -1;
+        for (int j = 0; j < fixed; j++) {
+            const char *p = fe->params[j];
+            if (p && (p == nm || strcmp(p, nm) == 0)) { idx = j; break; }
+        }
+        if (idx < 0) {
+            const char *label = callee_label(fe, f);
+            if (fe->rest_param && fe->params[fixed] && strcmp(fe->params[fixed], nm) == 0)
+                snprintf(msg, sizeof msg, "%.80s(): ...%.80s collects the extra arguments, so it cannot be given by name", label, nm);
+            else
+                snprintf(msg, sizeof msg, "%.80s() has no parameter named '%.80s'", label, nm);
+            glow_call_fail(msg);
+            return 0;
+        }
+        if (idx < npos) {
+            snprintf(msg, sizeof msg, "%.80s() got two values for '%.80s'", callee_label(fe, f), nm);
+            glow_call_fail(msg);
+            return 0;
+        }
+        while (*n <= idx) buf[(*n)++] = value_none();
+        buf[idx] = kvals[k];
+    }
+    return 1;
+}
+
+/* f(a, ...xs, name = value): the parser makes __glow_callv(f, kinds, args...)
+   (see call_node in glowlang.y). kinds has a letter per argument: p is a
+   positional value, s a list or set whose items are spread, and k a name =
+   value pair, which takes two arguments (the name, then the value). Named
+   arguments come after the others. */
+static Value native_glow_callv(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[1]) != VAL_STRING) return glow_call_fail("call: bad arguments");
+    Value f = args[0];
+    const char *kinds = AS_STRING(args[1]);
+    Value buf[256];
+    Value knames[128], kvals[128];
+    int n = 0, nkw = 0, a = 2;
+    for (const char *c = kinds; *c && a < argc; c++) {
+        if (*c == 'k') {
+            if (a + 1 >= argc || nkw >= 128) return glow_call_fail("call: bad arguments");
+            knames[nkw] = args[a]; kvals[nkw] = args[a + 1]; nkw++;
+            a += 2;
+            continue;
+        }
+        Value v = args[a++];
+        if (*c == 's') {
+            if (is_set(v)) v = glow_set_to_list(v);   /* a set spreads its items */
+            if (GET_TYPE(v) != VAL_LIST) {
+                char msg[160];
+                snprintf(msg, sizeof msg, "Cannot spread %s with ...: it needs a list or a set", glow_type_name(v));
+                return glow_call_fail(msg);
+            }
+            List *l = AS_LIST(v);
+            if (n + l->size > 255) return glow_call_fail("A call can pass at most 255 arguments");
+            for (int i = 0; i < l->size; i++) buf[n++] = l->items[i];
+            continue;
+        }
+        if (n >= 255) return glow_call_fail("A call can pass at most 255 arguments");
+        buf[n++] = v;
+    }
+    if (nkw && !glow_place_named(f, buf, &n, nkw, knames, kvals)) return value_none();
+    Value r = glow_call_value(f, n, buf);
+    if (IS_DEOPT(r)) {
+        char msg[160];
         snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
         return glow_call_fail(msg);
     }
@@ -7137,6 +7197,7 @@ void std_init(void) {
     var_set("__glow_super", native_func_new("__glow_super", native_glow_super));
     var_set("__glow_super_bind", native_func_new("__glow_super_bind", native_glow_super_bind));
     var_set("__glow_call", native_func_new("__glow_call", native_glow_call));
+    var_set("__glow_callv", native_func_new("__glow_callv", native_glow_callv));
     var_set("__glow_concat", native_func_new("__glow_concat", native_glow_concat));
     var_set("__glow_list_len", native_func_new("__glow_list_len", native_glow_list_len));
     var_set("__glow_enum", native_func_new("__glow_enum", native_glow_enum));

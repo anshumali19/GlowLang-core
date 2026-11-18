@@ -351,9 +351,14 @@ static Node *set_of(Node *list, int line) {
     return helper_call("__glow_set_from", a, 1, line);
 }
 /* callee(items): with a ...spread or name = value argument the call becomes
-   __glow_call(callee, positional list, [names], [values]), which matches
-   names to parameters at run time; otherwise it is an ordinary call.
-   Positional arguments come first, and a name can be given only once. */
+   __glow_callv(callee, kinds, arguments...), which matches names to
+   parameters at run time; otherwise it is an ordinary call. kinds has a
+   letter per argument: p (positional), s (...spread) or k (name = value,
+   passed as two arguments: the name, then the value). Nothing is packed
+   into lists, so the call allocates nothing of its own. A call with very
+   many arguments uses __glow_call(callee, positional list, [names],
+   [values]) instead. Positional arguments come first, and a name can be
+   given only once. */
 static Node *call_node(Node *callee, Node **items, int count) {
     int special = 0, seen_kw = 0, line = callee->line;
     Node **pos = NULL, **names = NULL, **vals = NULL; int npos = 0, nkw = 0, nvals = 0;
@@ -377,6 +382,24 @@ static Node *call_node(Node *callee, Node **items, int count) {
         list_push_node(&pos, &npos, it);
     }
     if (!special) return newCallExprNode(callee, items, count);
+    if (npos + 2 * nkw + 2 <= 250) {
+        int nargs = 2 + npos + 2 * nkw, a = 2;
+        Node **args = arena_alloc(sizeof(Node*) * nargs);
+        char *kinds = arena_alloc((size_t)(npos + nkw) + 1);
+        args[0] = callee;
+        for (int i = 0; i < npos; i++) {
+            kinds[i] = pos[i]->type == NODE_SPREAD ? 's' : 'p';
+            args[a++] = pos[i]->type == NODE_SPREAD ? pos[i]->left : pos[i];
+        }
+        for (int k = 0; k < nkw; k++) {
+            kinds[npos + k] = 'k';
+            args[a++] = names[k];
+            args[a++] = vals[k];
+        }
+        kinds[npos + nkw] = 0;
+        args[1] = newStringNode(kinds);
+        return helper_call("__glow_callv", args, nargs, line);
+    }
     Node **args = arena_alloc(sizeof(Node*) * 4);
     args[0] = callee;
     args[1] = list_node(pos, npos, line);
