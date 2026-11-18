@@ -1,140 +1,164 @@
 <p align="center">
   <h1 align="center">🔥 GlowLang</h1>
-  <p align="center"><strong>A programming language with natural-language syntax, a register bytecode VM with x86-64 and ARM64 JITs, SIMD tensors, built-in HTTP and SQLite, and a growing standard library and tooling.</strong></p>
+  <p align="center"><strong>A fast, free programming language that reads like plain English: a JIT-compiled VM, built-in web server, PostgreSQL, SQLite, WebSockets and SIMD tensors, on Windows, Linux and macOS.</strong></p>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/language-C-blue" alt="Language">
+  <a href="https://github.com/anshumali19/GlowLang-packages/releases/latest"><img src="https://img.shields.io/github/v/release/anshumali19/GlowLang-packages?label=release" alt="Latest release"></a>
+  <a href="https://apps.microsoft.com/detail/9P2D8F466LBX"><img src="https://img.shields.io/badge/Microsoft%20Store-Get%20GlowLang-0078D4" alt="Get GlowLang from the Microsoft Store"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/tests-output--checked%20on%203%20OSes-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-Apache%202.0%20%2B%20Commons%20Clause-blue" alt="License">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platform">
-  <a href="https://apps.microsoft.com/detail/9P2D8F466LBX"><img src="https://img.shields.io/badge/Microsoft%20Store-Get%20GlowLang-0078D4" alt="Get GlowLang from the Microsoft Store"></a>
 </p>
 
 ---
 
-## ✨ Features
+**GlowLang** is a general-purpose programming language with a syntax close to Python and English
+(`show`, `when` / `otherwise`, `every`, `blueprint`), written in C. Programs run on a register
+bytecode virtual machine with JIT compilers for x86-64 and ARM64 and a generational garbage
+collector, and on the benchmarks below they finish 1.4× to 8× faster than CPython.
+It ships with what web and data programs need: an HTTP server and client, PostgreSQL and SQLite,
+WebSockets, JSON, JWT / OAuth logins, SIMD tensors and its own package manager, `gdu`.
 
-| Category | What exists today |
-|----------|-------------------|
-| **Natural syntax** | `show`, `when`/`eif`/`otherwise`, `whenever`, `every`, `for each key, value in`, `is in`, `blueprint`, `action`/`can`, `use`/`import`, `ask` |
-| **Runtime** | Register-based bytecode VM; template JIT for x86-64 (Windows x64 and System V ABIs) and ARM64 (Apple silicon, ARM Linux) with on-stack replacement for hot loops; non-moving mark-and-sweep GC |
-| **Numbers** | Integers of any size (never overflow), floats, exact integer `**`, floor `%`; arithmetic on non-numbers raises a clear error |
-| **Concurrency** | `spawn` runs functions on OS threads under a global interpreter lock (one thread runs GlowLang code at a time); `threads.join_all()`; `lib/async.glow` channels, tasks and timers |
-| **HTTP** | Built-in TCP/HTTP server (`http.listen`, `http.accept`, `http.read`, `http.send`) and an HTTP/HTTPS client (`http.request`: certificate verification, redirects, chunked bodies, timeouts) |
-| **Database** | SQLite bindings (`sqlite.open`, `sqlite.exec`, `sqlite.query`, `sqlite.close`) |
-| **Tensors** | `tensor.zeros/ones/add/dot/matmul`; AVX2+FMA kernels chosen at run time when the CPU has them, scalar code otherwise |
-| **Security** | OpenSSL SHA-256 and HMAC (`crypto.sha256`, `crypto.hmac`), BLAKE3 |
-| **Text** | Unicode strings (lengths, indexes and slices count characters; full Unicode `upper`/`lower`), f-strings with any expression, string methods (`upper`, `replace`, `trim`, `split`, `join`, ...), regular expressions, JSON |
-| **Collections** | Lists and dicts compared by contents; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`; out-of-range indexes raise errors |
-| **Functions** | Closures (lambdas and nested functions); recursion to about 61,000 calls in compiled code and 65,000 in the interpreter, then a clear "Maximum recursion depth exceeded" error |
-| **Filesystem** | `fs.read`, `fs.write`, `fs.exists`, `fs.mkdir`, `fs.remove` |
-| **Tooling** | `trace`, `debug`, `check`, `profile` (line counts) and `package` subcommands, LSP server (syntax errors, completion, hover, go-to-definition), `gdu` package manager |
-| **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
-| **Testing** | Test programs whose output is compared line by line with `tests/expected/`, run in CI on Windows, Linux and macOS; fuzz harnesses, ASan/TSan make targets |
-
-## ⚡ Performance
-
-Measured with `benchmarks/run-benchmarks.ps1` on Windows (Intel i7-14650HX, MSVC build, Python 3.13.15). Times are whole-process wall time, median of 7 runs, and both languages must print the same answer. The full table and the method are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
-| Benchmark | GlowLang | CPython | CPython time / GlowLang time |
-|---|---:|---:|---:|
-| Fibonacci (sum fib 0..29) | 58 ms | 131 ms | 2.27x |
-| Loop (1M additions) | 17 ms | 90 ms | 5.23x |
-| Ackermann(3, 8) | 64 ms | 182 ms | 2.82x |
-| N-Queens (N=10, objects) | 41 ms | 97 ms | 2.38x |
-| Dijkstra (1000 nodes) | 78 ms | 177 ms | 2.28x |
-| Lists + dict (1M push, 200k keys) | 109 ms | 235 ms | 2.16x |
-| Strings (200k concat + split) | 48 ms | 70 ms | 1.44x |
-
-GlowLang is faster than CPython on these workloads, and far slower than compiled languages such as C, Go or Rust.
+The current version is **1.8.0** ([what's new](docs/release_notes_1.8.0.md)).
 
 ## 📥 Install
 
-### Windows: Microsoft Store (recommended)
+### Windows
 
-Get GlowLang from the Microsoft Store: **[apps.microsoft.com/detail/9P2D8F466LBX](https://apps.microsoft.com/detail/9P2D8F466LBX)** (Store ID `9P2D8F466LBX`), or from a terminal:
+Install GlowLang from the **[Microsoft Store](https://apps.microsoft.com/detail/9P2D8F466LBX)**
+(Store ID `9P2D8F466LBX`), or from a terminal:
 
 ```powershell
 winget install --id 9P2D8F466LBX --source msstore
 ```
 
-The Store version is signed by Microsoft, so Windows (SmartScreen, Smart App Control) runs it without warnings, and it updates itself. `glowlang` and `gdu` then work in every terminal without editing PATH, and the Start menu gets a GlowLang entry that opens the REPL.
+The Store version is signed by Microsoft, so SmartScreen and Smart App Control run it without
+warnings, and it updates itself. `glowlang` and `gdu` then work in every terminal without
+editing PATH, and the Start menu gets a GlowLang entry that opens the REPL.
 
-```powershell
-glowlang run app.glow
-```
-
-### Linux / macOS
-
-Download the archive for your platform from the [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest), unpack it, and keep the `lib/` folder next to `glowlang`. Or build from source (below).
-
-## 🚀 Build from Source
-
-### Windows (x64)
-
-Building is only needed to work on GlowLang itself; to use it, install it from the Microsoft Store (above).
-
-Requirements: Visual Studio 2022+ Build Tools (C++), `win_flex`/`win_bison` (`winget install WinFlexBison.win_flex_bison`), and vcpkg with `openssl:x64-windows-static sqlite3:x64-windows-static`.
-
-```powershell
-.\build.bat                      # builds and signs bin\glowlang.exe (see scripts\build-windows.ps1)
-.\bin\glowlang.exe run examples\hello.glow
-.\run_all_tests.bat              # the output-checked test suite
-```
-
-`build.bat -NoSign` skips signing. The build signs with a self-signed development certificate; Windows does not trust that certificate on other machines, and Smart App Control (when enabled) may block a fresh build. In that case rebuild, or sign with a trusted code-signing certificate.
-
-### Linux / macOS
+### Linux (x64)
 
 ```bash
-# Ubuntu/Debian dependencies
-sudo apt-get install gcc make flex bison libsqlite3-dev libssl-dev libx11-dev
-
-make                  # bin/glowlang and bin/gdu
-./bin/glowlang run examples/hello.glow
-make test             # output-checked test suite (scripts/run-tests.sh)
+mkdir -p ~/glowlang
+curl -fsSL https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-linux-x64.tar.gz | tar -xz -C ~/glowlang
+echo 'export PATH="$HOME/glowlang:$PATH"' >> ~/.bashrc && export PATH="$HOME/glowlang:$PATH"
+glowlang --version
 ```
 
-CI builds and tests every change on Linux, macOS and Windows, and each release is built and tested on Linux x64, macOS (Intel and Apple silicon) and Windows x64. The performance numbers above were measured on Windows.
+It needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+) plus libX11 and SQLite,
+which most systems already have (`sudo apt-get install libx11-6 libsqlite3-0` if not).
 
-## 📝 Hello World
+### macOS (Apple silicon and Intel)
 
+```bash
+arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64)
+mkdir -p ~/glowlang
+curl -fsSL https://github.com/anshumali19/GlowLang-packages/releases/latest/download/glowlang-macos-$arch.tar.gz | tar -xz -C ~/glowlang
+echo 'export PATH="$HOME/glowlang:$PATH"' >> ~/.zshrc && export PATH="$HOME/glowlang:$PATH"
+glowlang --version
 ```
+
+Every download is listed, with SHA-256 checksums, on the
+[releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest). Keep the
+`lib/` folder next to `glowlang`: it holds the standard libraries. To update later, run
+`gdu install glowlang`: it installs the latest release in `~/.glowlang/bin` and adds that folder
+to your PATH in `~/.bashrc` and `~/.zshrc`.
+
+## 🚀 Your first program
+
+Save this as `hello.glow`:
+
+```glow
 show "Hello, World!"
 
 let name = "GlowLang"
-show "Welcome to " + name + "!"
-
-# Natural language loops
-every item in [1, 2, 3, 4, 5]:
-    show "Item: " + item
+every n in [1, 2, 3]:
+    show f"{name} counts {n}"
 end
 ```
 
-## 🏗️ Language Highlights
+Run it:
 
-### Natural Syntax Classes
+```bash
+glowlang run hello.glow
 ```
-blueprint Animal:
-    action init(name, sound):
-        self.name = name
-        self.sound = sound
-    end
 
-    action speak():
-        show self.name + " says " + self.sound
+`glowlang` with no arguments opens the REPL. `glowlang check app.glow` finds syntax errors
+without running anything, and `gdu install <package>` adds a package to the project.
+
+## 🏗️ The language at a glance
+
+```glow
+# Variables, dicts and f-strings
+let scores = {"asha": 91, "ravi": 78, "meera": 85}
+
+# Loops and conditions read like English
+every student, score in scores:
+    when score >= 85:
+        show f"{student}: excellent"
+    otherwise:
+        show f"{student}: keep going"
     end
 end
 
-let dog = Animal("Rex", "Woof")
-dog.speak()
+# Functions with default and named arguments
+func greet(person, greeting = "Hello", punctuation = "!"):
+    return greeting + ", " + person + punctuation
+end
+show greet("Ravi", punctuation = "?")      # Hello, Ravi?
+
+# Classes (blueprint is another word for class; self is implicit)
+class Account:
+    func init(owner, balance = 0):
+        self.owner = owner
+        self.balance = balance
+    end
+    func deposit(amount):
+        self.balance = self.balance + amount
+        return self.balance
+    end
+end
+let acc = Account("Meera")
+acc.deposit(500)
+
+# match / case, enums and sets
+enum Size: SMALL, MEDIUM, LARGE
+func describe(value):
+    match value:
+        case 0:
+            return "zero"
+        case [first, ...rest]:
+            return f"a list starting with {first}"
+        otherwise:
+            return "something else"
+    end
+end
+show describe([4, 5, 6]), Size.LARGE      # a list starting with 4 Size.LARGE
+show {1, 2, 2, 3} | {3, 4}                # {1, 2, 3, 4}
+
+# Errors, none-safe access and floor division
+try:
+    let user = none
+    show user?.name ?? "guest"            # guest
+    show 10 // 3, -7 // 2                 # 3 -4
+    throw "something went wrong"
+catch e:
+    show "caught:", e
+finally:
+    show "done"
+end
 ```
 
-### HTTP Server
-```
+Comments start with `#` (or `/* ... */`); `//` is floor division, as in Python.
+[GlowLang in 10 minutes](docs/glowlang_in_10_minutes.md) walks through the rest, and the
+[language reference](docs/language_reference.md) covers everything.
+
+### A web server
+
+```glow
 let server = http.listen(8080)
-show "Server on :8080"
+show "Server on http://localhost:8080"
 
 while true:
     let client = http.accept(server)
@@ -144,137 +168,224 @@ while true:
 end
 ```
 
-### Database (SQLite)
-```
+For routes, JSON APIs and middleware there is the GlowWeb framework: see the
+[web guide](docs/web_guide.md) and the [GlowWeb tutorial](docs/glowweb_tutorial.md).
+
+### A database
+
+```glow
 let db = sqlite.open("app.db")
-sqlite.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+sqlite.exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
 sqlite.exec(db, "INSERT INTO users (name, age) VALUES ('Alice', 30)")
-let rows = sqlite.query(db, "SELECT * FROM users")
-for each row in rows:
+for each row in sqlite.query(db, "SELECT * FROM users"):
     show row["name"] + " is " + row["age"]
 end
 sqlite.close(db)
 ```
 
-### SIMD Tensors
-```
-let a = tensor.ones(1000000)
-let b = tensor.ones(1000000)
-let c = tensor.add(a, b)        # AVX2 when the CPU supports it
-let dot = tensor.dot(a, b)      # AVX2 + FMA dot product
+PostgreSQL is built in too: see [postgres.md](docs/postgres.md).
+
+## ⚡ Performance
+
+GlowLang against CPython on the same programs, measured with
+[`benchmarks/run-benchmarks.sh`](benchmarks/run-benchmarks.sh): whole-process wall time
+(startup included), median of 7 runs, and both languages must print the same answer.
+GlowLang 1.8.0 and Python 3.14.4 on Linux (WSL 2), Intel Core i7-14650HX.
+
+| Benchmark | GlowLang 1.8.0 | CPython 3.14 | GlowLang is faster by |
+|---|---:|---:|---:|
+| Fibonacci (sum fib 0..29) | 31 ms | 85 ms | 2.75× |
+| Loop (1M additions) | 8 ms | 63 ms | 8.09× |
+| Ackermann(3, 8) | 38 ms | 138 ms | 3.64× |
+| N-Queens (N=10, objects) | 25 ms | 62 ms | 2.46× |
+| Dijkstra (1000 nodes) | 40 ms | 117 ms | 2.91× |
+| Lists + dict (1M push, 200k keys) | 65 ms | 180 ms | 2.76× |
+| Strings (200k concat + split) | 34 ms | 49 ms | 1.44× |
+
+The report with the machine details is [benchmarks/RESULTS-linux.md](benchmarks/RESULTS-linux.md);
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md) has an older run on Windows
+(`benchmarks/run-benchmarks.ps1`). GlowLang is far slower than compiled languages such as C, Go
+or Rust.
+
+1.8.0 against 1.7.0 on the same machine: binary_trees 0.513 s → 0.405 s and 138 MB → 76 MB of
+memory, hashmap 0.605 s → 0.508 s, strings 0.222 s → 0.156 s, and an empty program needs 11 MB
+instead of 18 MB (see the [1.8.0 release notes](docs/release_notes_1.8.0.md)).
+
+## ✨ Features
+
+| Category | What exists today |
+|----------|-------------------|
+| **Syntax** | `show`, `when` / `eif` / `otherwise`, `every`, `for each key, value in`, `is in`, `blueprint` / `class`, `action` / `func`, `match` / `case`, `enum`, `try` / `catch` / `finally`, unpacking (`let a, b = b, a`), named arguments, `...rest` and `...spread`, `??` and `?.`, list / dict / set comprehensions |
+| **Runtime** | Register bytecode VM; JIT compilers for x86-64 (Windows and System V) and ARM64 (Apple silicon, ARM Linux) with on-stack replacement for hot loops; generational, non-moving garbage collector |
+| **Numbers** | Integers of any size (never overflow), floats, exact `**`, Python-style `//` and `%`, bitwise `& \| ^ ~ << >>`, literals like `0xff`, `0b1010` and `1_000` |
+| **Collections** | Lists, dicts and sets compared by contents; slices with steps; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`, `enumerate`, `zip` |
+| **Web** | HTTP server and HTTPS client (`http.request`: certificate checks, redirects, timeouts), the GlowWeb framework, WebSocket client and server (RFC 6455) |
+| **Databases** | SQLite built in; a PostgreSQL client with TLS, SCRAM logins, parameterized queries and transactions; Redis |
+| **Security** | SHA-256, HMAC, BLAKE3, random tokens; JWT signing and checking (HS / RS / ES); OAuth 2.0 and OpenID Connect sign-in with Google, Microsoft and GitHub presets |
+| **Services** | Clients for Razorpay, WhatsApp Cloud API, SMS through Twilio and Google Sheets |
+| **Data and AI** | SIMD tensors (AVX2 + FMA when the CPU has them); `glownum`, `glowframe`, `glowlearn`, `glowgrad` and `glowtext`, libraries like NumPy, pandas, scikit-learn and PyTorch written in GlowLang |
+| **Concurrency** | `spawn` on OS threads with a global interpreter lock; channels, tasks and timers in `lib/async.glow` |
+| **Text** | Unicode strings (lengths and slices count characters), f-strings, regular expressions, JSON, CSV |
+| **Tooling** | `check`, `trace`, `debug`, `profile` and `package` subcommands; a language server (errors, completion, hover, go-to-definition); the `gdu` package manager |
+| **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
+
+## 📖 Documentation
+
+**Start here**
+- [Getting Started](docs/getting_started.md): install, first program, packages
+- [GlowLang in 10 Minutes](docs/glowlang_in_10_minutes.md): the language by example ([examples/tour.glow](examples/tour.glow))
+- [Language Reference](docs/language_reference.md): every statement, operator and built-in
+- [Release notes 1.8.0](docs/release_notes_1.8.0.md) (and [1.7.0](docs/release_notes_1.7.0.md))
+
+**Building things**
+- Web: [web guide](docs/web_guide.md), [GlowWeb tutorial](docs/glowweb_tutorial.md), [WebSockets](docs/websocket.md)
+- Data: [PostgreSQL](docs/postgres.md), [AI libraries](docs/ai_libraries.md), [AI/ML guide](docs/ai_ml_guide.md), [tensors](docs/tensor_guide.md)
+- Logins and services: [JWT and OAuth](docs/jwt_oauth.md), [Razorpay, WhatsApp, SMS, Google Sheets](docs/services.md)
+- Programs and scripts: [concurrency](docs/concurrency_guide.md), [async](docs/async_guide.md), [processes](docs/process_guide.md), [shell scripting](docs/shell_scripting.md), [FFI](docs/ffi_guide.md)
+- Packages: [writing a package](docs/package_authoring.md), [the ecosystem](docs/ecosystem_guide.md)
+
+**Running and shipping**
+- [Debugger](docs/debugger_guide.md), [profiler](docs/profiler_guide.md), [optimization](docs/optimization_guide.md)
+- [Deployment](docs/deployment_guide.md), [production deployment](docs/production_deployment.md), [CI/CD](docs/cicd_setup.md)
+
+**Inside GlowLang**
+- [Architecture](ARCHITECTURE.md), [runtime internals](docs/runtime_internals.md) (VM, JIT, GC), [fuzzing](docs/fuzzing.md)
+
+More guides and tutorials: [GlowLang-docs](https://github.com/anshumali19/GlowLang-docs).
+Complete example programs: [GlowLang-examples](https://github.com/anshumali19/GlowLang-examples).
+
+## ❓ FAQ
+
+**How do I install GlowLang?**
+On Windows, from the [Microsoft Store](https://apps.microsoft.com/detail/9P2D8F466LBX) or with
+`winget install --id 9P2D8F466LBX --source msstore`. On Linux and macOS, with the `curl` command
+under [Install](#-install).
+
+**How do I run a `.glow` file?**
+`glowlang run file.glow`. With no file, `glowlang` opens an interactive REPL.
+
+**Is GlowLang faster than Python?**
+On the benchmarks above it finishes 1.4× to 8× sooner than CPython 3.14, startup included. It
+is not as fast as compiled languages like C, Go or Rust.
+
+**Is GlowLang like Python?**
+Close. Blocks end with `end` instead of depending on indentation, and keywords such as `show`,
+`when`, `every` and `blueprint` read like English, while `if`, `else`, `for each`, `class` and
+`print` work too.
+`//`, `%`, slices, f-strings, comprehensions and named arguments follow Python's rules, and
+`...rest` does what `*args` does.
+
+**How do I install packages?**
+`gdu install <name>` inside your project, then `use "<name>"` in the code. See
+[writing a package](docs/package_authoring.md) to publish your own.
+
+**Does it run on Apple silicon and ARM Linux?**
+Yes. Releases are built and tested for macOS on Apple silicon and Intel, Linux x64 and Windows
+x64, and the JIT also compiles for ARM64 Linux when built from source.
+
+**Is it free for commercial use?**
+Yes. Programs you write in GlowLang are yours to sell or license. GlowLang itself may not be
+sold (see [License](#-license)).
+
+**Where do I report a bug or ask a question?**
+Open an [issue](https://github.com/anshumali19/GlowLang-core/issues).
+
+## 🔨 Build from source
+
+Needed only to work on GlowLang itself.
+
+### Linux / macOS
+
+```bash
+# Ubuntu/Debian dependencies (macOS: brew install flex bison openssl@3 sqlite)
+sudo apt-get install gcc make flex bison libsqlite3-dev libssl-dev libx11-dev
+
+make                  # bin/glowlang and bin/gdu
+./bin/glowlang run examples/hello.glow
+make test             # output-checked test suite (scripts/run-tests.sh)
 ```
 
-### Concurrency
-```
-func worker(id):
-    show "Worker " + id + " running"
-end
+### Windows (x64)
 
-spawn worker(1)
-spawn worker(2)
-threads.join_all()              # the program also waits for its threads at exit
+Requirements: Visual Studio 2022+ Build Tools (C++), `win_flex` / `win_bison`
+(`winget install WinFlexBison.win_flex_bison`), and vcpkg with
+`openssl:x64-windows-static sqlite3:x64-windows-static`.
+
+```powershell
+.\build.bat                      # builds and signs bin\glowlang.exe (see scripts\build-windows.ps1)
+.\bin\glowlang.exe run examples\hello.glow
+.\run_all_tests.bat              # the output-checked test suite
 ```
 
-Threads share one interpreter lock, so `spawn` is for overlapping waiting (sleep, sockets, HTTP), not for running GlowLang code on several cores at once. See the [Concurrency Guide](docs/concurrency_guide.md).
-
-## 📦 Project Structure
-
-```
-GlowLang/
-├── src/                    # Core runtime (C)
-│   ├── glowlang.y          # Parser (Bison)
-│   ├── glowlang.l          # Lexer (Flex)
-│   ├── compiler.c          # Bytecode compiler
-│   ├── opt.c               # Bytecode optimizer
-│   ├── vm.c                # Virtual machine, threads, GIL
-│   ├── jit.c               # JIT compiler (x86-64 and ARM64 backends)
-│   ├── gc.c                # Garbage collector
-│   ├── stdlib.c            # Native standard library
-│   ├── regex.c             # Regular expression engine
-│   └── lsp.c               # Language Server Protocol
-├── lib/                    # Libraries written in GlowLang
-├── tests/                  # Test programs; expected output in tests/expected/
-├── benchmarks/             # Benchmark programs, runner and RESULTS.md
-├── scripts/                # Windows build/sign scripts and test runners
-├── examples/               # Example applications
-├── editors/                # Editor integrations
-├── tools/                  # Dev tools (gdu, debugger, profiler, inspector)
-├── docs/                   # Documentation
-└── Makefile / CMakeLists.txt
-```
+`build.bat -NoSign` skips signing. The build signs with a self-signed development certificate,
+which other machines do not trust, so Smart App Control (when enabled) may block a fresh build.
 
 ## 🧪 Testing
 
-Every `tests/*.glow` program is run with a timeout, and the runner checks its exit code, compares its stdout line by line with `tests/expected/<name>.out`, and requires listed lines in its stderr.
+Every `tests/*.glow` program runs with a timeout; the runner checks its exit code, compares its
+output line by line with `tests/expected/<name>.out`, and checks listed lines in its stderr.
 
 ```bash
 make test                                   # Linux/macOS
-GLOW_NOJITEXEC=1 ./scripts/run-tests.sh     # same suite with the JIT disabled
+GLOW_NOJITEXEC=1 ./scripts/run-tests.sh     # the same suite with the JIT off
+GLOWLANG_GC_STRESS=1 ./scripts/run-tests.sh # collect garbage constantly
 make test-sanitized                         # ASan + TSan builds
 make fuzz-all                               # fuzz harnesses
 ```
 
 ```powershell
-.\scripts\run-tests.ps1                                   # Windows
-.\scripts\run-tests.ps1 -ExtraEnv @{GLOWLANG_GC_STRESS='1'}
+.\scripts\run-tests.ps1                     # Windows
 ```
 
-The suite passes in five modes: default, interpreter only (`GLOW_NOJITEXEC=1`), without the baseline JIT (`GLOW_NOBASEEXEC=1`), GC stress (`GLOWLANG_GC_STRESS=1`) and scalar math (`GLOW_NO_SIMD=1`). CI runs the default mode on every platform, plus the interpreter-only, GC-stress and AddressSanitizer runs on Linux. `GLOW_JIT_DEBUG=1` prints each function the JIT compiles on stderr; CI uses it to check that compiled code really runs on Linux x64 and Apple silicon.
+CI builds and tests every change on Linux, macOS and Windows, plus interpreter-only, GC-stress
+and AddressSanitizer runs on Linux and PostgreSQL and WebSocket integration tests. Each release
+is built and tested on all four release platforms, and the published downloads are tested again
+after release.
 
-## 📖 Documentation
-
-- **[Getting Started](docs/getting_started.md)** — Tutorial for beginners
-- **[Language Reference](docs/language_reference.md)** — Syntax reference
-- **[Web Development](docs/web_guide.md)** — HTTP server and APIs
-- **[PostgreSQL](docs/postgres.md)**, **[JWT and OAuth](docs/jwt_oauth.md)** — databases and logins
-- **[Service Clients](docs/services.md)** — Razorpay, WhatsApp, SMS (Twilio) and Google Sheets
-- **[AI/ML Guide](docs/ai_ml_guide.md)** — Tensors and neural networks
-- **[Concurrency Guide](docs/concurrency_guide.md)** — `spawn`, the GIL, `whenever`
-- **[WebSockets](docs/websocket.md)** — live two-way connections, client and server
-- **[Runtime Internals](docs/runtime_internals.md)** — VM, JIT, GC
-- **[Architecture](ARCHITECTURE.md)** — Components and build system
-- **[Deployment Guide](docs/deployment_guide.md)** and **[Production Deployment](docs/production_deployment.md)**
-
-## 🛠️ Editor Support
-
-| Editor | Status | Location |
-|--------|--------|----------|
-| **VSCode** | ✅ Extension with syntax + snippets | `editors/glowlang-vscode/` |
-| **Neovim** | ✅ LSP config + syntax | `editors/neovim/` |
-| **Sublime Text** | ✅ Syntax definition | `editors/sublime/` |
-| **Helix** | ✅ Language config + highlights | `editors/helix/` |
-| **JetBrains** | ✅ File type definition | `editors/jetbrains/` |
-
-## 📊 Architecture
+## 📦 Project structure
 
 ```
-Source Code (.glow)
-    ↓
-  Lexer (Flex) → Tokens
-    ↓
-  Parser (Bison) → AST
-    ↓
-  Compiler → Register bytecode
-    ↓
-  Optimizer → Optimized bytecode
-    ↓
-  Interpreter ⇄ JIT (functions after 5 calls, loops after 1000 iterations)
-    ↓
-  GC (non-moving mark-and-sweep)
+GlowLang/
+├── src/                    # Runtime (C)
+│   ├── glowlang.y          # Parser (Bison)
+│   ├── glowlang.l          # Lexer (Flex)
+│   ├── compiler.c          # Bytecode compiler
+│   ├── opt.c               # Bytecode optimizer
+│   ├── vm.c                # Virtual machine, threads, GIL
+│   ├── jit.c               # JIT compiler (x86-64 and ARM64)
+│   ├── gc.c                # Generational garbage collector
+│   ├── stdlib.c            # Native standard library
+│   ├── regex.c             # Regular expressions
+│   └── lsp.c               # Language server
+├── lib/                    # Libraries written in GlowLang
+├── tests/                  # Test programs; expected output in tests/expected/
+├── benchmarks/             # Benchmark programs, runners and results
+├── examples/               # Example programs
+├── editors/                # Editor integrations
+├── tools/                  # gdu, debugger, profiler, inspector
+├── docs/                   # Documentation
+└── Makefile / CMakeLists.txt
+```
+
+```
+Source (.glow) → Lexer → Parser → AST → Compiler → register bytecode → Optimizer
+    → Interpreter ⇄ JIT (functions after 5 calls, loops after 1000 iterations)
+    → generational GC
 ```
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/amazing`
+2. Create a branch: `git checkout -b feature/amazing`
 3. Run the tests: `make test` (or `.\run_all_tests.bat` on Windows)
-4. Commit: `git commit -m 'Add amazing feature'`
-5. Push: `git push origin feature/amazing`
-6. Open a Pull Request
+4. Commit, push, and open a pull request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 📄 License
 
-GlowLang is licensed under the **Apache License 2.0 with the Commons Clause** and the GlowLang Additional Terms — see [LICENSE](LICENSE).
+GlowLang is licensed under the **Apache License 2.0 with the Commons Clause** and the GlowLang
+Additional Terms; see [LICENSE](LICENSE).
 
 - Use it for free, for anything, including commercial work. Programs you write in GlowLang are yours to sell or license as you like.
 - Read, modify and fork the source, and contribute back (see [CONTRIBUTING.md](CONTRIBUTING.md)).
@@ -283,5 +394,5 @@ GlowLang is licensed under the **Apache License 2.0 with the Commons Clause** an
 ---
 
 <p align="center">
-  Built with ❤️ by <a href="https://github.com/anshumali19">Anshumali & <a href="https://github.com/Anamika-codes"> Anamika</a></a>
+  Built with ❤️ by <a href="https://github.com/anshumali19">Anshumali</a> &amp; <a href="https://github.com/Anamika-codes">Anamika</a>
 </p>

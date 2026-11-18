@@ -103,7 +103,48 @@ end
 show safe_div(10, 4)
 show safe_div(1, 0)
 
-# 8. Batteries included
+# 8. More of the language
+func label(text, size = 12, bold = false):
+    return f"{text} ({size}px, bold: {bold})"
+end
+show label("Title", bold = true)
+
+func total(first, ...rest):
+    return first + sum(rest)
+end
+let more = [2, 3, 4]
+show total(1, ...more)
+
+let a, b = 1, 2
+a, b = b, a
+show a, b
+
+enum Color: RED, GREEN, BLUE
+func kind(x):
+    match x:
+        case 0:
+            return "zero"
+        case [head, ...tail]:
+            return f"list starting {head}"
+        otherwise:
+            return "other"
+    end
+end
+show kind(0), kind([7, 8]), Color.GREEN
+
+let seen = {1, 2, 3}
+show seen | {3, 4}, 2 in seen
+
+let user = none
+show user?.name ?? "guest"
+
+try:
+    show 7 // 2, -7 // 2
+finally:
+    show "cleaned up"
+end
+
+# 9. Batteries included
 use "glownum"
 show gnum.mean([1, 2, 3, 4])
 show gnum.dot([[1, 2], [3, 4]], [[1], [1]])
