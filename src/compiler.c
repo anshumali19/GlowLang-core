@@ -1674,7 +1674,7 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_CALL_EXPR:
         case NODE_CALL: {
-            if (n->type == NODE_CALL && n->name && strcmp(n->name, "__glow_call") == 0 && n->call_arg_count >= 1) {
+            if (n->type == NODE_CALL && n->name && (strcmp(n->name, "__glow_callv") == 0 || strcmp(n->name, "__glow_call") == 0) && n->call_arg_count >= 1) {
                 Node *cal = n->call_args[0];
                 if (cal && cal->type == NODE_INDEX && cal->name && cal->left && cal->left->type == NODE_VAR &&
                     cal->left->name && strcmp(cal->left->name, "super") == 0 && get_local_reg("super") == -1) {

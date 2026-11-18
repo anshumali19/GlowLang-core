@@ -37,3 +37,15 @@ Cannot spread int with ...: it needs a list or a set
 Cannot spread int with ...: it needs a list or a set
 greet() takes 3 arguments but 4 were given
 Cannot unpack 1 item: the names besides ...rest need 2
+24 [5, [6, 7], 18] [2, 3, 4, 5, 6, 7]
+[1, [2, 3], 6] 24 Yo, Fi
+r(1, 0) [9, 11]
+[12]
+[1, 1, 70, 1, 5, 2]
+[1, 4, 128, 254, 128, 130]
+[7, 8, 0, 0, 0, 130]
+Cannot spread dict with ...: it needs a list or a set
+wide() got two values for 'p1'
+wide() has no parameter named 'q'
+box() got two values for 'h'
+[1, 2, 64, 127, 128, 130] [1, 2] [1, 2, "x", 127, 128, "y"]
