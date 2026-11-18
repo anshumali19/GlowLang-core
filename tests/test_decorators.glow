@@ -1,0 +1,150 @@
+# Decorators: @d above a func makes the name hold d(func). Decorator
+# expressions are worked out top to bottom, then applied bottom up.
+import "functools"
+use "lib/web.glow"
+
+# ---- cache, through the function's own recursive calls
+let runs = {"n": 0}
+@cache
+func fib(n):
+    runs["n"] += 1
+    when n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+show fib(90), runs["n"]
+show fib(90), runs["n"]
+
+# ---- a decorator that wraps, and one with arguments
+func shout(f):
+    return lambda(...args): str(f(...args)).upper() + "!"
+end
+func repeated(count):
+    return lambda(f):
+        return lambda(...args): [f(...args) for each i in range(count)]
+    end
+end
+@shout
+func greet(name, greeting = "hello"):
+    return greeting + " " + name
+end
+show greet("asha"), greet("ravi", "hi")
+@repeated(3)
+func roll(x):
+    return x * 2
+end
+show roll(5)
+
+# ---- several decorators: made top to bottom, applied bottom up
+let order = []
+func tag(label):
+    order.push("make " + label)
+    return lambda(f):
+        order.push("apply " + label)
+        return lambda(...args): label + "(" + f(...args) + ")"
+    end
+end
+@tag("outer")
+@tag("inner")
+func base():
+    return "x"
+end
+show base(), order
+
+# ---- decorated generators and nested functions
+func doubled(gen_fn):
+    func wrapper(...args):
+        for each v in gen_fn(...args):
+            yield v * 2
+        end
+    end
+    return wrapper
+end
+@doubled
+func count_up(n):
+    every i from 1 to n:
+        yield i
+    end
+end
+show [v for each v in count_up(3)]
+func outer(k):
+    func add_k(f):
+        return lambda(x): f(x) + k
+    end
+    @add_k
+    func square(x):
+        return x * x
+    end
+    return square(3)
+end
+show outer(10)
+
+# ---- an identity decorator leaves the function as it was
+func registered(f):
+    return f
+end
+@registered
+func plain(a):
+    return a + 1
+end
+show plain(1), type(plain)
+try:
+    plain(1, 2)
+catch e:
+    show e
+end
+
+# ---- cache keys
+let seen = []
+@cache
+func describe(x):
+    seen.push(x)
+    return type(x)
+end
+show describe(1), describe(1.0), describe("1"), describe(true), describe(none), len(seen)
+show describe("ab"), describe("a"), len(seen)
+class Thing:
+    func init(n):
+        self.n = n
+    end
+end
+let t1 = Thing(1)
+let t2 = Thing(1)
+describe(t1)
+describe(t1)
+describe(t2)
+show len(seen)
+try:
+    describe([1, 2])
+catch e:
+    show e
+end
+
+# ---- GlowWeb routes as decorators
+let server = Server(8099)
+@server.get("/hello")
+func hello(req):
+    return "hi"
+end
+@server.post("/items")
+func add_item(req):
+    return "added"
+end
+show [r.method + " " + r.path for each r in server.router.routes], hello(none)
+
+# ---- a decorator on a method is reported when the class is made
+func noop(f):
+    return f
+end
+try:
+    class Widget:
+        @noop
+        func draw():
+            return "drawn"
+        end
+    end
+catch e:
+    show e
+end
+show "done"

@@ -1101,6 +1101,22 @@ static void compile_stmt(Node *n) {
             loop_stack_ptr--;
             break;
         }
+        case NODE_DECORATED: {
+            /* A decorator on a method: methods are looked up on the class,
+               not through a variable, so it could not take effect. Say so
+               when the class is made rather than ignore it. */
+            if (last_compiling_class || last_compiling_trait) {
+                char msg[240];
+                snprintf(msg, sizeof msg, "a decorator (@...) cannot be used on a method yet (%.80s); decorate a function outside the class", n->name);
+                Node *t = node_new(NODE_THROW);
+                t->left = newStringNode(intern_string(msg));
+                t->line = t->left->line = n->line;
+                compile_stmt(t);
+                break;
+            }
+            compile_stmt(n->left);
+            break;
+        }
         case NODE_YIELD: {
             /* Outside a generator's body (a yield at the top of a program)
                OP_YIELD raises when it runs. */

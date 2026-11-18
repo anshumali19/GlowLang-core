@@ -336,6 +336,7 @@ static int lex_identifier(void) {
                          return COLON; }
 ":"                    { if (lexer_bracket_depth == 0) lexer_with_header = 0; return COLON; }
 "..."                  { return ELLIPSIS; }
+"@"                    { return AT; }
 "??="                  { return NULLISH_ASSIGN; }
 "??"                   { return NULLISH; }
 "?."/"["               { return QDOT_INDEX; }   /* a?.[i] and a?.[i:j]: the [ is read next */

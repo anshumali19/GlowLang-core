@@ -1,0 +1,16 @@
+2880067194370816120 91
+2880067194370816120 91
+HELLO ASHA! HI RAVI!
+[10, 10, 10]
+outer(inner(x)) ["make outer", "make inner", "apply inner", "apply outer"]
+[2, 4, 6]
+19
+2 function
+plain() takes 1 argument but 2 were given
+int int string bool none 4
+string string 6
+8
+cache: a list cannot be an argument of a cached function (it can change after the call); pass numbers, text, true / false, none or objects
+["GET /hello", "POST /items"] hi
+a decorator (@...) cannot be used on a method yet (draw); decorate a function outside the class
+done

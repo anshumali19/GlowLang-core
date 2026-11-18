@@ -6851,6 +6851,7 @@ static FuncEntry *callee_function(Value f) {
 /* A function's name for messages: "area" rather than "Shape::area". Only
    errors use it, so it is kept out of the hot code. */
 static __attribute__((cold, noinline)) const char *callee_label(FuncEntry *fe, Value f) {
+    if (fe && fe->name && fe->name[0] == '@') return fe->name + 1;   /* decorated */
     if (fe && fe->name) {
         const char *c = strstr(fe->name, "::");
         if (c) return strcmp(c + 2, "init") == 0 && is_obj_type(f, OBJ_CLASS) ? AS_CLASS(f)->name : c + 2;
@@ -7016,8 +7017,10 @@ static Value native_glow_gen_new(int argc, Value *args) {
     g->pc = 0;
     g->state = GEN_CREATED;
     g->yielded = 0;
-    /* "Shape::points" shows as points. */
-    g->name = intern_string(colons ? colons + 2 : name);
+    /* "Shape::points" shows as points, a decorated "@count" as count. */
+    const char *shown = colons ? colons + 2 : name;
+    if (shown[0] == '@') shown++;
+    g->name = intern_string(shown);
     return make_value(VAL_OBJECT, (uintptr_t)g);
 }
 
@@ -7038,6 +7041,60 @@ static Value native_next(int argc, Value *args) {
     char msg[200];
     snprintf(msg, sizeof msg, "generator %.80s has no more values (next(g, default) returns default instead)", g->name ? g->name : "");
     return glow_call_fail(msg);
+}
+
+/* __glow_cache_key(args): the key functools.cache files a call under.
+   Numbers, text, true / false and none are compared by value (1 and 1.0
+   alike, as == has them); any other object by identity, as Python's cache
+   does. Lists, dicts and sets can change after the call, so they are
+   refused. */
+static int cache_key_part(DStr *d, Value v) {
+    char nb[64];
+    ValueType t = GET_TYPE(v);
+    if (t == VAL_NONE) { ds_puts(d, "n;"); return 1; }
+    if (t == VAL_BOOL) { ds_puts(d, AS_BOOL(v) ? "b1;" : "b0;"); return 1; }
+    if (t == VAL_INT) { snprintf(nb, sizeof nb, "d%lld;", (long long)AS_INT(v)); ds_puts(d, nb); return 1; }
+    if (t == VAL_FLOAT) {
+        double x = AS_FLOAT(v);
+        if (x == floor(x) && fabs(x) < 9.2e18) snprintf(nb, sizeof nb, "d%lld;", (long long)x);
+        else snprintf(nb, sizeof nb, "f%.17g;", x);
+        ds_puts(d, nb);
+        return 1;
+    }
+    if (t == VAL_STRING) {
+        size_t len = rope_length(v);
+        snprintf(nb, sizeof nb, "s%zu:", len);
+        ds_puts(d, nb);
+        ds_putn(d, AS_STRING(v), len);
+        return 1;
+    }
+    if (t == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_BIGINT) {
+        char *bb = bigint_to_new_string(AS_BIGINT(v));
+        ds_puts(d, "d"); ds_puts(d, bb); ds_puts(d, ";");
+        free(bb);
+        return 1;
+    }
+    if (t == VAL_LIST || t == VAL_DICT || is_set(v)) {
+        char msg[200];
+        snprintf(msg, sizeof msg, "cache: a %s cannot be an argument of a cached function (it can change after the call); pass numbers, text, true / false, none or objects", glow_type_name(v));
+        glow_call_fail(msg);
+        return 0;
+    }
+    snprintf(nb, sizeof nb, "o%llx;", (unsigned long long)(v & MASK_PAYLOAD));
+    ds_puts(d, nb);
+    return 1;
+}
+static Value native_glow_cache_key(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_LIST) return glow_call_fail("cache: bad call");
+    List *l = AS_LIST(args[0]);
+    DStr d = {0};
+    ds_putn(&d, "", 0);
+    for (int i = 0; i < l->size; i++) {
+        if (!cache_key_part(&d, l->items[i])) { free(d.p); return value_none(); }
+    }
+    Value key = value_string_copy_len(d.p, d.n);
+    free(d.p);
+    return key;
 }
 
 /* `with m as name:` (see with_one in glowlang.y). Objects take part by
@@ -7330,6 +7387,7 @@ void std_init(void) {
     var_set("__glow_gen_new", native_func_new("__glow_gen_new", native_glow_gen_new));
     var_set("next", native_func_new("next", native_next));
     var_set("__glow_with_enter", native_func_new("__glow_with_enter", native_glow_with_enter));
+    var_set("__glow_cache_key", native_func_new("__glow_cache_key", native_glow_cache_key));
     var_set("__glow_with_exit", native_func_new("__glow_with_exit", native_glow_with_exit));
     var_set("__glow_caught", native_func_new("__glow_caught", native_glow_caught));
     var_set("__glow_rethrow", native_func_new("__glow_rethrow", native_glow_rethrow));

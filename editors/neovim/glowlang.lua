@@ -49,6 +49,9 @@ vim.api.nvim_create_autocmd("FileType", {
             " match / case / enum only at the start of a statement line
             syntax match glowKeyword /^\s*\zs\(match\|case\)\ze\s.*:\s*\(#.*\)\=$/
             syntax match glowKeyword /^\s*\zsenum\ze\s\+\w\+\s*:/
+            " @decorator lines above a func
+            syntax match glowDecorator /^\s*\zs@[A-Za-z_][A-Za-z0-9_.]*/
+            highlight default link glowDecorator PreProc
             " yield only at the start of a statement
             syntax match glowKeyword /^\s*\zsyield\>/
             " with, and as in a with header

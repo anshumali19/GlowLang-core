@@ -12,5 +12,7 @@ regress_assign_target.glow  1
 regress_compound_target.glow  1
 regress_finally_error_line.glow  1
 regress_with_error_line.glow  1
+regress_decorator_target.glow  1
+regress_decorator_trace.glow  1
 regress_optchain_assign.glow  1
 regress_match_capture_error.glow  1
