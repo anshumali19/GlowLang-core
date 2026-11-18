@@ -171,6 +171,10 @@ contexts:
     - match: '^\s*(enum)\b(?=\s+\w+\s*:)'
       captures:
         1: keyword.declaration.enum.glowlang
+    # yield: a keyword only at the start of a statement
+    - match: '^\s*(yield)\b'
+      captures:
+        1: keyword.control.flow.glowlang
 
     # I/O keywords
     - match: '\b(show|write|input)\b'

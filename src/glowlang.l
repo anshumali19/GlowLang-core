@@ -264,6 +264,9 @@ static int lex_identifier(void) {
 "action"               { return FUNC; }
 "can"                  { return FUNC; }
 "lambda"               { lambda_wait = lexer_bracket_depth; return LAMBDA; }
+ /* yield is a keyword only where a statement starts, so a variable or
+    field named yield keeps working. */
+"yield"                { return lexer_prev_start ? YIELD : lex_identifier(); }
 "let"                  { return LET; }
 "return"               { return RETURN; }
 "true"                 { return TRUE_KW; }

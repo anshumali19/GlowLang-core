@@ -2065,6 +2065,12 @@ static void ds_value(DStr *d, Value v, int depth) {
             }
             ds_puts(d, "}");
         }
+        else if (ot == OBJ_GENERATOR) {
+            Generator *g = (Generator*)(uintptr_t)(v & MASK_PAYLOAD);
+            ds_puts(d, "<generator ");
+            ds_puts(d, g->name ? g->name : "");
+            ds_puts(d, ">");
+        }
         else ds_puts(d, "<object>");
     } else ds_puts(d, "none");
 }
@@ -2145,6 +2151,13 @@ static Value native_pairs(int argc, Value *args) {
 static Value native_pairs_flat(int argc, Value *args) {
     if (argc < 1) return value_list(list_new(0));
     Value coll = args[0];
+    if (glow_is_generator(coll)) {
+        /* Numbering a generator's values would have to run it to its end
+           first, which may never come. */
+        pending_exception = value_string_copy("for each a, b in a generator: a generator has no positions; use for each [a, b] in g to take each value apart, or count with a variable");
+        has_exception = 1;
+        return value_none();
+    }
     if (GET_TYPE(coll) == VAL_LIST) {
         List *l = AS_LIST(coll);
         List *out = list_new(l->size * 2 + 2);
@@ -6804,6 +6817,7 @@ const char *glow_type_name(Value v) {
         if (ot == OBJ_PACKED_ARRAY) return "tensor";
         if (ot == OBJ_BIGINT) return "int";
         if (ot == OBJ_TRAIT) return "trait";
+        if (ot == OBJ_GENERATOR) return "generator";
         return "object";
     }
     return "none";
@@ -6972,6 +6986,58 @@ static Value native_glow_callv(int argc, Value *args) {
         return glow_call_fail(msg);
     }
     return r;
+}
+
+/* __glow_gen_new("name", body, args...): what a generator function returns
+   (see make_generator in compiler.c). body is the hidden lambda holding the
+   function's code; the arguments become its first registers. Nothing runs
+   until the generator is first stepped. */
+static Value native_glow_gen_new(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || !is_obj_type(args[1], OBJ_CLOSURE) ||
+        !AS_CLOSURE(args[1])->body || !AS_CLOSURE(args[1])->body->is_generator)
+        return glow_call_fail("generator: bad call");
+    const char *name = AS_STRING(args[0]);
+    const char *colons = strstr(name, "::");
+    if (colons && strcmp(colons + 2, "init") == 0) {
+        char msg[200];
+        snprintf(msg, sizeof msg, "%.*s's init cannot use yield: making an object runs init to its end", (int)(colons - name) > 80 ? 80 : (int)(colons - name), name);
+        return glow_call_fail(msg);
+    }
+    Bytecode *bc = AS_CLOSURE(args[1])->body;
+    int n = bc->local_count > 0 ? bc->local_count : 1;
+    Value *regs = malloc(sizeof(Value) * (size_t)n);
+    if (!regs) return glow_call_fail("generator: out of memory");
+    for (int i = 0; i < n; i++) regs[i] = value_none();
+    for (int i = 0; i + 2 < argc && i < n; i++) regs[i] = args[i + 2];
+    Generator *g = gc_alloc(sizeof(Generator), OBJ_GENERATOR);
+    g->body = args[1];
+    g->regs = regs;
+    g->nregs = n;
+    g->pc = 0;
+    g->state = GEN_CREATED;
+    g->yielded = 0;
+    /* "Shape::points" shows as points. */
+    g->name = intern_string(colons ? colons + 2 : name);
+    return make_value(VAL_OBJECT, (uintptr_t)g);
+}
+
+/* next(g): g's next value. next(g, default): default once g has finished
+   (without it, a finished generator raises). */
+static Value native_next(int argc, Value *args) {
+    if (argc < 1 || !glow_is_generator(args[0])) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "next() needs a generator (got %s)", argc < 1 ? "nothing" : glow_type_name(args[0]));
+        return glow_call_fail(msg);
+    }
+    Generator *g = (Generator*)(uintptr_t)(args[0] & MASK_PAYLOAD);
+    int done;
+    Value v = glow_gen_resume(g, &done);
+    if (has_exception) return value_none();
+    if (!done) return v;
+    if (argc >= 2) return args[1];
+    char msg[200];
+    snprintf(msg, sizeof msg, "generator %.80s has no more values (next(g, default) returns default instead)", g->name ? g->name : "");
+    return glow_call_fail(msg);
 }
 
 /* For a `case [a, b]` pattern: len(x) when x is a list, -1 otherwise. */
@@ -7198,6 +7264,8 @@ void std_init(void) {
     var_set("__glow_super_bind", native_func_new("__glow_super_bind", native_glow_super_bind));
     var_set("__glow_call", native_func_new("__glow_call", native_glow_call));
     var_set("__glow_callv", native_func_new("__glow_callv", native_glow_callv));
+    var_set("__glow_gen_new", native_func_new("__glow_gen_new", native_glow_gen_new));
+    var_set("next", native_func_new("next", native_next));
     var_set("__glow_concat", native_func_new("__glow_concat", native_glow_concat));
     var_set("__glow_list_len", native_func_new("__glow_list_len", native_glow_list_len));
     var_set("__glow_enum", native_func_new("__glow_enum", native_glow_enum));

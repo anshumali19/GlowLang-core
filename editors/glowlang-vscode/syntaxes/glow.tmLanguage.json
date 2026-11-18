@@ -119,6 +119,10 @@
                     "match": "^\\s*(match|case)\\b(?=\\s.*:\\s*(#.*)?$)"
                 },
                 {
+                    "name": "keyword.control.flow.glow",
+                    "match": "^\\s*(yield)\\b"
+                },
+                {
                     "name": "keyword.declaration.enum.glow",
                     "match": "^\\s*(enum)\\b(?=\\s+\\w+\\s*:)"
                 },

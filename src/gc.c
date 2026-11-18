@@ -517,6 +517,14 @@ static void gc_trace_object(GCObject *obj) {
             break;
         }
         case OBJ_ITERATOR: { Iterator *it = (Iterator*)obj; mark_value(it->iterable); break; }
+        case OBJ_GENERATOR: {
+            /* Its body, and the registers of a paused body (stale ones while
+               it runs: the live values are then on the VM stack). */
+            Generator *g = (Generator*)obj;
+            mark_value(g->body);
+            for (int i = 0; i < g->nregs; i++) mark_value(g->regs[i]);
+            break;
+        }
         case OBJ_SET: mark_value(((GlowSet*)obj)->map); break;
         case OBJ_DICT: {
             Dict *d = (Dict*)obj;
@@ -604,6 +612,7 @@ static void process_grey_stack(void) {
 static void gc_free_object_payload(GCObject *unmarked) {
     if (unmarked->type == OBJ_LIST) list_free_storage((List*)unmarked);
     else if (unmarked->type == OBJ_DICT) dict_free_storage((Dict*)unmarked);
+    else if (unmarked->type == OBJ_GENERATOR) { free(((Generator*)unmarked)->regs); }
     else if (unmarked->type == OBJ_SQLITE_ITER) { if (((SQLiteIter*)unmarked)->stmt) sqlite3_finalize(((SQLiteIter*)unmarked)->stmt); }
     /* close_v2: the handle and its query iterators may be swept in any order. */
     else if (unmarked->type == OBJ_SQLITE_HANDLE) { if (((SQLiteHandle*)unmarked)->db) sqlite3_close_v2(((SQLiteHandle*)unmarked)->db); }
@@ -627,6 +636,7 @@ static inline int gc_type_always_final(ObjType t) {
     switch (t) {
         case OBJ_CLASS: case OBJ_TRAIT: case OBJ_PACKED_ARRAY: case OBJ_STRING_BUILDER:
         case OBJ_NATIVE_FUNC: case OBJ_CLOSURE: case OBJ_SQLITE_ITER: case OBJ_SQLITE_HANDLE:
+        case OBJ_GENERATOR:
             return 1;
         default:
             return 0;

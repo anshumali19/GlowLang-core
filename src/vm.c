@@ -1235,7 +1235,8 @@ const char *op_names[] = {
     "TRACE_ENTER", "PACKED_ADD", "PACKED_SUB", "PACKED_MUL", "PACKED_LOAD", "PACKED_STORE",
     "PACKED_FUSED_MUL_ADD", "MATRIX_MUL", "SIMD_ADD", "USE_FILE", "ITER_START", "ITER_NEXT",
     "IN", "ADD_INT", "SUB_INT", "MUL_INT", "LT_INT", "GT_INT", "LTE_INT", "GTE_INT", "EQ_INT",
-    "CALL_METHOD", "ITER_NEXT2", "BITAND", "BITOR", "BITXOR", "SHL", "SHR", "BITNOT"
+    "CALL_METHOD", "ITER_NEXT2", "BITAND", "BITOR", "BITXOR", "SHL", "SHR", "BITNOT",
+    "YIELD"
 };
 
 void print_bytecode(Bytecode *bc) {
@@ -1595,6 +1596,11 @@ Value jit_iter_next(Value vit) {
         Iterator *it = (Iterator*)obj;
         Value coll = it->iterable;
         int type = GET_TYPE(coll);
+        /* A generator's step runs GlowLang code that may raise. Compiled
+           code leaves the loop to the interpreter before anything has
+           happened (it redoes this instruction), and the interpreter steps
+           the generator itself (OP_ITER_NEXT). */
+        if (glow_is_generator(coll)) return VAL_DEOPT_SENTINEL;
         if (type == VAL_LIST) {
             List *l = AS_LIST(coll);
             if (it->index < l->size) return l->items[it->index++];
@@ -1628,6 +1634,82 @@ Value jit_iter_next(Value vit) {
         }
     }
     return JIT_ITER_DONE;
+}
+
+int glow_is_generator(Value v) {
+    return GET_TYPE(v) == VAL_OBJECT && (v & MASK_PAYLOAD) && GET_OBJ_TYPE(v) == OBJ_GENERATOR;
+}
+
+/* The generator whose body this thread is running (the innermost one, when
+   one generator's body steps another). OP_YIELD saves into it. */
+static THREAD_LOCAL Generator *gen_running = NULL;
+
+/* Run g's body to its next `yield`: put its registers back in a fresh
+   window at the top of the VM stack and continue at the saved instruction
+   (the first one, on the first call). The body runs in the interpreter
+   only (its bytecode is marked so the JIT leaves it alone). */
+Value glow_gen_resume(Generator *g, int *done) {
+    *done = 0;
+    if (g->state == GEN_DONE) { *done = 1; return value_none(); }
+    if (g->state == GEN_RUNNING) {
+        char msg[200];
+        snprintf(msg, sizeof msg, "generator %.80s is already running (its body cannot step it)", g->name ? g->name : "");
+        pending_exception = value_string_copy(msg);
+        has_exception = 1;
+        return value_none();
+    }
+    Closure *c = AS_CLOSURE(g->body);
+    Bytecode *bc = c->body;
+    int base = vm_stack_top;
+    int needed = base + bc->local_count + 16;
+    if (call_depth >= 65500 || glow_stack_low() || needed + 512 >= vm_stack_size) {
+        pending_exception = value_string_copy("Maximum recursion depth exceeded");
+        has_exception = 1;
+        return value_none();
+    }
+    for (int i = 0; i < bc->local_count; i++)
+        vm_stack[base + i] = i < g->nregs ? g->regs[i] : value_none();
+    int saved_top = vm_stack_top;
+    vm_stack_top = needed;
+    Generator *outer = gen_running;
+    gen_running = g;
+    g->state = GEN_RUNNING;
+    g->yielded = 0;
+    Instruction *start = g->pc > 0 ? &bc->code[g->pc] : NULL;
+    Value v = run_bytecode(bc, start, c, base);
+    gen_running = outer;
+    vm_stack_top = saved_top;
+    if (g->yielded && !has_exception) {
+        g->state = GEN_SUSPENDED;
+        return v;
+    }
+    /* Finished: returned, ran off its end, or raised. */
+    g->state = GEN_DONE;
+    free(g->regs);
+    g->regs = NULL;
+    g->nregs = 0;
+    *done = 1;
+    return value_none();
+}
+
+/* OP_YIELD: save the running generator's registers and the instruction
+   after this one. Returns 0 when this frame is not a generator's body. */
+static int gen_save(Bytecode *bc, Value *R, Instruction *next) {
+    Generator *g = gen_running;
+    if (!g || g->state != GEN_RUNNING || AS_CLOSURE(g->body)->body != bc) return 0;
+    int n = bc->local_count;
+    if (g->nregs != n) {
+        Value *r = realloc(g->regs, sizeof(Value) * (n > 0 ? n : 1));
+        if (!r) return 0;
+        g->regs = r;
+        g->nregs = n;
+    }
+    memcpy(g->regs, R, sizeof(Value) * (size_t)n);
+    g->pc = (int)(next - bc->code);
+    g->yielded = 1;
+    /* An old generator now holds young values. */
+    gc_write_barrier((GCObject*)g, value_none());
+    return 1;
 }
 
 /* `for each a, b in x` walks a flat list [a0, b0, a1, b1, ...] that
@@ -2074,7 +2156,8 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         &&l_OP_LT_INT, &&l_OP_GT_INT, &&l_OP_LTE_INT, &&l_OP_GTE_INT, &&l_OP_EQ_INT,
         &&l_OP_CALL_METHOD,
         &&l_OP_ITER_NEXT2,
-        &&l_OP_BITAND, &&l_OP_BITOR, &&l_OP_BITXOR, &&l_OP_SHL, &&l_OP_SHR, &&l_OP_BITNOT
+        &&l_OP_BITAND, &&l_OP_BITOR, &&l_OP_BITXOR, &&l_OP_SHL, &&l_OP_SHR, &&l_OP_BITNOT,
+        &&l_OP_YIELD
     };
 #endif
 
@@ -2237,6 +2320,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         case OP_SHL: goto l_OP_SHL; \
         case OP_SHR: goto l_OP_SHR; \
         case OP_BITNOT: goto l_OP_BITNOT; \
+        case OP_YIELD: goto l_OP_YIELD; \
     }
 
 #define DISPATCH() { \
@@ -3503,6 +3587,18 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         if (has_exception) goto l_OP_THROW;
         R(pc->r0) = r; pc++; goto l_DISPATCH;
     }
+    l_OP_YIELD: {
+        /* Only the generator's own frame (the base of this activation, which
+           glow_gen_resume started) can pause: its registers and the place to
+           go on from are saved, and the activation returns the value. */
+        if (internal_depth != 0 || !gen_save(bc, &R(0), pc + 1)) {
+            pending_exception = value_string_copy("yield can only be used inside a function");
+            has_exception = 1;
+            goto l_OP_THROW;
+        }
+        vm_ret_val = R(pc->r0);
+        goto l_DO_RETURN;
+    }
     l_OP_BITNOT: {
         Value v = R(pc->r1);
         if (__builtin_expect(IS_INT(v), 1)) R(pc->r0) = value_int(~AS_INT(v));
@@ -3828,7 +3924,18 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         pc++; goto l_DISPATCH;
     }
     l_OP_ITER_NEXT: {
-        Value next = jit_iter_next(R(pc->r1));
+        Value next;
+        Value _vit = R(pc->r1);
+        Iterator *_it = (GET_TYPE(_vit) == VAL_OBJECT && (_vit & MASK_PAYLOAD) && GET_OBJ_TYPE(_vit) == OBJ_ITERATOR) ? (Iterator*)(uintptr_t)(_vit & MASK_PAYLOAD) : NULL;
+        if (_it && glow_is_generator(_it->iterable)) {
+            int _done;
+            call_stack[my_frame_idx].pc = pc;
+            next = glow_gen_resume((Generator*)(uintptr_t)(_it->iterable & MASK_PAYLOAD), &_done);
+            if (has_exception) goto l_OP_THROW;
+            if (_done) next = JIT_ITER_DONE;
+        } else {
+            next = jit_iter_next(_vit);
+        }
         if (next != JIT_ITER_DONE) { R(pc->r0) = next; pc++; goto l_DISPATCH; }
         if (pc->arg < 0 || pc->arg >= bc->count) { pending_exception = value_string_copy("ITER_NEXT jump out of bounds"); has_exception = 1; goto l_OP_THROW; }
         pc = bc->code + pc->arg; DISPATCH();

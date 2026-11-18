@@ -1,0 +1,267 @@
+# Generators: a function with yield returns a generator; its body runs a
+# piece at a time as the generator is stepped (for each, next, yield from).
+
+func count_up(limit):
+    let i = 0
+    while i < limit:
+        yield i
+        i += 1
+    end
+end
+
+# ---- the basics
+for each n in count_up(3):
+    show "n:", n
+end
+let g = count_up(2)
+show type(g), g
+show next(g), next(g), next(g, "finished"), next(g, "still finished")
+show [x * x for each x in count_up(5) when x % 2 == 1]
+show {x: x * 2 for each x in count_up(3)}
+
+# ---- nothing runs until the generator is stepped
+func noisy():
+    show "body started"
+    yield 1
+    show "after the first yield"
+    yield 2
+end
+let lazy = noisy()
+show "made the generator"
+show next(lazy)
+show next(lazy)
+show next(lazy, "end")
+
+# ---- endless generators, stopping early, resuming after stop
+func naturals(start = 1):
+    let n = start
+    while true:
+        yield n
+        n += 1
+    end
+end
+let firsts = []
+let nat = naturals()
+for each n in nat:
+    firsts.push(n)
+    when len(firsts) == 3:
+        stop
+    end
+end
+show firsts, next(nat), next(nat)
+show next(naturals(start = 50))
+
+# ---- bare yield, return ends a generator early
+func early(flag):
+    yield
+    when flag:
+        return 99
+    end
+    yield "late"
+end
+show [v for each v in early(true)], [v for each v in early(false)]
+
+# ---- yield from: lists, sets, strings, other generators, recursion
+func chain(...parts):
+    for each p in parts:
+        yield from p
+    end
+end
+show [v for each v in chain([1, 2], "ab", count_up(2), {7})]
+class Node:
+    func init(value, children = []):
+        self.value = value
+        self.children = children
+    end
+    func walk():
+        yield self.value
+        for each c in self.children:
+            yield from c.walk()
+        end
+    end
+end
+let tree = Node(1, [Node(2, [Node(3), Node(4)]), Node(5)])
+show [v for each v in tree.walk()]
+
+# ---- methods see self; lambdas and closures can be generators
+class Countdown:
+    func init(start):
+        self.start = start
+    end
+    func ticks(step = 1):
+        let n = self.start
+        while n > 0:
+            yield f"{n}..."
+            n -= step
+        end
+        yield "liftoff"
+    end
+end
+show [t for each t in Countdown(5).ticks(step = 2)]
+let evens = lambda(limit):
+    for each i in count_up(limit):
+        when i % 2 == 0:
+            yield i
+        end
+    end
+end
+show [e for each e in evens(7)]
+func make_scaled(k):
+    func scaled(xs):
+        for each x in xs:
+            yield x * k
+        end
+    end
+    return scaled
+end
+let triple = make_scaled(3)
+show [v for each v in triple([1, 2, 3])]
+
+# ---- generators feeding generators
+func take(n, source):
+    let i = 0
+    for each v in source:
+        when i == n:
+            return
+        end
+        yield v
+        i += 1
+    end
+end
+func mapped(f, source):
+    for each v in source:
+        yield f(v)
+    end
+end
+show [v for each v in take(4, mapped(lambda(x): x * x, naturals()))]
+
+# ---- errors inside a generator
+func failing():
+    yield 1
+    throw "broken generator"
+end
+let collected = []
+try:
+    for each v in failing():
+        collected.push(v)
+    end
+catch e:
+    show "caught:", e, collected
+end
+let fg = failing()
+next(fg)
+try:
+    next(fg)
+catch e:
+    show "next raised:", e
+end
+show next(fg, "finished after the error")
+func guarded():
+    try:
+        yield 1
+        throw "inside"
+    catch e:
+        yield "handled " + e
+    finally:
+        yield "finally ran"
+    end
+    yield "after try"
+end
+show [v for each v in guarded()]
+
+# ---- misuse is reported
+try:
+    next([1, 2])
+catch e:
+    show e
+end
+try:
+    next(count_up(0))
+catch e:
+    show e
+end
+func self_stepping():
+    yield next(me)
+end
+let me = self_stepping()
+try:
+    next(me)
+catch e:
+    show e
+end
+class Bad:
+    func init():
+        yield 1
+    end
+end
+try:
+    Bad()
+catch e:
+    show e
+end
+try:
+    for each a, b in count_up(2):
+        show a, b
+    end
+catch e:
+    show e
+end
+for each [a, b] in mapped(lambda(i): [i, i * 10], count_up(2)):
+    show a, b
+end
+
+# ---- yield is still an ordinary name outside the start of a statement
+let yield = 5
+show yield + 1
+let box = {"yield": 7}
+show box["yield"]
+
+# ---- a loop the JIT compiles, stepping generators in every call
+func total(limit):
+    let s = 0
+    for each v in count_up(limit):
+        s += v
+    end
+    return s
+end
+let sums = 0
+every i from 1 to 300:
+    sums += total(20)
+end
+show sums
+
+# ---- many steps, and values kept across collections
+func blocks(n):
+    let keep = []
+    every i from 1 to n:
+        keep.push([i, str(i) * 3])
+        yield len(keep)
+    end
+    yield keep[n - 1]
+end
+let last = none
+for each v in blocks(20000):
+    last = v
+end
+show last
+let big = 0
+for each v in count_up(100000):
+    big += v
+end
+show big
+
+# ---- recursion through yield from, and running out of stack
+func down(n):
+    yield n
+    when n > 0:
+        yield from down(n - 1)
+    end
+end
+show sum([v for each v in down(100)])
+try:
+    for each v in down(1000000):
+        big = v
+    end
+catch e:
+    show "caught:", e
+end

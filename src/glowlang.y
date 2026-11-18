@@ -441,6 +441,21 @@ static Node *call_node(Node *callee, Node **items, int count) {
     return helper_call("__glow_call", args, 4, line);
 }
 /* for each [a, b] in items: each item is unpacked into a and b. */
+/* yield from x: yield each item of x in turn (a list, a set, a string or
+   another generator). */
+static Node *yield_from(Node *coll) {
+    static int yf_count = 0;
+    char buf[32];
+    snprintf(buf, sizeof buf, "__yf_%d", yf_count++);
+    const char *item = intern_string(buf);
+    Node *y = node_new(NODE_YIELD);
+    y->left = newVarNode(item);
+    y->line = y->left->line = coll->line;
+    Node *loop = node_new(NODE_FOR_EACH);
+    loop->name = item; loop->left = coll; loop->right = y;
+    loop->line = coll->line;
+    return loop;
+}
 static Node *unpack_loop(Node **names, int count, Node *coll, Node *body) {
     static int each_count = 0;
     char buf[32];
@@ -477,6 +492,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %token BAD_NUMBER
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
+%token YIELD
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
 %token ELLIPSIS NULLISH NULLISH_ASSIGN QDOT QDOT_INDEX MATCH CASE ENUM
 %token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
@@ -515,6 +531,9 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | USE STRING { $$ = node_new(NODE_IMPORT); $$->name = $2; }
     | RETURN expr { $$ = newReturnNode($2); }
     | RETURN { $$ = newReturnNode(newVarNode(intern_string("none"))); }
+    | YIELD expr { $$ = node_new(NODE_YIELD); $$->left = $2; $$->line = $2->line; }
+    | YIELD { $$ = node_new(NODE_YIELD); }
+    | YIELD FROM expr { $$ = yield_from($3); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }

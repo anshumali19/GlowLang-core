@@ -706,6 +706,66 @@ super.init(...parts)         # inside a method
 ```
 Spreading anything other than a list or a set is an error.
 
+### Generators: `yield`
+A function whose body contains `yield` is a generator function. Calling it runs
+none of its code yet: it returns a generator, and the body runs a piece at a
+time as the generator is stepped, pausing at each `yield` and handing over its
+value. Values are made only when they are needed, so a generator can be
+endless.
+
+```glow
+func count_up(limit):
+    let i = 0
+    while i < limit:
+        yield i
+        i += 1
+    end
+end
+
+for each n in count_up(3):
+    show n                       # 0, then 1, then 2
+end
+show [n * n for each n in count_up(4)]   # [0, 1, 4, 9]
+
+let g = count_up(2)
+show next(g), next(g)            # 0 1
+show next(g, "done")             # done: g has no more values
+
+func naturals():
+    let n = 1
+    while true:
+        yield n
+        n += 1
+    end
+end
+for each n in naturals():
+    when n > 3:
+        stop                     # leaves the generator paused
+    end
+    show n
+end
+
+func chain(a, b):
+    yield from a                 # each item of a list, set, string or generator
+    yield from b
+end
+show [v for each v in chain([1, 2], count_up(2))]   # [1, 2, 0, 1]
+```
+
+- `next(g)` gives the next value and raises once `g` has finished;
+  `next(g, default)` returns `default` instead.
+- `return` ends a generator. A bare `yield` hands over `none`.
+- Methods and lambdas can be generators. Inside a method, `self` works as
+  usual.
+- An error raised in the body reaches whoever is stepping the generator, and
+  the generator is then finished.
+- `for each a, b in g` needs positions, which a generator does not have; write
+  `for each [a, b] in g` to take each value apart.
+- A generator that is never stepped to its end does not run the rest of its
+  body, `finally` blocks included.
+- `yield` is a keyword only at the start of a statement, so a variable called
+  `yield` still works. `super` cannot be used inside a generator method.
+
 ### Recursive Functions
 ```glow
 func fibonacci(n):

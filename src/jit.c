@@ -2031,6 +2031,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_mov_arg1_reg(&buf, pc->r1);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_next);
                 emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);   /* a generator: the interpreter steps it */
                 emit_mov_rcx_imm64(&buf, JIT_ITER_DONE);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8); // cmp rax, rcx
                 jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84);                          // je: the loop is over
@@ -2499,6 +2500,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_mov_arg1_reg(&buf, pc->r1);
                 emit_mov_rax_imm64(&buf, (uintptr_t)jit_iter_next);
                 emit_call_rax(&buf);
+                emit_deopt_check(&buf, i);   /* a generator: the interpreter steps it */
                 emit_mov_rcx_imm64(&buf, JIT_ITER_DONE);
                 jit_emit_byte(&buf, 0x48); jit_emit_byte(&buf, 0x39); jit_emit_byte(&buf, 0xc8); // cmp rax, rcx
                 jit_emit_byte(&buf, 0x0f); jit_emit_byte(&buf, 0x84);                          // je: the loop is over
@@ -3445,6 +3447,7 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
             case OP_ITER_NEXT:
                 a64_load_reg(A, 0, pc->r1);
                 a64_call(A, (const void*)jit_iter_next);
+                a64_deopt_check(A, i);   /* a generator: the interpreter steps it */
                 a64_mov_imm(A, 9, JIT_ITER_DONE);
                 a64_emit(A, a64_cmp(0, 9));
                 a64_emit(A, a64_b_cond(A64_NE, 8));   /* not over: skip the exit */

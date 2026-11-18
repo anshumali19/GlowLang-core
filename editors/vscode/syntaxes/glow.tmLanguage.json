@@ -60,6 +60,10 @@
                 },
                 {
                     "name": "keyword.control.glow",
+                    "match": "^\\s*(yield)\\b"
+                },
+                {
+                    "name": "keyword.control.glow",
                     "match": "^\\s*(enum)\\b(?=\\s+\\w+\\s*:)"
                 }
             ]
