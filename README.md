@@ -61,7 +61,9 @@ glowlang --version
 
 Every download is listed, with SHA-256 checksums, on the
 [releases page](https://github.com/anshumali19/GlowLang-packages/releases/latest). Keep the
-`lib/` folder next to `glowlang`: it holds the standard libraries.
+`lib/` folder next to `glowlang`: it holds the standard libraries. To update later, run
+`gdu install glowlang`: it installs the latest release in `~/.glowlang/bin` and adds that folder
+to your PATH in `~/.bashrc` and `~/.zshrc`.
 
 ## 🚀 Your first program
 
