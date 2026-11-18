@@ -1,0 +1,51 @@
+# Typed into the REPL line by line (see tests/expected/modes.txt): blocks
+# and open brackets continue over several lines, an expression on its own
+# shows its value, and an error does not end the session.
+func double(x):
+    return x * 2
+end
+show double(4)
+
+let a = 3
+a + 1
+"text"
+none
+print("printed")
+when a > 5:
+    show "big"
+else:
+    show "small"
+end
+let xs = [1,
+  2,
+  3]
+xs
+let add = lambda(x):
+    return x + 100
+end
+add(1)
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+    func sum():
+        return self.x + self.y
+    end
+end
+Point(3, 4).sum()
+for each n in [1, 2]:
+    show n * 10
+end
+let bad =
+show "after a syntax error"
+1 / 0
+show "after a runtime error"
+when a > 1:
+    show "never finished"
+
+
+show "after two empty lines"
+double(21)
+exit
+show "not reached"

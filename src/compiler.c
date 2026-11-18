@@ -631,6 +631,9 @@ int yyparse(void);
 /* While parsing an f-string's {expression}, a syntax error is not
    reported here: the f-string raises a clear error when it runs instead. */
 static int quiet_parse = 0;
+/* Set by a syntax error found at the end of the input: the REPL then
+   reads another line instead of reporting it (see glow_repl_parse). */
+static int error_at_eof = 0;
 
 /* Falling off the end of a function returns none. (It used to return
    register 0: the first parameter, self, or the first local.) */
@@ -2186,6 +2189,47 @@ void compile(Node *n) {
     compile_stmt(n);
 }
 
+/* The REPL: parse what has been typed so far (src, its first line numbered
+   first_line). Returns 0 when it parsed (root holds it), 1 when it stops
+   too soon, inside a block or brackets not yet closed, so the REPL should
+   read another line, and 2 after reporting a syntax error. With final set
+   (no more lines will come), input that stops too soon is an error too. */
+int glow_repl_parse(const char *src, int first_line, int final) {
+    for (int pass = 0; pass < 2; pass++) {
+        YY_BUFFER_STATE b = yy_scan_string(src);
+        root = NULL;
+        line_num = first_line;
+        error_at_eof = 0;
+        quiet_parse = (pass == 0);
+        int rc = yyparse();
+        quiet_parse = 0;
+        yy_delete_buffer(b);
+        if (rc == 0 && glow_error_count == 0) return 0;
+        if (pass == 1) break;
+        if (error_at_eof) {
+            glow_clear_errors();
+            if (!final) return 1;
+            /* Given up on (two empty lines, or the end of the input). */
+            line_num = first_line;
+            yyerror("this statement was not finished (a block needs its 'end', or a bracket is still open), so it did not run");
+            root = NULL;
+            return 2;
+        }
+        glow_clear_errors();   /* again, loudly, to report the error */
+    }
+    root = NULL;
+    return 2;
+}
+
+/* The REPL: compile an expression typed on its own into a fresh register
+   and return that register, so the REPL can show its value. */
+int compile_repl_value(Node *e) {
+    compiling_line = e->line;
+    int r = next_free_reg++;
+    compile_expr(e, r);
+    return r;
+}
+
 /* The word that line `line` of `file` starts with (after indentation),
    copied into out; empty when the line cannot be read. */
 static void line_first_word(const char *file, int line, char *out, size_t cap) {
@@ -2253,7 +2297,10 @@ const char *glow_radix_literal(const char *text) {
 static char bad_literal[80];
 void glow_bad_literal(const char *text) { snprintf(bad_literal, sizeof bad_literal, "%s", text); }
 
+extern int yychar;
+
 void yyerror(const char *s) {
+    error_at_eof = (yychar == 0);
     if (quiet_parse) { bad_literal[0] = 0; return; }
     char numhint[200];
     if (bad_literal[0]) {

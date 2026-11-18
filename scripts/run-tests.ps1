@@ -10,7 +10,8 @@
       {{ANY}} matches any text (used for timings and memory figures);
     - stderr: every line of tests\expected\<name>.err must appear in it.
   tests\expected\modes.txt can mark a test "unordered" (lines compared as a
-  sorted multiset; for tests whose threads interleave) or "skip-stdout".
+  sorted multiset; for tests whose threads interleave), "skip-stdout", or
+  "repl" (the file is fed to `glowlang repl` as typed input instead of run).
   Backslashes are normalised to forward slashes in all output, so expected
   files are the same on Windows and Linux (run-tests.sh shares them).
 
@@ -62,7 +63,10 @@ $pass = 0; $fail = 0; $failures = @()
 $sw = [Diagnostics.Stopwatch]::StartNew()
 foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | Sort-Object Name) {
     $rel = "tests\" + $t.Name
-    $psi = New-Object Diagnostics.ProcessStartInfo $exe, ("run `"" + $rel + "`"")
+    $mode = $modes[$t.Name]
+    # "repl" tests are typed into the REPL, line by line, instead of run.
+    $runArgs = if ($mode -eq 'repl') { 'repl' } else { "run `"" + $rel + "`"" }
+    $psi = New-Object Diagnostics.ProcessStartInfo $exe, $runArgs
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -73,6 +77,7 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
     $psi.WorkingDirectory = $root
     foreach ($k in $ExtraEnv.Keys) { $psi.EnvironmentVariables[$k] = [string]$ExtraEnv[$k] }
     $p = [Diagnostics.Process]::Start($psi)
+    if ($mode -eq 'repl') { $p.StandardInput.Write([IO.File]::ReadAllText($t.FullName)) }
     $p.StandardInput.Close()
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
@@ -81,7 +86,6 @@ foreach ($t in Get-ChildItem (Join-Path $root 'tests') -Filter "$Filter.glow" | 
     } else { $code = $p.ExitCode }
     $out = Normalize $outTask.Result
     $err = Normalize $errTask.Result
-    $mode = $modes[$t.Name]
 
     $wantCode = if ($exitCodes.ContainsKey($t.Name)) { [int]$exitCodes[$t.Name] } else { 0 }
     $expFile = Join-Path $expectedDir ($t.BaseName + '.out')

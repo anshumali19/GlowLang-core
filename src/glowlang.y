@@ -1155,33 +1155,75 @@ int glow_main(int argc, char **argv) {
     std_cleanup();
     return 0;
 
-l_REPL:
-    printf("GlowLang %s Interactive REPL\nType 'exit' to quit.\n", GLOWLANG_VERSION);
+l_REPL:;
+    /* Input from a file or a pipe (glowlang repl < session.glow) gets no
+       banner or prompts, only what the statements print. */
+#ifdef _WIN32
+    int interactive = _isatty(_fileno(stdin));
+#else
+    int interactive = isatty(fileno(stdin));
+#endif
+    if (interactive) printf("GlowLang %s Interactive REPL\nType 'exit' to quit.\n", GLOWLANG_VERSION);
+    /* What has been typed so far: a statement can take several lines (a
+       block up to its `end`, or brackets left open), so lines are added
+       here, with a "...." prompt, until the parser no longer stops short.
+       Two empty lines in a row give up on an unfinished statement. */
     char line_buf[4096];
+    char *src = NULL; size_t src_len = 0, src_cap = 0;
+    int first_line = 1, src_lines = 0, blank_run = 0;
     compiling_file = "<stdin>";
     while (1) {
-        printf("glow> ");
-        if (!fgets(line_buf, sizeof(line_buf), stdin)) break;
-        if (strncmp(line_buf, "exit", 4) == 0) break;
-        root = NULL; glow_clear_errors();
-        YY_BUFFER_STATE bp = yy_scan_string(line_buf);
-        yyparse(); yy_delete_buffer(bp);
-        if (glow_error_count == 0 && root) {
+        if (interactive) printf(src_len ? "....  " : "glow> ");
+        fflush(stdout);
+        int at_eof = !fgets(line_buf, sizeof(line_buf), stdin);
+        if (at_eof && !src_len) break;
+        if (!at_eof) {
+            if (!src_len) {
+                const char *w = line_buf;
+                while (*w == ' ' || *w == '\t') w++;
+                if (strncmp(w, "exit", 4) == 0 && (w[4] == '\n' || w[4] == '\r' || w[4] == 0 || w[4] == ' ')) break;
+            }
+            size_t n = strlen(line_buf);
+            if (src_len + n + 2 > src_cap) { src_cap = (src_len + n + 2) * 2; src = realloc(src, src_cap); }
+            memcpy(src + src_len, line_buf, n + 1); src_len += n;
+            /* A line longer than the buffer comes in pieces: wait for its end. */
+            if (n && line_buf[n - 1] != '\n' && !feof(stdin)) continue;
+            src_lines++;
+            const char *p = line_buf;
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+            blank_run = *p ? 0 : blank_run + 1;
+            if (src_lines == 1 && !*p) { src_len = 0; src_lines = 0; first_line++; continue; }
+        }
+        if (src_len && src[src_len - 1] != '\n') { src[src_len++] = '\n'; src[src_len] = 0; }
+        glow_clear_errors();
+        int pr = glow_repl_parse(src, first_line, at_eof || blank_run >= 2);
+        if (pr == 1) continue;
+        first_line += src_lines;
+        src_len = 0; src_lines = 0; blank_run = 0;
+        if (pr == 0 && root) {
             if (!main_fe.body) main_fe.body = bc_new(&main_fe);
             Bytecode *main_bc = main_fe.body; compiling_bc = main_bc;
             int old_count = main_bc->count;
-            compile(root);
+            /* An expression on its own shows its value (unless none). */
+            int value_reg = -1;
+            if (root->type == NODE_EXPR_STMT && root->left) value_reg = compile_repl_value(root->left);
+            else compile(root);
             if (main_bc->count > old_count) {
                 main_bc->local_count = compiler_reg_peak();
                 int ret_idx = bc_emit(main_bc, OP_RETURN, 0, 0);
+                if (value_reg >= 0) main_bc->code[ret_idx].r0 = value_reg;
                 Instruction *start_pc = &main_bc->code[old_count];
+                runtime_error_thrown = 0;
                 Value res = run_bytecode(main_bc, start_pc, NULL, 0);
                 if (has_exception) { print_error_trace(pending_exception); has_exception = 0; }
-                else if (res != 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
+                else if (runtime_error_thrown) runtime_error_thrown = 0;   /* already reported */
+                else if (value_reg >= 0 && GET_TYPE(res) != VAL_NONE) { print_value(res); printf("\n"); }
                 main_bc->count = ret_idx;
             }
         }
+        if (at_eof) break;
     }
+    free(src);
     glow_threads_join_all();
     std_cleanup();
     return 0;

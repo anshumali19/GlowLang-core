@@ -244,6 +244,23 @@ Launch the REPL for interactive exploration:
 
 Type GlowLang expressions directly and see results instantly. Perfect for learning and prototyping.
 
+```
+glow> let xs = [3, 1, 2]
+glow> sorted(xs)
+[1, 2, 3]
+glow> func double(x):
+....      return x * 2
+....  end
+glow> double(21)
+42
+```
+
+- An expression on its own shows its value (unless it is `none`).
+- A block (`func`, `when`, `for`, `class`, ...) continues on `....` lines until its `end`, and so does a line that leaves a bracket open.
+- To give up on an unfinished block, press Enter on two empty lines.
+- An error is reported and the session carries on. Type `exit` to quit.
+- `glowlang repl < session.glow` runs a file as if it were typed in, without the prompts.
+
 ---
 
 ## Running Examples
