@@ -7,7 +7,8 @@
 #     expected line matches any text (timings, memory figures);
 #   - stderr: every line of tests/expected/<name>.err must appear in it.
 # tests/expected/modes.txt marks tests "unordered" (lines compared as a sorted
-# multiset, for threads that interleave) or "skip-stdout".
+# multiset, for threads that interleave), "skip-stdout", or "repl" (the file
+# is fed to `glowlang repl` as typed input instead of being run).
 #
 # Usage: scripts/run-tests.sh [name-glob]        e.g. scripts/run-tests.sh 'regress_*'
 # Environment: GLOWLANG_BIN (default ./bin/glowlang), TEST_TIMEOUT (seconds, default 60).
@@ -81,13 +82,18 @@ for t in tests/$filter.glow; do
     [ -f "$t" ] || continue
     name="$(basename "$t")"
     base="${name%.glow}"
-    run_limited "$bin" run "$t" </dev/null >"$out_f" 2>"$err_f"
+    mode="$(lookup "$exp/modes.txt" "$name")"
+    if [ "$mode" = "repl" ]; then
+        # The file is typed into the REPL, line by line.
+        run_limited "$bin" repl <"$t" >"$out_f" 2>"$err_f"
+    else
+        run_limited "$bin" run "$t" </dev/null >"$out_f" 2>"$err_f"
+    fi
     code=$?
     [ "$code" -eq 124 ] && code=TIMEOUT
 
     want_code="$(lookup "$exp/exit_codes.txt" "$name")"
     want_code="${want_code:-0}"
-    mode="$(lookup "$exp/modes.txt" "$name")"
     out="$(normalize <"$out_f")"
     err="$(normalize <"$err_f")"
     problems=()

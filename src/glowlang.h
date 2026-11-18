@@ -855,6 +855,8 @@ extern Node *root;
 extern FILE *yyin;
 int yyparse(void);
 void yyerror(const char *s);
+int glow_repl_parse(const char *src, int first_line, int final);
+int compile_repl_value(Node *e);
 const char *glow_strip_underscores(const char *text);
 const char *glow_radix_literal(const char *text);
 void glow_bad_literal(const char *text);

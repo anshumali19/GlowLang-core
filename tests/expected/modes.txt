@@ -5,3 +5,5 @@ simple_test.glow              unordered
 complex_industrial_test.glow  unordered
 # Infinite recursion: stdout is 65k identical lines; the stderr error is what matters.
 loop_rec_test.glow            skip-stdout
+# Typed into the REPL line by line (glowlang repl < file), not run as a file.
+test_repl.glow                repl
