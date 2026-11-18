@@ -209,7 +209,23 @@ int lexer_bracket_depth = 0;
    before each rule). */
 int lexer_at_stmt_start = 1;
 static int lexer_prev_start = 1;
-#define YY_USER_ACTION { lexer_prev_start = lexer_at_stmt_start; lexer_at_stmt_start = 0; }
+/* A lambda whose body is a block (`lambda(x):` at the end of a line, then
+   statements, then `end`) may sit inside brackets: xs.map(lambda(x): ... end).
+   Its body must see newlines, so when the `:` that ends such a header ends
+   the line, the bracket depth is saved and set to 0; the parser restores it
+   (lexer_block_pop) just before the lambda's `end`, when the lexer has read
+   nothing after that `end`. lambda_wait is the bracket depth at the latest
+   `lambda` keyword (-1 when none is open), and lambda_header_tok the token
+   number of the `)` that closed its parameters. */
+static int lambda_wait = -1;
+static long lexer_tok = 0, lambda_header_tok = -1;
+static int block_saved[256];
+static int block_count = 0;
+void lexer_block_pop(void) {
+    if (block_count > 0) lexer_bracket_depth = block_saved[--block_count];
+}
+void lexer_block_reset(void) { block_count = 0; lambda_wait = -1; lambda_header_tok = -1; }
+#define YY_USER_ACTION { lexer_prev_start = lexer_at_stmt_start; lexer_at_stmt_start = 0; lexer_tok++; }
 static int lex_identifier(void) {
     yylval.str_val = (const char *)intern_string(yytext);
     return ID;
@@ -247,7 +263,7 @@ static int lex_identifier(void) {
 "func"                 { return FUNC; }
 "action"               { return FUNC; }
 "can"                  { return FUNC; }
-"lambda"               { return LAMBDA; }
+"lambda"               { lambda_wait = lexer_bracket_depth; return LAMBDA; }
 "let"                  { return LET; }
 "return"               { return RETURN; }
 "true"                 { return TRUE_KW; }
@@ -298,6 +314,15 @@ static int lex_identifier(void) {
 ">="                   { return GTE; }
 "**"                   { return POW; }
 
+":"/[ \t\r]*("#"[^\n]*)?\n  {
+                         /* The `:` right after a lambda's parameters, at the
+                            end of the line: its body is a block. */
+                         if (lambda_header_tok == lexer_tok - 1 && block_count < 256) {
+                             block_saved[block_count++] = lexer_bracket_depth;
+                             lexer_bracket_depth = 0;
+                         }
+                         lambda_header_tok = -1;
+                         return COLON; }
 ":"                    { return COLON; }
 "..."                  { return ELLIPSIS; }
 "??="                  { return NULLISH_ASSIGN; }
@@ -320,7 +345,9 @@ static int lex_identifier(void) {
 "}"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return '}'; }
 ","                    { return COMMA; }
 "("                    { lexer_bracket_depth++; return '('; }
-")"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--; return ')'; }
+")"                    { if (lexer_bracket_depth > 0) lexer_bracket_depth--;
+                         if (lambda_wait == lexer_bracket_depth) { lambda_header_tok = lexer_tok; lambda_wait = -1; }
+                         return ')'; }
 
 0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)* {
     /* Hex 0xff, binary 0b1010, octal 0o17; _ may separate digits. */
@@ -426,18 +453,18 @@ f\"([^"\\]|\\.)*\" {
 }
 
 \n                     { line_num++; if (lexer_bracket_depth == 0) { lexer_at_stmt_start = 1; return NEWLINE; } }
-[ \t\r]+               { lexer_at_stmt_start = lexer_prev_start; }
+[ \t\r]+               { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; }
  /* The UTF-8 byte order mark that Notepad and PowerShell 5 put at the start
     of files: skip it like whitespace (outside strings) wherever it appears,
     so files from every entry point (run, import, eval) read the same. */
-"\xEF\xBB\xBF"         { lexer_at_stmt_start = lexer_prev_start; }
+"\xEF\xBB\xBF"         { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; }
 
-"#"[^\n]*              { lexer_at_stmt_start = lexer_prev_start; }
+"#"[^\n]*              { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; }
 
-"/*"                   { lexer_at_stmt_start = lexer_prev_start; BEGIN(COMMENT); }
-<COMMENT>"*/"          { lexer_at_stmt_start = lexer_prev_start; BEGIN(INITIAL); }
-<COMMENT>\n            { lexer_at_stmt_start = lexer_prev_start; line_num++; }
-<COMMENT>.             { lexer_at_stmt_start = lexer_prev_start; }
+"/*"                   { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; BEGIN(COMMENT); }
+<COMMENT>"*/"          { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; BEGIN(INITIAL); }
+<COMMENT>\n            { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; line_num++; }
+<COMMENT>.             { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; }
 
 .                      { printf("Warning: unknown char '%c' (0x%02x) at line %d\n", *yytext, (unsigned char)*yytext, line_num); }
 

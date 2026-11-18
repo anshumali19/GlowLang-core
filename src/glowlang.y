@@ -19,6 +19,8 @@
 
 extern int yylex(void);
 extern void lexer_cleanup(void);
+extern void lexer_block_pop(void);
+extern void lexer_block_reset(void);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -502,7 +504,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %nonassoc NOT_OP
 
 /* Brackets left open by an earlier, failed parse must not swallow newlines. */
-%initial-action { extern int lexer_bracket_depth, lexer_at_stmt_start; lexer_bracket_depth = 0; lexer_at_stmt_start = 1; }
+%initial-action { extern int lexer_bracket_depth, lexer_at_stmt_start; lexer_bracket_depth = 0; lexer_at_stmt_start = 1; lexer_block_reset(); }
 
 %%
 
@@ -683,7 +685,11 @@ primary: ID { $$ = newVarNode($1); } | INT_LIT { $$ = newIntNodeStr($1); } | STR
     | '{' expr FOR EACH ID IN_KW expr WHEN expr '}' { $$ = set_of(comp_node($2, intern_string($5), $7, $9), line_num); }
     | '{' expr FOR ID IN_KW expr '}' { $$ = set_of(comp_node($2, intern_string($4), $6, NULL), line_num); }
     | '{' expr FOR ID IN_KW expr WHEN expr '}' { $$ = set_of(comp_node($2, intern_string($4), $6, $8), line_num); }
-    | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
+    | '{' dict_elements '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = $2.keys; $$->dict_values = $2.values; $$->dict_count = $2.count; } | '{' '}' { $$ = node_new(NODE_DICT_LITERAL); $$->dict_keys = NULL; $$->dict_values = NULL; $$->dict_count = 0; } | LAMBDA '(' param_list ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, newReturnNode($6))); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON expr { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, newReturnNode($5)); n->type = NODE_LAMBDA; $$ = n; } | LAMBDA '(' param_list ')' COLON NEWLINE lines block_end END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), $3.count, $3.names, with_param_defaults($3.count, $3.names, $3.defaults, $7)); n->type = NODE_LAMBDA; n->has_rest = $3.rest; $$ = n; } | LAMBDA '(' ')' COLON NEWLINE lines block_end END { char buf[32]; snprintf(buf, 32, "lambda_%d", global_lambda_count++); Node *n = newFuncNode(intern_string(buf), 0, NULL, $6); n->type = NODE_LAMBDA; $$ = n; };
+/* Just before a block lambda's `end`: give the lexer back the bracket depth
+   it set aside at the lambda's `:` (see lexer_block_pop in glowlang.l), so
+   xs.map(lambda(x): ... end) keeps counting its `(`. */
+block_end: { lexer_block_pop(); };
 
 dict_elements: expr COLON expr { $$.count = 1; $$.keys = arena_alloc(sizeof(Node*)); $$.keys[0] = $1; $$.values = arena_alloc(sizeof(Node*)); $$.values[0] = $3; } | dict_elements COMMA expr COLON expr { $$.keys = arena_realloc($$.keys, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.keys[$1.count] = $3; $$.values = arena_realloc($$.values, sizeof(Node*)*($1.count), sizeof(Node*)*($1.count+1)); $$.values[$1.count] = $5; $$.count = $1.count + 1; };
 

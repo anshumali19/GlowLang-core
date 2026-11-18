@@ -731,6 +731,24 @@ let add = lambda(x, y): x + y
 show add(3, 4)    # 7
 ```
 
+When the body needs more than one expression, end the header line with `:`,
+write the statements, and close with `end`. This works anywhere a value goes,
+including inside a call's parentheses, a list or a dict:
+
+```glow
+show [3, 1, 2].map(lambda(x):
+    let sq = x * x
+    return sq + 1
+end)              # [10, 2, 5]
+
+let handlers = {
+    "double": lambda(x):
+        return x * 2
+    end
+}
+show handlers["double"](21)    # 42
+```
+
 ### Closures
 Lambdas and functions defined inside other functions see the enclosing
 function's variables. Each closure keeps its own copy of them, taken when it is
