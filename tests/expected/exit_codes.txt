@@ -9,5 +9,6 @@ test_import.glow        1
 regress_elif_hint.glow  1
 regress_bad_number.glow  1
 regress_assign_target.glow  1
+regress_compound_target.glow  1
 regress_optchain_assign.glow  1
 regress_match_capture_error.glow  1

@@ -230,10 +230,39 @@ static Node *enum_node(const char *name, Node *members) {
     e->name = intern_string(name); e->left = members; e->line = members ? members->line : line_num;
     return e;
 }
-/* x op= value for the bitwise operators: x = x op value. */
-static Node *compound_bitop(Node *target, NodeType op, Node *value) {
-    if (target->type != NODE_VAR) { error_at(target->line, "Compound assignment target must be a variable"); return NULL; }
-    return newAssignNode(target->name, newBinOp(op, newVarNode(target->name), value));
+/* target op= value: target = target op value. For a field or item
+   (x.name op= v, x[i] op= v) x and i are worked out once, as in Python: a
+   NODE_COMPOUND_INDEX computes them into registers, then reads the old
+   value, computes the new one and stores it. op is a binary node type, or
+   COMPOUND_FLOORDIV for //=. Errors name the statement's own line (yyerror
+   would name the next one: the lexer has already read the newline). */
+#define COMPOUND_FLOORDIV ((NodeType)-1)
+static Node *compound_value(NodeType op, Node *old, Node *value) {
+    return op == COMPOUND_FLOORDIV ? newFloorDivNode(old, value) : newBinOp(op, old, value);
+}
+static Node *compound_assign(Node *target, NodeType op, Node *value) {
+    if (target->type == NODE_VAR) {
+        Node *a = newAssignNode(target->name, compound_value(op, newVarNode(target->name), value));
+        a->line = target->line;
+        return a;
+    }
+    if (target->type != NODE_INDEX) {
+        error_at(target->line, "Compound assignment target must be a variable, a field or an item (x, x.name or x[i])");
+        return NULL;
+    }
+    Node *obj = node_new(NODE_REG), *key = target->name ? NULL : node_new(NODE_REG);
+    obj->line = target->line;
+    if (key) key->line = target->line;
+    Node *old = node_new(NODE_INDEX);
+    old->left = obj; old->right = key; old->name = target->name; old->line = target->line;
+    Node *store = node_new(NODE_INDEX_ASSIGN);
+    store->left = obj; store->right = key; store->name = target->name; store->line = target->line;
+    store->third = compound_value(op, old, value);
+    Node *c = node_new(NODE_COMPOUND_INDEX);
+    c->left = target->left; c->right = target->name ? NULL : target->right;
+    c->third = store; c->comp_expr = obj; c->comp_filter = key;
+    c->line = target->line;
+    return c;
 }
 /* `a, b = values` and `let a, b = values`. Each target becomes an ordinary
    assignment (or let, or a[i] / obj.x store) of a value the compiler has
@@ -504,18 +533,18 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | WHILE condition COLON NEWLINE lines END { $$ = newWhileNode($2, $5); }
     | UNTIL condition COLON NEWLINE lines END { $$ = newUntilNode($2, $5); }
     | REPEAT expr TIMES_KW COLON NEWLINE lines END { $$ = newRepeatNode($2, $6); }
-    | postfix PLUS_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_ADD, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix MINUS_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_SUB, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix MUL_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MUL, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix DIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_DIV, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix FLOORDIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newAssignNode($1->name, newFloorDivNode(newVarNode($1->name), $3)); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix MOD_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MOD, $1->name, $3); else { yyerror("Compound assignment target must be a variable"); YYERROR; } }
-    | postfix BITAND_ASSIGN expr { $$ = compound_bitop($1, NODE_BITAND, $3); if (!$$) YYERROR; }
-    | postfix BITOR_ASSIGN expr { $$ = compound_bitop($1, NODE_BITOR, $3); if (!$$) YYERROR; }
-    | postfix BITXOR_ASSIGN expr { $$ = compound_bitop($1, NODE_BITXOR, $3); if (!$$) YYERROR; }
-    | postfix SHL_ASSIGN expr { $$ = compound_bitop($1, NODE_SHL, $3); if (!$$) YYERROR; }
-    | postfix SHR_ASSIGN expr { $$ = compound_bitop($1, NODE_SHR, $3); if (!$$) YYERROR; }
-    | postfix NULLISH_ASSIGN expr { $$ = compound_bitop($1, NODE_NULLISH, $3); if (!$$) YYERROR; }
+    | postfix PLUS_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_ADD, $1->name, $3); else { $$ = compound_assign($1, NODE_ADD, $3); if (!$$) YYERROR; } }
+    | postfix MINUS_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_SUB, $1->name, $3); else { $$ = compound_assign($1, NODE_SUB, $3); if (!$$) YYERROR; } }
+    | postfix MUL_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MUL, $1->name, $3); else { $$ = compound_assign($1, NODE_MUL, $3); if (!$$) YYERROR; } }
+    | postfix DIV_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_DIV, $1->name, $3); else { $$ = compound_assign($1, NODE_DIV, $3); if (!$$) YYERROR; } }
+    | postfix FLOORDIV_ASSIGN expr { $$ = compound_assign($1, COMPOUND_FLOORDIV, $3); if (!$$) YYERROR; }
+    | postfix MOD_ASSIGN expr { if ($1->type == NODE_VAR) $$ = newCompoundAssignNode(NODE_COMPOUND_MOD, $1->name, $3); else { $$ = compound_assign($1, NODE_MOD, $3); if (!$$) YYERROR; } }
+    | postfix BITAND_ASSIGN expr { $$ = compound_assign($1, NODE_BITAND, $3); if (!$$) YYERROR; }
+    | postfix BITOR_ASSIGN expr { $$ = compound_assign($1, NODE_BITOR, $3); if (!$$) YYERROR; }
+    | postfix BITXOR_ASSIGN expr { $$ = compound_assign($1, NODE_BITXOR, $3); if (!$$) YYERROR; }
+    | postfix SHL_ASSIGN expr { $$ = compound_assign($1, NODE_SHL, $3); if (!$$) YYERROR; }
+    | postfix SHR_ASSIGN expr { $$ = compound_assign($1, NODE_SHR, $3); if (!$$) YYERROR; }
+    | postfix NULLISH_ASSIGN expr { $$ = compound_assign($1, NODE_NULLISH, $3); if (!$$) YYERROR; }
     | target_list ASSIGN expr_list { $$ = unpack_node($1.nodes, $1.count, $3.nodes, $3.count, 0, $1.nodes[0]->line); if (!$$) YYERROR; }
     | LET name_list ASSIGN expr_list { $$ = unpack_node($2.nodes, $2.count, $4.nodes, $4.count, 1, $2.nodes[0]->line); if (!$$) YYERROR; }
     | FOR EACH '[' name_list ']' IN_KW expr COLON NEWLINE lines END { $$ = unpack_loop($4.nodes, $4.count, $7, $10); if (!$$) YYERROR; }
@@ -963,7 +992,7 @@ int glow_main(int argc, char **argv) {
     return 0;
 
 l_REPL:
-    printf("GlowLang v1.0 Interactive REPL\nType 'exit' to quit.\n");
+    printf("GlowLang %s Interactive REPL\nType 'exit' to quit.\n", GLOWLANG_VERSION);
     char line_buf[4096];
     compiling_file = "<stdin>";
     while (1) {

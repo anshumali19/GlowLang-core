@@ -1,0 +1,1 @@
+Compound assignment target must be a variable, a field or an item (x, x.name or x[i])
