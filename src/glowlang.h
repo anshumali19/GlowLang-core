@@ -73,7 +73,8 @@ typedef struct { Value callee; int argc; Value *args; const char *name; int daem
  * ================================================================ */
 typedef enum {
     OBJ_STRING, OBJ_ROPE, OBJ_LIST, OBJ_DICT, OBJ_CLOSURE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD, OBJ_SHAPE, OBJ_TRAIT, OBJ_NATIVE_FUNC, OBJ_PACKED_ARRAY, OBJ_ITERATOR, OBJ_STRING_BUILDER, OBJ_BIGINT, OBJ_SQLITE_ITER, OBJ_SQLITE_HANDLE,
-    OBJ_SET
+    OBJ_SET,
+    OBJ_GENERATOR
 } ObjType;
 
 typedef struct GCObject {
@@ -168,6 +169,22 @@ typedef struct {
     Value iterable;
     int index;
 } Iterator;
+
+/* What calling a function that contains `yield` returns. The function's body
+   runs in the interpreter a piece at a time (glow_gen_resume): each `yield`
+   saves its registers and where it stopped here, and the next resume puts
+   them back on the VM stack and carries on from there. */
+enum { GEN_CREATED, GEN_SUSPENDED, GEN_RUNNING, GEN_DONE };
+typedef struct Generator {
+    GCObject obj;
+    Value body;          /* the hidden lambda holding the function's code */
+    Value *regs;         /* its registers while it is paused (nregs of them) */
+    int nregs;
+    int pc;              /* the instruction to resume at */
+    int state;           /* GEN_* */
+    int yielded;         /* set by OP_YIELD during the resume in progress */
+    const char *name;    /* the function's name, for messages */
+} Generator;
 
 typedef struct {
     GCObject obj;
@@ -513,7 +530,8 @@ typedef enum {
     OP_BITXOR,      /* r0 = r1 ^ r2 */
     OP_SHL,         /* r0 = r1 << r2 */
     OP_SHR,         /* r0 = r1 >> r2 */
-    OP_BITNOT       /* r0 = ~r1 */
+    OP_BITNOT,      /* r0 = ~r1 */
+    OP_YIELD        /* hand r0 to whoever resumed this generator and pause */
 } OpCode;
 
 typedef struct {
@@ -587,6 +605,7 @@ struct Bytecode {
     void *osr_code;
     size_t osr_code_size;
     int osr_failed;
+    int is_generator;   /* a generator's body: runs only through glow_gen_resume */
     uint32_t loop_iterations;
     /* Where compiled code enters this function's best compiled code for a
        direct call (see emit_self_call_direct); NULL until there is one. */
@@ -643,9 +662,10 @@ typedef enum {
                           the NODE_REG in third; none when left is none */
     NODE_KWARG,        /* name = expr in a call (the parser rewrites it) */
     NODE_REG,          /* a value the compiler already holds in register `reg` */
-    NODE_COMPOUND_INDEX /* x.name op= v / x[i] op= v: left is x, right is i (NULL
+    NODE_COMPOUND_INDEX, /* x.name op= v / x[i] op= v: left is x, right is i (NULL
                           for a field), third the store, written with the
                           NODE_REGs in comp_expr (x) and comp_filter (i) */
+    NODE_YIELD         /* yield left (none when left is NULL) */
 } NodeType;
 
 struct Node {
@@ -674,6 +694,8 @@ struct Node {
                                 applies to the whole chain */
     int has_rest;            /* function: its last parameter is ...rest;
                                 NODE_UNPACK: 1 + the index of the ...rest name */
+    int generator;           /* NODE_LAMBDA: the hidden body of a generator
+                                function (see make_generator in compiler.c) */
 };
 
 typedef Value (*NativeFuncPtr)(int argc, Value *args);
@@ -1054,6 +1076,11 @@ int glow_values_comparable(Value a, Value b);
 int glow_pack_rest(FuncEntry *fe, Value *args, int argc);
 Value glow_call_value(Value fn, int argc, Value *args);
 Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args);
+/* Generators (vm.c). glow_gen_resume runs g's body to its next `yield` and
+   returns the value; *done is set instead when the body has finished (or
+   raised, with has_exception set). */
+int glow_is_generator(Value v);
+Value glow_gen_resume(Generator *g, int *done);
 const char *glow_dict_key(Value k, char **owned);
 int glow_arity_error(const char *name, int given, int params);
 Value native_tensor_shape(int argc, Value *args);

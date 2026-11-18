@@ -1,0 +1,40 @@
+n: 0
+n: 1
+n: 2
+generator <generator count_up>
+0 1 finished still finished
+[1, 9]
+{"0": 0, "1": 2, "2": 4}
+made the generator
+body started
+1
+after the first yield
+2
+end
+[1, 2, 3] 4 5
+50
+[none] [none, "late"]
+[1, 2, "a", "b", 0, 1, 7]
+[1, 2, 3, 4, 5]
+["5...", "3...", "1...", "liftoff"]
+[0, 2, 4, 6]
+[3, 6, 9]
+[1, 4, 9, 16]
+caught: broken generator [1]
+next raised: broken generator
+finished after the error
+[1, "handled inside", "finally ran", "after try"]
+next() needs a generator (got list)
+generator count_up has no more values (next(g, default) returns default instead)
+generator self_stepping is already running (its body cannot step it)
+Bad's init cannot use yield: making an object runs init to its end
+for each a, b in a generator: a generator has no positions; use for each [a, b] in g to take each value apart, or count with a variable
+0 0
+1 10
+6
+7
+57000
+[20000, "200002000020000"]
+4999950000
+5050
+caught: Maximum recursion depth exceeded

@@ -416,6 +416,12 @@ static void analyze_escapes(Bytecode *bc) {
                 for (int j = 0; j < bc->local_count; j++) escapes[j] = 1;
                 break;
             }
+            case OP_YIELD:
+                /* A paused generator keeps all its registers after this
+                   activation returns: nothing may live in its stack arena. */
+                for (int j = 0; j < bc->local_count; j++) escapes[j] = 1;
+                escapes[pc->r0] = 1;
+                break;
             default: break;
         }
     }
@@ -516,6 +522,60 @@ static bool try_inline(FuncEntry *fe, int target_reg, int arg_count, int base_ar
    allocated, so a temporary from earlier in a loop can never share a register
    with a local declared later. Nested function, lambda, class and `whenever`
    bodies are scopes of their own and are not entered. */
+/* Does this function body contain `yield`? Functions, lambdas and classes
+   written inside it do not count: they are bodies of their own. */
+static int contains_yield(Node *n) {
+    while (n) {
+        if (n->type == NODE_SEQ) {
+            /* Statement chains lean left: walk down them in a loop. */
+            if (contains_yield(n->right)) return 1;
+            n = n->left;
+            continue;
+        }
+        switch (n->type) {
+            case NODE_YIELD: return 1;
+            case NODE_FUNC_DEF: case NODE_LAMBDA: case NODE_CLASS: case NODE_TRAIT: case NODE_WHENEVER:
+                return 0;
+            default: break;
+        }
+        if (contains_yield(n->right) || contains_yield(n->third) ||
+            contains_yield(n->comp_expr) || contains_yield(n->comp_filter)) return 1;
+        for (int i = 0; i < n->element_count; i++) if (contains_yield(n->elements[i])) return 1;
+        for (int i = 0; i < n->call_arg_count; i++) if (contains_yield(n->call_args[i])) return 1;
+        n = n->left;
+    }
+    return 0;
+}
+
+/* A function whose body contains `yield` is a generator function: calling
+   it runs nothing yet and returns a generator. Its body becomes
+       return __glow_gen_new("name", <hidden lambda with the old body>, params...)
+   The hidden lambda (generator = 1) takes the same parameters and sees the
+   same variables (self too, in a method); glow_gen_resume runs it a piece at
+   a time. Every way of calling a function keeps working unchanged, because
+   the generator function itself is an ordinary one. */
+static Node *make_generator(Node *f, const char *label) {
+    static int gen_count = 0;
+    char buf[48];
+    snprintf(buf, sizeof buf, "gen_body_%d", gen_count++);
+    Node *inner = newFuncNode(intern_string(buf), f->func_param_count, f->func_params, f->left);
+    inner->type = NODE_LAMBDA;
+    inner->generator = 1;
+    inner->line = f->line;
+    int n = f->func_param_count;
+    Node **args = arena_alloc(sizeof(Node*) * (size_t)(n + 2));
+    args[0] = newStringNode(label);
+    args[0]->line = f->line;
+    args[1] = inner;
+    for (int i = 0; i < n; i++) { args[2 + i] = newVarNode(f->func_params[i]); args[2 + i]->line = f->line; }
+    Node *call = node_new(NODE_CALL);
+    call->name = intern_string("__glow_gen_new");
+    call->call_args = args; call->call_arg_count = n + 2; call->line = f->line;
+    Node *ret = newReturnNode(call);
+    ret->line = f->line;
+    return ret;
+}
+
 static void hoist_locals(FuncEntry *fe, Node *n) {
     if (!n) return;
     if (n->type == NODE_SEQ) {
@@ -1041,6 +1101,14 @@ static void compile_stmt(Node *n) {
             loop_stack_ptr--;
             break;
         }
+        case NODE_YIELD: {
+            /* Outside a generator's body (a yield at the top of a program)
+               OP_YIELD raises when it runs. */
+            int r = compile_expr(n->left ? n->left : newVarNode(intern_string("none")), -1);
+            int idx = bc_emit(compiling_bc, OP_YIELD, 0, 0);
+            compiling_bc->code[idx].r0 = r;
+            break;
+        }
         case NODE_RETURN: {
             int r = compile_expr(n->left, -1);
             try_unwind(0);
@@ -1081,6 +1149,7 @@ static void compile_stmt(Node *n) {
             if (fe->local_regs) free(fe->local_regs);
             fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
 
+            if (contains_yield(n->left)) n->left = make_generator(n, func_name);
             fe->param_count = n->func_param_count; fe->params = n->func_params; fe->body = bc_new(fe);
             fe->rest_param = n->has_rest;
             Bytecode *p = compiling_bc; compiling_bc = fe->body;
@@ -2034,10 +2103,19 @@ static int compile_expr(Node *n, int target_reg) {
             if (fe->local_names) free(fe->local_names);
             if (fe->local_regs) free(fe->local_regs);
             fe->local_names = NULL; fe->local_regs = NULL; fe->local_count = 0; fe->local_capacity = 0; fe->reg_floor = 0;
+            if (!n->generator && contains_yield(n->left)) n->left = make_generator(n, "lambda");
             fe->param_count = n->func_param_count;
             fe->rest_param = n->has_rest;
             fe->params = n->func_params;
             fe->body = bc_new(fe);
+            if (n->generator) {
+                /* Runs only through glow_gen_resume, in the interpreter: a
+                   paused body lives in the generator, not on any frame
+                   compiled code could hold. */
+                fe->body->is_generator = 1;
+                fe->body->jit_failed = 1;
+                fe->body->osr_failed = 1;
+            }
             Bytecode *p = compiling_bc; compiling_bc = fe->body; FuncEntry *pf = compiling_func; compiling_func = fe;
             push_outer(pf);
             int old_free = next_free_reg;

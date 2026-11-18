@@ -49,6 +49,8 @@ vim.api.nvim_create_autocmd("FileType", {
             " match / case / enum only at the start of a statement line
             syntax match glowKeyword /^\s*\zs\(match\|case\)\ze\s.*:\s*\(#.*\)\=$/
             syntax match glowKeyword /^\s*\zsenum\ze\s\+\w\+\s*:/
+            " yield only at the start of a statement
+            syntax match glowKeyword /^\s*\zsyield\>/
 
             " Built-in functions
             syntax keyword glowBuiltin len type range append push pop sort reverse
