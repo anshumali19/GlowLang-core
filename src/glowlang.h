@@ -665,7 +665,9 @@ typedef enum {
     NODE_COMPOUND_INDEX, /* x.name op= v / x[i] op= v: left is x, right is i (NULL
                           for a field), third the store, written with the
                           NODE_REGs in comp_expr (x) and comp_filter (i) */
-    NODE_YIELD         /* yield left (none when left is NULL) */
+    NODE_YIELD,        /* yield left (none when left is NULL) */
+    NODE_DECORATED     /* @decorator ... func: left is what it becomes (see
+                          decorate in glowlang.y); name is the function's */
 } NodeType;
 
 struct Node {

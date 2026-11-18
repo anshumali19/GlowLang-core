@@ -1,0 +1,6 @@
+# A decorator must be followed by a func.
+func d(f):
+    return f
+end
+@d
+let x = 1

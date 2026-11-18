@@ -766,6 +766,57 @@ show [v for each v in chain([1, 2], count_up(2))]   # [1, 2, 0, 1]
 - `yield` is a keyword only at the start of a statement, so a variable called
   `yield` still works. `super` cannot be used inside a generator method.
 
+### Decorators: `@`
+`@d` on the line above a `func` makes the function's name hold `d(func)`
+instead of the function itself. Calls go through it, the function's own
+recursive calls included. `functools.cache` remembers results:
+
+```glow
+import "functools"
+
+@cache
+func fib(n):
+    when n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+show fib(90)                     # 2880067194370816120, at once
+
+func shout(f):
+    return lambda(...args): str(f(...args)).upper() + "!"
+end
+func repeated(count):            # a decorator that takes arguments
+    return lambda(f):
+        return lambda(...args): [f(...args) for each i in range(count)]
+    end
+end
+
+@shout
+func greet(name):
+    return "hello " + name
+end
+show greet("asha")               # HELLO ASHA!
+
+@repeated(2)
+@shout
+func hi():
+    return "hi"
+end
+show hi()                        # ["HI!", "HI!"]
+```
+
+- Several decorators are worked out top to bottom, then applied bottom up
+  (the one nearest the `func` first), as in Python.
+- A wrapper written as `lambda(...args)` passes on positional arguments;
+  there is no way yet to collect `name = value` arguments.
+- `cache` compares numbers, text, `true` / `false` and `none` by value and
+  other objects by identity; a list, dict or set as an argument is an error.
+- GlowWeb's `route`, `get`, `post`, `put` and `del` work as decorators
+  when the handler is left out: `@server.get("/hello")`.
+- Decorators work on functions, nested functions and generator functions,
+  not yet on methods (that is reported when the class is made).
+
 ### Recursive Functions
 ```glow
 func fibonacci(n):

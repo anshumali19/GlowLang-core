@@ -1,0 +1,10 @@
+# Errors inside a decorated function name it as written (fib), not
+# by its hidden name.
+func keep(f):
+    return f
+end
+@keep
+func fib(n):
+    return 1 / n
+end
+fib(0)

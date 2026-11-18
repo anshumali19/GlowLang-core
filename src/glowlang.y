@@ -505,6 +505,73 @@ static Node *with_node(Node **items, int count, Node *body) {
     return body;
 }
 
+/* @d1 @d2 ... func name(...): the decorators are worked out top to bottom
+   before the function is made, then applied bottom up, as in Python:
+       __deco_K_0 = d1
+       __deco_K_1 = d2
+       func @name(...): ...            (the function, under a hidden name)
+       name = __deco_K_0(__deco_K_1(@name))
+   Calls by name find a function before a variable, so the function itself
+   gets a name no program can write ("@name"), and `name` is only the
+   variable holding what the decorators return: calls to it, recursive ones
+   too, go through them. Messages show "@name" as "name". */
+static Node *decorate(Node *dexpr, Node *target) {
+    static int deco_count = 0;
+    Node *f = target;
+    Node **decos;
+    int count;
+    if (target->type == NODE_FUNC_DEF) {
+        decos = arena_alloc(sizeof(Node*));
+        decos[0] = dexpr;
+        count = 1;
+    } else if (target->type == NODE_DECORATED) {
+        /* Another decorator above an already decorated function: it comes
+           first. */
+        f = target->third;
+        count = target->call_arg_count + 1;
+        decos = arena_alloc(sizeof(Node*) * (size_t)count);
+        decos[0] = dexpr;
+        for (int i = 1; i < count; i++) decos[i] = target->call_args[i - 1];
+    } else {
+        error_at(dexpr->line, "A decorator (@...) must come right before a func");
+        return NULL;
+    }
+    int line = dexpr->line, k = deco_count++;
+    const char *name = target->type == NODE_DECORATED ? target->name : f->name;
+    char hidden[200];
+    snprintf(hidden, sizeof hidden, "@%.190s", name);
+    f->name = intern_string(hidden);
+    Node *seq = NULL;
+    const char **tmp = arena_alloc(sizeof(char*) * (size_t)count);
+    for (int i = 0; i < count; i++) {
+        char b[48];
+        snprintf(b, sizeof b, "__deco_%d_%d", k, i);
+        tmp[i] = intern_string(b);
+        Node *a = newAssignNode(tmp[i], decos[i]);
+        a->line = decos[i]->line;
+        seq = newSeqNode(seq, a);
+    }
+    seq = newSeqNode(seq, f);
+    Node *v = newVarNode(f->name);
+    v->line = line;
+    for (int i = count - 1; i >= 0; i--) {
+        Node **args = arena_alloc(sizeof(Node*));
+        args[0] = v;
+        Node *callee = newVarNode(tmp[i]);
+        callee->line = decos[i]->line;
+        v = newCallExprNode(callee, args, 1);
+        v->line = decos[i]->line;
+    }
+    Node *bind = newAssignNode(name, v);
+    bind->line = line;
+    seq = newSeqNode(seq, bind);
+    Node *d = node_new(NODE_DECORATED);
+    d->left = seq; d->name = name; d->third = f;
+    d->call_args = decos; d->call_arg_count = count;
+    d->line = line;
+    return d;
+}
+
 /* yield from x: yield each item of x in turn (a list, a set, a string or
    another generator). */
 static Node *yield_from(Node *coll) {
@@ -556,7 +623,7 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %token BAD_NUMBER
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
-%token YIELD WITH AS
+%token YIELD WITH AS AT
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
 %token ELLIPSIS NULLISH NULLISH_ASSIGN QDOT QDOT_INDEX MATCH CASE ENUM
 %token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
@@ -599,6 +666,7 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | YIELD { $$ = node_new(NODE_YIELD); }
     | YIELD FROM expr { $$ = yield_from($3); }
     | WITH with_items COLON NEWLINE lines END { $$ = with_node($2.nodes, $2.count, $5); }
+    | AT expr NEWLINE stmt { $$ = decorate($2, $4); if (!$$) YYERROR; }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }

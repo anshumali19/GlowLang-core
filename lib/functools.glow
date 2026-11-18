@@ -1,0 +1,33 @@
+# functools: decorators for functions.
+#
+#     import "functools"
+#
+#     @cache
+#     func fib(n):
+#         when n < 2:
+#             return n
+#         end
+#         return fib(n - 1) + fib(n - 2)
+#     end
+#     show fib(90)          # 2880067194370816120, at once
+
+# cache(f): f, remembering what it returned for each set of arguments, so a
+# second call with the same arguments gives the result without running f
+# again. Numbers, text, true / false and none are compared by value, other
+# objects by identity; lists, dicts and sets cannot be arguments (they could
+# change after the call). Call a cached function with positional arguments.
+func cache(f):
+    let memo = {}
+    func cached(...args):
+        let key = __glow_cache_key(args)
+        when memo.has(key):
+            return memo[key][1]
+        end
+        let result = f(...args)
+        # The arguments are kept with the result, so an object used as one
+        # stays alive (and keeps its identity) while it is in the cache.
+        memo[key] = [args, result]
+        return result
+    end
+    return cached
+end

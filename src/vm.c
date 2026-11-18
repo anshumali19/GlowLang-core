@@ -1152,6 +1152,7 @@ char* format_stack_trace(void) {
         int line = pc ? pc->line : 0;
         const char *file = (pc && pc->file) ? pc->file : "<unknown>";
         const char *func_name = (fe && fe->name) ? fe->name : "<unknown>";
+        if (func_name[0] == '@') func_name++;   /* a decorated function */
         char frame[256];
         snprintf(frame, 256, "  at %s (%s:%d)\n", func_name, file, line);
         strcat(buf, frame);
@@ -1770,6 +1771,7 @@ static inline void glow_wipe_values(Value *p, int n) {
 int glow_arity_error(const char *name, int given, int params) {
     char shown[160];
     const char *n = name ? name : "function";
+    if (n[0] == '@') n++;   /* a decorated function (see decorate in glowlang.y) */
     const char *colon = strstr(n, "::");
     if (strncmp(n, "lambda_", 7) == 0) snprintf(shown, sizeof shown, "lambda");
     else if (colon && strcmp(colon + 2, "init") == 0) snprintf(shown, sizeof shown, "%.*s", (int)(colon - n), n);

@@ -171,6 +171,9 @@ contexts:
     - match: '^\s*(enum)\b(?=\s+\w+\s*:)'
       captures:
         1: keyword.declaration.enum.glowlang
+    # @decorator lines above a func
+    - match: '^\s*@[A-Za-z_][\w.]*'
+      scope: entity.name.function.decorator.glowlang
     # yield: a keyword only at the start of a statement
     - match: '^\s*(yield)\b'
       captures:

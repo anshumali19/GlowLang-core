@@ -451,27 +451,61 @@ blueprint Server:
         ws.close()
     end
 
-    action route(path, handler):
+    # Each takes the handler, or, left out, returns a decorator that adds
+    # the function it is put on:
+    #     @server.get("/hello")
+    #     func hello(req): ... end
+    action route(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.add("ANY", path, h)
+                return h
+            end
+        end
         self.router.add("ANY", path, handler)
         return self
     end
 
-    action get(path, handler):
+    action get(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.get(path, h)
+                return h
+            end
+        end
         self.router.get(path, handler)
         return self
     end
 
-    action post(path, handler):
+    action post(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.post(path, h)
+                return h
+            end
+        end
         self.router.post(path, handler)
         return self
     end
 
-    action put(path, handler):
+    action put(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.put(path, h)
+                return h
+            end
+        end
         self.router.put(path, handler)
         return self
     end
 
-    action del(path, handler):
+    action del(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.del(path, h)
+                return h
+            end
+        end
         self.router.del(path, handler)
         return self
     end

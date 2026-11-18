@@ -123,6 +123,10 @@
                     "match": "^\\s*(yield)\\b"
                 },
                 {
+                    "name": "entity.name.function.decorator.glow",
+                    "match": "^\\s*@[A-Za-z_][\\w.]*"
+                },
+                {
                     "match": "^\\s*(with)\\b(?:.*\\b(as)\\b(?=\\s+\\w+\\s*[,:]))?",
                     "captures": {
                         "1": { "name": "keyword.control.flow.glow" },
