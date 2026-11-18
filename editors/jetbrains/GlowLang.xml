@@ -38,7 +38,7 @@
     <!-- ======================================================
          Keyword Set 1: Control Flow & Declarations
          ====================================================== -->
-    <keywords keywords="action;and;blueprint;can;catch;class;each;eif;end;every;extends;false;finally;for;from;func;in;input;is;is_not;lambda;let;not;or;otherwise;repeat;return;show;skip;spawn;stop;throw;times;to;trait;true;try;until;use;when;whenever;while;yield;write" ignore_case="false" />
+    <keywords keywords="action;and;blueprint;can;catch;class;each;eif;end;every;extends;false;finally;for;from;func;in;input;is;is_not;lambda;let;not;or;otherwise;repeat;return;show;skip;spawn;stop;throw;times;to;trait;true;try;until;use;when;whenever;while;with;yield;write" ignore_case="false" />
 
     <!-- ======================================================
          Keyword Set 2: Built-in Functions

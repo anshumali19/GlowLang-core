@@ -693,4 +693,19 @@ blueprint Transaction:
     action is_active():
         return self.active
     end
+
+    # `with Transaction(orm) as tx:` begins; the block's changes are committed
+    # when it ends normally and rolled back when it raises (the error goes on).
+    action enter():
+        return self.begin()
+    end
+
+    action exit(error):
+        when error is none:
+            self.commit()
+        otherwise:
+            self.rollback()
+        end
+        return false
+    end
 end

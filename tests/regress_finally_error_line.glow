@@ -1,0 +1,11 @@
+# An error that passes through finally is reported where it happened
+# (it used to name the last line of the finally block).
+func work():
+    try:
+        let x = 1
+        let y = x / 0
+    finally:
+        show "cleanup ran"
+    end
+end
+work()

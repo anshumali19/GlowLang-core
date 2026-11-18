@@ -441,6 +441,70 @@ static Node *call_node(Node *callee, Node **items, int count) {
     return helper_call("__glow_call", args, 4, line);
 }
 /* for each [a, b] in items: each item is unpacked into a and b. */
+/* with m as name: body end. Written with what the language already has:
+       __with_N = m
+       name = __glow_with_enter(__with_N)
+       __with_done_N = false
+       try:
+           body
+       catch __with_err_N:
+           __with_where_N = __glow_caught()
+           __with_done_N = true
+           when not __glow_with_exit(__with_N, __with_err_N):
+               __glow_rethrow(__with_err_N, __with_where_N)
+       finally:
+           when not __with_done_N: __glow_with_exit(__with_N, none)
+           __with_N = none
+       end
+   so the exit runs however the body is left (an error, return, stop, skip:
+   finally sees to those), once; a true result from exit(error) swallows
+   the error. Several items nest, the first outermost. */
+static Node *helper_call(const char *fn, Node **args, int count, int line);
+static Node *at_line(Node *n, int line) { if (n) n->line = line; return n; }
+static Node *with_one(Node *item, Node *body) {
+    static int with_count = 0;
+    int line = item->line, k = with_count++;
+    char b1[32], b2[32], b3[32], b4[32];
+    snprintf(b1, sizeof b1, "__with_%d", k);
+    snprintf(b2, sizeof b2, "__with_done_%d", k);
+    snprintf(b3, sizeof b3, "__with_err_%d", k);
+    snprintf(b4, sizeof b4, "__with_where_%d", k);
+    const char *mgr = intern_string(b1), *done = intern_string(b2), *err = intern_string(b3), *where = intern_string(b4);
+    Node *none = at_line(newVarNode(intern_string("none")), line);
+
+    Node **ea = arena_alloc(sizeof(Node*));
+    ea[0] = at_line(newVarNode(mgr), line);
+    Node *enter = helper_call("__glow_with_enter", ea, 1, line);
+    Node *head = at_line(newAssignNode(mgr, item->left), line);
+    head = newSeqNode(head, at_line(item->name ? newAssignNode(item->name, enter) : newExprStmtNode(enter), line));
+    head = newSeqNode(head, at_line(newAssignNode(done, at_line(newBoolNode(0), line)), line));
+
+    Node **xa = arena_alloc(sizeof(Node*) * 2);
+    xa[0] = at_line(newVarNode(mgr), line); xa[1] = at_line(newVarNode(err), line);
+    Node *exit_err = helper_call("__glow_with_exit", xa, 2, line);
+    /* Raised again from where it happened (the with line would mislead). */
+    Node **ra = arena_alloc(sizeof(Node*) * 2);
+    ra[0] = at_line(newVarNode(err), line); ra[1] = at_line(newVarNode(where), line);
+    Node *rethrow = at_line(newExprStmtNode(helper_call("__glow_rethrow", ra, 2, line)), line);
+    Node *caught = at_line(newAssignNode(where, helper_call("__glow_caught", NULL, 0, line)), line);
+    Node *on_error = newSeqNode(newSeqNode(caught, at_line(newAssignNode(done, at_line(newBoolNode(1), line)), line)),
+                                at_line(newIfNode(at_line(newBinOp(NODE_NOT, exit_err, NULL), line), rethrow, NULL), line));
+
+    Node **na = arena_alloc(sizeof(Node*) * 2);
+    na[0] = at_line(newVarNode(mgr), line); na[1] = none;
+    Node *exit_ok = at_line(newExprStmtNode(helper_call("__glow_with_exit", na, 2, line)), line);
+    Node *fin = newSeqNode(at_line(newIfNode(at_line(newBinOp(NODE_NOT, at_line(newVarNode(done), line), NULL), line), exit_ok, NULL), line),
+                           at_line(newAssignNode(mgr, at_line(newVarNode(intern_string("none")), line)), line));
+
+    Node *t = node_new(NODE_TRY_CATCH);
+    t->left = body; t->name = err; t->right = on_error; t->third = fin; t->line = line;
+    return newSeqNode(head, t);
+}
+static Node *with_node(Node **items, int count, Node *body) {
+    for (int i = count - 1; i >= 0; i--) body = with_one(items[i], body);
+    return body;
+}
+
 /* yield from x: yield each item of x in turn (a list, a set, a string or
    another generator). */
 static Node *yield_from(Node *coll) {
@@ -492,14 +556,14 @@ static void list_push_node(Node ***nodes, int *count, Node *n) {
 %token BAD_NUMBER
 %token <float_val> FLOAT_LIT
 %token <str_val> ID STRING FSTRING
-%token YIELD
+%token YIELD WITH AS
 %token SHOW WRITE WHEN WHENEVER EIF OTHERWISE WHILE UNTIL REPEAT FOR EACH IN_KW FUNC LAMBDA RETURN STOP SKIP END LET TRY CATCH FINALLY THROW IMPORT CLASS TRAIT EXTENDS USE SPAWN TRUE_KW FALSE_KW TIMES_KW INPUT_KW IS IS_NOT FROM TO NEWLINE COMMA ASSIGN PLUS_ASSIGN MINUS_ASSIGN MUL_ASSIGN DIV_ASSIGN FLOORDIV_ASSIGN MOD_ASSIGN EQ NEQ LT GT LTE GTE PLUS MINUS MUL DIV FLOORDIV MOD POW COLON AND_OP OR_OP NOT_OP
 %token ELLIPSIS NULLISH NULLISH_ASSIGN QDOT QDOT_INDEX MATCH CASE ENUM
 %token BITAND BITOR BITXOR BITNOT SHL SHR BITAND_ASSIGN BITOR_ASSIGN BITXOR_ASSIGN SHL_ASSIGN SHR_ASSIGN
 
 %type <node> program lines stmt expr term power postfix primary condition eif_chain otherwise_part unary
-%type <node_list> expr_list arg_list target_list name_list item_list case_pats
-%type <node> item target name_item match_cases case_clause enum_members enum_member case_pat enum_inline
+%type <node_list> expr_list arg_list target_list name_list item_list case_pats with_items
+%type <node> item target name_item match_cases case_clause enum_members enum_member case_pat enum_inline with_item
 %type <dict_list> dict_elements
 %type <str_list> param_list param
 %type <str_val> member_name
@@ -534,6 +598,7 @@ stmt: postfix ASSIGN expr { $$ = assign_node($1, $3); if (!$$) YYERROR; }
     | YIELD expr { $$ = node_new(NODE_YIELD); $$->left = $2; $$->line = $2->line; }
     | YIELD { $$ = node_new(NODE_YIELD); }
     | YIELD FROM expr { $$ = yield_from($3); }
+    | WITH with_items COLON NEWLINE lines END { $$ = with_node($2.nodes, $2.count, $5); }
     | STOP { $$ = node_new(NODE_STOP); }
     | SKIP { $$ = node_new(NODE_SKIP); }
     | FOR EACH ID IN_KW expr COLON NEWLINE lines END { $$ = node_new(NODE_FOR_EACH); $$->name = $3; $$->left = $5; $$->right = $8; }
@@ -587,6 +652,12 @@ expr_list: expr { $$.count = 1; $$.nodes = arena_alloc(sizeof(Node*)); $$.nodes[
 arg_list: item_list { $$ = $1; };
 /* Call arguments and list items: an expression, ...spread, or (only in a
    call) name = value. */
+/* with a as x, b: each item is a NODE_KWARG holding the expression (left)
+   and the name it binds (name, or NULL). */
+with_items: with_item { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); }
+    | with_items COMMA with_item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
+with_item: expr AS ID { $$ = node_new(NODE_KWARG); $$->left = $1; $$->name = $3; $$->line = $1->line; }
+    | expr { $$ = node_new(NODE_KWARG); $$->left = $1; $$->name = NULL; $$->line = $1->line; };
 item_list: item { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); }
     | item_list COMMA item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
 item: expr { $$ = $1; }

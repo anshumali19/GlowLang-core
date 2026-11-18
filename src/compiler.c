@@ -1294,6 +1294,21 @@ static void compile_stmt(Node *n) {
         }
         case NODE_USE_TRAIT: bc_emit(compiling_bc, OP_USE_TRAIT, 0, (intptr_t)n->name); break;
         case NODE_TRY_CATCH: {
+            /* An error that only passes through (a finally runs, then it goes
+               on) is raised again from where it happened: the handler notes
+               that place first (__glow_caught, before F, which may catch
+               errors of its own) and __glow_rethrow puts it back, so the
+               report names the failing line, not the finally block. */
+            #define TRY_NOTE_PLACE(reg) do { \
+                Node *_c = node_new(NODE_CALL); _c->name = intern_string("__glow_caught"); _c->line = n->line; \
+                compile_expr(_c, (reg)); } while (0)
+            #define TRY_RAISE_AGAIN(exc, where) do { \
+                Node **_a = arena_alloc(sizeof(Node*) * 2); \
+                _a[0] = node_new(NODE_REG); _a[0]->reg = (exc); _a[1] = node_new(NODE_REG); _a[1]->reg = (where); \
+                Node *_c = node_new(NODE_CALL); _c->name = intern_string("__glow_rethrow"); \
+                _c->call_args = _a; _c->call_arg_count = 2; _c->line = n->line; \
+                compile_expr(_c, -1); \
+                int _t = bc_emit(compiling_bc, OP_THROW, 0, 0); compiling_bc->code[_t].r0 = (exc); } while (0)
             /* The VM delivers the caught exception into a dedicated register
                (it used to overwrite register 0, i.e. `self` in methods or the
                first local in functions).
@@ -1344,19 +1359,23 @@ static void compile_stmt(Node *n) {
                     compile_stmt(fin);
                     jumps[njumps++] = bc_emit(compiling_bc, OP_JUMP, 0, 0);
                     int h2 = compiling_bc->count;
+                    int where2 = next_free_reg++;
+                    TRY_NOTE_PLACE(where2);
                     compile_stmt(fin);
-                    int t = bc_emit(compiling_bc, OP_THROW, 0, 0);
-                    compiling_bc->code[t].r0 = exc2;
+                    TRY_RAISE_AGAIN(exc2, where2);
                     try_add_ranges(&catch_ctx, c_start, c_end + 1, h2, exc2);
                 } else {
                     compile_stmt(n->right);
                 }
             } else {
                 /* try / finally without catch: run F, then the error goes on. */
+                int where = next_free_reg++;
+                TRY_NOTE_PLACE(where);
                 compile_stmt(fin);
-                int t = bc_emit(compiling_bc, OP_THROW, 0, 0);
-                compiling_bc->code[t].r0 = exc_reg;
+                TRY_RAISE_AGAIN(exc_reg, where);
             }
+            #undef TRY_NOTE_PLACE
+            #undef TRY_RAISE_AGAIN
             for (int k = 0; k < njumps; k++) compiling_bc->code[jumps[k]].arg = compiling_bc->count;
             try_add_ranges(&body_ctx, start_pc, body_end + 1, h1, exc_reg);
             break;

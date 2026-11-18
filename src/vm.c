@@ -327,6 +327,12 @@ int next_free_reg = 0;
 THREAD_LOCAL char *exception_stack_trace = NULL;
 THREAD_LOCAL const char *error_file = NULL;
 THREAD_LOCAL int error_line = 0;
+/* Where the error a catch most recently took was raised, kept so that code
+   which catches an error only to raise it again (a with block) can report
+   it where it happened (see __glow_caught / __glow_rethrow). */
+THREAD_LOCAL char *caught_stack_trace = NULL;
+THREAD_LOCAL const char *caught_error_file = NULL;
+THREAD_LOCAL int caught_error_line = 0;
 
 
 
@@ -3060,7 +3066,11 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                     R(bc->exception_table[i].exc_reg) = exc;
                     has_exception = 0;
                     pending_exception = 0;
-                    if (exception_stack_trace) { free(exception_stack_trace); exception_stack_trace = NULL; }
+                    free(caught_stack_trace);
+                    caught_stack_trace = exception_stack_trace;
+                    caught_error_file = error_file;
+                    caught_error_line = error_line;
+                    exception_stack_trace = NULL;
                     pc = bc->code + bc->exception_table[i].handler_pc;
                     DISPATCH();
                 }

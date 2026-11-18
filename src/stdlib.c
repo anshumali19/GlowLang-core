@@ -7040,6 +7040,69 @@ static Value native_next(int argc, Value *args) {
     return glow_call_fail(msg);
 }
 
+/* `with m as name:` (see with_one in glowlang.y). Objects take part by
+   having methods: enter() (optional) gives the value bound by `as` (m
+   itself when there is none); exit(error) runs when the block is left, with
+   the error or none, and a true result swallows the error. Objects with
+   only close() (connections, sockets, channels) are closed instead, and so
+   are SQLite handles. Anything else is a mistake worth reporting at once. */
+/* __glow_caught(): where the error just caught was raised, as
+   [file, line, stack trace]. __glow_rethrow(error, where) raises it again
+   with that place, so an error a with block passes on is reported at the
+   line that failed, not at the with. */
+static Value native_glow_caught(int argc, Value *args) {
+    (void)argc; (void)args;
+    List *l = list_new(3);
+    Value out = value_list(l);
+    list_push(l, caught_error_file ? value_string_copy(caught_error_file) : value_none());
+    list_push(l, value_int(caught_error_line));
+    list_push(l, caught_stack_trace ? value_string_copy(caught_stack_trace) : value_none());
+    return out;
+}
+static Value native_glow_rethrow(int argc, Value *args) {
+    pending_exception = argc >= 1 ? args[0] : value_none();
+    has_exception = 1;
+    if (argc >= 2 && GET_TYPE(args[1]) == VAL_LIST && AS_LIST(args[1])->size == 3) {
+        List *w = AS_LIST(args[1]);
+        free(exception_stack_trace);
+        exception_stack_trace = GET_TYPE(w->items[2]) == VAL_STRING ? strdup(AS_STRING(w->items[2])) : NULL;
+        if (GET_TYPE(w->items[0]) == VAL_STRING) error_file = intern_string(AS_STRING(w->items[0]));
+        if (GET_TYPE(w->items[1]) == VAL_INT) error_line = (int)AS_INT(w->items[1]);
+    }
+    return value_none();
+}
+static FuncEntry *with_method(Value m, const char *name) {
+    return is_obj_type(m, OBJ_INSTANCE) && AS_INSTANCE(m)->klass ? glow_class_method(AS_INSTANCE(m)->klass, name) : NULL;
+}
+static Value native_glow_with_enter(int argc, Value *args) {
+    Value m = argc >= 1 ? args[0] : value_none();
+    if (is_obj_type(m, OBJ_SQLITE_HANDLE)) return m;
+    FuncEntry *enter = with_method(m, "enter");
+    if (enter) return glow_call_method_fe(enter, m, 0, NULL);
+    if (with_method(m, "exit") || with_method(m, "close")) return m;
+    char msg[240];
+    if (is_obj_type(m, OBJ_INSTANCE) && AS_INSTANCE(m)->klass && AS_INSTANCE(m)->klass->name)
+        snprintf(msg, sizeof msg, "with: %.80s has no exit() or close() method, so with has nothing to do when the block ends", AS_INSTANCE(m)->klass->name);
+    else
+        snprintf(msg, sizeof msg, "with needs an object with an exit() or close() method (got %s)", glow_type_name(m));
+    return glow_call_fail(msg);
+}
+static Value native_glow_with_exit(int argc, Value *args) {
+    Value m = argc >= 1 ? args[0] : value_none();
+    Value err = argc >= 2 ? args[1] : value_none();
+    if (is_obj_type(m, OBJ_SQLITE_HANDLE)) { native_sqlite_close(1, &m); return value_bool(0); }
+    FuncEntry *ex = with_method(m, "exit");
+    if (ex) {
+        /* exit() may leave out the error parameter. */
+        Value r = ex->param_count >= 1 ? glow_call_method_fe(ex, m, 1, &err) : glow_call_method_fe(ex, m, 0, NULL);
+        if (has_exception) return value_none();
+        return value_bool(GET_TYPE(err) != VAL_NONE && value_truthy(r));
+    }
+    FuncEntry *close = with_method(m, "close");
+    if (close) glow_call_method_fe(close, m, 0, NULL);
+    return value_bool(0);
+}
+
 /* For a `case [a, b]` pattern: len(x) when x is a list, -1 otherwise. */
 static Value native_glow_list_len(int argc, Value *args) {
     return value_int(argc >= 1 && GET_TYPE(args[0]) == VAL_LIST ? AS_LIST(args[0])->size : -1);
@@ -7266,6 +7329,10 @@ void std_init(void) {
     var_set("__glow_callv", native_func_new("__glow_callv", native_glow_callv));
     var_set("__glow_gen_new", native_func_new("__glow_gen_new", native_glow_gen_new));
     var_set("next", native_func_new("next", native_next));
+    var_set("__glow_with_enter", native_func_new("__glow_with_enter", native_glow_with_enter));
+    var_set("__glow_with_exit", native_func_new("__glow_with_exit", native_glow_with_exit));
+    var_set("__glow_caught", native_func_new("__glow_caught", native_glow_caught));
+    var_set("__glow_rethrow", native_func_new("__glow_rethrow", native_glow_rethrow));
     var_set("__glow_concat", native_func_new("__glow_concat", native_glow_concat));
     var_set("__glow_list_len", native_func_new("__glow_list_len", native_glow_list_len));
     var_set("__glow_enum", native_func_new("__glow_enum", native_glow_enum));
