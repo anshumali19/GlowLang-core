@@ -1,0 +1,188 @@
+# with blocks: enter() gives the value bound by `as`, exit(error) runs
+# however the block is left, and objects with only close() are closed.
+import "orm"
+import "sync"
+
+let events = []
+class Resource:
+    func init(name, swallow = false):
+        self.name = name
+        self.swallow = swallow
+    end
+    func enter():
+        events.push("enter " + self.name)
+        return self.name + "-handle"
+    end
+    func exit(error):
+        events.push(f"exit {self.name} ({error ?? 'no error'})")
+        return self.swallow
+    end
+end
+
+# ---- the value from enter(), and exit after the block
+with Resource("a") as h:
+    events.push("body got " + h)
+end
+show events
+
+# ---- exit runs when the block raises; the error goes on
+events = []
+try:
+    with Resource("b"):
+        events.push("in b")
+        throw "boom"
+        events.push("not reached")
+    end
+catch e:
+    events.push("caught " + e)
+end
+show events
+
+# ---- exit(error) returning true swallows the error
+events = []
+with Resource("c", swallow = true):
+    throw "quiet"
+end
+events.push("after c")
+show events
+
+# ---- return, stop and skip leave through exit too
+events = []
+func early():
+    with Resource("d") as v:
+        return v + "!"
+    end
+end
+show early(), events
+events = []
+every i from 1 to 3:
+    with Resource(f"loop{i}"):
+        when i == 1:
+            skip
+        end
+        when i == 2:
+            stop
+        end
+    end
+end
+show events
+
+# ---- several at once, nested in order; exit runs in reverse
+events = []
+with Resource("outer") as o, Resource("inner") as i:
+    events.push(o + " / " + i)
+end
+show events
+
+# ---- objects with only close(), and SQLite handles
+class Conn:
+    func init():
+        self.open = true
+    end
+    func close():
+        self.open = false
+    end
+end
+let c = Conn()
+with c as same:
+    show "same object:", same is c, "open:", c.open
+end
+show "closed:", not c.open
+let db = sqlite.open(":memory:")
+with db:
+    sqlite.exec(db, "CREATE TABLE t (x INTEGER)")
+end
+try:
+    sqlite.exec(db, "INSERT INTO t VALUES (1)")
+    show "still open?"
+catch e:
+    show "sqlite handle closed"
+end
+
+# ---- exit() may leave out the error parameter
+class Plain:
+    func exit():
+        events.push("plain exit")
+    end
+end
+events = []
+with Plain():
+    events.push("plain body")
+end
+show events
+
+# ---- the lock is let go of however the block ends
+let m = Mutex()
+with m:
+    show "locked inside:", m.is_locked()
+end
+show "locked after:", m.is_locked()
+try:
+    with m:
+        throw "failure while holding the lock"
+    end
+catch e:
+    show "locked after an error:", m.is_locked()
+end
+
+# ---- an ORM transaction: commit on success, roll back on error
+let orm = ORM(":memory:")
+let s = Schema("items")
+s.string("name", {"required": true})
+orm.register(s)
+orm.migrate()
+with Transaction(orm):
+    orm.insert("items", {"name": "kept 1"})
+    orm.insert("items", {"name": "kept 2"})
+end
+try:
+    with Transaction(orm):
+        orm.insert("items", {"name": "rolled back"})
+        throw "abort"
+    end
+catch e:
+    show "transaction error:", e
+end
+show "items:", orm.count("items")
+
+# ---- mistakes are reported
+try:
+    with 42:
+        show "never"
+    end
+catch e:
+    show e
+end
+class NotAResource:
+    func init():
+        self.x = 1
+    end
+end
+try:
+    with NotAResource() as r:
+        show "never"
+    end
+catch e:
+    show e
+end
+class BadEnter:
+    func enter():
+        throw "enter failed"
+    end
+    func exit(error):
+        events.push("exit must not run")
+    end
+end
+events = []
+try:
+    with BadEnter():
+        events.push("body must not run")
+    end
+catch e:
+    show "caught:", e, events
+end
+
+# ---- as and with stay ordinary names elsewhere
+let as = 3
+let with = {"as": 4}
+show as + with["as"]

@@ -224,7 +224,11 @@ static int block_count = 0;
 void lexer_block_pop(void) {
     if (block_count > 0) lexer_bracket_depth = block_saved[--block_count];
 }
-void lexer_block_reset(void) { block_count = 0; lambda_wait = -1; lambda_header_tok = -1; }
+/* Inside the header of a `with` statement (from `with` to its `:` or the
+   end of the line, outside brackets): only there is `as` a keyword, so
+   variables and fields named as keep working. */
+static int lexer_with_header = 0;
+void lexer_block_reset(void) { block_count = 0; lambda_wait = -1; lambda_header_tok = -1; lexer_with_header = 0; }
 #define YY_USER_ACTION { lexer_prev_start = lexer_at_stmt_start; lexer_at_stmt_start = 0; lexer_tok++; }
 static int lex_identifier(void) {
     yylval.str_val = (const char *)intern_string(yytext);
@@ -267,6 +271,9 @@ static int lex_identifier(void) {
  /* yield is a keyword only where a statement starts, so a variable or
     field named yield keeps working. */
 "yield"                { return lexer_prev_start ? YIELD : lex_identifier(); }
+ /* with is a keyword only where a statement starts; as only in its header. */
+"with"                 { if (lexer_prev_start) { lexer_with_header = 1; return WITH; } return lex_identifier(); }
+"as"                   { return (lexer_with_header && lexer_bracket_depth == 0) ? AS : lex_identifier(); }
 "let"                  { return LET; }
 "return"               { return RETURN; }
 "true"                 { return TRUE_KW; }
@@ -325,8 +332,9 @@ static int lex_identifier(void) {
                              lexer_bracket_depth = 0;
                          }
                          lambda_header_tok = -1;
+                         if (lexer_bracket_depth == 0) lexer_with_header = 0;
                          return COLON; }
-":"                    { return COLON; }
+":"                    { if (lexer_bracket_depth == 0) lexer_with_header = 0; return COLON; }
 "..."                  { return ELLIPSIS; }
 "??="                  { return NULLISH_ASSIGN; }
 "??"                   { return NULLISH; }
@@ -455,7 +463,7 @@ f\"([^"\\]|\\.)*\" {
     return ID;
 }
 
-\n                     { line_num++; if (lexer_bracket_depth == 0) { lexer_at_stmt_start = 1; return NEWLINE; } }
+\n                     { line_num++; if (lexer_bracket_depth == 0) { lexer_at_stmt_start = 1; lexer_with_header = 0; return NEWLINE; } }
 [ \t\r]+               { lexer_at_stmt_start = lexer_prev_start; lexer_tok--; }
  /* The UTF-8 byte order mark that Notepad and PowerShell 5 put at the start
     of files: skip it like whitespace (outside strings) wherever it appears,

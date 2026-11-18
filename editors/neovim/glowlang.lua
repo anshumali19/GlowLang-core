@@ -51,6 +51,9 @@ vim.api.nvim_create_autocmd("FileType", {
             syntax match glowKeyword /^\s*\zsenum\ze\s\+\w\+\s*:/
             " yield only at the start of a statement
             syntax match glowKeyword /^\s*\zsyield\>/
+            " with, and as in a with header
+            syntax match glowKeyword /^\s*\zswith\>/
+            syntax match glowKeyword /^\s*with\>.*\<\zsas\ze\s\+\w\+\s*[,:]/
 
             " Built-in functions
             syntax keyword glowBuiltin len type range append push pop sort reverse

@@ -1,0 +1,15 @@
+# An error leaving a with block is reported where it happened, not at
+# the with line.
+class Res:
+    func exit(error):
+        show "exit ran"
+        return false
+    end
+end
+func work():
+    with Res():
+        let x = 1
+        let y = x / 0
+    end
+end
+work()

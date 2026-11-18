@@ -1081,7 +1081,41 @@ end
 `catch` is optional (`try:` ... `finally:` ... `end`). A `return` value is
 worked out before `finally` runs, and a `return` inside `finally` replaces
 it. An error raised inside `finally` is not caught by its own `catch`; it
-goes to the enclosing `try`.
+goes to the enclosing `try`. An error that passes through a `finally` is
+reported at the line where it was raised.
+
+### With
+`with` uses a resource for the length of a block and lets go of it however
+the block is left: when it ends, when it raises, and on `return`, `stop` or
+`skip`:
+```glow
+with sqlite.open("shop.db") as db:
+    sqlite.exec(db, "create table if not exists orders (item text)")
+    sqlite.exec(db, "insert into orders (item) values ('pen')")
+end                           # db is closed here, error or not
+
+use "lib/sync.glow"
+let m = Mutex()
+with m:
+    show m.is_locked()        # true: held for the block
+end
+show m.is_locked()            # false
+```
+An object takes part through its methods:
+- `enter()` (optional) gives the value bound by `as`; without it, `as`
+  binds the object itself.
+- `exit(error)` runs when the block is left, with the error or `none`. If it
+  returns `true` for an error, the error is swallowed; otherwise it goes on.
+  `exit()` may leave out the parameter.
+- An object with no `exit()` but a `close()` method is closed instead (a
+  Postgres connection, a WebSocket, a `Channel`). SQLite handles are closed
+  too.
+
+`with a() as x, b() as y:` opens both, in order, and lets go of them in
+the opposite order. If `enter()` raises, the block and `exit()` do not run.
+`Mutex` (lock and unlock) and the ORM's `Transaction` (commit, or roll back
+when the block raises) work with `with`. Using `with` on a value with no
+`exit()` or `close()` is an error.
 
 ### Throw
 ```glow

@@ -63,6 +63,13 @@
                     "match": "^\\s*(yield)\\b"
                 },
                 {
+                    "match": "^\\s*(with)\\b(?:.*\\b(as)\\b(?=\\s+\\w+\\s*[,:]))?",
+                    "captures": {
+                        "1": { "name": "keyword.control.glow" },
+                        "2": { "name": "keyword.control.glow" }
+                    }
+                },
+                {
                     "name": "keyword.control.glow",
                     "match": "^\\s*(enum)\\b(?=\\s+\\w+\\s*:)"
                 }

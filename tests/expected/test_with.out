@@ -1,0 +1,19 @@
+["enter a", "body got a-handle", "exit a (no error)"]
+["enter b", "in b", "exit b (boom)", "caught boom"]
+["enter c", "exit c (quiet)", "after c"]
+d-handle! ["enter d", "exit d (no error)"]
+["enter loop1", "exit loop1 (no error)", "enter loop2", "exit loop2 (no error)"]
+["enter outer", "enter inner", "outer-handle / inner-handle", "exit inner (no error)", "exit outer (no error)"]
+same object: true open: true
+closed: true
+sqlite handle closed
+["plain body", "plain exit"]
+locked inside: true
+locked after: false
+locked after an error: false
+transaction error: abort
+items: 2
+with needs an object with an exit() or close() method (got int)
+with: NotAResource has no exit() or close() method, so with has nothing to do when the block ends
+caught: enter failed []
+7

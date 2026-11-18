@@ -35,6 +35,18 @@ blueprint Mutex:
     action is_locked():
         return self.locked
     end
+
+    # `with mutex:` holds the lock for the block and lets go of it however
+    # the block ends.
+    action enter():
+        self.lock()
+        return self
+    end
+
+    action exit(error):
+        self.unlock()
+        return false
+    end
 end
 
 # AtomicCounter — thread-safe counter with a guard flag

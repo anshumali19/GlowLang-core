@@ -175,6 +175,11 @@ contexts:
     - match: '^\s*(yield)\b'
       captures:
         1: keyword.control.flow.glowlang
+    # with ... as name: keywords only in a with statement's header
+    - match: '^\s*(with)\b(?:.*\b(as)\b(?=\s+\w+\s*[,:]))?'
+      captures:
+        1: keyword.control.flow.glowlang
+        2: keyword.control.flow.glowlang
 
     # I/O keywords
     - match: '\b(show|write|input)\b'
