@@ -115,6 +115,15 @@ end
 let more = [2, 3, 4]
 show total(1, ...more)
 
+func shout(f):
+    return lambda(...args, **opts): str(f(...args, **opts)).upper() + "!"
+end
+@shout
+func hello(name, greeting = "hello"):
+    return greeting + " " + name
+end
+show hello("asha", greeting = "hi")
+
 let a, b = 1, 2
 a, b = b, a
 show a, b

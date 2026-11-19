@@ -97,8 +97,8 @@ show double(21)            # 42
 
 `action` and `can` mean the same as `func`. Hot functions are compiled to
 machine code automatically, with nothing for you to switch on: on the
-[benchmarks in the README](../README.md#-performance) GlowLang finishes 1.4x to
-8x sooner than CPython 3.14.
+[benchmarks in the README](../README.md#-performance) GlowLang finishes 1.5x to
+7.4x sooner than CPython 3.14.
 
 ## 6. Classes
 
@@ -146,6 +146,17 @@ func total(first, ...rest):
 end
 let more = [2, 3, 4]
 show total(1, ...more)              # 10
+
+# Decorators: @shout wraps the function below it; **opts collects
+# name = value arguments, so the wrapper passes on every argument
+func shout(f):
+    return lambda(...args, **opts): str(f(...args, **opts)).upper() + "!"
+end
+@shout
+func hello(name, greeting = "hello"):
+    return greeting + " " + name
+end
+show hello("asha", greeting = "hi") # HI ASHA!
 
 # Unpacking
 let a, b = 1, 2

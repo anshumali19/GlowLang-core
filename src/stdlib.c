@@ -6879,13 +6879,15 @@ Value glow_call_value(Value fn, int argc, Value *args) {
 }
 
 static Value glow_call_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
-static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra);
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra, FuncEntry **fe_out);
 static Value glow_call_kw(Value f, FuncEntry *fe, Value *buf, int n, int npos, Value extra);
 /* Call f with the arguments in buf (n of them, the first npos given by
    position) once name = value ones are placed; extra is the dict of those
    no parameter took (or 0). */
-static Value glow_call_placed(Value f, Value *buf, int n, int npos, Value extra) {
-    FuncEntry *fe = callee_function(f);
+static Value glow_call_placed(Value f, FuncEntry *fe, Value *buf, int n, int npos, Value extra) {
+    /* fe is f's function when glow_place_named found it (name = value
+       arguments), else NULL: positional calls (...spread) take the plain
+       path, which packs ...rest and leaves **opts to its default. */
     Value r = (fe && (fe->rest_param & REST_KW)) ? glow_call_kw(f, fe, buf, n, npos, extra) : glow_call_value(f, n, buf);
     if (IS_DEOPT(r)) {
         char msg[160];
@@ -6908,8 +6910,9 @@ static Value native_glow_call(int argc, Value *args) {
     for (int i = 0; i < n; i++) buf[i] = pos->items[i];
     int nkw = names->size < vals->size ? names->size : vals->size, npos = n;
     Value extra = 0;
-    if (nkw && !glow_place_named(f, buf, &n, nkw, names->items, vals->items, &extra)) return value_none();
-    return glow_call_placed(f, buf, n, npos, extra);
+    FuncEntry *fe = NULL;
+    if (nkw && !glow_place_named(f, buf, &n, nkw, names->items, vals->items, &extra, &fe)) return value_none();
+    return glow_call_placed(f, fe, buf, n, npos, extra);
 }
 
 /* A call of a function with a **opts parameter, its arguments placed (see
@@ -6943,10 +6946,11 @@ static Value glow_call_kw(Value f, FuncEntry *fe, Value *buf, int n, int npos, V
    parameter of that name, and parameters left between get none, so their
    defaults apply. *n is the count of positional arguments on entry and the
    count of arguments on return; 0 means an error was raised. */
-static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra) {
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra, FuncEntry **fe_out) {
     char msg[240];
     FuncEntry *fe = callee_function(f);
     *extra = 0;
+    *fe_out = fe;
     if (!fe || (fe->param_count > 0 && !fe->params)) {
         if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
         else snprintf(msg, sizeof msg, "%.80s() does not take name = value arguments", callee_label(fe, f));
@@ -7054,8 +7058,9 @@ static Value native_glow_callv(int argc, Value *args) {
     }
     int npos = n;
     Value extra = 0;
-    if (nkw && !glow_place_named(f, buf, &n, nkw, knames, kvals, &extra)) return value_none();
-    return glow_call_placed(f, buf, n, npos, extra);
+    FuncEntry *fe = NULL;
+    if (nkw && !glow_place_named(f, buf, &n, nkw, knames, kvals, &extra, &fe)) return value_none();
+    return glow_call_placed(f, fe, buf, n, npos, extra);
 }
 
 /* __glow_gen_new("name", body, args...): what a generator function returns
