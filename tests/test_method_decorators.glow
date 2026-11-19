@@ -153,14 +153,14 @@ func trial(f):
 end
 trial(lambda(): c.add(1, 2, 3))
 trial(lambda(): c.bump())
-# A decorator on a trait's method is an error when the trait is made.
-try:
-    trait Greets:
-        @same
-        func hello():
-            return "hi"
-        end
+# A trait's methods can be decorated too (more in test_trait_decorators.glow).
+trait Greets:
+    @same
+    func hello():
+        return "hi"
     end
-catch e:
-    show "error: " + str(e)
 end
+class Greeter:
+    use Greets
+end
+show Greeter().hello()

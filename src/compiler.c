@@ -728,7 +728,7 @@ static Node *lower_method_decorators(Node *n) {
     static int mdeco_count = 0;
     int k = mdeco_count++, line = n->line, count = n->call_arg_count;
     Node *f = n->third;
-    const char *cls = compiling_class_name, *name = n->name;
+    const char *cls = compiling_class_name ? compiling_class_name : compiling_trait_name, *name = n->name;
     char buf[300];
     Node *seq = NULL;
     const char **tmp = arena_alloc(sizeof(char*) * (size_t)count);
@@ -1354,20 +1354,11 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_DECORATED: {
-            if (last_compiling_class && compiling_class_name) {
+            /* A method of a class or a trait (a trait's methods, the
+               forwarding one included, are copied into each class that
+               uses it; the decorators run once, when the trait is made). */
+            if ((last_compiling_class && compiling_class_name) || (last_compiling_trait && compiling_trait_name)) {
                 compile_stmt(lower_method_decorators(n));
-                break;
-            }
-            /* A trait's methods are copied into each class that uses it, so
-               there is no one class whose method the decorators could wrap.
-               Say so when the trait is made rather than ignore it. */
-            if (last_compiling_trait) {
-                char msg[240];
-                snprintf(msg, sizeof msg, "a decorator (@...) cannot be used on a method of a trait (%.80s); decorate it in the class instead", n->name);
-                Node *t = node_new(NODE_THROW);
-                t->left = newStringNode(intern_string(msg));
-                t->line = t->left->line = n->line;
-                compile_stmt(t);
                 break;
             }
             compile_stmt(n->left);

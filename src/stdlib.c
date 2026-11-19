@@ -7298,6 +7298,16 @@ static Value native_glow_concat(int argc, Value *args) {
 static Value native_glow_super_bind(int argc, Value *args) {
     if (argc < 3 || GET_TYPE(args[1]) != VAL_STRING) return class_error("super: bad call");
     const char *name = AS_STRING(args[1]);
+    /* A trait: its own method (a decorated trait method's hidden one, see
+       lower_method_decorators in compiler.c). */
+    if (is_obj_type(args[0], OBJ_TRAIT)) {
+        Value m = dict_get(AS_TRAIT(args[0])->methods, name);
+        if (is_obj_type(m, OBJ_BOUND_METHOD) && AS_BOUND_METHOD(m)->method && AS_BOUND_METHOD(m)->method->body)
+            return bound_method_new(args[2], AS_BOUND_METHOD(m)->method);
+        char msg[200];
+        snprintf(msg, sizeof msg, "%.80s has no method '%.80s'", AS_TRAIT(args[0])->name ? AS_TRAIT(args[0])->name : "trait", name);
+        return class_error(msg);
+    }
     if (!is_obj_type(args[0], OBJ_CLASS)) {
         const char *why = GET_TYPE(args[0]) == VAL_STRING && strcmp(AS_STRING(args[0]), "no-parent") == 0
             ? "super can only be used in a class that extends another class"

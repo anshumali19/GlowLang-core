@@ -1,0 +1,16 @@
+calling [] {}
+hello, asha
+calling [] {"greeting": "beep"}
+beep, unit 7
+calling [] {}
+calling [] {"greeting": "hi"}
+["hello, unit 8", "hi, unit 8"]
+plain bo
+1
+(quiet) hello
+16 16 1
+32 2
+calling [1, 2] {}
+error: Greets.greet() takes 1 argument but 2 were given
+from the trait
+error: instance has no method 'later'
