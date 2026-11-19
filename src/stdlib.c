@@ -6879,7 +6879,21 @@ Value glow_call_value(Value fn, int argc, Value *args) {
 }
 
 static Value glow_call_fail(const char *msg) { pending_exception = value_string_copy(msg); has_exception = 1; return value_none(); }
-static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals);
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra);
+static Value glow_call_kw(Value f, FuncEntry *fe, Value *buf, int n, int npos, Value extra);
+/* Call f with the arguments in buf (n of them, the first npos given by
+   position) once name = value ones are placed; extra is the dict of those
+   no parameter took (or 0). */
+static Value glow_call_placed(Value f, Value *buf, int n, int npos, Value extra) {
+    FuncEntry *fe = callee_function(f);
+    Value r = (fe && (fe->rest_param & REST_KW)) ? glow_call_kw(f, fe, buf, n, npos, extra) : glow_call_value(f, n, buf);
+    if (IS_DEOPT(r)) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
+        return glow_call_fail(msg);
+    }
+    return r;
+}
 /* A call with very many ...spread or name = value arguments:
    __glow_call(f, positional, [names], [values]) (see call_node in
    glowlang.y; __glow_callv below is the usual form). */
@@ -6892,14 +6906,36 @@ static Value native_glow_call(int argc, Value *args) {
     Value buf[256];
     int n = pos->size;
     for (int i = 0; i < n; i++) buf[i] = pos->items[i];
-    int nkw = names->size < vals->size ? names->size : vals->size;
-    if (nkw && !glow_place_named(f, buf, &n, nkw, names->items, vals->items)) return value_none();
-    Value r = glow_call_value(f, n, buf);
-    if (IS_DEOPT(r)) {
-        char msg[160];
-        snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
-        return glow_call_fail(msg);
+    int nkw = names->size < vals->size ? names->size : vals->size, npos = n;
+    Value extra = 0;
+    if (nkw && !glow_place_named(f, buf, &n, nkw, names->items, vals->items, &extra)) return value_none();
+    return glow_call_placed(f, buf, n, npos, extra);
+}
+
+/* A call of a function with a **opts parameter, its arguments placed (see
+   glow_call_placed): lay out the whole frame here, ...rest list and opts
+   dict included, so nothing packs it again. */
+static Value glow_call_kw(Value f, FuncEntry *fe, Value *buf, int n, int npos, Value extra) {
+    int has_rest = (fe->rest_param & REST_LIST) != 0;
+    int fixed = fe->param_count - 1 - has_rest;
+    if (npos > fixed && !has_rest) { glow_arity_error(fe->name, npos + 1, fe->param_count); return value_none(); }
+    Value frame[256];
+    int k = 0;
+    for (; k < fixed; k++) frame[k] = k < n ? buf[k] : value_none();
+    if (has_rest) {
+        if (npos > fixed) {
+            List *l = list_new(npos - fixed);
+            frame[k] = value_list(l);
+            for (int i = fixed; i < npos; i++) list_push(l, buf[i]);
+        } else {
+            frame[k] = value_none();   /* the default: an empty list */
+        }
+        k++;
     }
+    frame[k++] = extra ? extra : value_none();   /* none: an empty dict */
+    Value r = jit_call_helper_val(f, k, frame, NULL);
+    volatile Value *w = frame;
+    for (int i = 0; i < k; i++) w[i] = 0;
     return r;
 }
 
@@ -6907,16 +6943,18 @@ static Value native_glow_call(int argc, Value *args) {
    parameter of that name, and parameters left between get none, so their
    defaults apply. *n is the count of positional arguments on entry and the
    count of arguments on return; 0 means an error was raised. */
-static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals) {
+static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *knames, const Value *kvals, Value *extra) {
     char msg[240];
     FuncEntry *fe = callee_function(f);
+    *extra = 0;
     if (!fe || (fe->param_count > 0 && !fe->params)) {
         if (GET_TYPE(f) != VAL_OBJECT || !(f & MASK_PAYLOAD)) snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
         else snprintf(msg, sizeof msg, "%.80s() does not take name = value arguments", callee_label(fe, f));
         glow_call_fail(msg);
         return 0;
     }
-    int fixed = fe->param_count - (fe->rest_param ? 1 : 0), npos = *n;
+    int has_kw = (fe->rest_param & REST_KW) != 0, has_rest = (fe->rest_param & REST_LIST) != 0;
+    int fixed = fe->param_count - has_rest - has_kw, npos = *n;
     for (int k = 0; k < nkw; k++) {
         const char *nm = AS_STRING(knames[k]);
         int idx = -1;
@@ -6924,9 +6962,15 @@ static int glow_place_named(Value f, Value *buf, int *n, int nkw, const Value *k
             const char *p = fe->params[j];
             if (p && (p == nm || strcmp(p, nm) == 0)) { idx = j; break; }
         }
+        if (idx < 0 && has_kw) {
+            /* No parameter of that name: it goes in the **opts dict. */
+            if (!*extra) *extra = value_dict(dict_new(4));
+            dict_set(AS_DICT(*extra), nm, kvals[k]);
+            continue;
+        }
         if (idx < 0) {
             const char *label = callee_label(fe, f);
-            if (fe->rest_param && fe->params[fixed] && strcmp(fe->params[fixed], nm) == 0)
+            if (has_rest && fe->params[fixed] && strcmp(fe->params[fixed], nm) == 0)
                 snprintf(msg, sizeof msg, "%.80s(): ...%.80s collects the extra arguments, so it cannot be given by name", label, nm);
             else
                 snprintf(msg, sizeof msg, "%.80s() has no parameter named '%.80s'", label, nm);
@@ -6963,6 +7007,25 @@ static Value native_glow_callv(int argc, Value *args) {
             a += 2;
             continue;
         }
+        if (*c == 'd') {
+            /* **d: each entry is a name = value argument. */
+            Value d = args[a++];
+            if (GET_TYPE(d) != VAL_DICT) {
+                char msg[160];
+                snprintf(msg, sizeof msg, "Cannot spread %s with **: it needs a dict", glow_type_name(d));
+                return glow_call_fail(msg);
+            }
+            Dict *dd = AS_DICT(d);
+            for (int i = 0; i < dd->used; i++) {
+                Value key = dd->keys[i];
+                if (GET_TYPE(key) == VAL_NONE) continue;   /* a removed entry */
+                if (nkw >= 128) return glow_call_fail("A call can pass at most 128 name = value arguments");
+                /* A key holds its interned text directly (see dict_set). */
+                knames[nkw] = value_string_copy((const char*)(uintptr_t)(key & MASK_PAYLOAD));
+                kvals[nkw] = dd->values[i]; nkw++;
+            }
+            continue;
+        }
         Value v = args[a++];
         if (*c == 's') {
             if (is_set(v)) v = glow_set_to_list(v);   /* a set spreads its items */
@@ -6979,14 +7042,20 @@ static Value native_glow_callv(int argc, Value *args) {
         if (n >= 255) return glow_call_fail("A call can pass at most 255 arguments");
         buf[n++] = v;
     }
-    if (nkw && !glow_place_named(f, buf, &n, nkw, knames, kvals)) return value_none();
-    Value r = glow_call_value(f, n, buf);
-    if (IS_DEOPT(r)) {
-        char msg[160];
-        snprintf(msg, sizeof msg, "Cannot call a %s", glow_type_name(f));
-        return glow_call_fail(msg);
+    /* A name given twice (by name = value and a **dict, or two dicts). */
+    for (int i = 1; i < nkw; i++) {
+        for (int j = 0; j < i; j++) {
+            if (strcmp(AS_STRING(knames[i]), AS_STRING(knames[j])) == 0) {
+                char msg[240];
+                snprintf(msg, sizeof msg, "%.80s() got two values for '%.80s'", callee_label(callee_function(f), f), AS_STRING(knames[i]));
+                return glow_call_fail(msg);
+            }
+        }
     }
-    return r;
+    int npos = n;
+    Value extra = 0;
+    if (nkw && !glow_place_named(f, buf, &n, nkw, knames, kvals, &extra)) return value_none();
+    return glow_call_placed(f, buf, n, npos, extra);
 }
 
 /* __glow_gen_new("name", body, args...): what a generator function returns

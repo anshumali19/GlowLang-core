@@ -694,7 +694,7 @@ struct Node {
     int reg;                 /* NODE_REG: the register holding the value */
     int closed;              /* NODE_OPTCHAIN: in parentheses, so a later .x
                                 applies to the whole chain */
-    int has_rest;            /* function: its last parameter is ...rest;
+    int has_rest;            /* function: REST_LIST / REST_KW bits (see FuncEntry);
                                 NODE_UNPACK: 1 + the index of the ...rest name */
     int generator;           /* NODE_LAMBDA: the hidden body of a generator
                                 function (see make_generator in compiler.c) */
@@ -733,10 +733,16 @@ typedef struct {
     size_t jit_size;
 } Specialization;
 
+#define REST_LIST 1
+#define REST_KW   2
 struct FuncEntry {
     const char *name;
     int param_count;
-    int rest_param;   /* the last parameter is ...rest: extra arguments arrive as a list there */
+    int rest_param;   /* REST_LIST: a ...rest parameter (extra positional arguments
+                         arrive as a list there); REST_KW: the last parameter is
+                         **opts (unmatched name = value arguments, as a dict). The
+                         ...rest one, when both, comes just before it. Any bit set
+                         sends calls through glow_pack_rest. */
     char **params;
     Bytecode *body;
     int used;

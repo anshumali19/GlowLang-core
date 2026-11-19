@@ -384,21 +384,28 @@ static Node *set_of(Node *list, int line) {
 /* callee(items): with a ...spread or name = value argument the call becomes
    __glow_callv(callee, kinds, arguments...), which matches names to
    parameters at run time; otherwise it is an ordinary call. kinds has a
-   letter per argument: p (positional), s (...spread) or k (name = value,
-   passed as two arguments: the name, then the value). Nothing is packed
+   letter per argument: p (positional), s (...spread), k (name = value,
+   passed as two arguments: the name, then the value) or d (**dict, whose
+   entries are name = value arguments). Nothing is packed
    into lists, so the call allocates nothing of its own. A call with very
    many arguments uses __glow_call(callee, positional list, [names],
    [values]) instead. Positional arguments come first, and a name can be
    given only once. */
 static Node *call_node(Node *callee, Node **items, int count) {
-    int special = 0, seen_kw = 0, line = callee->line;
+    int special = 0, seen_kw = 0, spread_dict = 0, line = callee->line;
     Node **pos = NULL, **names = NULL, **vals = NULL; int npos = 0, nkw = 0, nvals = 0;
     for (int i = 0; i < count; i++) {
         Node *it = items[i];
         if (it->type == NODE_KWARG) {
             special = seen_kw = 1;
+            if (!it->name) {   /* **dict: its names are checked when it runs */
+                spread_dict = 1;
+                list_push_node(&names, &nkw, NULL);
+                list_push_node(&vals, &nvals, it->left);
+                continue;
+            }
             for (int j = 0; j < nkw; j++) {
-                if (strcmp(names[j]->name, it->name) == 0) {
+                if (names[j] && strcmp(names[j]->name, it->name) == 0) {
                     char msg[160];
                     snprintf(msg, sizeof msg, "Argument '%.80s' is given twice", it->name);
                     error_at(it->line, msg); return NULL;
@@ -408,11 +415,12 @@ static Node *call_node(Node *callee, Node **items, int count) {
             list_push_node(&vals, &nvals, it->left);
             continue;
         }
-        if (seen_kw) { error_at(it->line, "A positional argument cannot come after a name = value argument"); return NULL; }
+        if (seen_kw) { error_at(it->line, "A positional argument cannot come after a name = value or **dict argument"); return NULL; }
         if (it->type == NODE_SPREAD) special = 1;
         list_push_node(&pos, &npos, it);
     }
     if (!special) return newCallExprNode(callee, items, count);
+    if (spread_dict && npos + 2 * nkw + 2 > 250) { error_at(line, "Too many arguments in a call with a **dict"); return NULL; }
     if (npos + 2 * nkw + 2 <= 250) {
         int nargs = 2 + npos + 2 * nkw, a = 2;
         Node **args = arena_alloc(sizeof(Node*) * nargs);
@@ -423,11 +431,13 @@ static Node *call_node(Node *callee, Node **items, int count) {
             args[a++] = pos[i]->type == NODE_SPREAD ? pos[i]->left : pos[i];
         }
         for (int k = 0; k < nkw; k++) {
+            if (!names[k]) { kinds[npos + k] = 'd'; args[a++] = vals[k]; continue; }
             kinds[npos + k] = 'k';
             args[a++] = names[k];
             args[a++] = vals[k];
         }
         kinds[npos + nkw] = 0;
+        nargs = a;
         args[1] = newStringNode(kinds);
         return helper_call("__glow_callv", args, nargs, line);
     }
@@ -730,7 +740,9 @@ item_list: item { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.c
     | item_list COMMA item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
 item: expr { $$ = $1; }
     | ELLIPSIS expr { $$ = node_new(NODE_SPREAD); $$->left = $2; $$->line = $2->line; }
-    | ID ASSIGN expr { $$ = node_new(NODE_KWARG); $$->name = intern_string($1); $$->left = $3; $$->line = $3->line; };
+    | ID ASSIGN expr { $$ = node_new(NODE_KWARG); $$->name = intern_string($1); $$->left = $3; $$->line = $3->line; }
+    /* **d: d's entries as name = value arguments (a KWARG without a name). */
+    | POW expr { $$ = node_new(NODE_KWARG); $$->name = NULL; $$->left = $2; $$->line = $2->line; };
 target: postfix { $$ = $1; }
     | ELLIPSIS postfix { $$ = node_new(NODE_SPREAD); $$->left = $2; $$->line = $2->line; };
 target_list: target COMMA target { $$.nodes = NULL; $$.count = 0; list_push_node(&$$.nodes, &$$.count, $1); list_push_node(&$$.nodes, &$$.count, $3); }
@@ -741,18 +753,22 @@ name_list: name_item COMMA name_item { $$.nodes = NULL; $$.count = 0; list_push_
     | name_list COMMA name_item { $$ = $1; list_push_node(&$$.nodes, &$$.count, $3); };
 param_list: param { $$ = $1; }
     | param_list COMMA param {
-        if ($1.rest) { error_at(line_num, "The ...rest parameter must be the last one"); YYERROR; }
+        if ($1.rest & REST_KW) { error_at(line_num, "The **name parameter must be the last one"); YYERROR; }
+        if (($1.rest & REST_LIST) && !($3.rest & REST_KW)) { error_at(line_num, "The ...rest parameter must be the last one (only a **name parameter can follow it)"); YYERROR; }
         int n = $1.count;
         $$.names = arena_realloc($1.names, sizeof(char*)*n, sizeof(char*)*(n+1)); $$.names[n] = $3.names[0];
         $$.defaults = arena_realloc($1.defaults, sizeof(Node*)*n, sizeof(Node*)*(n+1)); $$.defaults[n] = $3.defaults[0];
         $$.count = n + 1;
-        $$.rest = $3.rest;
+        $$.rest = $1.rest | $3.rest;
     };
 param: ID { $$.count = 1; $$.rest = 0; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = NULL; }
     | ID ASSIGN expr { $$.count = 1; $$.rest = 0; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($1); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = $3; }
     /* ...rest: the extra arguments, as a list (empty when there are none,
        which the default gives: a call with no extras leaves it none). */
-    | ELLIPSIS ID { $$.count = 1; $$.rest = 1; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($2); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = node_new(NODE_LIST_LITERAL); };
+    | ELLIPSIS ID { $$.count = 1; $$.rest = REST_LIST; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($2); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = node_new(NODE_LIST_LITERAL); }
+    /* **opts: the name = value arguments no other parameter takes, as a
+       dict (a fresh empty one when there are none). */
+    | POW ID { $$.count = 1; $$.rest = REST_KW; $$.names = arena_alloc(sizeof(char*)); $$.names[0] = (char*)intern_string($2); $$.defaults = arena_alloc(sizeof(Node*)); $$.defaults[0] = node_new(NODE_DICT_LITERAL); };
 condition: expr;
 opt_newlines: opt_newlines NEWLINE | ;
 match_cases: case_clause { $$ = $1; } | match_cases case_clause { $$ = add_case($1, $2); };

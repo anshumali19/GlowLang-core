@@ -1747,9 +1747,20 @@ Value glow_not(Value v) { return value_bool(!value_truthy(v)); }
    internal name: "Class::method" shows as Class.method, "Class::init" as
    Class(), and "lambda_7" as lambda. Raises; returns 0. */
 /* The arguments from fe's ...rest position on (args excludes self) become
-   one list in that slot. Returns the new argument count. */
+   one list in that slot. Returns the new argument count. A **opts slot (the
+   last) is never filled by position: it is left out of the count, so it
+   reads as none and gets its default, an empty dict; name = value calls
+   fill it in glow_call_kw (stdlib.c). Without a ...rest, more positional
+   arguments than the other parameters is an error: the count returned is
+   then one too high, so the arity check fails (glow_arity_error takes the
+   one back off). */
 int glow_pack_rest(FuncEntry *fe, Value *args, int argc) {
-    int r = fe->param_count - 1;
+    int kw = (fe->rest_param & REST_KW) != 0;
+    if (!(fe->rest_param & REST_LIST)) {
+        int fixed = fe->param_count - kw;
+        return argc > fixed ? argc + 1 : argc;
+    }
+    int r = fe->param_count - 1 - kw;   /* the ...rest slot */
     if (r < 0 || argc <= r) return argc;
     List *l = list_new(argc - r);
     Value lv = value_list(l);
@@ -1771,6 +1782,11 @@ static inline void glow_wipe_values(Value *p, int n) {
 int glow_arity_error(const char *name, int given, int params) {
     char shown[160];
     const char *n = name ? name : "function";
+    /* A function with a **opts parameter (and no ...rest): neither the
+       count of what was given (see glow_pack_rest) nor the parameters
+       include that slot. */
+    FuncEntry *kfe = name ? func_get(name) : NULL;
+    if (kfe && (kfe->rest_param & REST_KW) && !(kfe->rest_param & REST_LIST) && params == kfe->param_count) { given--; params--; }
     if (n[0] == '@') n++;   /* a decorated function (see decorate in glowlang.y) */
     const char *colon = strstr(n, "::");
     if (strncmp(n, "lambda_", 7) == 0) snprintf(shown, sizeof shown, "lambda");

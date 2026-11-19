@@ -1,0 +1,111 @@
+# **opts parameters collect name = value arguments; **d spreads a dict's
+# entries as name = value arguments. Together they let a wrapper pass on
+# every argument it gets.
+
+func describe(name, ...rest, **opts):
+    return name + " " + str(rest) + " " + str(opts)
+end
+show describe("a")
+show describe("b", 1, 2)
+show describe("c", 1, size = 3, color = "red")
+show describe(name = "d", x = 1)
+
+func only_opts(**opts):
+    return opts
+end
+show only_opts()
+show only_opts(a = 1, b = [2])
+# Each call gets a fresh dict.
+let first = only_opts()
+first["changed"] = true
+show only_opts()
+
+# Named parameters still take their own names; the rest go in opts.
+func box(width, height = 1, **style):
+    return str(width) + "x" + str(height) + " " + str(style)
+end
+show box(2)
+show box(2, height = 5, border = "thin")
+show box(height = 3, width = 4)
+
+# **d at the call: a dict's entries become name = value arguments.
+let settings = {"height": 7, "shade": "dark"}
+show box(1, **settings)
+show box(**{"width": 9})
+func plain(a, b = 2):
+    return a * 10 + b
+end
+show plain(**{"a": 1, "b": 5})
+show plain(1, **{})
+
+# A wrapper that passes everything on: positional and name = value alike.
+func logged(f):
+    func wrapper(...args, **opts):
+        show "calling with " + str(args) + " " + str(opts)
+        return f(...args, **opts)
+    end
+    return wrapper
+end
+@logged
+func greet(name, greeting = "hello"):
+    return greeting + ", " + name
+end
+show greet("ann")
+show greet("bo", greeting = "hi")
+
+# Lambdas and methods take them too.
+let tag = lambda(text, **attrs): "<" + text + " " + str(attrs) + ">"
+show tag("p", id = "x")
+class Widget:
+    func init(kind, **props):
+        self.kind = kind
+        self.props = props
+    end
+    func with_props(**more):
+        let all = {}
+        for each k, v in self.props:
+            all[k] = v
+        end
+        for each k, v in more:
+            all[k] = v
+        end
+        return all
+    end
+end
+let w = Widget("button", label = "OK")
+show w.kind + " " + str(w.props)
+show w.with_props(enabled = true)
+
+# Errors.
+func two(a, b):
+    return a + b
+end
+func trial(f):
+    try:
+        f()
+    catch e:
+        show "error: " + str(e)
+    end
+end
+trial(lambda(): two(1, **{"c": 3}))
+trial(lambda(): two(1, b = 2, **{"b": 3}))
+trial(lambda(): two(**[1, 2]))
+trial(lambda(): two(**{1: 2}))
+trial(lambda(): only_opts(1))
+trial(lambda(): box(1, 2, 3))
+
+# functools.cache keys name = value arguments too, in any order.
+import "functools"
+let runs = 0
+@cache
+func area(w, h = 1, **extra):
+    runs = runs + 1
+    return w * h
+end
+show area(2, h = 3)
+show area(2, h = 3)
+show area(w = 2, h = 3)
+show area(2, 3)
+show area(2, h = 3, unit = "m", scale = 1)
+show area(2, scale = 1, unit = "m", h = 3)
+show runs

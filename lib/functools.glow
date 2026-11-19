@@ -15,18 +15,23 @@
 # second call with the same arguments gives the result without running f
 # again. Numbers, text, true / false and none are compared by value, other
 # objects by identity; lists, dicts and sets cannot be arguments (they could
-# change after the call). Call a cached function with positional arguments.
+# change after the call). name = value arguments are part of the key, in any
+# order: f(1, b = 2) and f(1, 2) are cached apart, as in Python.
 func cache(f):
     let memo = {}
-    func cached(...args):
+    func cached(...args, **opts):
         let key = __glow_cache_key(args)
-        when memo.has(key):
-            return memo[key][1]
+        when len(opts) > 0:
+            let names = sorted(opts.keys())
+            key = key + "|" + __glow_cache_key(names + [opts[n] for each n in names])
         end
-        let result = f(...args)
+        when memo.has(key):
+            return memo[key][2]
+        end
+        let result = f(...args, **opts)
         # The arguments are kept with the result, so an object used as one
         # stays alive (and keeps its identity) while it is in the cache.
-        memo[key] = [args, result]
+        memo[key] = [args, opts, result]
         return result
     end
     return cached

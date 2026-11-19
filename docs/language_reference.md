@@ -706,6 +706,32 @@ super.init(...parts)         # inside a method
 ```
 Spreading anything other than a list or a set is an error.
 
+### Name = Value Arguments as a Dict: `**opts`
+A last parameter written `**name` collects the `name = value` arguments that
+no other parameter takes, as a dict (a new empty one when there are none). It
+may follow a `...rest` parameter. `**dict` in a call passes a dict's entries
+as `name = value` arguments:
+```glow
+func tag(name, ...children, **attrs):
+    return name + " " + str(children) + " " + str(attrs)
+end
+tag("p", "hi", id = "intro")     # p ["hi"] {"id": "intro"}
+
+let style = {"color": "red", "size": 2}
+tag("span", **style)             # span [] {"color": "red", "size": 2}
+```
+Together they let a wrapper pass on every argument it is given:
+```glow
+func logged(f):
+    return lambda(...args, **opts):
+        show "calling " + str(args) + " " + str(opts)
+        return f(...args, **opts)
+    end
+end
+```
+A name given twice (directly and in a `**dict`, or in two dicts) is an
+error, and so is `**` on anything but a dict.
+
 ### Generators: `yield`
 A function whose body contains `yield` is a generator function. Calling it runs
 none of its code yet: it returns a generator, and the body runs a piece at a
@@ -784,7 +810,7 @@ end
 show fib(90)                     # 2880067194370816120, at once
 
 func shout(f):
-    return lambda(...args): str(f(...args)).upper() + "!"
+    return lambda(...args, **opts): str(f(...args, **opts)).upper() + "!"
 end
 func repeated(count):            # a decorator that takes arguments
     return lambda(f):
@@ -811,8 +837,9 @@ show hi()                        # ["HI!", "HI!"]
 - `@d` is short for writing `name = d(name)` after the function; that works
   too (`fib = cache(fib)`), and every call to the name, from anywhere, runs
   what it holds now.
-- A wrapper written as `lambda(...args)` passes on positional arguments;
-  there is no way yet to collect `name = value` arguments.
+- A wrapper written as `lambda(...args, **opts)` that calls
+  `f(...args, **opts)` passes on every argument, `name = value` ones
+  included (see `**opts` above).
 - `cache` compares numbers, text, `true` / `false` and `none` by value and
   other objects by identity; a list, dict or set as an argument is an error.
 - GlowWeb's `route`, `get`, `post`, `put` and `del` work as decorators
