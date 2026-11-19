@@ -1,0 +1,54 @@
+# GlowWeb end to end: a real server on its own thread, answering real HTTP
+# requests over a socket. Each answer is checked; a wrong one fails the test.
+use "lib/web.glow"
+
+show "=== Running GlowWeb Integration Test ==="
+
+func check(what, got, want):
+    when got != want:
+        throw what + ": expected " + str(want) + ", got " + str(got)
+    end
+    show what + ": ok"
+end
+
+let port = 29883
+let server = Server(port)
+
+server.route("/hello", lambda(req):
+    return "Hello from GlowWeb!"
+end)
+
+server.route("/echo", lambda(req):
+    return "you sent " + req.method + " " + req.path
+end)
+
+spawn server.start()
+
+# Wait until the server answers, rather than for a fixed time.
+let base = "http://127.0.0.1:" + str(port)
+let res = none
+let tries = 0
+while res == none and tries < 100:
+    try:
+        res = http.request("GET", base + "/hello")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+when res == none:
+    throw "the server did not answer"
+end
+check("GET /hello status", res["status"], 200)
+check("GET /hello body", res["body"], "Hello from GlowWeb!")
+
+let echo = http.request("GET", base + "/echo")
+check("GET /echo body", echo["body"], "you sent GET /echo")
+
+let missing = http.request("GET", base + "/nowhere")
+check("GET /nowhere status", missing["status"], 404)
+
+# Stop: the accept loop sees running = false after its next connection.
+server.running = false
+http.request("GET", base + "/hello")
+show "=== GlowWeb Integration Test Passed ==="

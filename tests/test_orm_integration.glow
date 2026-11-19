@@ -78,4 +78,5 @@ show "Users count after Bob deleted: ", count2
 
 # Close and clean up
 db.close()
+fs.remove(db_file)
 show "=== GlowORM Integration Test Passed ==="

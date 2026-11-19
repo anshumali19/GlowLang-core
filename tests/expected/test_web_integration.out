@@ -1,0 +1,7 @@
+=== Running GlowWeb Integration Test ===
+[GlowWeb] Starting server on port 29883
+GET /hello status: ok
+GET /hello body: ok
+GET /echo body: ok
+GET /nowhere status: ok
+=== GlowWeb Integration Test Passed ===
