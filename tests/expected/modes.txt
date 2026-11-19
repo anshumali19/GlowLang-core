@@ -7,3 +7,5 @@ complex_industrial_test.glow  unordered
 loop_rec_test.glow            skip-stdout
 # Typed into the REPL line by line (glowlang repl < file), not run as a file.
 test_repl.glow                repl
+# Finally blocks of dropped generators run when the collector finds them.
+test_generator_dropped.glow   unordered

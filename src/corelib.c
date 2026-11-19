@@ -1095,7 +1095,9 @@ NativeFuncPtr glow_method_lookup(Value v, const char *name, Instruction *pc, Val
             if (!fn && e >= 0) *member = d->values[e];
             return fn;
         }
-        default: return is_set(v) ? cached_find(pc, &kind_set, set_methods, name) : NULL;
+        default:
+            if (glow_is_generator(v)) return strcmp(name, "close") == 0 ? glow_native_gen_close : NULL;
+            return is_set(v) ? cached_find(pc, &kind_set, set_methods, name) : NULL;
     }
 }
 

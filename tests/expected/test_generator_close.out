@@ -1,0 +1,18 @@
+0 a
+1 b
+0 0
+1 10
+2 20
+1
+cleanup close
+finished
+finished
+guarded finally
+caught boom
+[1]
+1
+cleanup with
+error: generator stubborn yielded a value while being closed
+[0, 1, 9]
+end of program
+cleanup at exit

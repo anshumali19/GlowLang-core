@@ -28,7 +28,8 @@ next() needs a generator (got list)
 generator count_up has no more values (next(g, default) returns default instead)
 generator self_stepping is already running (its body cannot step it)
 Bad's init cannot use yield: making an object runs init to its end
-for each a, b in a generator: a generator has no positions; use for each [a, b] in g to take each value apart, or count with a variable
+0 0
+1 1
 0 0
 1 10
 6

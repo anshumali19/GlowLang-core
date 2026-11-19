@@ -1622,11 +1622,25 @@ static void compile_stmt(Node *n) {
                         compiling_bc->code[idx].r0 = exc_reg;
                     }
                 }
+                /* In a generator's body, close() raises a signal at the
+                   paused yield so finally blocks run; a catch passes it on
+                   (Python's except Exception does not take GeneratorExit). */
+                Node *catch_body = n->right;
+                if (compiling_bc->is_generator) {
+                    Node **ca = arena_alloc(sizeof(Node*));
+                    ca[0] = node_new(NODE_REG); ca[0]->reg = exc_reg;
+                    Node *is_exit = node_new(NODE_CALL);
+                    is_exit->name = intern_string("__glow_gen_closing");
+                    is_exit->call_args = ca; is_exit->call_arg_count = 1; is_exit->line = n->line;
+                    Node *again = node_new(NODE_THROW);
+                    again->left = node_new(NODE_REG); again->left->reg = exc_reg; again->line = n->line;
+                    catch_body = newSeqNode(newIfNode(is_exit, again, NULL), catch_body);
+                }
                 if (fin) {
                     int exc2 = next_free_reg++;
                     int c_start = compiling_bc->count;
                     try_push(fin);
-                    compile_stmt(n->right);
+                    compile_stmt(catch_body);
                     int c_end = bc_emit(compiling_bc, OP_NOP, 0, 0);
                     TryCtx catch_ctx = try_stack[--try_depth];
                     compile_stmt(fin);
@@ -1638,7 +1652,7 @@ static void compile_stmt(Node *n) {
                     TRY_RAISE_AGAIN(exc2, where2);
                     try_add_ranges(&catch_ctx, c_start, c_end + 1, h2, exc2);
                 } else {
-                    compile_stmt(n->right);
+                    compile_stmt(catch_body);
                 }
             } else {
                 /* try / finally without catch: run F, then the error goes on. */

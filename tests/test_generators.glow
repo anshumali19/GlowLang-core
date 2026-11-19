@@ -199,6 +199,7 @@ try:
 catch e:
     show e
 end
+# for each i, x numbers a generator's values, as for a list.
 try:
     for each a, b in count_up(2):
         show a, b

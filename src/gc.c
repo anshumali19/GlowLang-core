@@ -316,6 +316,41 @@ GC_NO_SANITIZE static GCObject *gc_find_object(uintptr_t p) {
    shared (see vm_get_const_string in vm.c). They are kept alive for the life
    of the process by being registered here as permanent GC roots, so the
    collector never frees a literal that later loads still reference. */
+/* Generators paused inside a try (vm.c registers them when they yield
+   there). After marking, one that nothing reaches but that still needs its
+   finally blocks run is kept alive and queued; the interpreter closes the
+   queue's generators at its next call (glow_gen_run_pending). The queue is
+   a root until then. */
+static Generator **gc_gen_reg = NULL;
+static int gc_gen_reg_len = 0, gc_gen_reg_cap = 0;
+static Generator **gc_gen_pending = NULL;
+static int gc_gen_pending_cap = 0;
+int gc_gen_pending_count = 0;
+void gc_gen_register(Generator *g) {
+    if (gc_gen_reg_len == gc_gen_reg_cap) {
+        gc_gen_reg_cap = gc_gen_reg_cap ? gc_gen_reg_cap * 2 : 32;
+        gc_gen_reg = realloc(gc_gen_reg, sizeof(Generator*) * (size_t)gc_gen_reg_cap);
+    }
+    gc_gen_reg[gc_gen_reg_len++] = g;
+}
+void gc_gen_pending_add(Generator *g) {
+    for (int i = 0; i < gc_gen_pending_count; i++) if (gc_gen_pending[i] == g) return;
+    if (gc_gen_pending_count == gc_gen_pending_cap) {
+        gc_gen_pending_cap = gc_gen_pending_cap ? gc_gen_pending_cap * 2 : 16;
+        gc_gen_pending = realloc(gc_gen_pending, sizeof(Generator*) * (size_t)gc_gen_pending_cap);
+    }
+    gc_gen_pending[gc_gen_pending_count++] = g;
+}
+Generator *gc_gen_pending_peek(void) { return gc_gen_pending_count ? gc_gen_pending[0] : NULL; }
+void gc_gen_pending_pop(void) {
+    if (!gc_gen_pending_count) return;
+    memmove(gc_gen_pending, gc_gen_pending + 1, sizeof(Generator*) * (size_t)(gc_gen_pending_count - 1));
+    gc_gen_pending_count--;
+}
+void gc_gen_for_each_registered(void (*fn)(Generator *)) {
+    for (int i = 0; i < gc_gen_reg_len; i++) fn(gc_gen_reg[i]);
+}
+
 static Value *gc_const_roots = NULL;
 static int gc_const_roots_cap = 0;
 static int gc_const_roots_len = 0;
@@ -766,6 +801,7 @@ static void gc_mark_precise_roots(void (*mark_root)(Value)) {
     if (vm_last_class) mark_root(value_class(vm_last_class));
     if (vm_last_trait) mark_root(value_trait(vm_last_trait));
     for (int i = 0; i < gc_const_roots_len; i++) mark_root(gc_const_roots[i]);
+    for (int i = 0; i < gc_gen_pending_count; i++) mark_root(make_value(VAL_OBJECT, (uintptr_t)gc_gen_pending[i]));
     gc_mark_pending_spawn_roots(mark_root);
     for (int i=0; i<active_stack_count; i++) {
         Value *stk = *(active_stacks[i].vm_stack_ptr);
@@ -832,6 +868,40 @@ static int gc_marked_now(GCObject *o) {
     }
     return o->marked == gc_epoch;
 }
+/* After marking: registered generators nothing reaches. One that still
+   needs closing is marked (with all it holds) and queued; the others are
+   dropped from the list, as the sweep is about to free them. A minor
+   collection takes old generators as live. */
+static int gc_live_after_mark(GCObject *o, int major) {
+    if (!major && o->generation) return 1;
+    if (o->is_block_allocated) {
+        GCBlock *b = (GCBlock*)o->block_ptr;
+        size_t g = (size_t)((char*)o - b->data) / GC_GRANULE;
+        return (b->marks[g / 64] >> (g % 64)) & 1;
+    }
+    return o->marked == gc_epoch;
+}
+static void gc_rescue_generators(int major) {
+    int keep = 0, rescued = 0;
+    for (int i = 0; i < gc_gen_reg_len; i++) {
+        Generator *g = gc_gen_reg[i];
+        if (gc_live_after_mark((GCObject*)g, major)) {
+            /* Still reachable: keep it listed while it may need closing. */
+            if (g->state == GEN_DONE) g->registered = 0;
+            else gc_gen_reg[keep++] = g;
+            continue;
+        }
+        g->registered = 0;
+        if (glow_gen_needs_close(g)) {
+            push_grey((GCObject*)g);
+            gc_gen_pending_add(g);
+            rescued = 1;
+        }
+    }
+    gc_gen_reg_len = keep;
+    if (rescued) process_grey_stack();
+}
+
 static void gc_verify_visit(GCObject *obj) {
     GCObject *p = gcv_parent;
     if (p && p->generation && !obj->generation && !p->in_remembered_set &&
@@ -947,6 +1017,7 @@ GC_NOINLINE static void gc_collect_impl(int major) {
     if (!major) gc_mark_remembered();
     if (gc_stats) t1 = gc_now();
     process_grey_stack();
+    if (gc_gen_reg_len) gc_rescue_generators(major);
     gc_minor = 0;
     if (gc_stats) t2 = gc_now();
     if (major) gc_clear_remembered(); else gc_remset_rebuild();
