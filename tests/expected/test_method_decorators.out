@@ -1,0 +1,34 @@
+calling with 2 args {}
+12
+calling with 2 args {"step": 5}
+17
+35
+calling with 2 args {}
+calling with 2 args {}
+19
+calling with 2 args {}
+119
+outer(inner(hi))
+calling with 2 args {}
+sub add
+calling with 2 args {"step": 1}
+100
+203
+calling with 2 args {}
+sub add
+calling with 2 args {"step": 1}
+calling with 2 args {}
+sub add
+calling with 2 args {"step": 1}
+100
+42
+error: gave up after 3: not yet
+832040
+31
+832040
+31
+[101, 102, 103]
+calling with 4 args {}
+error: Counter.add() takes 2 arguments but 3 were given
+error: Cannot apply '+' to none and int
+error: a decorator (@...) cannot be used on a method of a trait (hello); decorate it in the class instead

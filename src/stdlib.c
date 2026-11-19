@@ -6854,7 +6854,7 @@ static __attribute__((cold, noinline)) const char *callee_label(FuncEntry *fe, V
     if (fe && fe->name && fe->name[0] == '@') return fe->name + 1;   /* decorated */
     if (fe && fe->name) {
         const char *c = strstr(fe->name, "::");
-        if (c) return strcmp(c + 2, "init") == 0 && is_obj_type(f, OBJ_CLASS) ? AS_CLASS(f)->name : c + 2;
+        if (c) return strcmp(c + 2, "init") == 0 && is_obj_type(f, OBJ_CLASS) ? AS_CLASS(f)->name : c + 2 + (c[2] == '@');
         if (strncmp(fe->name, "lambda_", 7) == 0) return "lambda";
         return fe->name;
     }

@@ -844,8 +844,45 @@ show hi()                        # ["HI!", "HI!"]
   other objects by identity; a list, dict or set as an argument is an error.
 - GlowWeb's `route`, `get`, `post`, `put` and `del` work as decorators
   when the handler is left out: `@server.get("/hello")`.
-- Decorators work on functions, nested functions and generator functions,
-  not yet on methods (that is reported when the class is made).
+- Decorators work on functions, nested functions, generator functions and
+  methods.
+
+On a method, the decorator gets a plain function whose first argument is the
+object, and `obj.m(...)` runs what it returns, from outside, through `self`
+and through `super` alike:
+
+```glow
+import "functools"
+
+func logged(f):
+    return lambda(obj, ...args, **opts):
+        show "calling with " + str(args)
+        return f(obj, ...args, **opts)
+    end
+end
+
+class Account:
+    func init(balance):
+        self.balance = balance
+    end
+    @logged
+    func deposit(amount):
+        self.balance = self.balance + amount
+        return self.balance
+    end
+    @cache                       # keyed on the object and the arguments
+    func fee(months):
+        return months * 2
+    end
+end
+let a = Account(10)
+show a.deposit(5)                # calling with [5], then 15
+```
+
+- A subclass inherits the decorated method; overriding it (decorated or
+  not) replaces it, and `super.m(...)` runs the parent's decorated version.
+- A decorator on a method of a `trait` is an error (reported when the trait
+  is made): decorate the method in the class instead.
 
 ### Recursive Functions
 ```glow
