@@ -133,7 +133,7 @@ func add_item(req):
 end
 show [r.method + " " + r.path for each r in server.router.routes], hello(none)
 
-# ---- a decorator on a method is reported when the class is made
+# ---- a decorator on a method (more in test_method_decorators.glow)
 func noop(f):
     return f
 end
@@ -147,4 +147,5 @@ try:
 catch e:
     show e
 end
+show Widget().draw()
 show "done"

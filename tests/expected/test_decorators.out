@@ -12,5 +12,5 @@ string string 6
 8
 cache: a list cannot be an argument of a cached function (it can change after the call); pass numbers, text, true / false, none or objects
 ["GET /hello", "POST /items"] hi
-a decorator (@...) cannot be used on a method yet (draw); decorate a function outside the class
+drawn
 done

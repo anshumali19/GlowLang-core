@@ -1153,8 +1153,11 @@ char* format_stack_trace(void) {
         const char *file = (pc && pc->file) ? pc->file : "<unknown>";
         const char *func_name = (fe && fe->name) ? fe->name : "<unknown>";
         if (func_name[0] == '@') func_name++;   /* a decorated function */
+        /* A decorated method "C::@m" shows as C::m. */
+        const char *dm = strstr(func_name, "::@");
         char frame[256];
-        snprintf(frame, 256, "  at %s (%s:%d)\n", func_name, file, line);
+        if (dm) snprintf(frame, 256, "  at %.*s::%.120s (%s:%d)\n", (int)(dm - func_name), func_name, dm + 3, file, line);
+        else snprintf(frame, 256, "  at %s (%s:%d)\n", func_name, file, line);
         strcat(buf, frame);
     }
     if (call_stack_ptr > max_frames) {
@@ -1791,7 +1794,7 @@ int glow_arity_error(const char *name, int given, int params) {
     const char *colon = strstr(n, "::");
     if (strncmp(n, "lambda_", 7) == 0) snprintf(shown, sizeof shown, "lambda");
     else if (colon && strcmp(colon + 2, "init") == 0) snprintf(shown, sizeof shown, "%.*s", (int)(colon - n), n);
-    else if (colon) snprintf(shown, sizeof shown, "%.*s.%.80s", (int)(colon - n), n, colon + 2);
+    else if (colon) snprintf(shown, sizeof shown, "%.*s.%.80s", (int)(colon - n), n, colon + 2 + (colon[2] == '@'));
     else snprintf(shown, sizeof shown, "%.120s", n);
     char msg[300];
     snprintf(msg, sizeof msg, "%s() takes %d argument%s but %d %s given", shown, params, params == 1 ? "" : "s", given, given == 1 ? "was" : "were");

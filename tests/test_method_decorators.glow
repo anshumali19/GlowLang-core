@@ -1,0 +1,166 @@
+# Decorators on methods: @d above a func in a class. As in Python, d gets a
+# plain function whose first argument is the object, and obj.m(...) runs
+# what d returned.
+
+func logged(f):
+    func wrapper(...args, **opts):
+        show "calling with " + str(len(args)) + " args " + str(opts)
+        return f(...args, **opts)
+    end
+    return wrapper
+end
+func twice(f):
+    return lambda(obj, x): f(obj, f(obj, x))
+end
+
+class Counter:
+    func init(start):
+        self.n = start
+    end
+    @logged
+    func add(k, step = 1):
+        self.n = self.n + k * step
+        return self.n
+    end
+    @twice
+    func bump(x):
+        return x + self.n
+    end
+    # Through self, the decorated method runs too.
+    func add_twice(k):
+        self.add(k)
+        return self.add(k)
+    end
+end
+let c = Counter(10)
+show c.add(2)
+show c.add(1, step = 5)
+show c.bump(1)
+show c.add_twice(1)
+# A bound method keeps working as a value.
+let adder = c.add
+show adder(100)
+
+# Several decorators: the one nearest the func is applied first.
+func tag(label):
+    return lambda(f): lambda(...args): label + "(" + str(f(...args)) + ")"
+end
+class Words:
+    @tag("outer")
+    @tag("inner")
+    func word(w):
+        return w
+    end
+end
+show Words().word("hi")
+
+# Subclasses: an inherited decorated method, an override decorated again,
+# and super reaching the parent's decorated version.
+class Sub extends Counter:
+    @logged
+    func add(k, step = 1):
+        show "sub add"
+        return super.add(k * 100, step = step)
+    end
+end
+let s = Sub(0)
+show s.add(1)
+show s.bump(3)
+show s.add_twice(0)
+
+# A decorator with arguments, keeping state per call.
+func retry(attempts):
+    return lambda(f):
+        return lambda(obj, ...args):
+            let tries = 0
+            while true:
+                tries = tries + 1
+                try:
+                    return f(obj, ...args)
+                catch e:
+                    when tries >= attempts:
+                        throw "gave up after " + str(tries) + ": " + str(e)
+                    end
+                end
+            end
+        end
+    end
+end
+class Flaky:
+    func init(fails):
+        self.fails = fails
+    end
+    @retry(3)
+    func fetch(x):
+        when self.fails > 0:
+            self.fails = self.fails - 1
+            throw "not yet"
+        end
+        return x * 2
+    end
+end
+show Flaky(2).fetch(21)
+try:
+    Flaky(5).fetch(1)
+catch e:
+    show "error: " + str(e)
+end
+
+# functools.cache on a method: keyed on the object and the arguments.
+import "functools"
+let fib_runs = 0
+class Fib:
+    @cache
+    func fib(n):
+        fib_runs = fib_runs + 1
+        when n < 2:
+            return n
+        end
+        return self.fib(n - 1) + self.fib(n - 2)
+    end
+end
+let fb = Fib()
+show fb.fib(30)
+show fib_runs
+show fb.fib(30)
+show fib_runs
+
+# Generators and init can be decorated.
+func same(f):
+    return f
+end
+class Gen:
+    @same
+    func init(base):
+        self.base = base
+    end
+    @same
+    func items(n):
+        for i from 1 to n:
+            yield self.base + i
+        end
+    end
+end
+show [x for each x in Gen(100).items(3)]
+
+# Errors name the method, not its hidden name.
+func trial(f):
+    try:
+        f()
+    catch e:
+        show "error: " + str(e)
+    end
+end
+trial(lambda(): c.add(1, 2, 3))
+trial(lambda(): c.bump())
+# A decorator on a trait's method is an error when the trait is made.
+try:
+    trait Greets:
+        @same
+        func hello():
+            return "hi"
+        end
+    end
+catch e:
+    show "error: " + str(e)
+end

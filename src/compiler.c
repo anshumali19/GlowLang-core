@@ -687,6 +687,103 @@ static Node *parse_snippet(const char *code) {
     return rc == 0 ? r : NULL;
 }
 
+/* @d1 @d2 ... func m(...) inside class C. decorate (glowlang.y) has renamed
+   the method "@m"; here it becomes
+       __mdeco_K_0 = d1                     (the decorators, top to bottom)
+       __mdeco_K_1 = d2
+       func @m(...): ...                    (the method, under a hidden name)
+       func m(...args, **opts):             (what obj.m(...) runs)
+           return __mdeco_K(self, ...args, **opts)
+       __mdeco_K = __mdeco_K_0(__mdeco_K_1(<C's @m as a function of self, ...>))
+   so, as in Python, each decorator gets a plain function whose first argument
+   is the object, and calls of m (from outside, through self, through super)
+   go through what the decorators returned. The function handed to them calls
+   C's own @m (found from C upward), so a subclass that decorates its own m
+   does not change what C's version runs. Its name, "@C.m", shows as C.m. */
+/* when args is none: args = []   when opts is none: opts = {} */
+static Node *rest_defaults(const char *args, const char *opts) {
+    Node *seq = NULL;
+    for (int i = 0; i < 2; i++) {
+        const char *p = i ? opts : args;
+        Node *missing = newBinOp(NODE_EQ, newVarNode(p), newVarNode(intern_string("none")));
+        Node *d = node_new(i ? NODE_DICT_LITERAL : NODE_LIST_LITERAL);
+        seq = newSeqNode(seq, newIfNode(missing, newAssignNode(p, d), NULL));
+    }
+    return seq;
+}
+static Node *forward_call(Node *callee, const char *kinds, Node *first, int line) {
+    int n = first ? 5 : 4, a = 0;
+    Node **args = arena_alloc(sizeof(Node*) * (size_t)n);
+    args[a++] = callee;
+    args[a++] = newStringNode(intern_string(kinds));
+    if (first) args[a++] = first;
+    args[a++] = newVarNode(intern_string("__args"));
+    args[a++] = newVarNode(intern_string("__opts"));
+    Node *c = node_new(NODE_CALL);
+    c->name = intern_string("__glow_callv");
+    c->call_args = args; c->call_arg_count = n; c->line = line;
+    return c;
+}
+static Node *lower_method_decorators(Node *n) {
+    static int mdeco_count = 0;
+    int k = mdeco_count++, line = n->line, count = n->call_arg_count;
+    Node *f = n->third;
+    const char *cls = compiling_class_name, *name = n->name;
+    char buf[300];
+    Node *seq = NULL;
+    const char **tmp = arena_alloc(sizeof(char*) * (size_t)count);
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof buf, "__mdeco_%d_%d", k, i);
+        tmp[i] = intern_string(buf);
+        Node *a = newAssignNode(tmp[i], n->call_args[i]);
+        a->line = n->call_args[i]->line;
+        seq = newSeqNode(seq, a);
+    }
+    seq = newSeqNode(seq, f);
+    snprintf(buf, sizeof buf, "__mdeco_%d", k);
+    const char *holder = intern_string(buf);
+
+    /* func m(...__args, **__opts): return __mdeco_K(self, ...__args, **__opts) */
+    char **sp = arena_alloc(sizeof(char*) * 2);
+    sp[0] = (char*)intern_string("__args"); sp[1] = (char*)intern_string("__opts");
+    Node *sbody = newSeqNode(rest_defaults(sp[0], sp[1]),
+        newReturnNode(forward_call(newVarNode(holder), "psd", newVarNode(intern_string("self")), line)));
+    Node *stub = newFuncNode(name, 2, sp, sbody);
+    stub->has_rest = REST_LIST | REST_KW;
+    stub->line = line;
+    seq = newSeqNode(seq, stub);
+
+    /* lambda(__self, ...__args, **__opts): C's @m bound to __self, called */
+    char **lp = arena_alloc(sizeof(char*) * 3);
+    lp[0] = (char*)intern_string("__self"); lp[1] = sp[0]; lp[2] = sp[1];
+    Node **ba = arena_alloc(sizeof(Node*) * 3);
+    ba[0] = newVarNode(cls);
+    ba[1] = newStringNode(f->name);
+    ba[2] = newVarNode(lp[0]);
+    Node *bind = node_new(NODE_CALL);
+    bind->name = intern_string("__glow_super_bind");
+    bind->call_args = ba; bind->call_arg_count = 3; bind->line = line;
+    Node *lbody = newSeqNode(rest_defaults(lp[1], lp[2]), newReturnNode(forward_call(bind, "sd", NULL, line)));
+    snprintf(buf, sizeof buf, "@%.140s.%.140s", cls, name);
+    Node *lam = newFuncNode(intern_string(buf), 3, lp, lbody);
+    lam->type = NODE_LAMBDA;
+    lam->has_rest = REST_LIST | REST_KW;
+    lam->line = line;
+
+    Node *v = lam;
+    for (int i = count - 1; i >= 0; i--) {
+        Node **args = arena_alloc(sizeof(Node*));
+        args[0] = v;
+        Node *callee = newVarNode(tmp[i]);
+        callee->line = n->call_args[i]->line;
+        v = newCallExprNode(callee, args, 1);
+        v->line = n->call_args[i]->line;
+    }
+    Node *set = newAssignNode(holder, v);
+    set->line = line;
+    return newSeqNode(seq, set);
+}
+
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
@@ -1105,12 +1202,16 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_DECORATED: {
-            /* A decorator on a method: methods are looked up on the class,
-               not through a variable, so it could not take effect. Say so
-               when the class is made rather than ignore it. */
-            if (last_compiling_class || last_compiling_trait) {
+            if (last_compiling_class && compiling_class_name) {
+                compile_stmt(lower_method_decorators(n));
+                break;
+            }
+            /* A trait's methods are copied into each class that uses it, so
+               there is no one class whose method the decorators could wrap.
+               Say so when the trait is made rather than ignore it. */
+            if (last_compiling_trait) {
                 char msg[240];
-                snprintf(msg, sizeof msg, "a decorator (@...) cannot be used on a method yet (%.80s); decorate a function outside the class", n->name);
+                snprintf(msg, sizeof msg, "a decorator (@...) cannot be used on a method of a trait (%.80s); decorate it in the class instead", n->name);
                 Node *t = node_new(NODE_THROW);
                 t->left = newStringNode(intern_string(msg));
                 t->line = t->left->line = n->line;
