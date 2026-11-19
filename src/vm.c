@@ -3803,7 +3803,12 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         }
         DISPATCH();
     }
-    l_OP_TRAIT_DEF: { const char *n = (const char*)pc->ptr; Value t = value_trait(trait_new(n)); var_set(n, t); vm_last_trait = AS_TRAIT(t); pc++; goto l_DISPATCH; }
+    l_OP_TRAIT_DEF: { const char *n = (const char*)pc->ptr; Value t = value_trait(trait_new(n)); var_set(n, t); vm_last_trait = AS_TRAIT(t);
+        /* The trait's methods are its own: OP_METHOD_DEF took the last class
+           defined before it, so a trait after a class gave that class its
+           methods and left the trait empty. */
+        vm_last_class = NULL;
+        pc++; goto l_DISPATCH; }
     l_OP_USE_TRAIT: {
         Value tv = var_get((const char*)pc->ptr);
         if (GET_TYPE(tv) == VAL_OBJECT && (tv & MASK_PAYLOAD) && GET_OBJ_TYPE(tv) == OBJ_TRAIT && vm_last_class) {

@@ -31,4 +31,4 @@ error: gave up after 3: not yet
 calling with 4 args {}
 error: Counter.add() takes 2 arguments but 3 were given
 error: Cannot apply '+' to none and int
-error: a decorator (@...) cannot be used on a method of a trait (hello); decorate it in the class instead
+hi

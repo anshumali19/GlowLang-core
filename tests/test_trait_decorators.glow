@@ -1,0 +1,106 @@
+# Decorators on a trait's methods: the decorators run once, when the trait
+# is made, and every class that uses the trait gets the decorated method.
+
+let made = 0
+func logged(f):
+    made = made + 1
+    return lambda(obj, ...args, **opts):
+        show "calling " + str(args) + " " + str(opts)
+        return f(obj, ...args, **opts)
+    end
+end
+
+trait Greets:
+    @logged
+    func greet(greeting = "hello"):
+        return greeting + ", " + self.name
+    end
+    func plain():
+        return "plain " + self.name
+    end
+end
+
+class Person:
+    use Greets
+    func init(name):
+        self.name = name
+    end
+end
+class Robot:
+    use Greets
+    func init(id):
+        self.name = "unit " + str(id)
+    end
+    # Through self, the decorated version runs.
+    func twice():
+        return [self.greet(), self.greet(greeting = "hi")]
+    end
+end
+
+show Person("asha").greet()
+show Robot(7).greet(greeting = "beep")
+show Robot(8).twice()
+show Person("bo").plain()
+show made                          # the decorator ran once, for the trait
+
+# A class's own method of the same name wins over the trait's.
+class Quiet:
+    use Greets
+    func init():
+        self.name = "q"
+    end
+    func greet(greeting = "hello"):
+        return "(quiet) " + greeting
+    end
+end
+show Quiet().greet()
+
+# functools.cache on a trait method.
+import "functools"
+let runs = 0
+trait Squares:
+    @cache
+    func square(n):
+        runs = runs + 1
+        return n * n * self.k
+    end
+end
+class Sq:
+    use Squares
+    func init(k):
+        self.k = k
+    end
+end
+let a = Sq(1)
+show a.square(4), a.square(4), runs
+let b = Sq(2)
+show b.square(4), runs             # another object: computed again
+
+# Errors name the method, not its hidden name.
+try:
+    Person("x").greet(1, 2)
+catch e:
+    show "error: " + str(e)
+end
+
+# A trait defined after a class keeps its methods (they used to go to that
+# class, leaving the trait empty).
+class Earlier:
+    func own():
+        return "earlier"
+    end
+end
+trait Later:
+    func later():
+        return "from the trait"
+    end
+end
+class UsesLater:
+    use Later
+end
+show UsesLater().later()
+try:
+    Earlier().later()
+catch e:
+    show "error: " + str(e)
+end

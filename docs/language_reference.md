@@ -895,8 +895,9 @@ show a.deposit(5)                # calling with [5], then 15
 
 - A subclass inherits the decorated method; overriding it (decorated or
   not) replaces it, and `super.m(...)` runs the parent's decorated version.
-- A decorator on a method of a `trait` is an error (reported when the trait
-  is made): decorate the method in the class instead.
+- A trait's methods can be decorated too. The decorators run once, when
+  the trait is made, and every class that uses the trait gets the decorated
+  method; a class's own method of the same name wins.
 
 ### Recursive Functions
 ```glow
