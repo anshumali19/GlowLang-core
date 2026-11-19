@@ -1,0 +1,5 @@
+# Used by test_named_calls.glow: defines area again, with the parameters in
+# another order, so calls compiled for the first area must notice.
+func area(scale, w, h = 1):
+    return "module area w=" + str(w) + " h=" + str(h) + " scale=" + str(scale)
+end

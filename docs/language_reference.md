@@ -680,6 +680,11 @@ filled, is an error (`greet() has no parameter named 'nope'`,
 `greet() got two values for 'name'`). Built-in functions take positional
 arguments only.
 
+A call by name to a function defined once in the program is matched to its
+parameters when the program is compiled, so it runs as fast as a plain call.
+Calls to methods, constructors, lambdas and functions with `...rest` or
+`**opts` are matched when they run.
+
 ### Any Number of Arguments: `...rest`
 A last parameter written `...name` collects the extra arguments into a list
 (empty when there are none). It works for functions, lambdas, methods and

@@ -784,6 +784,158 @@ static Node *lower_method_decorators(Node *n) {
     return newSeqNode(seq, set);
 }
 
+/* ---- name = value calls worked out when compiling ----
+   f(1, scale = 3) is __glow_callv(f, "pk", 1, "scale", 3) (see call_node in
+   glowlang.y), which matches names to parameters on every call. When f is a
+   function defined once in the program being compiled, with no ...rest or
+   **opts, never assigned to, and the call has no ...spread or **dict, the
+   match is made here instead and the call becomes the plain f(1, none, 3):
+   a parameter left out gets none, so its default applies, as it would at
+   run time. Anything the match finds wrong (a name f does not have, a value
+   given twice, too many arguments) is left to __glow_callv to report.
+
+   Guard: the plain call is right only while f is that definition. Another
+   definition of f compiled later (an import, a later REPL line) replaces the
+   function, so each resolved definition has a flag variable, true while it
+   is the current one, and the call compiles to
+       f(1, none, 3) when <flag> otherwise __glow_callv(f, "pk", 1, "scale", 3)
+   Compiling any definition of a name sets the flags of the name's resolved
+   definitions (true for that one, false for the others). */
+typedef struct { const char *name; Node *def; const char *flag; } NamedDef;
+static NamedDef *named_defs = NULL;
+static int named_def_count = 0, named_def_cap = 0, named_unit_start = 0;
+typedef struct { const char *name; Node *def; int count; } DefSeen;
+static DefSeen *defs_seen = NULL;
+static int defs_seen_count = 0, defs_seen_cap = 0;
+static Node *named_slow_call = NULL;   /* the call being compiled as the fallback */
+
+static void set_global_bool(const char *name, int v) {
+    int slot = global_get_slot(name);
+    global_table.values[slot] = value_bool(v);
+}
+static void def_seen(const char *name, Node *def) {
+    for (int i = 0; i < defs_seen_count; i++)
+        if (strcmp(defs_seen[i].name, name) == 0) { defs_seen[i].count++; return; }
+    if (defs_seen_count == defs_seen_cap) {
+        defs_seen_cap = defs_seen_cap ? defs_seen_cap * 2 : 64;
+        defs_seen = realloc(defs_seen, sizeof(DefSeen) * (size_t)defs_seen_cap);
+    }
+    defs_seen[defs_seen_count++] = (DefSeen){ name, def, 1 };
+}
+/* Every definition that makes a function by its plain name: not methods
+   (written directly in a class or trait), but nested functions too. */
+static void collect_defs(Node *n, int in_class) {
+    while (n) {
+        if (n->type == NODE_SEQ) {
+            collect_defs(n->right, in_class);
+            n = n->left;
+            continue;
+        }
+        if (n->type == NODE_FUNC_DEF && !in_class && n->name) def_seen(n->name, n);
+        if (n->type == NODE_FUNC_DEF || n->type == NODE_LAMBDA) in_class = 0;
+        if (n->type == NODE_CLASS || n->type == NODE_TRAIT) in_class = 1;
+        collect_defs(n->right, in_class); collect_defs(n->third, in_class);
+        collect_defs(n->comp_expr, in_class); collect_defs(n->comp_filter, in_class);
+        for (int i = 0; i < n->element_count; i++) collect_defs(n->elements[i], in_class);
+        for (int i = 0; i < n->print_count; i++) collect_defs(n->print_items[i], in_class);
+        for (int i = 0; i < n->dict_count; i++) { collect_defs(n->dict_keys[i], in_class); collect_defs(n->dict_values[i], in_class); }
+        for (int i = 0; i < n->call_arg_count; i++) collect_defs(n->call_args[i], in_class);
+        for (int i = 0; i < n->fstring_part_count; i++) collect_defs(n->fstring_parts[i], in_class);
+        n = n->left;
+    }
+}
+static void collect_named_defs(Node *program) {
+    defs_seen_count = 0;
+    collect_defs(program, 0);
+    named_unit_start = named_def_count;
+    for (int i = 0; i < defs_seen_count; i++) {
+        DefSeen *s = &defs_seen[i];
+        if (s->count != 1 || s->def->has_rest || s->name[0] == '@' || glow_name_reassigned(s->name)) continue;
+        if (named_def_count == named_def_cap) {
+            named_def_cap = named_def_cap ? named_def_cap * 2 : 64;
+            named_defs = realloc(named_defs, sizeof(NamedDef) * (size_t)named_def_cap);
+        }
+        char buf[300];
+        snprintf(buf, sizeof buf, "__named:%.200s:%d", s->name, named_def_count);
+        NamedDef *d = &named_defs[named_def_count++];
+        d->name = s->name; d->def = s->def; d->flag = intern_string(buf);
+        set_global_bool(d->flag, 1);
+    }
+}
+/* A definition of `name` is being compiled: it replaces the function. */
+static void named_def_compiled(const char *name, Node *def) {
+    for (int i = 0; i < named_def_count; i++)
+        if (strcmp(named_defs[i].name, name) == 0) set_global_bool(named_defs[i].flag, named_defs[i].def == def);
+}
+static int holds_code(Node *n) {
+    while (n) {
+        if (n->type == NODE_LAMBDA || n->type == NODE_FUNC_DEF || n->type == NODE_YIELD) return 1;
+        if (holds_code(n->right) || holds_code(n->third) || holds_code(n->comp_expr) || holds_code(n->comp_filter)) return 1;
+        for (int i = 0; i < n->element_count; i++) if (holds_code(n->elements[i])) return 1;
+        for (int i = 0; i < n->dict_count; i++) if (holds_code(n->dict_keys[i]) || holds_code(n->dict_values[i])) return 1;
+        for (int i = 0; i < n->call_arg_count; i++) if (holds_code(n->call_args[i])) return 1;
+        for (int i = 0; i < n->fstring_part_count; i++) if (holds_code(n->fstring_parts[i])) return 1;
+        n = n->left;
+    }
+    return 0;
+}
+static int simple_value(Node *n) {
+    return n->type == NODE_INT_LIT || n->type == NODE_FLOAT_LIT || n->type == NODE_BOOL_LIT ||
+           n->type == NODE_STRING_LIT || n->type == NODE_VAR;
+}
+/* The plain call for __glow_callv node n, or NULL to leave it as it is.
+   *flag gets the guard's variable. */
+static Node *resolve_named_call(Node *n, const char **flag) {
+    if (n->call_arg_count < 2) return NULL;
+    Node *callee = n->call_args[0], *kn = n->call_args[1];
+    if (!callee || callee->type != NODE_VAR || !callee->name || !kn || kn->type != NODE_STRING_LIT || !kn->name) return NULL;
+    const char *name = callee->name;
+    if (get_local_reg(name) != -1 || is_outer_local(name) || glow_name_reassigned(name)) return NULL;
+    NamedDef *d = NULL;
+    for (int i = named_unit_start; i < named_def_count; i++)
+        if (strcmp(named_defs[i].name, name) == 0) { d = &named_defs[i]; break; }
+    if (!d) return NULL;
+    int pc = d->def->func_param_count;
+    char **ps = d->def->func_params;
+    if (pc > 250 || (pc > 0 && !ps)) return NULL;
+    Node *slot[256] = { 0 };
+    int top = 0, used = 0, last = -1, in_order = 1, simple = 1, a = 2;
+    for (const char *c = kn->name; *c; c++) {
+        if (*c == 'p') {
+            if (a >= n->call_arg_count || top >= pc) return NULL;
+            Node *v = n->call_args[a++];
+            if (holds_code(v)) return NULL;
+            slot[top++] = v;
+            if (top > used) used = top;
+            continue;
+        }
+        if (*c != 'k' || a + 1 >= n->call_arg_count) return NULL;   /* ...spread, **dict */
+        Node *nm = n->call_args[a], *v = n->call_args[a + 1];
+        a += 2;
+        if (!nm || nm->type != NODE_STRING_LIT || !nm->name || holds_code(v)) return NULL;
+        int idx = -1;
+        for (int j = 0; j < pc; j++) if (ps[j] && strcmp(ps[j], nm->name) == 0) { idx = j; break; }
+        if (idx < 0 || slot[idx]) return NULL;
+        slot[idx] = v;
+        if (idx < last) in_order = 0;
+        last = idx;
+        if (!simple_value(v)) simple = 0;
+        if (idx + 1 > used) used = idx + 1;
+    }
+    if (a != n->call_arg_count) return NULL;
+    /* The values run in the order written: reordering them is only safe when
+       the names already follow the parameters, or the values are plain. */
+    if (!in_order && !simple) return NULL;
+    Node **args = arena_alloc(sizeof(Node*) * (size_t)(used ? used : 1));
+    for (int i = 0; i < used; i++) args[i] = slot[i] ? slot[i] : newVarNode(intern_string("none"));
+    Node *cv = newVarNode(name);
+    cv->line = callee->line ? callee->line : n->line;
+    Node *call = newCallExprNode(cv, args, used);
+    call->line = n->line;
+    *flag = d->flag;
+    return call;
+}
+
 static void compile_stmt(Node *n) {
     if (!n) return;
     compiling_line = n->line;
@@ -1253,6 +1405,7 @@ static void compile_stmt(Node *n) {
                 func_name = intern_string(buf);
             }
             FuncEntry *fe = func_table_add(func_name);
+            if (!is_method) named_def_compiled(func_name, n);
             if (fe->body) bc_free(fe->body);
             if (fe->specs) {
                 for (int i=0; i<fe->spec_count; i++) {
@@ -1900,6 +2053,20 @@ static int compile_expr(Node *n, int target_reg) {
         }
         case NODE_CALL_EXPR:
         case NODE_CALL: {
+            if (n->type == NODE_CALL && n != named_slow_call && n->name && strcmp(n->name, "__glow_callv") == 0) {
+                const char *flag = NULL;
+                Node *fast = resolve_named_call(n, &flag);
+                if (fast) {
+                    Node *c = node_new(NODE_COND);
+                    c->left = newVarNode(flag);
+                    c->right = fast; c->third = n; c->line = n->line;
+                    Node *saved = named_slow_call;
+                    named_slow_call = n;
+                    int r = compile_expr(c, reg);
+                    named_slow_call = saved;
+                    return r;
+                }
+            }
             if (n->type == NODE_CALL && n->name && (strcmp(n->name, "__glow_callv") == 0 || strcmp(n->name, "__glow_call") == 0) && n->call_arg_count >= 1) {
                 Node *cal = n->call_args[0];
                 if (cal && cal->type == NODE_INDEX && cal->name && cal->left && cal->left->type == NODE_VAR &&
@@ -2357,6 +2524,7 @@ static void collect_assigned(Node *n) {
 
 void compile(Node *n) {
     collect_assigned(n);
+    collect_named_defs(n);
     compile_stmt(n);
 }
 
