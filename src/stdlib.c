@@ -2145,19 +2145,21 @@ static Value native_pairs(int argc, Value *args) {
     return out_v;
 }
 
+/* __glow_gen_closing(e): is e the signal close() raises in a generator? */
+static Value native_glow_gen_closing(int argc, Value *args) {
+    extern int glow_gen_is_exit(Value v);
+    return value_bool(argc > 0 && glow_gen_is_exit(args[0]));
+}
+
 /* What `for each a, b in coll` walks: the same pairs as pairs(coll), laid
    out flat in one list, [a0, b0, a1, b1, ...], so a pass of the loop builds
    no list of its own. Like pairs(), it is a snapshot of coll. */
 static Value native_pairs_flat(int argc, Value *args) {
     if (argc < 1) return value_list(list_new(0));
     Value coll = args[0];
-    if (glow_is_generator(coll)) {
-        /* Numbering a generator's values would have to run it to its end
-           first, which may never come. */
-        pending_exception = value_string_copy("for each a, b in a generator: a generator has no positions; use for each [a, b] in g to take each value apart, or count with a variable");
-        has_exception = 1;
-        return value_none();
-    }
+    /* A generator is stepped by the loop itself (OP_ITER_NEXT2), which
+       numbers its values as they come: it may never end. */
+    if (glow_is_generator(coll)) return coll;
     if (GET_TYPE(coll) == VAL_LIST) {
         List *l = AS_LIST(coll);
         List *out = list_new(l->size * 2 + 2);
@@ -7207,7 +7209,7 @@ static FuncEntry *with_method(Value m, const char *name) {
 }
 static Value native_glow_with_enter(int argc, Value *args) {
     Value m = argc >= 1 ? args[0] : value_none();
-    if (is_obj_type(m, OBJ_SQLITE_HANDLE)) return m;
+    if (is_obj_type(m, OBJ_SQLITE_HANDLE) || glow_is_generator(m)) return m;
     FuncEntry *enter = with_method(m, "enter");
     if (enter) return glow_call_method_fe(enter, m, 0, NULL);
     if (with_method(m, "exit") || with_method(m, "close")) return m;
@@ -7222,6 +7224,14 @@ static Value native_glow_with_exit(int argc, Value *args) {
     Value m = argc >= 1 ? args[0] : value_none();
     Value err = argc >= 2 ? args[1] : value_none();
     if (is_obj_type(m, OBJ_SQLITE_HANDLE)) { native_sqlite_close(1, &m); return value_bool(0); }
+    if (glow_is_generator(m)) {
+        /* A generator: close it, so its finally blocks run. */
+        Value saved = pending_exception; int had = has_exception;
+        has_exception = 0;
+        glow_gen_close((Generator*)(uintptr_t)(m & MASK_PAYLOAD));
+        if (!has_exception && had) { pending_exception = saved; has_exception = had; }
+        return value_bool(0);
+    }
     FuncEntry *ex = with_method(m, "exit");
     if (ex) {
         /* exit() may leave out the error parameter. */
@@ -7492,6 +7502,7 @@ void std_init(void) {
     var_set("pass", value_none());
     var_set("pairs", native_func_new("pairs", native_pairs));
     var_set("__pairs_flat", native_func_new("__pairs_flat", native_pairs_flat));
+    var_set("__glow_gen_closing", native_func_new("__glow_gen_closing", native_glow_gen_closing));
     var_set("input", native_func_new("input", native_input));
     var_set("ask", native_func_new("ask", native_input));
 

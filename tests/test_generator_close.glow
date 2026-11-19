@@ -1,0 +1,113 @@
+# Generators: for each i, x over them, close(), with, super in a generator
+# method, and finally blocks of generators left paused.
+
+# for each i, x numbers a generator's values as they come, as for a list,
+# so an endless one works too.
+func letters():
+    yield "a"
+    yield "b"
+end
+for each i, x in letters():
+    show i, x
+end
+func naturals():
+    let n = 0
+    while true:
+        yield n
+        n += 1
+    end
+end
+for each i, x in naturals():
+    when i == 3:
+        stop
+    end
+    show i, x * 10
+end
+
+# close() runs the finally blocks around the yield it is paused at; the
+# generator is then finished.
+func held(tag):
+    try:
+        yield 1
+        yield 2
+    finally:
+        show "cleanup " + tag
+    end
+end
+let g = held("close")
+show next(g)
+g.close()
+show next(g, "finished")
+g.close()                         # closing again does nothing
+let fresh = held("never started")
+fresh.close()                     # nothing ran, so no finally runs
+show next(fresh, "finished")
+
+# A catch in the generator does not take the close: only finally runs.
+func guarded():
+    try:
+        yield 1
+    catch e:
+        show "catch saw " + str(e)
+    finally:
+        show "guarded finally"
+    end
+end
+let k = guarded()
+next(k)
+k.close()
+
+# Errors still reach the catch as before.
+func failing():
+    try:
+        yield 1
+        throw "boom"
+    catch e:
+        show "caught " + e
+    end
+end
+show [x for each x in failing()]
+
+# with closes the generator when the block ends.
+with held("with") as w:
+    show next(w)
+end
+
+# A yield in a finally block cannot pause a closing generator.
+func stubborn():
+    try:
+        yield 1
+    finally:
+        yield 2
+    end
+end
+let s = stubborn()
+next(s)
+try:
+    s.close()
+catch e:
+    show "error: " + str(e)
+end
+
+# super inside a generator method.
+class Base:
+    func items():
+        yield 1
+    end
+end
+class Child extends Base:
+    func init():
+        self.last = 9
+    end
+    func items():
+        yield 0
+        yield from super.items()
+        yield self.last
+    end
+end
+show [x for each x in Child().items()]
+
+# A generator still paused in a try when the program ends is closed then.
+let z = held("at exit")
+next(z)
+show "end of program"

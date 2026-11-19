@@ -959,6 +959,7 @@ int glow_main(int argc, char **argv) {
                                     if (runtime_error_thrown) { fflush(stdout); return 1; }
                                 }
                                 glow_threads_join_all();
+                                glow_gen_close_all();
                                 std_cleanup(); return 0;
                             } else {
                                 if (script) free(script);
@@ -1115,6 +1116,7 @@ int glow_main(int argc, char **argv) {
                             return 1;
                         }
                         glow_threads_join_all();
+                        glow_gen_close_all();
                     } else {
                         printf("Syntax Check: OK\n");
                     }
@@ -1160,6 +1162,7 @@ int glow_main(int argc, char **argv) {
                     return 1;
                 }
                 glow_threads_join_all();
+                glow_gen_close_all();
             }
             if (yyin) fclose(yyin);
         } else {

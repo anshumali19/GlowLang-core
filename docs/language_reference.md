@@ -790,12 +790,21 @@ show [v for each v in chain([1, 2], count_up(2))]   # [1, 2, 0, 1]
   usual.
 - An error raised in the body reaches whoever is stepping the generator, and
   the generator is then finished.
-- `for each a, b in g` needs positions, which a generator does not have; write
-  `for each [a, b] in g` to take each value apart.
-- A generator that is never stepped to its end does not run the rest of its
-  body, `finally` blocks included.
+- `for each i, x in g` numbers the values as they come (0, 1, 2, ...), as
+  for a list, so it works on an endless generator too. Write
+  `for each [a, b] in g` to take each value apart instead.
+- `g.close()` finishes a generator early: the `finally` blocks around the
+  `yield` it is paused at run, and `next(g)` then finds it finished. A
+  `catch` in the generator does not see the close, as Python's
+  `except Exception` does not see `GeneratorExit`. `with g as x:` closes
+  it when the block ends.
+- A generator dropped while paused inside a `try` still runs its `finally`
+  blocks: once the collector finds nothing uses it any more, or at the
+  latest when the program ends. An error raised there is reported and the
+  program goes on.
+- `super` works inside a generator method.
 - `yield` is a keyword only at the start of a statement, so a variable called
-  `yield` still works. `super` cannot be used inside a generator method.
+  `yield` still works.
 
 ### Decorators: `@`
 `@d` on the line above a `func` makes the function's name hold `d(func)`
@@ -1231,8 +1240,8 @@ An object takes part through its methods:
   returns `true` for an error, the error is swallowed; otherwise it goes on.
   `exit()` may leave out the parameter.
 - An object with no `exit()` but a `close()` method is closed instead (a
-  Postgres connection, a WebSocket, a `Channel`). SQLite handles are closed
-  too.
+  Postgres connection, a WebSocket, a `Channel`). SQLite handles and
+  generators are closed too.
 
 `with a() as x, b() as y:` opens both, in order, and lets go of them in
 the opposite order. If `enter()` raises, the block and `exit()` do not run.

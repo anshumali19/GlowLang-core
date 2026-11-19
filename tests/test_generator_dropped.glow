@@ -1,0 +1,39 @@
+# A generator dropped while paused inside a try still runs its finally:
+# the collector keeps it until it has been closed. When that happens depends
+# on the collector (at the latest when the program ends), so the lines are
+# compared in any order (see tests/expected/modes.txt).
+
+func held(tag):
+    try:
+        yield 1
+    finally:
+        show "cleanup " + tag
+    end
+end
+func drop(tag):
+    let d = held(tag)
+    next(d)
+end
+for i from 1 to 5:
+    drop("dropped " + str(i))
+end
+for i from 1 to 300000:
+    let junk = [i, i]
+end
+show "after allocating"
+
+# An error in the finally block of a dropped generator has no caller to go
+# to: it is reported and the program goes on.
+func bad():
+    try:
+        yield 1
+    finally:
+        throw "finally failed"
+    end
+end
+func drop_bad():
+    let b = bad()
+    next(b)
+end
+drop_bad()
+show "end of program"

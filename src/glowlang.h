@@ -184,6 +184,8 @@ typedef struct Generator {
     int state;           /* GEN_* */
     int yielded;         /* set by OP_YIELD during the resume in progress */
     const char *name;    /* the function's name, for messages */
+    unsigned char closing;     /* close(): the next resume raises at the yield */
+    unsigned char registered;  /* in the GC's list of generators paused in a try */
 } Generator;
 
 typedef struct {
@@ -1095,6 +1097,20 @@ Value glow_call_method_fe(FuncEntry *fe, Value self, int nargs, Value *args);
    raised, with has_exception set). */
 int glow_is_generator(Value v);
 Value glow_gen_resume(Generator *g, int *done);
+/* close(): run a paused generator's finally blocks (see vm.c). */
+Value glow_gen_close(Generator *g);
+Value glow_native_gen_close(int argc, Value *args);   /* g.close() */
+int glow_gen_needs_close(Generator *g);
+void glow_gen_run_pending(void);
+void glow_gen_close_all(void);
+/* gc.c: generators paused inside a try, and the unreachable ones of them
+   waiting for their finally to run. */
+void gc_gen_register(Generator *g);
+void gc_gen_pending_add(Generator *g);
+extern int gc_gen_pending_count;
+Generator *gc_gen_pending_peek(void);
+void gc_gen_pending_pop(void);
+void gc_gen_for_each_registered(void (*fn)(Generator *));
 const char *glow_dict_key(Value k, char **owned);
 int glow_arity_error(const char *name, int given, int params);
 Value native_tensor_shape(int argc, Value *args);

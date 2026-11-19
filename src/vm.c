@@ -1423,6 +1423,7 @@ Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing) {
         if (strcmp(n, "merge") == 0) return bound_native_method_new(o, native_dict_merge);
         return v;
     }
+    if (glow_is_generator(o) && strcmp(n, "close") == 0) return bound_native_method_new(o, glow_native_gen_close);
     if (GET_TYPE(o) == VAL_OBJECT && (o & MASK_PAYLOAD) && GET_OBJ_TYPE(o) == OBJ_PACKED_ARRAY && strcmp(n, "shape") == 0) {
         return native_tensor_shape(1, &o); /* t.shape, as tensor.shape(t) */
     }
@@ -1658,6 +1659,119 @@ static THREAD_LOCAL Generator *gen_running = NULL;
    window at the top of the VM stack and continue at the saved instruction
    (the first one, on the first call). The body runs in the interpreter
    only (its bytecode is marked so the JIT leaves it alone). */
+/* ---- Closing generators ----
+   close() raises the close signal at the yield a generator is paused at:
+   its finally blocks run (a catch in a generator's body passes the signal
+   on, see NODE_TRY_CATCH in compiler.c), and the generator is done. A
+   generator paused inside a try that the program can no longer reach is
+   closed too: the GC keeps it alive and queues it (gc_gen_register), and
+   the next call the interpreter starts closes it. At the end of a program
+   every generator still paused in a try is closed. */
+static THREAD_LOCAL int gen_throw_now = 0;
+static Value gen_exit_v = 0;
+static Value gen_exit_value(void) {
+    if (!gen_exit_v) {
+        gen_exit_v = value_string_copy("generator closed");
+        gc_register_constant_root(gen_exit_v);
+    }
+    return gen_exit_v;
+}
+int glow_gen_is_exit(Value v) { return gen_exit_v && v == gen_exit_v; }
+static int gen_in_try(Bytecode *bc, int idx) {
+    for (int i = 0; i < bc->exception_count; i++)
+        if (idx >= bc->exception_table[i].start_pc && idx < bc->exception_table[i].end_pc) return 1;
+    return 0;
+}
+int glow_gen_needs_close(Generator *g) {
+    return g->state == GEN_SUSPENDED && g->pc > 0 && gen_in_try(AS_CLOSURE(g->body)->body, g->pc - 1);
+}
+static void gen_done(Generator *g) {
+    g->state = GEN_DONE;
+    free(g->regs);
+    g->regs = NULL;
+    g->nregs = 0;
+}
+Value glow_gen_close(Generator *g) {
+    if (g->state == GEN_CREATED) { gen_done(g); return value_none(); }
+    if (g->state == GEN_RUNNING) {
+        char msg[200];
+        snprintf(msg, sizeof msg, "generator %.80s is running: its own body cannot close it", g->name ? g->name : "");
+        pending_exception = value_string_copy(msg);
+        has_exception = 1;
+        return value_none();
+    }
+    if (g->state != GEN_SUSPENDED) return value_none();
+    Value ex = gen_exit_value();
+    char *saved_trace = exception_stack_trace;
+    exception_stack_trace = NULL;
+    g->closing = 1;
+    int done;
+    glow_gen_resume(g, &done);
+    if (has_exception) {
+        if (pending_exception == ex) {
+            has_exception = 0;
+            pending_exception = 0;
+            free(exception_stack_trace);
+            exception_stack_trace = saved_trace;
+        } else {
+            free(saved_trace);
+        }
+        return value_none();
+    }
+    exception_stack_trace = saved_trace;
+    if (!done) {
+        /* A yield in a finally block: it cannot pause again. */
+        gen_done(g);
+        char msg[200];
+        snprintf(msg, sizeof msg, "generator %.80s yielded a value while being closed", g->name ? g->name : "");
+        pending_exception = value_string_copy(msg);
+        has_exception = 1;
+    }
+    return value_none();
+}
+Value glow_native_gen_close(int argc, Value *args) {
+    if (argc < 1 || !glow_is_generator(args[0])) return value_none();
+    return glow_gen_close((Generator*)(uintptr_t)(args[0] & MASK_PAYLOAD));
+}
+/* Close the generators the GC queued. An error from one of their finally
+   blocks has no caller to go to: it is reported and the program goes on. */
+void glow_gen_run_pending(void) {
+    static THREAD_LOCAL int busy = 0;
+    if (busy) return;
+    busy = 1;
+    /* One level deeper than whatever runs now, so an error from a finally
+       is never taken for the main program's own (see l_FINISH). */
+    call_depth++;
+    while (gc_gen_pending_count > 0) {
+        Generator *g = gc_gen_pending_peek();
+        glow_gen_close(g);
+        gc_gen_pending_pop();
+        if (has_exception) {
+            char *m = value_to_new_cstring(pending_exception);
+            fflush(stdout);
+            fprintf(stderr, "Error in a finally block of generator %s, closed because nothing used it any more: %s\n", g->name ? g->name : "", m ? m : "");
+            free(m);
+            has_exception = 0;
+            pending_exception = 0;
+            free(exception_stack_trace);
+            exception_stack_trace = NULL;
+        }
+    }
+    call_depth--;
+    busy = 0;
+}
+static void gen_close_registered(Generator *g) {
+    if (!glow_gen_needs_close(g)) return;
+    gc_gen_pending_add(g);
+}
+/* The end of the program: every generator still paused in a try is on the
+   GC's list (reachable or not, as only a collection drops one), so close
+   them all, without a collection. */
+void glow_gen_close_all(void) {
+    gc_gen_for_each_registered(gen_close_registered);
+    if (gc_gen_pending_count > 0) glow_gen_run_pending();
+}
+
 Value glow_gen_resume(Generator *g, int *done) {
     *done = 0;
     if (g->state == GEN_DONE) { *done = 1; return value_none(); }
@@ -1686,6 +1800,13 @@ Value glow_gen_resume(Generator *g, int *done) {
     g->state = GEN_RUNNING;
     g->yielded = 0;
     Instruction *start = g->pc > 0 ? &bc->code[g->pc] : NULL;
+    if (g->closing && g->pc > 0) {
+        /* close(): go back to the yield it paused at, which raises the
+           close signal there, so the try blocks around it see it. */
+        g->closing = 0;
+        start = &bc->code[g->pc - 1];
+        gen_throw_now = 1;
+    }
     Value v = run_bytecode(bc, start, c, base);
     gen_running = outer;
     vm_stack_top = saved_top;
@@ -1717,6 +1838,10 @@ static int gen_save(Bytecode *bc, Value *R, Instruction *next) {
     memcpy(g->regs, R, sizeof(Value) * (size_t)n);
     g->pc = (int)(next - bc->code);
     g->yielded = 1;
+    if (!g->registered && gen_in_try(bc, g->pc - 1)) {
+        g->registered = 1;
+        gc_gen_register(g);
+    }
     /* An old generator now holds young values. */
     gc_write_barrier((GCObject*)g, value_none());
     return 1;
@@ -1731,6 +1856,9 @@ Value jit_iter_pair_first(Value vit) {
     GCObject *obj = (GCObject*)(uintptr_t)(vit & MASK_PAYLOAD);
     if (obj->type != OBJ_ITERATOR) return JIT_ITER_DONE;
     Iterator *it = (Iterator*)obj;
+    /* A generator: compiled code leaves the step to the interpreter
+       (OP_ITER_NEXT2), which runs it and numbers its values. */
+    if (glow_is_generator(it->iterable)) return VAL_DEOPT_SENTINEL;
     if (GET_TYPE(it->iterable) != VAL_LIST) return JIT_ITER_DONE;
     List *l = AS_LIST(it->iterable);
     return it->index + 1 < l->size ? l->items[it->index] : JIT_ITER_DONE;
@@ -1926,6 +2054,9 @@ Value glow_slice(Value obj, Value startV, Value endV) {
     if (base_reg + bc->local_count + 16 > vm_stack_top) {
         vm_stack_top = base_reg + bc->local_count + 16;
     }
+    /* Generators the GC found unreachable while paused in a try: run their
+       finally blocks now, above this frame (see glow_gen_run_pending). */
+    if (__builtin_expect(gc_gen_pending_count > 0, 0) && !has_exception) glow_gen_run_pending();
 
     // static THREAD_LOCAL long total_instructions = 0;
     // static THREAD_LOCAL Trace *recording_trace = NULL;
@@ -3619,6 +3750,12 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         R(pc->r0) = r; pc++; goto l_DISPATCH;
     }
     l_OP_YIELD: {
+        if (__builtin_expect(gen_throw_now, 0)) {
+            gen_throw_now = 0;
+            pending_exception = gen_exit_value();
+            has_exception = 1;
+            goto l_OP_THROW;
+        }
         /* Only the generator's own frame (the base of this activation, which
            glow_gen_resume started) can pause: its registers and the place to
            go on from are saved, and the activation returns the value. */
@@ -3972,6 +4109,22 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         pc = bc->code + pc->arg; DISPATCH();
     }
     l_OP_ITER_NEXT2: {
+        Value _vit2 = R(pc->r1);
+        Iterator *_it2 = (GET_TYPE(_vit2) == VAL_OBJECT && (_vit2 & MASK_PAYLOAD) && GET_OBJ_TYPE(_vit2) == OBJ_ITERATOR) ? (Iterator*)(uintptr_t)(_vit2 & MASK_PAYLOAD) : NULL;
+        if (_it2 && glow_is_generator(_it2->iterable)) {
+            /* for each i, x in a generator: i counts from 0, as for a list. */
+            int _done;
+            call_stack[my_frame_idx].pc = pc;
+            Value v = glow_gen_resume((Generator*)(uintptr_t)(_it2->iterable & MASK_PAYLOAD), &_done);
+            if (has_exception) goto l_OP_THROW;
+            if (!_done) {
+                R(pc->r0) = value_int(_it2->index);
+                R(pc->r2) = v;
+                _it2->index++;
+                pc++; goto l_DISPATCH;
+            }
+            pc = bc->code + pc->arg; DISPATCH();
+        }
         Value first = jit_iter_pair_first(R(pc->r1));
         if (first != JIT_ITER_DONE) {
             R(pc->r0) = first;
