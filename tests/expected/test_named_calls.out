@@ -1,0 +1,25 @@
+6
+10
+4
+24
+24
+xB!
+1B3
+eval c
+eval b
+eval a
+abc
+eval a
+eval c
+aBc
+1001000
+error: area() got two values for 'w'
+error: area() has no parameter named 'depth'
+error: area() got two values for 'scale'
+local 2,1
+second 21
+second 21
+2/1
+6
+module area w=2 h=3 scale=1
+module area w=2 h=3 scale=1

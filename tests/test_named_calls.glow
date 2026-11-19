@@ -1,0 +1,87 @@
+# name = value calls to a function defined once are matched to its
+# parameters when the program is compiled; these check that every result,
+# error and order of evaluation stays what the run-time match gives.
+
+func area(w, h = 1, scale = 1):
+    return w * h * scale
+end
+show area(2, h = 3)
+show area(2, scale = 5)
+show area(w = 4)
+show area(scale = 2, w = 3, h = 4)
+show area(2, h = 3, scale = 4)
+
+# A parameter left out in the middle gets its default.
+func label(a, b = "B", c = "C"):
+    return a + b + c
+end
+show label("x", c = "!")
+show label(c = "3", a = "1")
+
+# Values run in the order written, whatever the parameters' order.
+func say(text):
+    show "eval " + text
+    return text
+end
+show label(c = say("c"), b = say("b"), a = say("a"))
+show label(say("a"), c = say("c"))
+
+# In a loop, inside a function, and in a function defined after its caller.
+func total(n):
+    let s = 0
+    for i from 1 to n:
+        s = s + later(step = 2, x = i)
+    end
+    return s
+end
+func later(x, step = 1):
+    return x * step
+end
+show total(1000)
+
+# Errors are the same as before.
+func trial(f):
+    try:
+        f()
+    catch e:
+        show "error: " + str(e)
+    end
+end
+trial(lambda(): area(2, w = 3))
+trial(lambda(): area(2, depth = 3))
+trial(lambda(): area(1, 2, 3, scale = 4))
+
+# A local of the same name is called, not the function.
+func shadow():
+    let area = lambda(h, w): "local " + str(h) + "," + str(w)
+    return area(w = 1, h = 2)
+end
+show shadow()
+
+# Two definitions of one name: each call runs whichever is current.
+func twice_defined(a, b = 0):
+    return "first " + str(a) + str(b)
+end
+show twice_defined(b = 1, a = 2)
+func twice_defined(b, a = 0):
+    return "second " + str(a) + str(b)
+end
+show twice_defined(b = 1, a = 2)
+
+# A name the program assigns to is matched when it runs.
+func swapped(p, q):
+    return str(p) + "-" + str(q)
+end
+let old = swapped
+swapped = lambda(q, p): str(q) + "/" + str(p)
+show swapped(p = 1, q = 2)
+
+# A module that defines area again with other parameters: the calls
+# compiled for the first area follow the new one.
+func call_area():
+    return area(w = 2, h = 3, scale = 1)
+end
+show call_area()
+use "tests/modules/named_redefine.glow"
+show call_area()
+show area(w = 2, h = 3, scale = 1)
