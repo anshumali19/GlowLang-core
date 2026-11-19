@@ -1,0 +1,12 @@
+=== Running GlowORM Integration Test ===
+Initial users count:  0
+Rollback completed.
+Re-run migrations completed.
+Users count after inserts:  3
+Alice age:  30
+Alice role:  admin
+First oldest user:  Charlie  age:  35
+Second oldest user:  Alice  age:  30
+Alice new age:  31
+Users count after Bob deleted:  2
+=== GlowORM Integration Test Passed ===
