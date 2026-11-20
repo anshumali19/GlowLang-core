@@ -15,3 +15,9 @@ class Other:
         return "other scale by=" + str(by) + " extra=" + str(extra)
     end
 end
+# An object whose field has the name of a method in the main program.
+class Gizmo:
+    func init():
+        self.kickoff = lambda(b, a): "gizmo field " + str(a) + str(b)
+    end
+end

@@ -98,6 +98,41 @@ trial(lambda(): s.scale(size = 3))
 trial(lambda(): Shape(1, w = 2))
 trial(lambda(): Shape(depth = 2))
 
+# A trait's init replaces the class's own when the class uses it after.
+trait Named:
+    func init(last, first = "?"):
+        self.full = first + " " + last
+    end
+end
+class Person:
+    func init(first, last = "?"):
+        self.full = first + " " + last
+    end
+    use Named
+end
+show Person(first = "Ada", last = "L").full
+
+# A list's own sort takes no name = value arguments, though a class here
+# has a sort method.
+class Deck:
+    func sort(key = none, reverse = false):
+        return "deck sort " + str(reverse)
+    end
+end
+show Deck().sort(reverse = true)
+trial(lambda(): [3, 1].sort(reverse = true))
+
+# A method whose name a module later gives to a field (see the module).
+class Job:
+    func kickoff(a, b = 0):
+        return "job " + str(a) + str(b)
+    end
+end
+func begin(o):
+    return o.kickoff(b = 2, a = 1)
+end
+show begin(Job())
+
 # A module that defines Shape again, with init's parameters in another
 # order, and another class with a method scale: calls compiled for the
 # first ones follow what is there now.
@@ -113,3 +148,4 @@ let m = make()
 show m.w, m.h
 show scaled(m)
 show scaled(Other())
+show begin(Job()), begin(Gizmo())

@@ -1075,6 +1075,17 @@ static NativeFuncPtr cached_find(Instruction *pc, const char *kind, const Method
     return fn;
 }
 
+/* Is name a built-in method of some value (a string, list, dict, set or
+   generator)? Those take no name = value arguments (see resolve_named_call
+   in compiler.c). The names glow_get_property adds are included. */
+int glow_is_builtin_method_name(const char *name) {
+    static const char *extra[] = { "type", "close", "has", "keys", "values", "remove", "merge", "contains", "find", "slice", "split", NULL };
+    if (find_method(string_methods, name) || find_method(list_methods, name) ||
+        find_method(set_methods, name) || find_method(dict_methods, name)) return 1;
+    for (int i = 0; extra[i]; i++) if (strcmp(extra[i], name) == 0) return 1;
+    return 0;
+}
+
 NativeFuncPtr glow_method_lookup(Value v, const char *name, Instruction *pc, Value *member) {
     *member = value_none();
     if (!name) return NULL;

@@ -845,17 +845,19 @@ static const char *keyed(const char *prefix, const char *name) {
     snprintf(buf, sizeof buf, "%s%.250s", prefix, name);
     return intern_string(buf);
 }
-/* The init written directly in class c's body; NULL when there is none, or
-   when it is decorated (its parameters are then the forwarding ones). */
+/* The init written directly in class c's body; NULL when there is none,
+   when it is decorated (its parameters are then the forwarding ones), or
+   when the class uses a trait (whose init may replace it). */
 static Node *class_own_init(Node *c) {
-    Node *n = c->left;
+    Node *n = c->left, *init = NULL;
     while (n) {
         Node *s = n->type == NODE_SEQ ? n->right : n;
-        if (s && s->type == NODE_FUNC_DEF && s->name && strcmp(s->name, "init") == 0) return s;
+        if (s && s->type == NODE_USE_TRAIT) return NULL;
+        if (s && s->type == NODE_FUNC_DEF && s->name && strcmp(s->name, "init") == 0) init = s;
         if (s && s->type == NODE_DECORATED && s->name && strcmp(s->name, "init") == 0) return NULL;
         n = n->type == NODE_SEQ ? n->left : NULL;
     }
-    return NULL;
+    return init;
 }
 static void def_seen(const char *name, Node *def) {
     for (int i = 0; i < defs_seen_count; i++)
@@ -898,9 +900,15 @@ static void collect_defs(Node *n, int in_class) {
         n = n->left;
     }
 }
+static void named_def_compiled(const char *name, Node *def);
 static void collect_named_defs(Node *program) {
     defs_seen_count = 0;
     collect_defs(program, 0);
+    /* A field or dict key named m here (a module, a later REPL line) may now
+       answer to o.m: the earlier programs' calls of a method m stop using
+       the plain call. */
+    for (int i = 0; i < defs_seen_count; i++)
+        if (strncmp(defs_seen[i].name, "field ", 6) == 0) named_def_compiled(keyed(".", defs_seen[i].name + 6), NULL);
     named_unit_start = named_def_count;
     for (int i = 0; i < defs_seen_count; i++) {
         DefSeen *s = &defs_seen[i];
@@ -964,6 +972,9 @@ static Node *resolve_named_call(Node *n, const char **flag) {
         /* o.m(...): not super.m (see __glow_super_bind), and not a member of
            a built-in module (fs.remove, os.exit). */
         if (callee->left->type == NODE_VAR && callee->left->name && strcmp(callee->left->name, "super") == 0) return NULL;
+        /* A list's sort, a string's split...: they take no name = value
+           arguments, and o may be a list or a string. */
+        if (glow_is_builtin_method_name(callee->name)) return NULL;
         for (int g = 0; g < global_table.count; g++) {
             Value gv = global_table.values[g];
             if (GET_TYPE(gv) == VAL_DICT && dict_get_idx(AS_DICT(gv), callee->name) >= 0) return NULL;
