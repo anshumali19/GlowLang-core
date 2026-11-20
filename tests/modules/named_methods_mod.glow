@@ -1,0 +1,23 @@
+# Used by test_named_methods.glow: a class Shape again, with init's
+# parameters in another order, and a second class with a method scale whose
+# parameters differ. Calls compiled before this was loaded must notice.
+class Shape:
+    func init(h, w = 1):
+        self.w = w
+        self.h = h
+    end
+    func scale(by, extra = 0):
+        return "module scale by=" + str(by) + " extra=" + str(extra)
+    end
+end
+class Other:
+    func scale(extra, by = 1):
+        return "other scale by=" + str(by) + " extra=" + str(extra)
+    end
+end
+# An object whose field has the name of a method in the main program.
+class Gizmo:
+    func init():
+        self.kickoff = lambda(b, a): "gizmo field " + str(a) + str(b)
+    end
+end

@@ -800,7 +800,19 @@ static Node *lower_method_decorators(Node *n) {
    is the current one, and the call compiles to
        f(1, none, 3) when <flag> otherwise __glow_callv(f, "pk", 1, "scale", 3)
    Compiling any definition of a name sets the flags of the name's resolved
-   definitions (true for that one, false for the others). */
+   definitions (true for that one, false for the others).
+
+   Constructors and methods too:
+   - C(x = 1), when class C is defined once, with its own init (no ...rest
+     or **opts), and C is never assigned to: matched to init's parameters.
+     Its entry is named "class C"; compiling any class C sets the flags.
+   - o.m(x = 1), when exactly one method named m exists in the program (in
+     one class or trait; subclasses inherit it), no method m was compiled
+     before (an earlier REPL line, a module), nothing can hold another m
+     instead: no field is assigned that name (o.m = ..., {"m": ...}) and no
+     built-in module has it. Then whatever o.m finds is that method, and the
+     call becomes the plain o.m(...). Its entry is named ".m"; compiling any
+     method m sets the flags. */
 typedef struct { const char *name; Node *def; const char *flag; } NamedDef;
 static NamedDef *named_defs = NULL;
 static int named_def_count = 0, named_def_cap = 0, named_unit_start = 0;
@@ -812,6 +824,40 @@ static Node *named_slow_call = NULL;   /* the call being compiled as the fallbac
 static void set_global_bool(const char *name, int v) {
     int slot = global_get_slot(name);
     global_table.values[slot] = value_bool(v);
+}
+/* Method names compiled so far, in any program (see collect_named_defs). */
+static const char **methods_compiled = NULL;
+static int methods_compiled_count = 0, methods_compiled_cap = 0;
+static int method_compiled_before(const char *m) {
+    for (int i = 0; i < methods_compiled_count; i++) if (strcmp(methods_compiled[i], m) == 0) return 1;
+    return 0;
+}
+static void note_method_compiled(const char *m) {
+    if (!m || method_compiled_before(m)) return;
+    if (methods_compiled_count == methods_compiled_cap) {
+        methods_compiled_cap = methods_compiled_cap ? methods_compiled_cap * 2 : 64;
+        methods_compiled = realloc(methods_compiled, sizeof(char*) * (size_t)methods_compiled_cap);
+    }
+    methods_compiled[methods_compiled_count++] = m;
+}
+static const char *keyed(const char *prefix, const char *name) {
+    char buf[300];
+    snprintf(buf, sizeof buf, "%s%.250s", prefix, name);
+    return intern_string(buf);
+}
+/* The init written directly in class c's body; NULL when there is none,
+   when it is decorated (its parameters are then the forwarding ones), or
+   when the class uses a trait (whose init may replace it). */
+static Node *class_own_init(Node *c) {
+    Node *n = c->left, *init = NULL;
+    while (n) {
+        Node *s = n->type == NODE_SEQ ? n->right : n;
+        if (s && s->type == NODE_USE_TRAIT) return NULL;
+        if (s && s->type == NODE_FUNC_DEF && s->name && strcmp(s->name, "init") == 0) init = s;
+        if (s && s->type == NODE_DECORATED && s->name && strcmp(s->name, "init") == 0) return NULL;
+        n = n->type == NODE_SEQ ? n->left : NULL;
+    }
+    return init;
 }
 static void def_seen(const char *name, Node *def) {
     for (int i = 0; i < defs_seen_count; i++)
@@ -832,6 +878,16 @@ static void collect_defs(Node *n, int in_class) {
             continue;
         }
         if (n->type == NODE_FUNC_DEF && !in_class && n->name) def_seen(n->name, n);
+        if (n->type == NODE_FUNC_DEF && in_class && n->name) def_seen(keyed(".", n->name), n);
+        /* A decorated method m: its forwarding method takes anything. */
+        if (n->type == NODE_DECORATED && in_class && n->name) { def_seen(keyed(".", n->name), NULL); def_seen(keyed(".", n->name), NULL); }
+        if (n->type == NODE_CLASS && n->name) def_seen(keyed("class ", n->name), class_own_init(n));
+        /* Names something other than a method may answer to. */
+        if ((n->type == NODE_INDEX_ASSIGN || n->type == NODE_COMPOUND_INDEX) && n->name) def_seen(keyed("field ", n->name), NULL);
+        if (n->type == NODE_DICT_LITERAL)
+            for (int i = 0; i < n->dict_count; i++)
+                if (n->dict_keys[i] && n->dict_keys[i]->type == NODE_STRING_LIT && n->dict_keys[i]->name)
+                    def_seen(keyed("field ", n->dict_keys[i]->name), NULL);
         if (n->type == NODE_FUNC_DEF || n->type == NODE_LAMBDA) in_class = 0;
         if (n->type == NODE_CLASS || n->type == NODE_TRAIT) in_class = 1;
         collect_defs(n->right, in_class); collect_defs(n->third, in_class);
@@ -844,13 +900,30 @@ static void collect_defs(Node *n, int in_class) {
         n = n->left;
     }
 }
+static void named_def_compiled(const char *name, Node *def);
 static void collect_named_defs(Node *program) {
     defs_seen_count = 0;
     collect_defs(program, 0);
+    /* A field or dict key named m here (a module, a later REPL line) may now
+       answer to o.m: the earlier programs' calls of a method m stop using
+       the plain call. */
+    for (int i = 0; i < defs_seen_count; i++)
+        if (strncmp(defs_seen[i].name, "field ", 6) == 0) named_def_compiled(keyed(".", defs_seen[i].name + 6), NULL);
     named_unit_start = named_def_count;
     for (int i = 0; i < defs_seen_count; i++) {
         DefSeen *s = &defs_seen[i];
-        if (s->count != 1 || s->def->has_rest || s->name[0] == '@' || glow_name_reassigned(s->name)) continue;
+        if (s->count != 1 || !s->def || s->def->has_rest || s->name[0] == '@') continue;
+        if (strncmp(s->name, "field ", 6) == 0) continue;
+        if (s->name[0] == '.') {
+            const char *m = s->name + 1;
+            if (m[0] == '@' || method_compiled_before(m)) continue;
+            int field = 0;
+            for (int j = 0; j < defs_seen_count; j++)
+                if (strncmp(defs_seen[j].name, "field ", 6) == 0 && strcmp(defs_seen[j].name + 6, m) == 0) { field = 1; break; }
+            if (field) continue;
+        } else if (strncmp(s->name, "class ", 6) == 0) {
+            if (glow_name_reassigned(s->name + 6)) continue;
+        } else if (glow_name_reassigned(s->name)) continue;
         if (named_def_count == named_def_cap) {
             named_def_cap = named_def_cap ? named_def_cap * 2 : 64;
             named_defs = realloc(named_defs, sizeof(NamedDef) * (size_t)named_def_cap);
@@ -888,12 +961,35 @@ static int simple_value(Node *n) {
 static Node *resolve_named_call(Node *n, const char **flag) {
     if (n->call_arg_count < 2) return NULL;
     Node *callee = n->call_args[0], *kn = n->call_args[1];
-    if (!callee || callee->type != NODE_VAR || !callee->name || !kn || kn->type != NODE_STRING_LIT || !kn->name) return NULL;
-    const char *name = callee->name;
-    if (get_local_reg(name) != -1 || is_outer_local(name) || glow_name_reassigned(name)) return NULL;
+    if (!callee || !kn || kn->type != NODE_STRING_LIT || !kn->name) return NULL;
+    const char *key = NULL;
+    int is_method = 0;
+    if (callee->type == NODE_VAR && callee->name) {
+        const char *name = callee->name;
+        if (get_local_reg(name) != -1 || is_outer_local(name) || glow_name_reassigned(name)) return NULL;
+        key = name;
+    } else if (callee->type == NODE_INDEX && callee->name && callee->left && !callee->right) {
+        /* o.m(...): not super.m (see __glow_super_bind), and not a member of
+           a built-in module (fs.remove, os.exit). */
+        if (callee->left->type == NODE_VAR && callee->left->name && strcmp(callee->left->name, "super") == 0) return NULL;
+        /* A list's sort, a string's split...: they take no name = value
+           arguments, and o may be a list or a string. */
+        if (glow_is_builtin_method_name(callee->name)) return NULL;
+        for (int g = 0; g < global_table.count; g++) {
+            Value gv = global_table.values[g];
+            if (GET_TYPE(gv) == VAL_DICT && dict_get_idx(AS_DICT(gv), callee->name) >= 0) return NULL;
+        }
+        key = keyed(".", callee->name);
+        is_method = 1;
+    } else return NULL;
     NamedDef *d = NULL;
     for (int i = named_unit_start; i < named_def_count; i++)
-        if (strcmp(named_defs[i].name, name) == 0) { d = &named_defs[i]; break; }
+        if (strcmp(named_defs[i].name, key) == 0) { d = &named_defs[i]; break; }
+    if (!d && !is_method) {
+        const char *ck = keyed("class ", key);
+        for (int i = named_unit_start; i < named_def_count; i++)
+            if (strcmp(named_defs[i].name, ck) == 0) { d = &named_defs[i]; break; }
+    }
     if (!d) return NULL;
     int pc = d->def->func_param_count;
     char **ps = d->def->func_params;
@@ -928,8 +1024,11 @@ static Node *resolve_named_call(Node *n, const char **flag) {
     if (!in_order && !simple) return NULL;
     Node **args = arena_alloc(sizeof(Node*) * (size_t)(used ? used : 1));
     for (int i = 0; i < used; i++) args[i] = slot[i] ? slot[i] : newVarNode(intern_string("none"));
-    Node *cv = newVarNode(name);
-    cv->line = callee->line ? callee->line : n->line;
+    Node *cv = callee;
+    if (!is_method) {
+        cv = newVarNode(callee->name);
+        cv->line = callee->line ? callee->line : n->line;
+    }
     Node *call = newCallExprNode(cv, args, used);
     call->line = n->line;
     *flag = d->flag;
@@ -1397,6 +1496,10 @@ static void compile_stmt(Node *n) {
             }
             FuncEntry *fe = func_table_add(func_name);
             if (!is_method) named_def_compiled(func_name, n);
+            else if (n->name) {
+                named_def_compiled(keyed(".", n->name), n);
+                note_method_compiled(intern_string(n->name));
+            }
             if (fe->body) bc_free(fe->body);
             if (fe->specs) {
                 for (int i=0; i<fe->spec_count; i++) {
@@ -1523,6 +1626,7 @@ static void compile_stmt(Node *n) {
             break;
         }
         case NODE_CLASS: {
+            if (n->name) named_def_compiled(keyed("class ", n->name), class_own_init(n));
             const char *old_class = compiling_class_name;
             const char *old_parent = compiling_parent_name;
             compiling_class_name = n->name;

@@ -1160,6 +1160,7 @@ Value bound_native_method_new(Value inst, NativeFuncPtr native_m);
 /* Core library (corelib.c): built-in list/string/dict methods and globals. */
 NativeFuncPtr glow_builtin_method(Value v, const char *name);
 NativeFuncPtr glow_method_lookup(Value v, const char *name, struct Instruction *pc, Value *member);
+int glow_is_builtin_method_name(const char *name);
 void glow_corelib_init(void);
 void glow_datetime_init(void);
 void glow_websocket_init(void);
