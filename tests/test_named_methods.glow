@@ -1,0 +1,115 @@
+# name = value arguments to constructors and methods are matched when the
+# program is compiled where that is safe; these check that results, errors
+# and the order of evaluation stay what the run-time match gives.
+
+class Shape:
+    func init(w, h = 1):
+        self.w = w
+        self.h = h
+    end
+    func scale(by, extra = 0):
+        return (self.w * self.h) * by + extra
+    end
+    func describe(prefix = "", suffix = ""):
+        return prefix + str(self.w) + "x" + str(self.h) + suffix
+    end
+end
+show Shape(2, h = 3).describe()
+show Shape(h = 4, w = 5).describe(suffix = "!")
+show Shape(w = 6).describe(prefix = "[", suffix = "]")
+let s = Shape(2, 3)
+show s.scale(2), s.scale(by = 2), s.scale(extra = 1, by = 10)
+
+# Inherited methods are the same method.
+class Square extends Shape:
+    func init(side):
+        self.w = side
+        self.h = side
+    end
+end
+show Square(3).scale(extra = 5, by = 1)
+show Square(4).describe(suffix = " square")
+
+# Values run in the order written.
+func say(t):
+    show "eval " + t
+    return t
+end
+show s.describe(suffix = say("b"), prefix = say("a"))
+show Shape(h = say("2"), w = say("7")).describe()
+
+# A method name two classes define is matched when the call runs.
+class Cat:
+    func speak(sound = "meow", count = 1):
+        return sound * count
+    end
+end
+class Dog:
+    func speak(count = 1, sound = "woof"):
+        return sound * count
+    end
+end
+show Cat().speak(count = 2), Dog().speak(count = 2)
+
+# A field of the same name as a method: the call takes what the object has.
+class Holder:
+    func init(f):
+        self.run = f
+    end
+end
+class Runner:
+    func run(a, b = 0):
+        return "method " + str(a) + str(b)
+    end
+end
+show Runner().run(b = 2, a = 1)
+show Holder(lambda(b, a): "field " + str(a) + str(b)).run(b = 2, a = 1)
+
+# A dict member of the same name.
+class Opener:
+    func open(path, mode = "r"):
+        return "method " + path + " " + mode
+    end
+end
+let tools = {"open": lambda(mode, path): "dict " + path + " " + mode}
+show Opener().open(mode = "w", path = "a.txt")
+show tools.open(mode = "w", path = "a.txt")
+
+# A class whose init is inherited is matched when the call runs.
+class Base:
+    func init(first, second = "2nd"):
+        self.v = first + "/" + second
+    end
+end
+class Derived extends Base:
+end
+show Derived(second = "b", first = "a").v
+
+# Errors are the same as before.
+func trial(f):
+    try:
+        f()
+    catch e:
+        show "error: " + str(e)
+    end
+end
+trial(lambda(): s.scale(2, by = 3))
+trial(lambda(): s.scale(size = 3))
+trial(lambda(): Shape(1, w = 2))
+trial(lambda(): Shape(depth = 2))
+
+# A module that defines Shape again, with init's parameters in another
+# order, and another class with a method scale: calls compiled for the
+# first ones follow what is there now.
+func make():
+    return Shape(w = 2, h = 3)
+end
+func scaled(o):
+    return o.scale(by = 2, extra = 1)
+end
+show make().describe(), scaled(make())
+use "tests/modules/named_methods_mod.glow"
+let m = make()
+show m.w, m.h
+show scaled(m)
+show scaled(Other())

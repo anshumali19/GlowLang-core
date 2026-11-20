@@ -1,0 +1,26 @@
+2x3
+5x4!
+[6x1]
+12 12 61
+14
+4x4 square
+eval b
+eval a
+a2x3b
+eval 2
+eval 7
+7x2
+meowmeow woofwoof
+method 12
+field 12
+method a.txt w
+dict a.txt w
+a/b
+error: scale() got two values for 'by'
+error: scale() has no parameter named 'size'
+error: Shape() got two values for 'w'
+error: Shape() has no parameter named 'depth'
+2x3 13
+2 3
+module scale by=2 extra=1
+other scale by=2 extra=1
