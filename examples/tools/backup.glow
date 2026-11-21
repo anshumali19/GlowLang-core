@@ -1,0 +1,96 @@
+#!/usr/bin/env glowlang
+# backup: keep a copy of a folder up to date, copying only what changed.
+#
+#   backup ~/Documents /mnt/usb/Documents [--dry-run] [--delete]
+#
+# A file is copied when the copy is missing, has another size, or is older
+# than the original. --delete also removes files from the copy that are no
+# longer in the original. --dry-run says what would happen and changes
+# nothing. Run it again any time: an up-to-date copy costs only a look at
+# each file.
+import "cli"
+
+let app = ArgParser("backup", "Mirror a folder, copying only what changed")
+app.positional("source", "The folder to back up")
+app.positional("target", "Where the copy lives")
+app.flag("--dry-run", "Show what would happen without changing anything", "-n")
+app.flag("--delete", "Remove files from the copy that the source no longer has")
+let args = app.parse_or_exit()
+let src = fs.abspath(args["source"]).replace("\\", "/")
+let dst = fs.abspath(args["target"]).replace("\\", "/")
+let dry = args["--dry-run"]
+
+when not fs.is_dir(src):
+    os.eprint("backup: " + args["source"] + " is not a folder")
+    os.exit(1)
+end
+when dst.starts_with(src + "/"):
+    os.eprint("backup: the copy cannot be inside the folder it copies")
+    os.exit(1)
+end
+
+func relative(path, root):
+    return path.replace("\\", "/")[len(root) + 1:]
+end
+
+func human(bytes):
+    for each unit in ["B", "KB", "MB", "GB"]:
+        when bytes < 1024 or unit == "GB":
+            return str(round(bytes * 10) / 10) + " " + unit
+        end
+        bytes = bytes / 1024
+    end
+end
+
+let copied = 0
+let same = 0
+let removed = 0
+let bytes = 0
+let wanted = {}
+for each path in fs.walk(src):
+    let rel = relative(path, src)
+    wanted[rel] = true
+    let target = dst + "/" + rel
+    let s = fs.stat(path)
+    let t = fs.stat(target)
+    when t != none and t["size"] == s["size"] and t["modified"] >= s["modified"]:
+        same = same + 1
+        skip
+    end
+    when t == none:
+        show "new      " + rel
+    otherwise:
+        show "changed  " + rel
+    end
+    copied = copied + 1
+    bytes = bytes + s["size"]
+    when not dry:
+        fs.mkdirs(fs.dirname(target))
+        fs.copy(path, target)
+    end
+end
+
+when args["--delete"] and fs.is_dir(dst):
+    for each path in fs.walk(dst):
+        let rel = relative(path, dst)
+        when not wanted.has(rel):
+            show "removed  " + rel
+            removed = removed + 1
+            when not dry:
+                fs.remove(path)
+            end
+        end
+    end
+end
+
+let summary = "copied "
+when dry:
+    summary = "would copy "
+end
+summary = summary + str(copied) + " files (" + human(bytes) + "), " + str(same) + " already up to date"
+when args["--delete"] and dry:
+    summary = summary + ", " + str(removed) + " to remove"
+eif args["--delete"]:
+    summary = summary + ", " + str(removed) + " removed"
+end
+show summary

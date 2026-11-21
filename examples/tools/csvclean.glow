@@ -1,0 +1,146 @@
+#!/usr/bin/env glowlang
+# csvclean: tidy a CSV file and say what changed.
+#
+#   csvclean data.csv [-o clean.csv] [--dedupe]
+#
+# Trims spaces around every value, turns headers into lower_snake_case,
+# drops empty rows, pads short rows and cuts long ones to the header's
+# width, and with --dedupe drops repeated rows. Quoted values ("a, b",
+# "say ""hi""", line breaks inside quotes) are read and written correctly.
+# Without -o the result goes to standard output; the report goes to
+# standard error either way.
+import "cli"
+
+let app = ArgParser("csvclean", "Tidy a CSV file")
+app.positional("file", "The CSV file to read")
+app.option("--output", "Where to write the result (default: standard output)", "", "-o")
+app.flag("--dedupe", "Drop rows that repeat an earlier row", "-d")
+let args = app.parse_or_exit()
+
+# The rows of a CSV text, each a list of values.
+func parse_csv(text):
+    let rows = []
+    let row = []
+    let cell = ""
+    let quoted = false
+    let i = 0
+    let n = len(text)
+    while i < n:
+        let c = text[i]
+        when quoted:
+            when c == "\"":
+                when i + 1 < n and text[i + 1] == "\"":
+                    cell = cell + "\""
+                    i = i + 1
+                otherwise:
+                    quoted = false
+                end
+            otherwise:
+                cell = cell + c
+            end
+        eif c == "\"":
+            quoted = true
+        eif c == ",":
+            row.push(cell)
+            cell = ""
+        eif c == "\n" or c == "\r":
+            when c == "\r" and i + 1 < n and text[i + 1] == "\n":
+                i = i + 1
+            end
+            row.push(cell)
+            rows.push(row)
+            row = []
+            cell = ""
+        otherwise:
+            cell = cell + c
+        end
+        i = i + 1
+    end
+    when cell != "" or len(row) > 0:
+        row.push(cell)
+        rows.push(row)
+    end
+    return rows
+end
+
+func csv_value(v):
+    when v.contains(",") or v.contains("\"") or v.contains("\n"):
+        return "\"" + v.replace("\"", "\"\"") + "\""
+    end
+    return v
+end
+
+func header_name(h):
+    let out = ""
+    for each c in h.strip().lower():
+        when "abcdefghijklmnopqrstuvwxyz0123456789".contains(c):
+            out = out + c
+        eif len(out) > 0 and out[len(out) - 1] != "_":
+            out = out + "_"
+        end
+    end
+    while len(out) > 0 and out[len(out) - 1] == "_":
+        out = out[0:len(out) - 1]
+    end
+    return out
+end
+
+let text = fs.read(args["file"])
+when text == none:
+    os.eprint("csvclean: cannot read " + args["file"])
+    os.exit(1)
+end
+let rows = parse_csv(text)
+when len(rows) == 0:
+    os.eprint("csvclean: " + args["file"] + " is empty")
+    os.exit(1)
+end
+
+let header = [header_name(h) for each h in rows[0]]
+let width = len(header)
+let out = [header]
+let seen = {}
+let report = {"trimmed": 0, "empty": 0, "padded": 0, "cut": 0, "duplicates": 0}
+for each raw in rows[1:]:
+    let row = []
+    for each v in raw:
+        let t = v.strip()
+        when t != v:
+            report["trimmed"] = report["trimmed"] + 1
+        end
+        row.push(t)
+    end
+    when "".join(row) == "":
+        report["empty"] = report["empty"] + 1
+        skip
+    end
+    when len(row) < width:
+        report["padded"] = report["padded"] + 1
+        while len(row) < width:
+            row.push("")
+        end
+    eif len(row) > width:
+        report["cut"] = report["cut"] + 1
+        row = row[0:width]
+    end
+    let key = json.stringify(row)
+    when args["--dedupe"] and seen.has(key):
+        report["duplicates"] = report["duplicates"] + 1
+        skip
+    end
+    seen[key] = true
+    out.push(row)
+end
+
+let result = "\n".join([",".join([csv_value(v) for each v in r]) for each r in out]) + "\n"
+when args["--output"] == "":
+    os.write(result)
+otherwise:
+    fs.write(args["--output"], result)
+end
+os.eprint("csvclean: " + str(len(rows) - 1) + " rows in, " + str(len(out) - 1) + " out; headers: " + ", ".join(header))
+for each k, v in report:
+    when v > 0:
+        os.eprint("  " + k + ": " + str(v))
+    end
+end
