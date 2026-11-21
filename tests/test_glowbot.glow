@@ -75,6 +75,24 @@ func bot(args, typed, env = none):
     return [r["code"], r["stdout"].replace("\r\n", "\n").strip(), r["stderr"].replace("\r\n", "\n").strip()]
 end
 
+# A sent message with its random boundary named B and its base64 parts decoded.
+func readable(raw):
+    let m = raw.replace("\r\n", "\n")
+    let b = m[m.find("boundary=\"") + 10:]
+    b = b[0:b.find("\"")]
+    let pieces = m.split("--" + b)
+    let out = pieces[0].replace(b, "B")
+    for each p in pieces[1:]:
+        when p.starts_with("--"):
+            out = out + "--B--"
+            skip
+        end
+        let sep = p.find("\n\n")
+        out = out + "--B" + p[0:sep] + "\n\n" + crypto.unbase64(p[sep + 2:].replace("\n", "")).replace("\r\n", "\n") + "\n"
+    end
+    return out
+end
+
 func last_line(text):
     let lines = text.split("\n")
     return lines[len(lines) - 1]
@@ -126,7 +144,7 @@ try:
     r = bot(["send"], "bob\nbob@example.com, ana@example.org\nCafé plans\nLine one\nLine two\n.\nyes\n")
     show r[0]
     show r[1]
-    show seen["sent"][0].replace("\r\n", "\n")
+    show readable(seen["sent"][0])
 
     show "--- --to is checked too"
     r = bot(["send", "--to", "bob@example.com\nBcc: eve@example.com", "--subject", "x", "--body", "x"], "yes\n")
@@ -147,7 +165,7 @@ try:
     show r[0]
     show r[1]
     show seen["ai"][1]["messages"][0]["content"].contains("meeting moved to fri 3pm")
-    show seen["sent"][1].replace("\r\n", "\n")
+    show readable(seen["sent"][1])
 
     show "--- an expired sign-in"
     fs.write(fs.join(dir, "token.json"), json.stringify({"refresh_token": "revoked"}))

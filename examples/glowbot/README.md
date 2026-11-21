@@ -89,8 +89,8 @@ From now on `glowbot send` works without signing in again.
 - **Permission: `gmail.send` only.** GlowBot asks for
   `https://www.googleapis.com/auth/gmail.send`. That lets it send mail and
   nothing else: it cannot read, search or delete your email.
-- **Sending: the Gmail API.** The email is built as a plain text MIME
-  message (UTF-8, with the subject encoded when it is not plain ASCII),
+- **Sending: the Gmail API.** The email is built as a MIME message (plain text plus HTML,
+  UTF-8, with the subject encoded when it is not plain ASCII),
   base64url-encoded, and posted to `users.messages.send`. Gmail sets the From
   address to your account and keeps a copy in *Sent*. Gmail's reply holds the
   message id, which GlowBot prints.
@@ -105,6 +105,15 @@ From now on `glowbot send` works without signing in again.
   and gives the full power of your account to anything that holds it, with
   no way to limit it to sending. A Google-issued token for `gmail.send` only
   can be revoked on its own, and GlowBot never sees your password.
+
+## The footer
+
+Every email ends with "Powered by GlowBot™ (A Svapnora® Product yet to be
+released)", shown in the draft before you approve it. Emails are sent with a
+plain-text version and an HTML version in which "GlowBot" is set large.
+Drafts written with `--ai` also get a line above the footer saying AI helped
+write them. The texts are `FOOTER_TEXT`, `FOOTER_HTML` and `AI_NOTE` at the
+top of the email section of `glowbot.glow`.
 
 ## The safety rules
 

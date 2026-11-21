@@ -22,6 +22,8 @@ To:      bob@example.com
 Subject: Lunch
 
 See you at noon.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
 ---------------------------------------
 Send this email? Type yes to send, anything else cancels: Not sent.
 sent so far: 0
@@ -39,16 +41,31 @@ Subject: Café plans
 
 Line one
 Line two
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
 ---------------------------------------
 Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
 To: bob@example.com, ana@example.org
 Subject: =?UTF-8?B?Q2Fmw6kgcGxhbnM=?=
 MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="B"
+
+--B
 Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+Content-Transfer-Encoding: base64
 
 Line one
 Line two
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+--B
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#202124">Line one<br>
+Line two</div>
+<p style="font-family:Arial,sans-serif;font-size:14px;color:#3c4043;margin-top:28px">Powered by <span style="font-size:26px;color:#202124">GlowBot</span> <sup>™</sup>&nbsp;&nbsp; (A Svapnora® Product yet to be released)</p>
+--B--
 --- --to is checked too
 1 glowbot: not a valid email address list: bob@example.com
 sent so far: 1
@@ -66,6 +83,10 @@ Hello Ana,
 Thanks for the notes.
 
 Best
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
 ---------------------------------------
 Send this email? Type yes to send, anything else cancels: Not sent.
 llama3.2 false true
@@ -85,20 +106,44 @@ Hi Bob,
 The meeting moves to Friday at 3 pm.
 
 Best regards
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
 ---------------------------------------
 Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
 true
 To: bob@example.com
 Subject: Meeting
 MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="B"
+
+--B
 Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+Content-Transfer-Encoding: base64
 
 Hi Bob,
 
 The meeting moves to Friday at 3 pm.
 
 Best regards
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+--B
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#202124">Hi Bob,<br>
+<br>
+The meeting moves to Friday at 3 pm.<br>
+<br>
+Best regards<br>
+<br>
+This email was written with AI help. Please review it carefully, AI can make mistakes.</div>
+<p style="font-family:Arial,sans-serif;font-size:14px;color:#3c4043;margin-top:28px">Powered by <span style="font-size:26px;color:#202124">GlowBot</span> <sup>™</sup>&nbsp;&nbsp; (A Svapnora® Product yet to be released)</p>
+--B--
 --- an expired sign-in
 1 Run glowbot login again. Nothing was sent.
 sent so far: 2

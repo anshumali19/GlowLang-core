@@ -218,10 +218,37 @@ func header_text(s):
     return s
 end
 
+# Added under every email: plain text, and HTML with a large "GlowBot".
+let FOOTER_TEXT = "Powered by GlowBot™  (A Svapnora® Product yet to be released)"
+let FOOTER_HTML = ("<p style=\"font-family:Arial,sans-serif;font-size:14px;color:#3c4043;margin-top:28px\">Powered by " +
+    "<span style=\"font-size:26px;color:#202124\">GlowBot</span> <sup>™</sup>&nbsp;&nbsp; (A Svapnora® Product yet to be released)</p>")
+# Added above the footer when --ai wrote the text.
+let AI_NOTE = "This email was written with AI help. Please review it carefully, AI can make mistakes."
+
+func html_escape(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+end
+
+# A MIME part, base64 in 76-character lines so long paragraphs are safe.
+func mime_part(boundary, kind, content):
+    let b = crypto.base64(content)
+    let lines = []
+    let i = 0
+    while i < len(b):
+        lines.push(b[i:i + 76])
+        i = i + 76
+    end
+    return "--" + boundary + "\r\nContent-Type: " + kind + "; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + "\r\n".join(lines) + "\r\n"
+end
+
 func mime(rcpt, subject, body):
+    let text = body.replace("\r\n", "\n")
+    let html = "<div style=\"font-family:Arial,sans-serif;font-size:15px;color:#202124\">" + html_escape(text).replace("\n", "<br>\n") + "</div>\n" + FOOTER_HTML
+    let boundary = "glowbot-" + crypto.random_token(18)
     return ("To: " + ", ".join(rcpt) + "\r\nSubject: " + header_text(subject) +
-        "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" +
-        body.replace("\r\n", "\n").replace("\n", "\r\n"))
+        "\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n" +
+        mime_part(boundary, "text/plain", (text + "\n\n" + FOOTER_TEXT).replace("\n", "\r\n")) +
+        mime_part(boundary, "text/html", html) + "--" + boundary + "--\r\n")
 end
 
 func ask(question):
@@ -341,7 +368,7 @@ func send(cfg):
     end
     when args["--ai"]:
         show "Drafting..."
-        body = polish(rcpt, subject, body)
+        body = polish(rcpt, subject, body) + "\n\n" + AI_NOTE
     end
 
     show ""
@@ -350,6 +377,8 @@ func send(cfg):
     show "Subject: " + subject
     show ""
     show body
+    show ""
+    show FOOTER_TEXT
     show "---------------------------------------"
     let answer = input("Send this email? Type yes to send, anything else cancels: ")
     when answer == none or answer.strip().lower() != "yes":
