@@ -1,0 +1,151 @@
+[GlowWeb] Starting server on port 29890
+--- send before login
+1 glowbot: not signed in yet: run glowbot login first
+--- login
+true
+true true true
+400
+400
+200 GlowBot is signed in. You can close this tab.
+0
+Waiting for Google...
+Signed in. GlowBot can now send email from your Gmail (and nothing else).
+rt-secret-1
+refresh token printed: false
+redirect_uri: http://127.0.0.1:29891/
+--- send, answered no
+0
+To (addresses, separated by commas): Subject: What should it say? (end with a line holding only a dot)
+
+---------------- draft ----------------
+To:      bob@example.com
+Subject: Lunch
+
+See you at noon.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Not sent.
+sent so far: 0
+--- only a typed yes sends
+Send this email? Type yes to send, anything else cancels: Not sent. 0
+Send this email? Type yes to send, anything else cancels: Not sent. 0
+--- bad addresses are asked again
+0
+To (addresses, separated by commas): Please give full email addresses, like ana@example.com.
+To (addresses, separated by commas): Subject: What should it say? (end with a line holding only a dot)
+
+---------------- draft ----------------
+To:      bob@example.com, ana@example.org
+Subject: Café plans
+
+Line one
+Line two
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
+To: bob@example.com, ana@example.org
+Subject: =?UTF-8?B?Q2Fmw6kgcGxhbnM=?=
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="B"
+
+--B
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+Line one
+Line two
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+--B
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#202124">Line one<br>
+Line two</div>
+<p style="font-family:Arial,sans-serif;font-size:14px;color:#3c4043;margin-top:28px">Powered by <span style="font-size:26px;color:#202124">GlowBot</span> <sup>™</sup>&nbsp;&nbsp; (A Svapnora® Product yet to be released)</p>
+--B--
+--- --to is checked too
+1 glowbot: not a valid email address list: bob@example.com
+sent so far: 1
+--- --ai with free local Ollama, then cancelled
+0
+Your notes for the email (end with a line holding only a dot)
+Drafting...
+
+---------------- draft ----------------
+To:      ana@example.com
+Subject: Notes
+
+Hello Ana,
+
+Thanks for the notes.
+
+Best
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Not sent.
+llama3.2 false true
+sent so far: 1
+1 glowbot: --ai could not reach Ollama. Install it free from https://ollama.com, run: ollama pull llama3.2, and try again (or leave out --ai). Nothing was sent.
+--- --ai with Claude when a key is set, still asks
+0
+Your notes for the email (end with a line holding only a dot)
+Drafting...
+
+---------------- draft ----------------
+To:      bob@example.com
+Subject: Meeting
+
+Hi Bob,
+
+The meeting moves to Friday at 3 pm.
+
+Best regards
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
+true
+To: bob@example.com
+Subject: Meeting
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="B"
+
+--B
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+Hi Bob,
+
+The meeting moves to Friday at 3 pm.
+
+Best regards
+
+This email was written with AI help. Please review it carefully, AI can make mistakes.
+
+Powered by GlowBot™  (A Svapnora® Product yet to be released)
+--B
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#202124">Hi Bob,<br>
+<br>
+The meeting moves to Friday at 3 pm.<br>
+<br>
+Best regards<br>
+<br>
+This email was written with AI help. Please review it carefully, AI can make mistakes.</div>
+<p style="font-family:Arial,sans-serif;font-size:14px;color:#3c4043;margin-top:28px">Powered by <span style="font-size:26px;color:#202124">GlowBot</span> <sup>™</sup>&nbsp;&nbsp; (A Svapnora® Product yet to be released)</p>
+--B--
+--- an expired sign-in
+1 Run glowbot login again. Nothing was sent.
+sent so far: 2
+--- logout
+Signed out false

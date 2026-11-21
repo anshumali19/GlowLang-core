@@ -1,0 +1,185 @@
+# GlowBot (examples/glowbot) run as a user runs it, against a local GlowWeb
+# server playing Google's token endpoint, the Gmail API and the drafting
+# API. No real account or network is used. The test plays the browser for
+# glowbot login.
+use "lib/web.glow"
+
+let dir = fs.join(os.temp_dir(), "glowbot_test_" + str(os.pid()))
+fs.mkdirs(dir)
+let cfg = fs.join(dir, "config.json")
+let mock = "http://127.0.0.1:29890"
+# The shape of the file Google's console downloads, plus the test's endpoints.
+fs.write(cfg, json.stringify({"installed": {"client_id": "cid", "client_secret": "csecret"}, "port": 29891,
+    "auth_url": mock + "/auth", "token_url": mock + "/token", "gmail_url": mock}))
+
+# What the mock server saw.
+let seen = {"sent": [], "token_forms": [], "ai": []}
+
+func form(body):
+    let out = {}
+    for each pair in body.split("&"):
+        let eq = pair.find("=")
+        when eq > 0:
+            out[pair[0:eq]] = pair[eq + 1:].replace("%2F", "/").replace("%3A", ":").replace("%20", " ")
+        end
+    end
+    return out
+end
+
+let server = Server(29890)
+server.post("/token", lambda(req, res):
+    let f = form(req.body)
+    seen["token_forms"].push(f)
+    when f.get("grant_type") == "authorization_code" and f.get("code") == "good/code" and f.get("code_verifier", "") != "" and f.get("client_secret") == "csecret":
+        return {"access_token": "at-1", "refresh_token": "rt-secret-1", "expires_in": 3600}
+    eif f.get("grant_type") == "refresh_token" and f.get("refresh_token") == "rt-secret-1":
+        return {"access_token": "at-2", "expires_in": 3600}
+    end
+    res.status(400).send_json({"error": "invalid_grant"})
+end)
+server.post("/gmail/v1/users/me/messages/send", lambda(req, res):
+    when req.get_header("Authorization") != "Bearer at-2":
+        res.status(401).send_json({"error": {"message": "bad token"}})
+        return none
+    end
+    seen["sent"].push(crypto.unbase64(req.json_body()["raw"]))
+    return {"id": "msg-123", "threadId": "t-1"}
+end)
+server.post("/ai", lambda(req):
+    seen["ai"].push(req.json_body())
+    return {"content": [{"type": "text", "text": "Hi Bob,\n\nThe meeting moves to Friday at 3 pm.\n\nBest regards"}]}
+end)
+server.post("/api/chat", lambda(req):
+    seen["ai"].push(req.json_body())
+    return {"model": "llama3.2", "message": {"role": "assistant", "content": "Hello Ana,\n\nThanks for the notes.\n\nBest"}, "done": true}
+end)
+spawn server.start()
+let up = false
+let tries = 0
+while not up and tries < 100:
+    try:
+        http.request("GET", mock + "/ping")
+        up = true
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+
+func bot(args, typed, env = none):
+    let opts = {"input": typed}
+    when env != none:
+        opts["env"] = env
+    end
+    let r = process.run([process.executable, "run", "examples/glowbot/glowbot.glow"] + args + ["--config", cfg], opts)
+    return [r["code"], r["stdout"].replace("\r\n", "\n").strip(), r["stderr"].replace("\r\n", "\n").strip()]
+end
+
+# A sent message with its random boundary named B and its base64 parts decoded.
+func readable(raw):
+    let m = raw.replace("\r\n", "\n")
+    let b = m[m.find("boundary=\"") + 10:]
+    b = b[0:b.find("\"")]
+    let pieces = m.split("--" + b)
+    let out = pieces[0].replace(b, "B")
+    for each p in pieces[1:]:
+        when p.starts_with("--"):
+            out = out + "--B--"
+            skip
+        end
+        let sep = p.find("\n\n")
+        out = out + "--B" + p[0:sep] + "\n\n" + crypto.unbase64(p[sep + 2:].replace("\n", "")).replace("\r\n", "\n") + "\n"
+    end
+    return out
+end
+
+func last_line(text):
+    let lines = text.split("\n")
+    return lines[len(lines) - 1]
+end
+
+try:
+    show "--- send before login"
+    let r = bot(["send"], "")
+    show r[0], r[2]
+
+    show "--- login"
+    let w = process.start([process.executable, "run", "examples/glowbot/glowbot.glow", "login", "--no-browser", "--config", cfg], {})
+    let url = ""
+    let n = 0
+    while not url.starts_with("http") and n < 10:
+        url = str(process.read_line(w, 20)).strip()
+        n = n + 1
+    end
+    show url.starts_with(mock + "/auth?")
+    show url.contains("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.send&"), url.contains("access_type=offline"), url.contains("code_challenge_method=S256")
+    let state = url[url.find("state=") + 6:]
+    state = state[0:state.find("&")]
+    # A request without this sign-in's state is turned away.
+    show http.request("GET", "http://127.0.0.1:29891/favicon.ico")["status"]
+    show http.request("GET", "http://127.0.0.1:29891/?code=stolen&state=wrong")["status"]
+    let back = http.request("GET", "http://127.0.0.1:29891/?code=good%2Fcode&state=" + state)
+    show back["status"], back["body"]
+    let rest = process.read_all(w, 20)
+    show process.wait(w, 20)
+    process.close(w)
+    show rest.replace("\r\n", "\n").strip()
+    show json.parse(fs.read(fs.join(dir, "token.json")))["refresh_token"]
+    show "refresh token printed:", (url + rest).contains("rt-secret-1")
+    show "redirect_uri:", seen["token_forms"][0]["redirect_uri"]
+
+    show "--- send, answered no"
+    r = bot(["send"], "bob@example.com\nLunch\nSee you at noon.\n.\nno\n")
+    show r[0]
+    show r[1]
+    show "sent so far:", len(seen["sent"])
+
+    show "--- only a typed yes sends"
+    r = bot(["send", "--to", "bob@example.com", "--subject", "Hi", "--body", "x"], "y\n")
+    show last_line(r[1]), len(seen["sent"])
+    r = bot(["send", "--to", "bob@example.com", "--subject", "Hi", "--body", "x"], "")
+    show last_line(r[1]), len(seen["sent"])
+
+    show "--- bad addresses are asked again"
+    r = bot(["send"], "bob\nbob@example.com, ana@example.org\nCafé plans\nLine one\nLine two\n.\nyes\n")
+    show r[0]
+    show r[1]
+    show readable(seen["sent"][0])
+
+    show "--- --to is checked too"
+    r = bot(["send", "--to", "bob@example.com\nBcc: eve@example.com", "--subject", "x", "--body", "x"], "yes\n")
+    show r[0], r[2].split("\n")[0]
+    show "sent so far:", len(seen["sent"])
+
+    show "--- --ai with free local Ollama, then cancelled"
+    r = bot(["send", "--ai", "--to", "ana@example.com", "--subject", "Notes"], "thx for notes\n.\nno\n", {"ANTHROPIC_API_KEY": "", "GLOWBOT_OLLAMA_URL": mock})
+    show r[0]
+    show r[1]
+    show seen["ai"][0]["model"], seen["ai"][0]["stream"], seen["ai"][0]["messages"][0]["content"].contains("thx for notes")
+    show "sent so far:", len(seen["sent"])
+    r = bot(["send", "--ai", "--to", "ana@example.com", "--subject", "x"], "notes\n.\n", {"ANTHROPIC_API_KEY": "", "GLOWBOT_OLLAMA_URL": "http://127.0.0.1:29899"})
+    show r[0], r[2]
+
+    show "--- --ai with Claude when a key is set, still asks"
+    r = bot(["send", "--ai", "--to", "bob@example.com", "--subject", "Meeting"], "meeting moved to fri 3pm\n.\nyes\n", {"ANTHROPIC_API_KEY": "test-key", "GLOWBOT_AI_URL": mock + "/ai"})
+    show r[0]
+    show r[1]
+    show seen["ai"][1]["messages"][0]["content"].contains("meeting moved to fri 3pm")
+    show readable(seen["sent"][1])
+
+    show "--- an expired sign-in"
+    fs.write(fs.join(dir, "token.json"), json.stringify({"refresh_token": "revoked"}))
+    r = bot(["send", "--to", "bob@example.com", "--subject", "x", "--body", "x"], "yes\n")
+    show r[0], r[2].split("\n")[1]
+    show "sent so far:", len(seen["sent"])
+
+    show "--- logout"
+    show bot(["logout"], "")[1].split(".")[0], fs.exists(fs.join(dir, "token.json"))
+finally:
+    server.running = false
+    try:
+        http.request("GET", mock + "/ping")
+    catch e:
+    end
+    fs.remove_all(dir)
+end
