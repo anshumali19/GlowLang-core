@@ -1,0 +1,69 @@
+# Functions that use show or throw are compiled too; these are called often
+# enough to be, and must print and raise exactly as the interpreter does.
+
+class Point:
+    func init(x, y):
+        self.x = x
+        self.y = y
+    end
+end
+
+func report(i, p):
+    let total = 0
+    for k from 1 to 3:
+        total = total + k * i
+    end
+    when i % 40 == 0:
+        show "report", i, total, [i, "x"], {"k": i}, p.x, none, 1.5, true
+    end
+    return total
+end
+let sum = 0
+for i from 1 to 200:
+    sum = sum + report(i, Point(i, 2))
+end
+show sum
+
+# throw caught in the same function, in a caller, and by type.
+func check(n):
+    try:
+        when n % 50 == 0:
+            throw "bad " + str(n)
+        end
+        return n
+    catch e:
+        return "caught " + str(e)
+    end
+end
+func risky(n):
+    when n == 150:
+        throw "too big: " + str(n)
+    end
+    return n * 2
+end
+let caught = []
+let total = 0
+for i from 1 to 200:
+    let r = check(i)
+    when type(r) == "string":
+        caught.push(r)
+    end
+    try:
+        total = total + risky(i)
+    catch e:
+        caught.push(str(e))
+    end
+end
+show caught
+show total
+
+# A throw that nothing catches still names its line.
+func fail(n):
+    when n == 300:
+        throw "uncaught " + str(n)
+    end
+    return n
+end
+for i from 1 to 300:
+    fail(i)
+end

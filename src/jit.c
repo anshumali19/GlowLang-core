@@ -1684,6 +1684,7 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
             case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
             case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
+            case OP_SHOW: case OP_THROW:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -2012,6 +2013,17 @@ static void emit_get_property(JITBuffer *buf, Instruction *pc, Instruction *orig
                 emit_mov_rax_imm64(&buf, (uint64_t)jit_const_string((const char*)pc->ptr));
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
+            case OP_SHOW:
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r0 * 8); // add r10, r0*8
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_show);
+                emit_call_rax(&buf);
+                emit_exception_check(&buf, i);
+                break;
+            /* Rare: the interpreter raises it, with its try tables. */
+            case OP_THROW: emit_side_exit(&buf, i); break;
             case OP_LIST_LITERAL: case OP_DICT_LITERAL:
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r1 * 8); // add r10, r1*8
@@ -2160,6 +2172,7 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
             case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
             case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
             case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
+            case OP_SHOW: case OP_THROW:
                 break;
             default: jit_debug_skipped(bc, fe, "unsupported", pc->op); bc->jit_failed = 1; return;
         }
@@ -2482,6 +2495,17 @@ static void jit_compile_baseline_impl(Bytecode *bc, FuncEntry *fe, int osr_mode)
                 emit_mov_rax_imm64(&buf, (uint64_t)jit_const_string((const char*)pc->ptr));
                 emit_mov_reg_rax(&buf, pc->r0);
                 break;
+            case OP_SHOW:
+                jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
+                jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r0 * 8); // add r10, r0*8
+                emit_mov_arg1_r10(&buf);
+                emit_mov_arg2_imm64(&buf, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                emit_mov_rax_imm64(&buf, (uintptr_t)jit_show);
+                emit_call_rax(&buf);
+                emit_exception_check(&buf, i);
+                break;
+            /* Rare: the interpreter raises it, with its try tables. */
+            case OP_THROW: emit_side_exit(&buf, i); break;
             case OP_LIST_LITERAL: case OP_DICT_LITERAL:
                 jit_emit_byte(&buf, 0x4d); jit_emit_byte(&buf, 0x89); jit_emit_byte(&buf, 0xe2); // mov r10, r12
                 jit_emit_byte(&buf, 0x49); jit_emit_byte(&buf, 0x81); jit_emit_byte(&buf, 0xc2); jit_emit_u32(&buf, pc->r1 * 8); // add r10, r1*8
@@ -3179,6 +3203,7 @@ static int a64_supported(OpCode op) {
         case OP_LIST_LITERAL: case OP_DICT_LITERAL: case OP_ITER_START: case OP_ITER_NEXT:
         case OP_NOT: case OP_IN: case OP_SLICE: case OP_SKIP: case OP_STOP: case OP_ITER_NEXT2:
             case OP_BITAND: case OP_BITOR: case OP_BITXOR: case OP_SHL: case OP_SHR: case OP_BITNOT:
+        case OP_SHOW: case OP_THROW:
             return 1;
         default:
             return 0;
@@ -3435,6 +3460,13 @@ static void a64_compile(Bytecode *bc, FuncEntry *fe, int mode) {
                 a64_mov_imm(A, 0, (uint64_t)jit_const_string((const char*)pc->ptr));
                 a64_store_reg(A, 0, pc->r0);
                 break;
+            case OP_SHOW:
+                a64_addr_reg(A, 0, pc->r0);
+                a64_mov_imm(A, 1, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
+                a64_call(A, (const void*)jit_show);
+                a64_exception_check(A, i);
+                break;
+            case OP_THROW: a64_side_exit(A, i); break;
             case OP_LIST_LITERAL: case OP_DICT_LITERAL:
                 a64_addr_reg(A, 0, pc->r1);
                 a64_mov_imm(A, 1, (uint64_t)(pc->arg < 0 ? 0 : pc->arg));
