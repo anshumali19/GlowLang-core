@@ -389,6 +389,7 @@ Value jit_shr_helper(Value a, Value b);
 Value jit_bitnot_helper(Value v);
 Value jit_const_string(const char *s);
 Value jit_list_literal(Value *regs, int n);
+void jit_show(Value *regs, int n);
 Value jit_dict_literal(Value *regs, int n);
 Value jit_iter_start(Value coll);
 Value jit_iter_next(Value it);

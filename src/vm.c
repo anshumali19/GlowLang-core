@@ -1572,6 +1572,12 @@ Value jit_neg_helper(Value v) {
 
 Value jit_const_string(const char *s) { return vm_get_const_string(s); }
 
+/* show from compiled code: the interpreter's OP_SHOW. */
+void jit_show(Value *regs, int n) {
+    for (int i = 0; i < n; i++) { print_value(regs[i]); if (i < n - 1) printf(" "); }
+    printf("\n"); fflush(stdout);
+}
+
 Value jit_list_literal(Value *regs, int n) {
     List *l = list_alloc(n, 0);
     for (int i = 0; i < n; i++) list_push(l, regs[i]);

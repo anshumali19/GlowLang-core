@@ -1,0 +1,8 @@
+report 40 240 [40, "x"] {"k": 40} 40 none 1.5 true
+report 80 480 [80, "x"] {"k": 80} 80 none 1.5 true
+report 120 720 [120, "x"] {"k": 120} 120 none 1.5 true
+report 160 960 [160, "x"] {"k": 160} 160 none 1.5 true
+report 200 1200 [200, "x"] {"k": 200} 200 none 1.5 true
+120600
+["caught bad 50", "caught bad 100", "caught bad 150", "too big: 150", "caught bad 200"]
+39900
