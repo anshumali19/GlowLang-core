@@ -1560,7 +1560,7 @@ whole characters, and positions count characters like string indexes; `\d \w
 Scripts: `args` (the arguments after the program file), `script` (its path),
 `getenv(name, default)` / `env(name)`, `env()` (all variables as a dict),
 `setenv(name, value)`, `unsetenv(name)`, `cwd()`, `chdir(dir)`, `home()`,
-`temp_dir()`, `pid()`, `platform` (`"windows"`, `"linux"`, `"macos"`),
+`temp_dir()`, `pid()`, `cpu_count()`, `platform` (`"windows"`, `"linux"`, `"macos"`),
 `isatty(fd)`, `read_stdin()`, `write(values...)` (no newline),
 `eprint(values...)` / `ewrite(values...)` (standard error). See the
 [shell scripting guide](shell_scripting.md).

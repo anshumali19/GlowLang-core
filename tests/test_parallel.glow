@@ -1,0 +1,28 @@
+# parallel.map runs a module's function over a list in worker processes and
+# returns the results in order.
+import "parallel"
+let work = "tests/modules/parallel_work.glow"
+
+let nums = []
+for i from 1 to 25:
+    nums.push(i)
+end
+show parallel.map(work, "square", nums, workers = 4)
+show parallel_map(work, "square", nums, workers = 1) == parallel.map(work, "square", nums)
+show parallel.map(work, "fib", [20, 21, 22, 23], workers = 2)
+show parallel.map(work, "describe", [none, true, 2, 1.5, "héllo", [1, [2]], {"k": "v"}], workers = 3)
+show parallel.map(work, "square", [])
+show parallel.map(work, "square", [3], workers = 8)
+show os.cpu_count() >= 1
+
+func trial(f):
+    try:
+        f()
+    catch e:
+        show "error: " + str(e)
+    end
+end
+trial(lambda(): parallel.map(work, "picky", [5, 6, 7, 8], workers = 2))
+trial(lambda(): parallel.map(work, "no such", [1]))
+trial(lambda(): parallel.map("tests/modules/missing.glow", "square", [1]))
+trial(lambda(): parallel.map("tests/modules/parallel_recursive.glow", "twice", [1]))

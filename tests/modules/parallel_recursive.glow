@@ -1,0 +1,7 @@
+# Used by test_parallel.glow: a module that calls parallel.map at its top
+# level, which a worker must refuse.
+import "parallel"
+let inner = parallel.map("tests/modules/parallel_work.glow", "square", [1, 2])
+func twice(x):
+    return x * 2
+end

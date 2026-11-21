@@ -1,0 +1,22 @@
+# Used by test_parallel.glow: functions that parallel.map runs in workers.
+func square(x):
+    return x * x
+end
+
+func describe(v):
+    return {"type": type(v), "value": v}
+end
+
+func fib(n):
+    when n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+func picky(x):
+    when x == 7:
+        throw "seven is not allowed"
+    end
+    return x + 1
+end
