@@ -1,0 +1,74 @@
+#!/usr/bin/env glowlang
+# renamer: rename many files at once with a regular expression.
+#
+#   renamer "IMG_(\d+)" "holiday-\1" ~/Pictures/trip           (shows the plan)
+#   renamer "IMG_(\d+)" "holiday-\1" ~/Pictures/trip --apply   (renames)
+#
+# The pattern is matched against each file name in the folder (not in
+# folders below it); \1, \2 or \g<name> put groups in the new name. Nothing
+# is renamed without --apply, and nothing at all if two files would get the
+# same name or a new name is already taken.
+import "cli"
+import "re"
+
+let app = ArgParser("renamer", "Rename many files with a regular expression")
+app.positional("pattern", "What to look for in each file name")
+app.positional("replacement", "What to put instead; \\1 is the first group")
+app.positional("folder", "Where the files are", ".")
+app.flag("--apply", "Rename the files (without it, only the plan is shown)", "-a")
+let args = app.parse_or_exit()
+let folder = args["folder"]
+
+when not fs.is_dir(folder):
+    os.eprint("renamer: " + folder + " is not a folder")
+    os.exit(1)
+end
+
+let names = sorted([n for each n in fs.list(folder) if fs.is_file(fs.join(folder, n))])
+let plan = []
+let taken = {}
+for each n in names:
+    taken[n] = true
+end
+let clash = []
+for each n in names:
+    when re.find(args["pattern"], n) == none:
+        skip
+    end
+    let new_name = re.replace(args["pattern"], n, args["replacement"])
+    when new_name == n:
+        skip
+    end
+    plan.push([n, new_name])
+end
+# Two files may not get the same new name, and a new name may belong to
+# an existing file only if that file is renamed too.
+let targets = {}
+for each p in plan:
+    when targets.has(p[1]) or (taken.has(p[1]) and not [q for each q in plan if q[0] == p[1]]):
+        clash.push(p[1])
+    end
+    targets[p[1]] = true
+end
+
+for each p in plan:
+    show p[0] + "  ->  " + p[1]
+end
+when len(clash) > 0:
+    os.eprint("renamer: refusing, these names would clash: " + ", ".join(clash))
+    os.exit(1)
+end
+when len(plan) == 0:
+    show "nothing to rename"
+eif not args["--apply"]:
+    show str(len(plan)) + " files would be renamed; add --apply to do it"
+otherwise:
+    # Through temporary names, so a -> b and b -> c in one run cannot collide.
+    for each i, p in plan:
+        fs.move(fs.join(folder, p[0]), fs.join(folder, ".renamer-" + str(i)))
+    end
+    for each i, p in plan:
+        fs.move(fs.join(folder, ".renamer-" + str(i)), fs.join(folder, p[1]))
+    end
+    show str(len(plan)) + " files renamed"
+end

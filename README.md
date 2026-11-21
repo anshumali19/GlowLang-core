@@ -272,6 +272,7 @@ memory from 138 MB to 76 MB compared with 1.7.0
 **Start here**
 - [Getting Started](docs/getting_started.md): install, first program, packages
 - [GlowLang in 10 Minutes](docs/glowlang_in_10_minutes.md): the language by example ([examples/tour.glow](examples/tour.glow))
+- [Tools you can ship as one file](examples/tools/README.md): a log summarizer, CSV cleaner, folder backup, API checker and bulk renamer, each a single executable with `glowlang package`
 - [Language Reference](docs/language_reference.md): every statement, operator and built-in
 - [Release notes 1.11.0](docs/release_notes_1.11.0.md) (and [1.10.0](docs/release_notes_1.10.0.md), [1.9.0](docs/release_notes_1.9.0.md), [1.8.0](docs/release_notes_1.8.0.md))
 

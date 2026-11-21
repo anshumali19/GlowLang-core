@@ -1571,7 +1571,8 @@ Scripts: `args` (the arguments after the program file), `script` (its path),
 (a directory and everything in it), `mkdir(path)`, `mkdirs(path)` (with
 parents), `copy(src, dst)`, `move(src, dst)`, `list(dir)` / `readdir(dir)`,
 `walk(dir)` (every file below dir), `glob(pattern)` (`*`, `?`, `[a-z]`,
-`**`), `size(path)`, `stat(path)`, and path pieces `join(a, b, ...)`,
+`**`), `size(path)`, `stat(path)` (`{"size", "is_dir", "modified"}`, the last in
+seconds since 1970), and path pieces `join(a, b, ...)`,
 `basename`, `dirname`, `extension`, `abspath`.
 
 `chr(code)` and `ord(text)` convert between characters and Unicode code

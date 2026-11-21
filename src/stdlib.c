@@ -6678,6 +6678,7 @@ static Value native_fs_stat(int argc, Value *args) {
     Dict *d = dict_new(4);
     dict_set(d, "size", value_int(st.st_size));
     dict_set(d, "is_dir", value_bool(S_ISDIR(st.st_mode)));
+    dict_set(d, "modified", value_int((int64_t)st.st_mtime));   /* seconds since 1970 */
     return value_dict(d);
 }
 
