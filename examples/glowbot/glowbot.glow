@@ -5,8 +5,8 @@
 #   glowbot login            sign in to Google once (opens your browser)
 #   glowbot send             ask who, what subject and what to say, show the
 #                            email, and send it on "yes"
-#   glowbot send --ai        turn your notes into a polished draft first
-#                            (needs ANTHROPIC_API_KEY)
+#   glowbot send --ai        turn your notes into a polished draft first,
+#                            free with Ollama on this computer
 #   glowbot logout           forget the saved sign-in
 #
 # Setup and how the Gmail connection works: examples/glowbot/README.md.
@@ -23,7 +23,7 @@ app.option("--config", "The settings file", fs.join(os.home(), ".glowbot", "conf
 app.option("--to", "Recipients, separated by commas")
 app.option("--subject", "The subject")
 app.option("--body", "The text of the email")
-app.flag("--ai", "Polish your notes into a draft with Claude (needs ANTHROPIC_API_KEY)")
+app.flag("--ai", "Turn your notes into a draft with a free local AI model (Ollama)")
 app.flag("--no-browser", "login: print the sign-in link instead of opening a browser")
 let args = app.parse_or_exit()
 
@@ -238,37 +238,52 @@ func ask_text(question):
     return "\n".join(lines).strip()
 end
 
-# Claude turns notes into an email body. The recipients never come from it.
+func env(name, default):
+    let v = os.getenv(name)
+    when v == none or v == "":
+        return default
+    end
+    return v
+end
+
+# An AI model turns notes into an email body; the recipients never come from
+# it. Free by default: Ollama running on this computer. With
+# ANTHROPIC_API_KEY set, Claude (a paid API) is used instead.
 func polish(rcpt, subject, notes):
-    let key = os.getenv("ANTHROPIC_API_KEY")
-    when key == none or key == "":
-        fail("--ai needs ANTHROPIC_API_KEY set. Without --ai, GlowBot sends your text as you wrote it.")
-    end
-    let url = os.getenv("GLOWBOT_AI_URL")
-    when url == none or url == "":
-        url = "https://api.anthropic.com/v1/messages"
-    end
-    let model = os.getenv("GLOWBOT_AI_MODEL")
-    when model == none or model == "":
-        model = "claude-sonnet-5-5"
-    end
     let prompt = ("Write the body of an email from my notes. It goes to " + ", ".join(rcpt) + " with the subject \"" + subject +
         "\". Keep my meaning and facts, add nothing I did not say, and sign off without inventing a name. Reply with only the email body.\n\nMy notes:\n" + notes)
-    let r = http.request("POST", url, {"timeout": 60,
-        "headers": {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        "body": json.stringify({"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]})})
+    let key = env("ANTHROPIC_API_KEY", "")
+    let r = none
     let text = ""
     try:
-        for each part in json.parse(r["body"])["content"]:
-            when part.get("type", "") == "text":
-                text = text + part["text"]
+        when key != "":
+            r = http.request("POST", env("GLOWBOT_AI_URL", "https://api.anthropic.com/v1/messages"), {"timeout": 60,
+                "headers": {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                "body": json.stringify({"model": env("GLOWBOT_AI_MODEL", "claude-sonnet-5-5"), "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]})})
+        otherwise:
+            r = http.request("POST", env("GLOWBOT_OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat", {"timeout": 300,
+                "headers": {"content-type": "application/json"},
+                "body": json.stringify({"model": env("GLOWBOT_AI_MODEL", "llama3.2"), "stream": false, "messages": [{"role": "user", "content": prompt}]})})
+        end
+    catch e:
+        fail("--ai could not reach Ollama. Install it free from https://ollama.com, run: ollama pull llama3.2, and try again (or leave out --ai). Nothing was sent.")
+    end
+    try:
+        let data = json.parse(r["body"])
+        when key != "":
+            for each part in data["content"]:
+                when part.get("type", "") == "text":
+                    text = text + part["text"]
+                end
             end
+        otherwise:
+            text = data["message"]["content"]
         end
     catch e:
         text = ""
     end
     when r["status"] != 200 or text.strip() == "":
-        fail("the drafting service answered " + str(r["status"]) + "; nothing was sent")
+        fail("the drafting model answered " + str(r["status"]) + " (for Ollama: is the model pulled? ollama pull " + env("GLOWBOT_AI_MODEL", "llama3.2") + "). Nothing was sent.")
     end
     return text.strip()
 end
@@ -335,6 +350,10 @@ func send(cfg):
     end
 
     let raw = crypto.base64(mime(rcpt, subject, body), true)
+    # Padded, as in Google's own examples.
+    while len(raw) % 4 != 0:
+        raw = raw + "="
+    end
     let url = cfg.get("gmail_url", "https://gmail.googleapis.com") + "/gmail/v1/users/me/messages/send"
     let r = http.request("POST", url, {"timeout": 60,
         "headers": {"Authorization": "Bearer " + access_token(cfg), "Content-Type": "application/json"},

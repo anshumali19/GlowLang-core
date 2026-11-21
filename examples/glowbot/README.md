@@ -29,7 +29,7 @@ Sent. Gmail message id: 18c2f0a9b3e4d5f6
 | `glowbot login` | Signs in to Google once and saves the permission to send mail |
 | `glowbot send` | Asks who the email is for, the subject and the text, shows the email, sends it on `yes` |
 | `glowbot send --to a@x.com --subject Hi --body "..."` | The same, with the answers given up front. It still asks before sending |
-| `glowbot send --ai` | Takes your rough notes and has Claude write a polished draft. It still shows the draft and asks |
+| `glowbot send --ai` | Takes your rough notes and has a free AI model on your computer write a polished draft. It still shows the draft and asks |
 | `glowbot logout` | Deletes the saved sign-in |
 
 `--config PATH` picks the settings file (default `~/.glowbot/config.json`).
@@ -118,11 +118,26 @@ From now on `glowbot send` works without signing in again.
 
 ## Drafting help (optional, off by default)
 
-`glowbot send --ai` sends your notes, the recipients' addresses and the
-subject to Claude (the Anthropic API) and shows the draft it writes. It
-needs the environment variable `ANTHROPIC_API_KEY`. `GLOWBOT_AI_MODEL`
-picks the model (default `claude-sonnet-5-5`). Without `--ai`, nothing
-leaves your computer except the email itself, which goes to Gmail.
+`glowbot send --ai` turns your rough notes into a polished draft. By default
+it is **free and private**: it uses [Ollama](https://ollama.com), which runs
+an AI model on your own computer, so your notes never leave it.
+
+1. Install Ollama from https://ollama.com (free).
+2. Download a model once: `ollama pull llama3.2` (about 2 GB; 8 GB of RAM is enough).
+3. Use `glowbot send --ai`. Ollama runs in the background after installing.
+
+`GLOWBOT_AI_MODEL` picks another Ollama model, for example `gemma3` or
+`qwen3`. If you set `ANTHROPIC_API_KEY`, GlowBot uses Claude (a paid API)
+instead, with `GLOWBOT_AI_MODEL` defaulting to `claude-sonnet-5-5`.
+
+Without `--ai`, nothing leaves your computer except the email itself, which
+goes to Gmail.
+
+## Cost
+
+Everything GlowBot needs is free: the Google Cloud project (no billing
+account needed), the Gmail API (free for personal use), GlowLang and
+Ollama. Only the optional Claude path costs money.
 
 ## Tests
 

@@ -52,7 +52,26 @@ Line two
 --- --to is checked too
 1 glowbot: not a valid email address list: bob@example.com
 sent so far: 1
---- --ai drafts, still asks
+--- --ai with free local Ollama, then cancelled
+0
+Your notes for the email (end with a line holding only a dot)
+Drafting...
+
+---------------- draft ----------------
+To:      ana@example.com
+Subject: Notes
+
+Hello Ana,
+
+Thanks for the notes.
+
+Best
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Not sent.
+llama3.2 false true
+sent so far: 1
+1 glowbot: --ai could not reach Ollama. Install it free from https://ollama.com, run: ollama pull llama3.2, and try again (or leave out --ai). Nothing was sent.
+--- --ai with Claude when a key is set, still asks
 0
 Your notes for the email (end with a line holding only a dot)
 Drafting...
@@ -80,7 +99,6 @@ Hi Bob,
 The meeting moves to Friday at 3 pm.
 
 Best regards
-1 glowbot: --ai needs ANTHROPIC_API_KEY set. Without --ai, GlowBot sends your text as you wrote it.
 --- an expired sign-in
 1 Run glowbot login again. Nothing was sent.
 sent so far: 2
