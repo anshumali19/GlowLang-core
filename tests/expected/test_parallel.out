@@ -1,0 +1,11 @@
+[1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361, 400, 441, 484, 529, 576, 625]
+true
+[6765, 10946, 17711, 28657]
+[{"type": "none", "value": none}, {"type": "bool", "value": true}, {"type": "int", "value": 2}, {"type": "float", "value": 1.5}, {"type": "string", "value": "héllo"}, {"type": "list", "value": [1, [2]]}, {"type": "dict", "value": {"k": "v"}}]
+[]
+[9]
+true
+error: parallel.map: picky(7) failed: seven is not allowed
+error: parallel.map: the function name must be a plain name, not no such
+error: parallel.map: no module file tests/modules/missing.glow
+error: parallel.map: worker 1 of 1 failed (exit code 1)

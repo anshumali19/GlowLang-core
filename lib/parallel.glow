@@ -1,0 +1,131 @@
+# parallel.glow: use several CPU cores, one GlowLang process per worker.
+#
+#   parallel.map(module, name, items, workers = 0)
+#
+# Calls name(item) for every item and returns the results in the order of
+# items. module is the path of a .glow file that defines the function name;
+# each worker loads it and works through its share of the items, so work
+# that keeps one core busy finishes up to `workers` times sooner. workers = 0
+# means one per CPU core (os.cpu_count()); never more than there are items.
+#
+# Items and results travel between processes as JSON: none, true/false,
+# numbers, strings, and lists and dicts of those. The first error raised by
+# the function is raised here, with the item it was called on. What the
+# function shows is printed as usual, by whichever worker ran it.
+#
+# Keep the function in a module of its own: a module that calls
+# parallel.map itself (at its top level) is refused, since every worker
+# would start workers of its own.
+#
+# After import "parallel", call it as parallel.map(...) or parallel_map(...).
+
+func __parallel_identifier(name):
+    let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    when type(name) != "string" or len(name) == 0 or not letters.contains(name[0]):
+        return false
+    end
+    for each c in name:
+        when not (letters + "0123456789").contains(c):
+            return false
+        end
+    end
+    return true
+end
+
+func parallel_map(module, name, items, workers = 0):
+    when os.getenv("GLOW_PARALLEL_WORKER"):
+        throw "parallel.map: a worker's module calls parallel.map itself; keep the function in a module of its own"
+    end
+    when not __parallel_identifier(name):
+        throw "parallel.map: the function name must be a plain name, not " + str(name)
+    end
+    when type(module) != "string" or not fs.is_file(module):
+        throw "parallel.map: no module file " + str(module)
+    end
+    let path = fs.abspath(module).replace("\\", "/")
+    when path.contains("\""):
+        throw "parallel.map: the module's path must not contain a double quote"
+    end
+    let count = len(items)
+    when count == 0:
+        return []
+    end
+    let n = workers
+    when n <= 0:
+        n = os.cpu_count()
+    end
+    when n > count:
+        n = count
+    end
+
+    # Contiguous shares, so the results join back in order.
+    let base = fs.join(os.temp_dir(), "glow_parallel_" + str(os.pid()) + "_" + str(int(os.time() * 1000000)))
+    let script = base + "_worker.glow"
+    fs.write(script, "use \"" + path + "\"\n" +
+        "let __out = []\n" +
+        "for each __item in json.parse(fs.read(os.args[0])):\n" +
+        "    try:\n" +
+        "        __out.push([true, " + name + "(__item)])\n" +
+        "    catch __e:\n" +
+        "        __out.push([false, str(__e)])\n" +
+        "        fs.write(os.args[1], json.stringify(__out))\n" +
+        "        os.exit(0)\n" +
+        "    end\n" +
+        "end\n" +
+        "fs.write(os.args[1], json.stringify(__out))\n")
+    let procs = []
+    let files = []
+    let starts = []
+    let start = 0
+    try:
+        for k from 0 to n - 1:
+            let size = int(count / n)
+            when k < count % n:
+                size = size + 1
+            end
+            let input = base + "_" + str(k) + "_in.json"
+            let output = base + "_" + str(k) + "_out.json"
+            fs.write(input, json.stringify(items[start:start + size]))
+            files.push([input, output])
+            starts.push(start)
+            procs.push(process.start([process.executable, "run", script, input, output],
+                {"env": {"GLOW_PARALLEL_WORKER": "1"}, "stdout": "inherit", "stderr": "inherit"}))
+            start = start + size
+        end
+        let results = []
+        for k from 0 to n - 1:
+            let code = process.wait(procs[k])
+            when code != 0 or not fs.is_file(files[k][1]):
+                throw "parallel.map: worker " + str(k + 1) + " of " + str(n) + " failed (exit code " + str(code) + ")"
+            end
+            let i = starts[k]
+            for each r in json.parse(fs.read(files[k][1])):
+                when not r[0]:
+                    throw "parallel.map: " + name + "(" + json.stringify(items[i]) + ") failed: " + r[1]
+                end
+                results.push(r[1])
+                i = i + 1
+            end
+        end
+        return results
+    finally:
+        for each p in procs:
+            when process.alive(p):
+                process.kill(p)
+            end
+            process.close(p)
+        end
+        for each f in files:
+            for each fp in f:
+                when fs.exists(fp):
+                    fs.remove(fp)
+                end
+            end
+        end
+        when fs.exists(script):
+            fs.remove(script)
+        end
+    end
+end
+
+let parallel = {"map": parallel_map}

@@ -1514,6 +1514,19 @@ static Value os_pid(int argc, Value *args) {
 #endif
 }
 
+/* os.cpu_count(): the number of CPU cores this process can use (at least 1). */
+static Value os_cpu_count(int argc, Value *args) {
+    (void)argc; (void)args;
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    long n = (long)si.dwNumberOfProcessors;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    return value_int(n > 0 ? n : 1);
+}
+
 /* os.isatty(fd): whether 0 (stdin), 1 (stdout) or 2 (stderr) is a terminal. */
 static Value os_isatty(int argc, Value *args) {
     int fd = argc > 0 && GET_TYPE(args[0]) == VAL_INT ? (int)AS_INT(args[0]) : 1;
@@ -2083,6 +2096,7 @@ void glow_scripting_init(void) {
         dict_set(os, "home", native_func_new("home", os_home));
         dict_set(os, "temp_dir", native_func_new("temp_dir", os_temp_dir));
         dict_set(os, "pid", native_func_new("pid", os_pid));
+        dict_set(os, "cpu_count", native_func_new("cpu_count", os_cpu_count));
         dict_set(os, "isatty", native_func_new("isatty", os_isatty));
         dict_set(os, "read_stdin", native_func_new("read_stdin", os_read_stdin));
         dict_set(os, "write", native_func_new("write", os_write));

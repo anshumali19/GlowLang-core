@@ -97,6 +97,7 @@ reachable as `shell.sh`, `shell.run`, `shell.ok`, `shell.lines`, `shell.pipe`,
 | `os.home()`, `os.temp_dir()` | The user's home and the temporary directory. |
 | `os.platform` | `"windows"`, `"linux"` or `"macos"`. |
 | `os.pid()` | This process's id. |
+| `os.cpu_count()` | The number of CPU cores; see [`parallel.map`](process_guide.md#using-every-core-import-parallel) to use them. |
 | `os.isatty(fd)` | Whether 0 (stdin), 1 (stdout) or 2 (stderr) is a terminal. |
 | `os.read_stdin()` | Everything on standard input, for filters such as `cat data.txt \| glowlang run count.glow`. `input(prompt)` reads one line. |
 | `os.write(...)`, `os.eprint(...)`, `os.ewrite(...)` | Print without a newline; print to standard error. |
