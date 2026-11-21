@@ -46,6 +46,14 @@ func load_config(path):
             fail("cannot read " + path + ": it is not valid JSON")
         end
     end
+    # The JSON file Google's console downloads for a Desktop app client.
+    when type(cfg.get("installed", none)) == "dict":
+        for each k in ["client_id", "client_secret"]:
+            when not cfg.has(k):
+                cfg[k] = cfg["installed"].get(k, "")
+            end
+        end
+    end
     for each pair in [["client_id", "GLOWBOT_CLIENT_ID"], ["client_secret", "GLOWBOT_CLIENT_SECRET"]]:
         let v = os.getenv(pair[1])
         when v != none and v != "":

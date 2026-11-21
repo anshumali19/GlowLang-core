@@ -54,8 +54,10 @@ You do these steps yourself, once. They are free for personal use.
 4. **Make an OAuth client for a desktop app.** Open *Credentials → Create
    credentials → OAuth client ID*. Choose the application type *Desktop app*.
    Google then shows a client ID and a client secret.
-5. **Give them to GlowBot.** Either create `~/.glowbot/config.json`
-   (`C:\Users\<you>\.glowbot\config.json` on Windows):
+5. **Give them to GlowBot.** The easiest way: click **Download JSON** in
+   Google's dialog and save the file as `~/.glowbot/config.json`
+   (`C:\Users\<you>\.glowbot\config.json` on Windows). GlowBot reads that
+   file as it is. Or write the file yourself:
 
    ```json
    {"client_id": "1234-abc.apps.googleusercontent.com", "client_secret": "GOCSPX-..."}

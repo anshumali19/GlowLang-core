@@ -8,7 +8,8 @@ let dir = fs.join(os.temp_dir(), "glowbot_test_" + str(os.pid()))
 fs.mkdirs(dir)
 let cfg = fs.join(dir, "config.json")
 let mock = "http://127.0.0.1:29890"
-fs.write(cfg, json.stringify({"client_id": "cid", "client_secret": "csecret", "port": 29891,
+# The shape of the file Google's console downloads, plus the test's endpoints.
+fs.write(cfg, json.stringify({"installed": {"client_id": "cid", "client_secret": "csecret"}, "port": 29891,
     "auth_url": mock + "/auth", "token_url": mock + "/token", "gmail_url": mock}))
 
 # What the mock server saw.
