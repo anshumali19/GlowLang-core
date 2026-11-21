@@ -1,0 +1,22 @@
+# glowlang package: the program and every module it uses go inside the
+# executable, which then runs from any folder and gets its arguments.
+let dir = fs.join(os.temp_dir(), "glow_package_test_" + str(os.pid()))
+fs.mkdirs(dir)
+let exe = fs.join(dir, "tool")
+when os.platform == "windows":
+    exe = exe + ".exe"
+end
+try:
+    let made = process.run([process.executable, "package", "tests/modules/package_tool.glow", "-o", exe], {})
+    show made["code"], made["stdout"].contains("(4 files)")
+    for each line in made["stdout"].split("\n"):
+        when line.starts_with("  + "):
+            show line.split(" (")[0]
+        end
+    end
+    let ran = process.run([exe, "one", "two words"], {"cwd": dir})
+    show ran["code"]
+    show ran["stdout"].replace("\r\n", "\n").strip()
+finally:
+    fs.remove_all(dir)
+end

@@ -1,0 +1,8 @@
+0 true
+  + package_helper.glow
+  + cli
+  + functools
+0
+args: ["one", "two words"]
+42 23416728348467685
+class

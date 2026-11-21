@@ -1,0 +1,12 @@
+# Used by package_tool.glow, packed into the same executable.
+import "functools"
+func double(x):
+    return x * 2
+end
+@cache
+func fib_cached(n):
+    when n < 2:
+        return n
+    end
+    return fib_cached(n - 1) + fib_cached(n - 2)
+end

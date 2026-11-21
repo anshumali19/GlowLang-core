@@ -62,6 +62,33 @@ included on Windows), and `os.script` is the file's path. A program ends with
 exit code 0, or 1 if an error is not caught; `os.exit(code)` ends it with any
 code.
 
+## Shipping a script as one file
+
+```bash
+glowlang package deploy.glow
+```
+
+makes `deploy` (`deploy.exe` on Windows): one executable that holds GlowLang,
+the program, and every module it uses: the program's own files, packages from
+`gdu install`, and the standard libraries it imports. Copy it to a machine
+without GlowLang and run it from any folder: `./deploy --env prod`. Its
+arguments are `os.args` and `os.script` is the executable's path. `-o name`
+picks another file name. It prints each module it packed:
+
+```
+  + helpers.glow (helpers.glow)
+  + cli (/usr/local/lib/glowlang/lib/cli.glow)
+Package created: deploy (3 files)
+```
+
+- Modules are found from `use` and `import` lines with the path written out.
+  A module loaded by a path built while the program runs is not packed, and
+  must be on disk next to it.
+- The executable runs on the same kind of system it was made on (Linux x64,
+  macOS, Windows x64).
+- On Windows the executable is not signed, so SmartScreen or Smart App Control
+  may block it on other machines.
+
 ## Running commands (`import "shell"`)
 
 A command is either a **string**, run by `/bin/sh` (or `cmd.exe` on Windows) so
