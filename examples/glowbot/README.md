@@ -40,41 +40,39 @@ into one executable with `glowlang package examples/glowbot/glowbot.glow`.
 
 ## Connecting it to your Gmail
 
-You do these steps yourself, once. They are free for personal use.
+You do these steps yourself, once. They are free: no billing account or card.
+Google Cloud requires 2-step verification on your Google account.
 
-1. **Create a Google Cloud project.** Go to https://console.cloud.google.com/,
-   choose *Select a project → New project*, and name it, for example "GlowBot".
-2. **Enable the Gmail API.** In that project, open *APIs & Services → Library*,
-   search for "Gmail API" and click *Enable*.
-3. **Set up the consent screen.** Open *APIs & Services → OAuth consent screen*
-   (it may be called *Google Auth Platform*). Choose *External* and fill in the
-   app name and your email. Under *Audience → Test users*, add your own Gmail
-   address. The app can stay in *Testing* mode: only the test users you list
-   can sign in to it.
-4. **Make an OAuth client for a desktop app.** Open *Credentials → Create
-   credentials → OAuth client ID*. Choose the application type *Desktop app*.
-   Google then shows a client ID and a client secret.
-5. **Give them to GlowBot.** The easiest way: click **Download JSON** in
-   Google's dialog and save the file as `~/.glowbot/config.json`
-   (`C:\Users\<you>\.glowbot\config.json` on Windows). GlowBot reads that
-   file as it is. Or write the file yourself:
+1. **Make a Personal mode client.** Open
+   https://console.cloud.google.com/auth/overview/personal, keep *Create a new
+   project*, choose the application type *Desktop app*, accept the terms and
+   click *Continue*. A Personal mode app works only for your own account, so
+   Google needs no review, shows no "unverified app" warning, and does not end
+   the sign-in after 7 days.
+2. **Keep the client file.** In the dialog that follows, click **Download JSON**.
+   Google does not show the secret again.
+3. **Enable the Gmail API** in that new project: open *APIs & Services →
+   Library*, search for "Gmail API" and click *Enable*.
+4. **Give the client to GlowBot.** Save the downloaded file as
+   `~/.glowbot/config.json` (`C:\Users\<you>\.glowbot\config.json` on
+   Windows). GlowBot reads that file as it is. Or write the file yourself:
 
    ```json
    {"client_id": "1234-abc.apps.googleusercontent.com", "client_secret": "GOCSPX-..."}
    ```
 
    or set the environment variables `GLOWBOT_CLIENT_ID` and `GLOWBOT_CLIENT_SECRET`.
-6. **Sign in once:** `glowbot login`. Your browser opens Google's sign-in page.
-   Choose your account and allow "Send email on your behalf". Google may warn
-   that the app is not verified. That is expected for your own app in Testing
-   mode: choose *Continue*. The browser then says "GlowBot is signed in".
+5. **Sign in once:** `glowbot login`. Your browser opens Google's sign-in page.
+   Choose your account and allow "Send email on your behalf". The browser then
+   says "GlowBot is signed in".
 
-From now on `glowbot send` works without signing in again.
+From now on `glowbot send` works without signing in again, until you run
+`glowbot logout`, remove GlowBot at https://myaccount.google.com/permissions
+or change your Google password.
 
-> In Testing mode Google ends the sign-in after 7 days, and GlowBot then asks
-> you to run `glowbot login` again. To avoid this, set the consent screen's
-> publishing status to *In production*. You can do that without Google's
-> review, since only you use the app; you will still see the "not verified" warning.
+> A normal *External* app (consent screen, test users) also works, but while it
+> is in *Testing* Google ends the sign-in after 7 days, and publishing it needs
+> a home page and privacy policy on a domain you own. Personal mode avoids both.
 
 ## How it works
 
