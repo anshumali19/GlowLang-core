@@ -1,0 +1,88 @@
+[GlowWeb] Starting server on port 29890
+--- send before login
+1 glowbot: not signed in yet: run glowbot login first
+--- login
+true
+true true true
+400
+400
+200 GlowBot is signed in. You can close this tab.
+0
+Waiting for Google...
+Signed in. GlowBot can now send email from your Gmail (and nothing else).
+rt-secret-1
+refresh token printed: false
+redirect_uri: http://127.0.0.1:29891/
+--- send, answered no
+0
+To (addresses, separated by commas): Subject: What should it say? (end with a line holding only a dot)
+
+---------------- draft ----------------
+To:      bob@example.com
+Subject: Lunch
+
+See you at noon.
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Not sent.
+sent so far: 0
+--- only a typed yes sends
+Send this email? Type yes to send, anything else cancels: Not sent. 0
+Send this email? Type yes to send, anything else cancels: Not sent. 0
+--- bad addresses are asked again
+0
+To (addresses, separated by commas): Please give full email addresses, like ana@example.com.
+To (addresses, separated by commas): Subject: What should it say? (end with a line holding only a dot)
+
+---------------- draft ----------------
+To:      bob@example.com, ana@example.org
+Subject: Café plans
+
+Line one
+Line two
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
+To: bob@example.com, ana@example.org
+Subject: =?UTF-8?B?Q2Fmw6kgcGxhbnM=?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Line one
+Line two
+--- --to is checked too
+1 glowbot: not a valid email address list: bob@example.com
+sent so far: 1
+--- --ai drafts, still asks
+0
+Your notes for the email (end with a line holding only a dot)
+Drafting...
+
+---------------- draft ----------------
+To:      bob@example.com
+Subject: Meeting
+
+Hi Bob,
+
+The meeting moves to Friday at 3 pm.
+
+Best regards
+---------------------------------------
+Send this email? Type yes to send, anything else cancels: Sent. Gmail message id: msg-123
+true
+To: bob@example.com
+Subject: Meeting
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Hi Bob,
+
+The meeting moves to Friday at 3 pm.
+
+Best regards
+1 glowbot: --ai needs ANTHROPIC_API_KEY set. Without --ai, GlowBot sends your text as you wrote it.
+--- an expired sign-in
+1 Run glowbot login again. Nothing was sent.
+sent so far: 2
+--- logout
+Signed out false

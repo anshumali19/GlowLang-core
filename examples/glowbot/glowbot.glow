@@ -1,0 +1,370 @@
+#!/usr/bin/env glowlang
+# GlowBot: write an email, read it, and send it from your Gmail only after
+# you type "yes".
+#
+#   glowbot login            sign in to Google once (opens your browser)
+#   glowbot send             ask who, what subject and what to say, show the
+#                            email, and send it on "yes"
+#   glowbot send --ai        turn your notes into a polished draft first
+#                            (needs ANTHROPIC_API_KEY)
+#   glowbot logout           forget the saved sign-in
+#
+# Setup and how the Gmail connection works: examples/glowbot/README.md.
+import "cli"
+use "oauth"
+
+let GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+
+let app = ArgParser("glowbot", "Write emails and send them from your Gmail, only after you approve each one")
+app.subcommand("login", "Sign in to Google once and save the permission to send mail")
+app.subcommand("send", "Write an email, check it, and send it on yes")
+app.subcommand("logout", "Forget the saved sign-in")
+app.option("--config", "The settings file", fs.join(os.home(), ".glowbot", "config.json"), "-c")
+app.option("--to", "Recipients, separated by commas")
+app.option("--subject", "The subject")
+app.option("--body", "The text of the email")
+app.flag("--ai", "Polish your notes into a draft with Claude (needs ANTHROPIC_API_KEY)")
+app.flag("--no-browser", "login: print the sign-in link instead of opening a browser")
+let args = app.parse_or_exit()
+
+func fail(msg):
+    os.eprint("glowbot: " + msg)
+    os.exit(1)
+end
+
+# ---- settings ----
+# config.json: {"client_id": ..., "client_secret": ...}; the environment
+# variables GLOWBOT_CLIENT_ID and GLOWBOT_CLIENT_SECRET win over it.
+# Optional keys "auth_url", "token_url", "gmail_url" and "port" exist for
+# tests that point GlowBot at a local mock server.
+func load_config(path):
+    let cfg = {}
+    when fs.exists(path):
+        try:
+            cfg = json.parse(fs.read(path))
+        catch e:
+            fail("cannot read " + path + ": it is not valid JSON")
+        end
+    end
+    for each pair in [["client_id", "GLOWBOT_CLIENT_ID"], ["client_secret", "GLOWBOT_CLIENT_SECRET"]]:
+        let v = os.getenv(pair[1])
+        when v != none and v != "":
+            cfg[pair[0]] = v
+        end
+    end
+    when cfg.get("client_id", "") == "" or cfg.get("client_secret", "") == "":
+        fail("no Google client id and secret. Put them in " + path + " or set GLOWBOT_CLIENT_ID and GLOWBOT_CLIENT_SECRET (see examples/glowbot/README.md)")
+    end
+    return cfg
+end
+
+let cfg_path = args["--config"]
+let token_path = fs.join(fs.dirname(cfg_path), "token.json")
+
+func google(cfg):
+    let c = {"client_id": cfg["client_id"], "client_secret": cfg["client_secret"],
+             "redirect_uri": "http://127.0.0.1:" + str(cfg.get("port", 8765)) + "/",
+             "scope": GMAIL_SEND}
+    when cfg.has("auth_url"):
+        c["authorize_url"] = cfg["auth_url"]
+    end
+    when cfg.has("token_url"):
+        c["token_url"] = cfg["token_url"]
+    end
+    return oauth.provider("google", c)
+end
+
+func url_decode(s):
+    let hex = "0123456789abcdef"
+    let bytes = []
+    let i = 0
+    let b = s.replace("+", " ").bytes()
+    while i < len(b):
+        when b[i] == 37 and i + 2 < len(b) and hex.contains(chr(b[i + 1]).lower()) and hex.contains(chr(b[i + 2]).lower()):
+            bytes.push(hex.find(chr(b[i + 1]).lower()) * 16 + hex.find(chr(b[i + 2]).lower()))
+            i = i + 3
+        otherwise:
+            bytes.push(b[i])
+            i = i + 1
+        end
+    end
+    let out = ""
+    for each x in bytes:
+        out = out + chr(x)
+    end
+    return out
+end
+
+# The query parameters of a raw HTTP request ("GET /?a=1&b=2 HTTP/1.1").
+func query_of(raw):
+    let words = str(raw).split("\r\n")[0].split(" ")
+    let q = {}
+    when len(words) < 2 or not words[1].contains("?"):
+        return q
+    end
+    let qs = words[1][words[1].find("?") + 1:]
+    for each pair in qs.split("&"):
+        let eq = pair.find("=")
+        when eq > 0:
+            q[url_decode(pair[0:eq])] = url_decode(pair[eq + 1:])
+        end
+    end
+    return q
+end
+
+func reply(client, status, text):
+    http.send(client, "HTTP/1.1 " + status + "\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " + str(len(text.bytes())) + "\r\n\r\n" + text)
+    http.close(client)
+end
+
+func open_browser(url):
+    try:
+        when os.platform == "windows":
+            process.run(["rundll32", "url.dll,FileProtocolHandler", url], {})
+        eif os.platform == "macos":
+            process.run(["open", url], {})
+        otherwise:
+            process.run(["xdg-open", url], {})
+        end
+    catch e:
+        show "(Could not open a browser; open the link above yourself.)"
+    end
+end
+
+func login(cfg):
+    let client = google(cfg)
+    let port = int(cfg.get("port", 8765))
+    let listener = http.listen(port)
+    when listener < 0:
+        fail("cannot listen on port " + str(port) + " for Google's answer; set \"port\" in " + cfg_path)
+    end
+    # offline + consent: Google returns a refresh token, so this is needed once.
+    let start = client.authorize_url({"access_type": "offline", "prompt": "consent"})
+    show "Sign in to Google and allow GlowBot to send email for you:"
+    show start["url"]
+    when not args["--no-browser"]:
+        open_browser(start["url"])
+    end
+    show "Waiting for Google..."
+    while true:
+        let c = http.accept(listener)
+        when c < 0:
+            skip
+        end
+        let q = query_of(http.read(c))
+        # Ignore favicon requests and anything not from this sign-in.
+        when q.get("state", none) != start["state"]:
+            reply(c, "400 Bad Request", "Not a GlowBot sign-in.")
+            skip
+        end
+        when q.has("error"):
+            reply(c, "200 OK", "GlowBot was not allowed to send mail. You can close this tab.")
+            fail("Google said: " + q["error"])
+        end
+        reply(c, "200 OK", "GlowBot is signed in. You can close this tab.")
+        let tokens = client.exchange(q.get("code", ""), start["verifier"])
+        when not tokens.has("refresh_token"):
+            fail("Google sent no refresh token. Remove GlowBot at https://myaccount.google.com/permissions and run glowbot login again.")
+        end
+        fs.mkdirs(fs.dirname(token_path))
+        fs.write(token_path, json.stringify({"refresh_token": tokens["refresh_token"]}))
+        when os.platform != "windows":
+            process.run(["chmod", "600", token_path], {})
+        end
+        show "Signed in. GlowBot can now send email from your Gmail (and nothing else)."
+        return none
+    end
+end
+
+# ---- the email ----
+func has_line_break(s):
+    return s.contains("\n") or s.contains("\r")
+end
+
+func valid_address(a):
+    let at = a.find("@")
+    return at > 0 and at < len(a) - 1 and not a.contains(" ") and not a.contains(",") and not a.contains("<") and not a.contains(">") and not has_line_break(a) and a[at + 1:].contains(".")
+end
+
+# The list of addresses in "a@x.com, b@y.org", or none if one is not valid.
+func parse_recipients(text):
+    let list = [a.strip() for each a in str(text).split(",") if a.strip() != ""]
+    when len(list) == 0:
+        return none
+    end
+    for each a in list:
+        when not valid_address(a):
+            return none
+        end
+    end
+    return list
+end
+
+# RFC 2047 for subjects that are not plain ASCII.
+func header_text(s):
+    for each b in s.bytes():
+        when b > 126:
+            return "=?UTF-8?B?" + crypto.base64(s) + "?="
+        end
+    end
+    return s
+end
+
+func mime(rcpt, subject, body):
+    return ("To: " + ", ".join(rcpt) + "\r\nSubject: " + header_text(subject) +
+        "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" +
+        body.replace("\r\n", "\n").replace("\n", "\r\n"))
+end
+
+func ask(question):
+    let a = input(question)
+    when a == none:
+        fail("stopped: no more input. Nothing was sent.")
+    end
+    return a.strip()
+end
+
+# Lines until one that is just "." (or the end of input).
+func ask_text(question):
+    show question + " (end with a line holding only a dot)"
+    let lines = []
+    while true:
+        let line = input("")
+        when line == none or line.strip() == ".":
+            stop
+        end
+        lines.push(line.replace("\r", ""))
+    end
+    return "\n".join(lines).strip()
+end
+
+# Claude turns notes into an email body. The recipients never come from it.
+func polish(rcpt, subject, notes):
+    let key = os.getenv("ANTHROPIC_API_KEY")
+    when key == none or key == "":
+        fail("--ai needs ANTHROPIC_API_KEY set. Without --ai, GlowBot sends your text as you wrote it.")
+    end
+    let url = os.getenv("GLOWBOT_AI_URL")
+    when url == none or url == "":
+        url = "https://api.anthropic.com/v1/messages"
+    end
+    let model = os.getenv("GLOWBOT_AI_MODEL")
+    when model == none or model == "":
+        model = "claude-sonnet-5-5"
+    end
+    let prompt = ("Write the body of an email from my notes. It goes to " + ", ".join(rcpt) + " with the subject \"" + subject +
+        "\". Keep my meaning and facts, add nothing I did not say, and sign off without inventing a name. Reply with only the email body.\n\nMy notes:\n" + notes)
+    let r = http.request("POST", url, {"timeout": 60,
+        "headers": {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        "body": json.stringify({"model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]})})
+    let text = ""
+    try:
+        for each part in json.parse(r["body"])["content"]:
+            when part.get("type", "") == "text":
+                text = text + part["text"]
+            end
+        end
+    catch e:
+        text = ""
+    end
+    when r["status"] != 200 or text.strip() == "":
+        fail("the drafting service answered " + str(r["status"]) + "; nothing was sent")
+    end
+    return text.strip()
+end
+
+func access_token(cfg):
+    let saved = json.parse(fs.read(token_path))
+    let token = none
+    try:
+        token = google(cfg).refresh(saved["refresh_token"])["access_token"]
+    catch e:
+        fail(str(e) + "\nRun glowbot login again. Nothing was sent.")
+    end
+    return token
+end
+
+func send(cfg):
+    when not fs.exists(token_path):
+        fail("not signed in yet: run glowbot login first")
+    end
+    let rcpt = none
+    when args["--to"] != none:
+        rcpt = parse_recipients(args["--to"])
+        when rcpt == none:
+            fail("not a valid email address list: " + args["--to"])
+        end
+    end
+    while rcpt == none:
+        rcpt = parse_recipients(ask("To (addresses, separated by commas): "))
+        when rcpt == none:
+            show "Please give full email addresses, like ana@example.com."
+        end
+    end
+    let subject = args["--subject"]
+    when subject == none:
+        subject = ask("Subject: ")
+    end
+    when has_line_break(subject):
+        fail("the subject cannot have line breaks")
+    end
+    let body = args["--body"]
+    when body == none:
+        let what = "What should it say?"
+        when args["--ai"]:
+            what = "Your notes for the email"
+        end
+        body = ask_text(what)
+    end
+    when args["--ai"]:
+        show "Drafting..."
+        body = polish(rcpt, subject, body)
+    end
+
+    show ""
+    show "---------------- draft ----------------"
+    show "To:      " + ", ".join(rcpt)
+    show "Subject: " + subject
+    show ""
+    show body
+    show "---------------------------------------"
+    let answer = input("Send this email? Type yes to send, anything else cancels: ")
+    when answer == none or answer.strip().lower() != "yes":
+        show "Not sent."
+        return none
+    end
+
+    let raw = crypto.base64(mime(rcpt, subject, body), true)
+    let url = cfg.get("gmail_url", "https://gmail.googleapis.com") + "/gmail/v1/users/me/messages/send"
+    let r = http.request("POST", url, {"timeout": 60,
+        "headers": {"Authorization": "Bearer " + access_token(cfg), "Content-Type": "application/json"},
+        "body": json.stringify({"raw": raw})})
+    let data = {}
+    try:
+        data = json.parse(r["body"])
+    catch e:
+        data = {}
+    end
+    when r["status"] != 200 or type(data) != "dict" or not data.has("id"):
+        let why = "status " + str(r["status"])
+        when type(data) == "dict" and type(data.get("error", none)) == "dict":
+            why = why + ": " + str(data["error"].get("message", ""))
+        end
+        fail("Gmail did not send it (" + why + ")")
+    end
+    show "Sent. Gmail message id: " + data["id"]
+end
+
+let cmd = args["_subcommand"]
+when cmd == "login":
+    login(load_config(cfg_path))
+eif cmd == "send":
+    send(load_config(cfg_path))
+eif cmd == "logout":
+    when fs.exists(token_path):
+        fs.remove(token_path)
+    end
+    show "Signed out. To also revoke access, remove GlowBot at https://myaccount.google.com/permissions"
+otherwise:
+    app.help()
+end
