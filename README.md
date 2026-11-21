@@ -203,6 +203,17 @@ end
 For routes, JSON APIs and middleware there is the GlowWeb framework: see the
 [web guide](docs/web_guide.md) and the [GlowWeb tutorial](docs/glowweb_tutorial.md).
 
+`glowlang new myapi` starts a whole API in one step: sign-up, login with tokens,
+hashed passwords, a SQLite database and tests that call every endpoint. Nothing
+else needs installing:
+
+```bash
+glowlang new myapi
+cd myapi
+glowlang run test_app.glow    # 16 checks
+glowlang run app.glow         # http://localhost:8000
+```
+
 ### A database
 
 ```glow

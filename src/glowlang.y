@@ -1158,12 +1158,27 @@ int glow_main(int argc, char **argv) {
         printf("  profile <file.glow> Execute, then list the lines that ran most often\n");
         printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
+        printf("  new <name>        Start a web API project (login, database, tests)\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
         printf("  --version         Print the GlowLang version\n\n");
         printf("Options:\n");
         printf("  -o <output>       Specify output file for 'package' subcommand\n");
         return 0;
+    }
+
+    /* glowlang new <name>: runs lib/new_project.glow, which writes the
+       starter project, as `glowlang run new_project.glow <args>`. */
+    if (strcmp(subcommand, "new") == 0) {
+        const char *found = NULL;
+        FILE *nf = glow_find_module("lib/new_project.glow", "", &found);
+        if (!nf) { fprintf(stderr, "glowlang new: the standard library (lib/new_project.glow) is missing\n"); return 1; }
+        fclose(nf);
+        char **nargv = malloc(sizeof(char *) * (size_t)(argc + 2));
+        nargv[0] = argv[0]; nargv[1] = "run"; nargv[2] = (char *)found;
+        for (int i = 2; i < argc; i++) nargv[i + 1] = argv[i];
+        nargv[argc + 1] = NULL;
+        argc = argc + 1; argv = nargv; subcommand = "run";
     }
 
     if (strcmp(subcommand, "package") == 0) {

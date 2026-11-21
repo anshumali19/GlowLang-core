@@ -1586,6 +1586,11 @@ default), `"base64"` or `"raw"` (the bytes themselves); Twilio's webhooks, for e
 `crypto.hmac(token, data, "sha1", "base64")`. `random_bytes(n)` and `random_hex(n)`: n bytes
 from the operating system's secure random source, for keys and tokens. `equal(a, b)`: compare
 secrets in constant time. `uuid4()`: a random UUID. For signing messages, see `lib/kavach.glow`.
+`password_hash(pw)`: a slow, salted hash to store instead of a password, as
+`pbkdf2_sha256$600000$<salt>$<hash>` (PBKDF2-HMAC-SHA256, the format Django uses; other
+threads run while it works). `password_check(pw, stored)`: whether `pw` matches such a hash,
+compared in constant time; anything not in that form gives `false`. `lib/crypto.glow` has
+them as `hash.password(pw)` and `hash.check_password(pw, stored)`.
 
 ### Threads (`threads.`)
 `join_all()`, `active()`. See also `lib/async.glow` and `lib/sync.glow`.

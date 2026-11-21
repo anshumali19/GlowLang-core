@@ -1,0 +1,130 @@
+# __NAME__: a web API with sign-up, login and notes, stored in SQLite.
+#
+#   glowlang run app.glow              (serves on http://localhost:8000)
+#   glowlang run test_app.glow         (runs the tests)
+#   glowlang package app.glow          (one file to copy to a server)
+#
+# Settings come from environment variables: PORT (8000), DB_PATH (app.db)
+# and APP_SECRET, the key that signs login tokens. Without APP_SECRET, a
+# random one is made and kept in secret.txt; set it yourself in production.
+use "web"
+use "jwt"
+use "crypto"
+
+let PORT = int(os.getenv("PORT", "8000"))
+let DB_PATH = os.getenv("DB_PATH", "app.db")
+let SECRET = os.getenv("APP_SECRET", "")
+when SECRET == "":
+    SECRET = fs.read("secret.txt") ?? ""
+    when SECRET == "":
+        SECRET = hash.random_hex(32)
+        fs.write("secret.txt", SECRET)
+    end
+end
+
+let db = sqlite.open(DB_PATH)
+sqlite.exec(db, "create table if not exists users (id integer primary key, email text unique not null, password text not null);" +
+    "create table if not exists notes (id integer primary key, user_id integer not null, text text not null, created integer not null)")
+
+# The JSON object a request sent, or none.
+func body_of(req):
+    try:
+        let data = json.parse(req.body)
+        when type(data) == "dict":
+            return data
+        end
+    catch e:
+        return none
+    end
+    return none
+end
+
+# The id of the user whose token came with the request, or none.
+func user_of(req):
+    let auth = req.get_header("Authorization") ?? ""
+    when not auth.starts_with("Bearer "):
+        return none
+    end
+    try:
+        return int(jwt.decode(auth[7:], SECRET)["sub"])
+    catch e:
+        return none
+    end
+end
+
+let app = Server(PORT)
+
+@app.get("/health")
+func health(req):
+    return {"ok": true}
+end
+
+# {"email", "password"} -> 201 {"id"}
+@app.post("/signup")
+func signup(req, res):
+    let data = body_of(req)
+    when data == none or type(data.get("email")) != "string" or type(data.get("password")) != "string":
+        return res.status(400).send_json({"error": "send JSON with email and password"})
+    end
+    let email = data["email"].strip().lower()
+    when not email.contains("@") or len(data["password"]) < 8:
+        return res.status(400).send_json({"error": "a valid email and a password of 8 or more characters are needed"})
+    end
+    when len(sqlite.query(db, "select id from users where email = ?", [email])) > 0:
+        return res.status(409).send_json({"error": "that email already has an account"})
+    end
+    sqlite.exec(db, "insert into users (email, password) values (?, ?)", [email, hash.password(data["password"])])
+    return res.status(201).send_json({"id": sqlite.last_insert_id(db)})
+end
+
+# {"email", "password"} -> {"token"}, valid for a day. Send it back as
+# the header "Authorization: Bearer <token>".
+@app.post("/login")
+func login(req, res):
+    let data = body_of(req) ?? {}
+    let rows = sqlite.query(db, "select id, password from users where email = ?", [str(data.get("email") ?? "").strip().lower()])
+    when len(rows) == 0 or not hash.check_password(str(data.get("password") ?? ""), rows[0]["password"]):
+        return res.status(401).send_json({"error": "wrong email or password"})
+    end
+    return {"token": jwt.encode({"sub": str(rows[0]["id"]), "exp": jwt.now() + 86400}, SECRET)}
+end
+
+@app.get("/notes")
+func list_notes(req, res):
+    let user = user_of(req)
+    when user == none:
+        return res.status(401).send_json({"error": "log in first"})
+    end
+    return sqlite.query(db, "select id, text, created from notes where user_id = ? order by id", [user])
+end
+
+# {"text"} -> 201 the new note
+@app.post("/notes")
+func add_note(req, res):
+    let user = user_of(req)
+    when user == none:
+        return res.status(401).send_json({"error": "log in first"})
+    end
+    let data = body_of(req)
+    when data == none or type(data.get("text")) != "string" or data["text"].strip() == "":
+        return res.status(400).send_json({"error": "send JSON with text"})
+    end
+    let now = int(os.time())
+    sqlite.exec(db, "insert into notes (user_id, text, created) values (?, ?, ?)", [user, data["text"], now])
+    return res.status(201).send_json({"id": sqlite.last_insert_id(db), "text": data["text"], "created": now})
+end
+
+@app.del("/notes/:id")
+func delete_note(req, res):
+    let user = user_of(req)
+    when user == none:
+        return res.status(401).send_json({"error": "log in first"})
+    end
+    let gone = sqlite.exec(db, "delete from notes where id = ? and user_id = ?", [req.params["id"], user])
+    when gone == 0:
+        return res.status(404).send_json({"error": "no such note"})
+    end
+    return {"deleted": int(req.params["id"])}
+end
+
+app.start()

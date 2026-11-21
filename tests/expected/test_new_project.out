@@ -1,0 +1,35 @@
+--- routes with :name parts
+/notes/:id {"id": "42"}
+/notes/latest
+/users/:user/notes/:id {"user": "ada", "id": "7"}
+true true true
+--- password hashes
+true 4
+true false
+true
+true
+false false false
+--- glowlang new
+0 Made notes-api/ with app.glow, test_app.glow and README.md. Next:
+["README.md", "app.glow", "test_app.glow"]
+# notes-api
+glowlang new: notes-api already exists
+glowlang new: use letters, digits, - and _ in the name, not "bad name"
+0
+ok    the server starts
+ok    sign up
+ok    the same email cannot sign up twice
+ok    short passwords are refused
+ok    a body that is not a JSON object is refused
+ok    a wrong password cannot log in
+ok    log in
+ok    notes need a login
+ok    a forged token is refused
+ok    add a note
+ok    list notes
+ok    others do not see your notes
+ok    others cannot delete your notes
+ok    delete a note
+ok    a deleted note is gone
+ok    unknown paths answer 404
+0 failed
