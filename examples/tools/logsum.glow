@@ -1,0 +1,106 @@
+#!/usr/bin/env glowlang
+# logsum: summarize log files: lines per level, the most common errors, and
+# errors per hour.
+#
+#   logsum app.log [more.log ...] [--top 5]
+#   cat app.log | logsum -
+#
+# A line's level is the first word DEBUG, INFO, WARN/WARNING, ERROR or
+# FATAL/CRITICAL in it (any case); its hour comes from a timestamp such as
+# 2026-11-21 14:05:09 or 2026-11-21T14:05:09Z. Errors that differ only in
+# numbers count as one ("timeout after 30s" and "timeout after 45s").
+import "cli"
+import "re"
+
+let app = ArgParser("logsum", "Summarize log files")
+app.positional("file", "A log file, or - for standard input")
+app.option("--top", "How many of the most common errors to list", "5", "-t")
+let args = app.parse_or_exit()
+let files = [args["file"]] + args["_rest"]
+
+let levels = {"DEBUG": 0, "INFO": 0, "WARN": 0, "ERROR": 0, "FATAL": 0}
+let errors = {}
+let per_hour = {}
+let total = 0
+
+func level_of(word):
+    let w = word.upper()
+    when w == "WARNING":
+        return "WARN"
+    end
+    when w == "CRITICAL":
+        return "FATAL"
+    end
+    return w
+end
+
+for each f in files:
+    let text = none
+    when f == "-":
+        text = os.read_stdin()
+    otherwise:
+        text = fs.read(f)
+    end
+    when text == none:
+        os.eprint("logsum: cannot read " + f)
+        os.exit(1)
+    end
+    for each line in text.replace("\r\n", "\n").split("\n"):
+        when line.strip() == "":
+            skip
+        end
+        total = total + 1
+        let m = re.find("(?i)\b(debug|info|warning|warn|error|fatal|critical)\b", line)
+        when m == none:
+            skip
+        end
+        let level = level_of(m.text)
+        levels[level] = levels[level] + 1
+        when level == "ERROR" or level == "FATAL":
+            let message = line[m.stop:].strip()
+            while len(message) > 0 and "]:-| ".contains(message[0]):
+                message = message[1:]
+            end
+            let key = re.replace("\d+", message, "#")
+            errors[key] = (errors[key] ?? 0) + 1
+            let t = re.find("\d{4}-\d{2}-\d{2}[ T](\d{2})", line)
+            when t != none:
+                let hour = t.text[0:10] + " " + t.group(1) + ":00"
+                per_hour[hour] = (per_hour[hour] ?? 0) + 1
+            end
+        end
+    end
+end
+
+show str(total) + " lines"
+let counts = TextTable()
+counts.set_headers(["level", "lines"])
+for each name in ["FATAL", "ERROR", "WARN", "INFO", "DEBUG"]:
+    when levels[name] > 0:
+        counts.add_row([name, str(levels[name])])
+    end
+end
+show counts.to_string()
+
+when len(errors) > 0:
+    let top = int(args["--top"])
+    let ranked = sorted(errors.keys(), lambda(k): -errors[k])
+    let t = TextTable()
+    t.set_headers(["count", "error"])
+    for each k in ranked[0:top]:
+        t.add_row([str(errors[k]), k])
+    end
+    show "most common errors:"
+    show t.to_string()
+    show "errors per hour:"
+    let busiest = 0
+    for each h, n in per_hour:
+        when n > busiest:
+            busiest = n
+        end
+    end
+    for each h in sorted(per_hour.keys()):
+        let n = per_hour[h]
+        show h + "  " + "#" * int(n * 30 / busiest + 0.99) + " " + str(n)
+    end
+end

@@ -1,0 +1,99 @@
+#!/usr/bin/env glowlang
+# apicheck: check that web pages and APIs answer as they should.
+#
+#   apicheck checks.txt [--timeout 10]
+#
+# One check per line of checks.txt; blank lines and lines starting with #
+# are skipped:
+#
+#   https://example.com/
+#   https://api.example.com/health   status=200  contains=ok
+#   https://api.example.com/v1/user  json=data.id
+#
+# status= is the expected HTTP status (default: any 2xx), contains= text the
+# body must have, json= a dotted path that must exist in the JSON body. Each
+# check is reported with its time; the exit code is 1 if any check fails, so
+# it works in cron jobs and CI.
+import "cli"
+
+let app = ArgParser("apicheck", "Check that web pages and APIs answer as they should")
+app.positional("file", "The list of checks")
+app.option("--timeout", "Seconds to wait for each answer", "10", "-t")
+let args = app.parse_or_exit()
+
+let text = fs.read(args["file"])
+when text == none:
+    os.eprint("apicheck: cannot read " + args["file"])
+    os.exit(1)
+end
+
+# none when the check passes, otherwise what went wrong.
+func problem(r, want):
+    when want.has("status"):
+        when str(r["status"]) != want["status"]:
+            return "status " + str(r["status"]) + ", expected " + want["status"]
+        end
+    eif r["status"] < 200 or r["status"] > 299:
+        return "status " + str(r["status"])
+    end
+    when want.has("contains") and not r["body"].contains(want["contains"]):
+        return "body does not contain \"" + want["contains"] + "\""
+    end
+    when want.has("json"):
+        let data = none
+        try:
+            data = json.parse(r["body"])
+        catch e:
+            return "body is not JSON"
+        end
+        for each part in want["json"].split("."):
+            when type(data) != "dict" or not data.has(part):
+                return "JSON has no " + want["json"]
+            end
+            data = data[part]
+        end
+    end
+    return none
+end
+
+let table = TextTable()
+table.set_headers(["result", "ms", "url", "detail"])
+let failed = 0
+let checks = 0
+for each line in text.replace("\r\n", "\n").split("\n"):
+    let words = [w for each w in line.strip().split(" ") if w != ""]
+    when len(words) == 0 or words[0].starts_with("#"):
+        skip
+    end
+    let url = words[0]
+    let want = {}
+    for each w in words[1:]:
+        let eq = w.find("=")
+        when eq > 0:
+            want[w[0:eq]] = w[eq + 1:]
+        end
+    end
+    checks = checks + 1
+    let t0 = os.time()
+    let what = none
+    let r = none
+    try:
+        r = http.request("GET", url, {"timeout": int(args["--timeout"])})
+        what = problem(r, want)
+    catch e:
+        what = str(e)
+    end
+    let ms = str(round((os.time() - t0) * 1000))
+    when what == none:
+        table.add_row(["ok", ms, url, "status " + str(r["status"])])
+    otherwise:
+        failed = failed + 1
+        table.add_row(["FAIL", ms, url, what])
+    end
+end
+
+show table.to_string()
+show str(checks - failed) + " of " + str(checks) + " checks passed"
+when failed > 0:
+    os.exit(1)
+end

@@ -1,0 +1,103 @@
+# The command-line tools in examples/tools, run as a user would run them,
+# on files made here.
+use "lib/web.glow"
+
+let dir = fs.join(os.temp_dir(), "glow_tools_test_" + str(os.pid()))
+fs.mkdirs(dir)
+
+func tool(name, args):
+    let r = process.run([process.executable, "run", "examples/tools/" + name + ".glow"] + args, {})
+    return [r["code"], r["stdout"].replace("\r\n", "\n").strip(), r["stderr"].replace("\r\n", "\n").strip()]
+end
+
+try:
+    show "--- logsum"
+    fs.write(fs.join(dir, "app.log"),
+        "2026-11-21 09:00:01 INFO server started\n" +
+        "2026-11-21 09:15:40 ERROR timeout after 30s calling payments\n" +
+        "2026-11-21 09:47:02 ERROR timeout after 45s calling payments\n" +
+        "[2026-11-21T10:02:11Z] [warning] slow\n" +
+        "2026-11-21 10:59:59 CRITICAL disk full\n" +
+        "no level here\n")
+    let r = tool("logsum", [fs.join(dir, "app.log"), "--top", "1"])
+    show r[0]
+    show r[1]
+
+    show "--- csvclean"
+    fs.write(fs.join(dir, "in.csv"), "Full Name , E-mail\n Ada ,ada@x.org\n,\n\"Hopper, Grace\",g@x.org,extra\n Ada ,ada@x.org\n")
+    r = tool("csvclean", [fs.join(dir, "in.csv"), "--dedupe", "-o", fs.join(dir, "out.csv")])
+    show r[0]
+    show fs.read(fs.join(dir, "out.csv")).replace("\r\n", "\n").strip()
+    show r[2].split("\n")[0].replace(fs.join(dir, ""), "")
+
+    show "--- backup"
+    let src = fs.join(dir, "src")
+    let dst = fs.join(dir, "copy")
+    fs.mkdirs(fs.join(src, "docs"))
+    fs.write(fs.join(src, "a.txt"), "hello")
+    fs.write(fs.join(src, "docs", "n.md"), "notes")
+    show tool("backup", [src, dst, "--dry-run"])[1]
+    show fs.exists(dst)
+    show tool("backup", [src, dst])[1]
+    show tool("backup", [src, dst])[1]
+    fs.write(fs.join(src, "a.txt"), "hello again")
+    fs.remove(fs.join(src, "docs", "n.md"))
+    show tool("backup", [src, dst, "--delete"])[1]
+    show fs.read(fs.join(dst, "a.txt")), fs.exists(fs.join(dst, "docs", "n.md"))
+
+    show "--- renamer"
+    let pics = fs.join(dir, "pics")
+    fs.mkdirs(pics)
+    for each n in ["IMG_0001.jpg", "IMG_0002.jpg", "notes.txt"]:
+        fs.write(fs.join(pics, n), n)
+    end
+    show tool("renamer", ["IMG_(\\d+)", "trip-\\1", pics])[1]
+    show sorted(fs.list(pics))
+    show tool("renamer", ["IMG_(\\d+)", "trip-\\1", pics, "--apply"])[1]
+    show sorted(fs.list(pics))
+    r = tool("renamer", ["trip-\\d+", "same", pics, "--apply"])
+    show r[0], r[2]
+
+    show "--- apicheck"
+    let server = Server(29886)
+    server.route("/health", lambda(req):
+        return "all ok"
+    end)
+    server.route("/user", lambda(req):
+        return json.stringify({"data": {"id": 7}})
+    end)
+    spawn server.start()
+    let up = false
+    let tries = 0
+    while not up and tries < 100:
+        try:
+            http.request("GET", "http://127.0.0.1:29886/health")
+            up = true
+        catch e:
+            os.sleep(100)
+            tries = tries + 1
+        end
+    end
+    fs.write(fs.join(dir, "checks.txt"),
+        "# comments and blank lines are skipped\n\n" +
+        "http://127.0.0.1:29886/health status=200 contains=ok\n" +
+        "http://127.0.0.1:29886/user json=data.id\n" +
+        "http://127.0.0.1:29886/user json=data.email\n" +
+        "http://127.0.0.1:29886/missing\n")
+    r = tool("apicheck", [fs.join(dir, "checks.txt"), "--timeout", "5"])
+    # Stop: the accept loop sees running = false after its next connection.
+    server.running = false
+    http.request("GET", "http://127.0.0.1:29886/health")
+    show r[0]
+    # The time column changes from run to run: show the others.
+    for each line in r[1].split("\n"):
+        when line.starts_with("| "):
+            let cells = [c.strip() for each c in line.split("|")]
+            show cells[1], cells[3], cells[4]
+        eif not line.starts_with("+"):
+            show line
+        end
+    end
+finally:
+    fs.remove_all(dir)
+end

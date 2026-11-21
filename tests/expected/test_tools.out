@@ -1,0 +1,58 @@
+--- logsum
+0
+6 lines
++-------+-------+
+| level | lines |
++-------+-------+
+| FATAL | 1     |
+| ERROR | 2     |
+| WARN  | 1     |
+| INFO  | 1     |
++-------+-------+
+most common errors:
++-------+-----------------------------------+
+| count | error                             |
++-------+-----------------------------------+
+| 2     | timeout after #s calling payments |
++-------+-----------------------------------+
+errors per hour:
+2026-11-21 09:00  ############################## 2
+2026-11-21 10:00  ############### 1
+--- csvclean
+0
+full_name,e_mail
+Ada,ada@x.org
+"Hopper, Grace",g@x.org
+csvclean: 4 rows in, 2 out; headers: full_name, e_mail
+--- backup
+new      a.txt
+new      docs/n.md
+would copy 2 files (10 B), 0 already up to date
+false
+new      a.txt
+new      docs/n.md
+copied 2 files (10 B), 0 already up to date
+copied 0 files (0 B), 2 already up to date
+changed  a.txt
+removed  docs/n.md
+copied 1 files (11 B), 0 already up to date, 1 removed
+hello again false
+--- renamer
+IMG_0001.jpg  ->  trip-0001.jpg
+IMG_0002.jpg  ->  trip-0002.jpg
+2 files would be renamed; add --apply to do it
+["IMG_0001.jpg", "IMG_0002.jpg", "notes.txt"]
+IMG_0001.jpg  ->  trip-0001.jpg
+IMG_0002.jpg  ->  trip-0002.jpg
+2 files renamed
+["notes.txt", "trip-0001.jpg", "trip-0002.jpg"]
+1 renamer: refusing, these names would clash: same.jpg
+--- apicheck
+[GlowWeb] Starting server on port 29886
+1
+result url detail
+ok http://127.0.0.1:29886/health status 200
+ok http://127.0.0.1:29886/user status 200
+FAIL http://127.0.0.1:29886/user JSON has no data.email
+FAIL http://127.0.0.1:29886/missing status 404
+2 of 4 checks passed
