@@ -1202,6 +1202,10 @@ FuncEntry* func_get(const char *name);
 void std_init(void);
 void std_cleanup(void);
 void print_value(Value v);
+/* glowlang package: modules packed into the program, and the module file
+   `use path` would load from importer. */
+void glow_embed_module(const char *name, const char *data, size_t len);
+FILE *glow_find_module(const char *path, const char *importer, const char **found);
 void format_double(char *buf, size_t n, double d);
 double val_to_double(Value v);
 extern Class *vm_last_class;

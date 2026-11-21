@@ -1,0 +1,7 @@
+# Used by test_package.glow: a program packaged with glowlang package. It
+# uses a module of its own, which uses a standard library in turn.
+use "package_helper.glow"
+import "cli"
+show "args:", os.args
+show double(21), fib_cached(80)
+show type(ArgParser)

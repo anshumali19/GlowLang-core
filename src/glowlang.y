@@ -11,6 +11,7 @@
 #else
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 #endif
 #include "glowlang.h"
@@ -891,6 +892,223 @@ static void glow_pass_script_args(const char *filename, int argc, char **argv) {
     glow_set_script_args(filename, 0, NULL);
 }
 
+/* glowlang package: a copy of this executable with the program and every
+   module it uses appended, so it runs on a machine without GlowLang or the
+   program's files. Layout at the end of the file:
+     entries [u32 name length][name][u64 size][bytes], the program first,
+     then [u64 total size of the entries]["GLOW_ARCHIVE"].
+   Modules are found as `use` finds them (the program's own files, .glow_pkg
+   packages, the standard library) and are packed by the path written in
+   the use/import, which is how the packaged program looks them up.
+   shortcut: modules are found by scanning for lines that start with
+   use/import "..."; one loaded by a path built at run time is not packed. */
+typedef struct { char *key; char *path; char *data; long size; } PackFile;
+
+static char *pack_read(const char *path, long *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    char *d = n >= 0 ? malloc((size_t)n + 1) : NULL;
+    if (d && fread(d, 1, (size_t)n, f) != (size_t)n) { free(d); d = NULL; }
+    fclose(f);
+    if (d) { d[n] = '\0'; *size = n; }
+    return d;
+}
+
+static int pack_word(const char *s, long n, long j, const char *w) {
+    long k = (long)strlen(w);
+    return n - j > k && strncmp(s + j, w, (size_t)k) == 0 && (s[j + k] == ' ' || s[j + k] == '\t');
+}
+
+/* Add the modules files[idx] uses that are not packed yet. */
+static void pack_scan(PackFile **files, int *count, int idx) {
+    const char *s = (*files)[idx].data, *importer = (*files)[idx].path;
+    long n = (*files)[idx].size;
+    for (long i = 0; i < n; i++) {
+        long j = i;
+        while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+        int kw = pack_word(s, n, j, "use") ? 3 : pack_word(s, n, j, "import") ? 6 : 0;
+        if (kw) {
+            j += kw;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            long k = j + 1;
+            while (k < n && s[k] != '"' && s[k] != '\n') k++;
+            if (j < n && s[j] == '"' && k < n && s[k] == '"' && k - j - 1 < 512) {
+                char lit[512];
+                memcpy(lit, s + j + 1, (size_t)(k - j - 1)); lit[k - j - 1] = '\0';
+                int seen = 0;
+                for (int q = 1; q < *count; q++) if (strcmp((*files)[q].key, lit) == 0) seen = 1;
+                const char *found = NULL;
+                FILE *f = seen ? NULL : glow_find_module(lit, importer, &found);
+                if (f) {
+                    fclose(f);
+                    long sz = 0;
+                    char *d = pack_read(found, &sz);
+                    if (d) {
+                        *files = realloc(*files, sizeof(PackFile) * (size_t)(*count + 1));
+                        (*files)[*count] = (PackFile){ strdup(lit), strdup(found), d, sz };
+                        (*count)++;
+                        printf("  + %s (%s)\n", lit, found);
+                    }
+                } else if (!seen) {
+                    fprintf(stderr, "note: %s not found; the program needs it on disk when it runs\n", lit);
+                }
+            }
+        }
+        while (i < n && s[i] != '\n') i++;
+    }
+}
+
+static int glow_package(const char *src_file, const char *out_file) {
+    PackFile *files = malloc(sizeof(PackFile));
+    long src_size = 0;
+    char *src = pack_read(src_file, &src_size);
+    if (!src) { fprintf(stderr, "Error: Could not open source '%s'\n", src_file); free(files); return 1; }
+    const char *base = strrchr(src_file, '/');
+    const char *bs = strrchr(src_file, '\\');
+    if (bs && (!base || bs > base)) base = bs;
+    base = base ? base + 1 : src_file;
+    files[0] = (PackFile){ strdup(base), strdup(src_file), src, src_size };
+    int count = 1;
+    for (int i = 0; i < count; i++) pack_scan(&files, &count, i);
+
+    /* The output is named after the program unless -o says otherwise. */
+    char out_buf[1024];
+    if (!out_file) {
+        snprintf(out_buf, sizeof(out_buf), "%s", base);
+        size_t bl = strlen(out_buf);
+        if (bl > 5 && strcmp(out_buf + bl - 5, ".glow") == 0) out_buf[bl - 5] = '\0';
+#ifdef _WIN32
+        strncat(out_buf, ".exe", sizeof(out_buf) - strlen(out_buf) - 1);
+#endif
+        out_file = out_buf;
+    }
+
+    char self_path[1024];
+    int self_len = get_self_exe_path(self_path, sizeof(self_path) - 1);
+    FILE *fself = self_len == -1 ? NULL : (self_path[self_len] = '\0', fopen(self_path, "rb"));
+    FILE *fout = fself ? fopen(out_file, "wb") : NULL;
+    if (!fout) {
+        fprintf(stderr, "Error: Could not write '%s'\n", out_file);
+        if (fself) fclose(fself);
+        return 1;
+    }
+    /* This executable may itself be a package: copy only the runtime. */
+    fseek(fself, 0, SEEK_END);
+    long runtime_size = ftell(fself);
+    if (runtime_size >= 20) {
+        char marker[12];
+        fseek(fself, -12, SEEK_END);
+        uint64_t old = 0;
+        if (fread(marker, 1, 12, fself) == 12 && memcmp(marker, "GLOW_ARCHIVE", 12) == 0) {
+            fseek(fself, -20, SEEK_END);
+            if (fread(&old, sizeof old, 1, fself) == 1 && old + 20 <= (uint64_t)runtime_size) runtime_size -= (long)old + 20;
+        }
+    }
+    fseek(fself, 0, SEEK_SET);
+    char buf[8192];
+    long left = runtime_size;
+    while (left > 0) {
+        size_t n = fread(buf, 1, left < (long)sizeof(buf) ? (size_t)left : sizeof(buf), fself);
+        if (n == 0) break;
+        fwrite(buf, 1, n, fout);
+        left -= (long)n;
+    }
+    fclose(fself);
+
+    uint64_t total = 0;
+    for (int i = 0; i < count; i++) {
+        uint32_t nl = (uint32_t)strlen(files[i].key);
+        uint64_t sz = (uint64_t)files[i].size;
+        fwrite(&nl, sizeof nl, 1, fout); fwrite(files[i].key, 1, nl, fout);
+        fwrite(&sz, sizeof sz, 1, fout); fwrite(files[i].data, 1, (size_t)sz, fout);
+        total += sizeof nl + nl + sizeof sz + sz;
+        free(files[i].key); free(files[i].path); free(files[i].data);
+    }
+    free(files);
+    fwrite(&total, sizeof total, 1, fout);
+    fwrite("GLOW_ARCHIVE", 1, 12, fout);
+    int bad = ferror(fout);
+    fclose(fout);
+    if (bad) { fprintf(stderr, "Error: Could not write '%s'\n", out_file); return 1; }
+#ifndef _WIN32
+    chmod(out_file, 0755);
+#endif
+    printf("Package created: %s (%d file%s)\n", out_file, count, count == 1 ? "" : "s");
+    return 0;
+}
+
+/* If this executable is a package, register its modules and run its
+   program: returns 1 with the exit code in *rc. A parallel.map worker
+   (GLOW_PARALLEL_WORKER, started as `<exe> run script ...`) keeps the
+   modules but runs its script like glowlang does. */
+static int glow_run_package(int argc, char **argv, int *rc) {
+    char self_path[1024];
+    int len = get_self_exe_path(self_path, sizeof(self_path) - 1);
+    if (len == -1) return 0;
+    self_path[len] = '\0';
+    FILE *f = fopen(self_path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    char marker[12];
+    uint64_t total = 0;
+    char *payload = NULL;
+    if (fsize >= 20 && fseek(f, -12, SEEK_END) == 0 && fread(marker, 1, 12, f) == 12 &&
+        memcmp(marker, "GLOW_ARCHIVE", 12) == 0 && fseek(f, -20, SEEK_END) == 0 &&
+        fread(&total, sizeof total, 1, f) == 1 && total + 20 <= (uint64_t)fsize &&
+        (payload = malloc((size_t)total + 1)) != NULL) {
+        fseek(f, fsize - 20 - (long)total, SEEK_SET);
+        if (fread(payload, 1, (size_t)total, f) != (size_t)total) { free(payload); payload = NULL; }
+    }
+    fclose(f);
+    if (!payload) return 0;
+
+    /* Entries; the payload stays allocated, since modules point into it. */
+    const char *main_name = NULL, *main_src = NULL;
+    size_t main_len = 0;
+    uint64_t at = 0;
+    while (at + 12 <= total) {
+        uint32_t nl; uint64_t sz;
+        memcpy(&nl, payload + at, sizeof nl); at += sizeof nl;
+        if (at + nl + 8 > total) break;
+        char *name = malloc(nl + 1);
+        memcpy(name, payload + at, nl); name[nl] = '\0'; at += nl;
+        memcpy(&sz, payload + at, sizeof sz); at += sizeof sz;
+        if (at + sz > total) { free(name); break; }
+        if (!main_src) { main_name = name; main_src = payload + at; main_len = (size_t)sz; }
+        else glow_embed_module(name, payload + at, (size_t)sz);
+        at += sz;
+    }
+    if (!main_src) return 0;
+    if (getenv("GLOW_PARALLEL_WORKER") && argc > 1 && strcmp(argv[1], "run") == 0) return 0;
+
+    glow_set_script_args(self_path, argc - 1, argv + 1);
+    char *script = malloc(main_len + 1);
+    memcpy(script, main_src, main_len); script[main_len] = '\0';
+    compiling_file = main_name;
+    root = NULL;
+    YY_BUFFER_STATE bp = yy_scan_string(script);
+    int parse_res = yyparse(); yy_delete_buffer(bp);
+    free(script);
+    *rc = 0;
+    if (parse_res != 0) { std_cleanup(); *rc = 1; return 1; }
+    if (root) {
+        Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
+        main_fe.body = main_bc; compile(root);
+        main_bc->local_count = compiler_reg_peak();
+        bc_emit(main_bc, OP_RETURN, 0, 0);
+        optimize_bytecode(main_bc);
+        run_bytecode(main_bc, NULL, NULL, 0);
+        if (has_exception) print_error_trace(pending_exception);
+        if (runtime_error_thrown) { fflush(stdout); *rc = 1; return 1; }
+    }
+    glow_threads_join_all();
+    glow_gen_close_all();
+    std_cleanup();
+    return 1;
+}
+
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 void dump_all_bc() {
     printf("Main:\n");
@@ -909,68 +1127,15 @@ int main(int argc, char **argv) {
 #else
 int glow_main(int argc, char **argv) {
 #endif
+    int packaged_rc = 0;
     /* The main thread owns the GIL for its whole life except while parked in a
        blocking native or yielding to a spawned thread. */
     glow_gil_acquire();
     var_table_init(); func_table_init(); vm_stack_init(); intern_table_init(); std_init();
     next_free_reg = 0;
 
-    // 1. Check for Embedded Package
-    char self_path[1024];
-    int len = get_self_exe_path(self_path, sizeof(self_path)-1);
-    if (len != -1) {
-        self_path[len] = '\0';
-        FILE *f = fopen(self_path, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long fsize = ftell(f);
-            if (fsize >= 20) {
-                fseek(f, -12, SEEK_END); // Marker is 12 bytes: "GLOW_ARCHIVE"
-                char marker[13];
-                if (fread(marker, 1, 12, f) == 12) {
-                    marker[12] = '\0';
-                    if (strcmp(marker, "GLOW_ARCHIVE") == 0) {
-                        fseek(f, -20, SEEK_END); // Read 8-byte uint64_t size
-                        uint64_t script_size = 0;
-                        if (fread(&script_size, sizeof(uint64_t), 1, f) == 1 && script_size < (uint64_t)fsize) {
-                            fseek(f, fsize - 20 - (long)script_size, SEEK_SET);
-                            char *script = malloc(script_size + 1);
-                            if (script && fread(script, 1, script_size, f) == (size_t)script_size) {
-                                script[script_size] = '\0';
-                                fclose(f);
-
-                                compiling_file = "<embedded>";
-                                root = NULL;
-                                YY_BUFFER_STATE bp = yy_scan_string(script);
-                                int parse_res = yyparse(); yy_delete_buffer(bp);
-                                free(script);
-                                if (parse_res != 0) {
-                                    std_cleanup();
-                                    return 1;
-                                }
-                                if (root) {
-                                    Bytecode *main_bc = bc_new(&main_fe); compiling_bc = main_bc;
-                                    main_fe.body = main_bc; compile(root);
-                                    main_bc->local_count = compiler_reg_peak();
-                                    bc_emit(main_bc, OP_RETURN, 0, 0);
-                                    optimize_bytecode(main_bc);
-                                    run_bytecode(main_bc, NULL, NULL, 0);
-                                    if (has_exception) print_error_trace(pending_exception);
-                                    if (runtime_error_thrown) { fflush(stdout); return 1; }
-                                }
-                                glow_threads_join_all();
-                                glow_gen_close_all();
-                                std_cleanup(); return 0;
-                            } else {
-                                if (script) free(script);
-                            }
-                        }
-                    }
-                }
-            }
-            fclose(f);
-        }
-    }
+    // 1. A packaged program (glowlang package) runs what was packed into it.
+    if (glow_run_package(argc, argv, &packaged_rc)) return packaged_rc;
 
     if (argc == 1) {
         // Default to REPL
@@ -1002,49 +1167,9 @@ int glow_main(int argc, char **argv) {
     }
 
     if (strcmp(subcommand, "package") == 0) {
-        if (argc < 3) { fprintf(stderr, "Usage: glow package <file.glow> [-o output]\n"); return 1; }
-        const char *src_file = argv[2];
-        const char *out_file = "app.bin";
-        if (argc > 4 && strcmp(argv[3], "-o") == 0) out_file = argv[4];
-
-        FILE *fsrc = fopen(src_file, "rb");
-        if (!fsrc) { fprintf(stderr, "Error: Could not open source '%s'\n", src_file); return 1; }
-        fseek(fsrc, 0, SEEK_END); long src_size = ftell(fsrc); fseek(fsrc, 0, SEEK_SET);
-        char *src_buf = malloc(src_size);
-        if (fread(src_buf, 1, src_size, fsrc) != (size_t)src_size) {
-            // Silence warning and handle partial read
-        }
-        fclose(fsrc);
-
-        char self_path[1024];
-        int self_len = get_self_exe_path(self_path, sizeof(self_path)-1);
-        if (self_len == -1) { free(src_buf); return 1; }
-        self_path[self_len] = '\0';
-        FILE *fself = fopen(self_path, "rb");
-        if (!fself) { free(src_buf); return 1; }
-        
-        FILE *fout = fopen(out_file, "wb");
-        if (!fout) { fclose(fself); free(src_buf); return 1; }
-        
-        char buf[8192]; size_t n;
-        while ((n = fread(buf, 1, sizeof(buf), fself)) > 0) fwrite(buf, 1, n, fout);
-        fclose(fself);
-
-        uint64_t payload_sz = (uint64_t)src_size;
-        fwrite(src_buf, 1, src_size, fout);
-        fwrite(&payload_sz, sizeof(uint64_t), 1, fout);
-        fwrite("GLOW_ARCHIVE", 1, 12, fout);
-        fclose(fout);
-        free(src_buf);
-        
-#ifndef _WIN32
-        char chmod_cmd[1024]; snprintf(chmod_cmd, 1024, "chmod +x %s", out_file);
-        if (system(chmod_cmd) == -1) {
-            // handle error
-        }
-#endif
-        printf("Package created: %s\n", out_file);
-        return 0;
+        if (argc < 3) { fprintf(stderr, "Usage: glowlang package <file.glow> [-o output]\n"); return 1; }
+        const char *out_file = argc > 4 && strcmp(argv[3], "-o") == 0 ? argv[4] : NULL;
+        return glow_package(argv[2], out_file);
     }
 
     if (strcmp(subcommand, "repl") == 0) {

@@ -1526,6 +1526,27 @@ static FILE *glow_open_module(const char *path, const char *importer, const char
     return NULL;
 }
 
+FILE *glow_find_module(const char *path, const char *importer, const char **found) {
+    return glow_open_module(path, importer, found);
+}
+
+/* Modules packed into a program by `glowlang package`, by the path written
+   in its use/import. They win over files on disk. */
+static struct { const char *name; const char *data; size_t len; } *embedded_mods;
+static int embedded_count;
+void glow_embed_module(const char *name, const char *data, size_t len) {
+    embedded_mods = realloc(embedded_mods, sizeof(*embedded_mods) * (size_t)(embedded_count + 1));
+    embedded_mods[embedded_count].name = name;
+    embedded_mods[embedded_count].data = data;
+    embedded_mods[embedded_count].len = len;
+    embedded_count++;
+}
+static const char *embedded_module(const char *name, size_t *len) {
+    for (int i = 0; i < embedded_count; i++)
+        if (strcmp(embedded_mods[i].name, name) == 0) { *len = embedded_mods[i].len; return embedded_mods[i].data; }
+    return NULL;
+}
+
 /* An index as a whole number (ints and integral floats). */
 static int index_value(Value v, int64_t *out) {
     if (GET_TYPE(v) == VAL_INT) { *out = AS_INT(v); return 1; }
@@ -3980,19 +4001,28 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 fclose(deps);
             }
         }
-        FILE *f = glow_open_module(resolved_path, pc->file, &resolved_path);
-        if (!f) {
-            char err[512]; snprintf(err, sizeof(err), "Could not open file: %s", path);
-            pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
+        size_t emb_len = 0;
+        const char *emb = embedded_module(path, &emb_len);
+        char *buf;
+        if (emb) {
+            buf = malloc(emb_len + 1);
+            memcpy(buf, emb, emb_len); buf[emb_len] = '\0';
+            resolved_path = path;
+        } else {
+            FILE *f = glow_open_module(resolved_path, pc->file, &resolved_path);
+            if (!f) {
+                char err[512]; snprintf(err, sizeof(err), "Could not open file: %s", path);
+                pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
+            }
+            fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+            if (sz < 0 || sz > 64 * 1024 * 1024) {
+                fclose(f);
+                char err[512]; snprintf(err, sizeof(err), "File too large or invalid: %s", path);
+                pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
+            }
+            buf = malloc(sz + 1);
+            size_t nread = fread(buf, 1, sz, f); buf[nread] = '\0'; fclose(f);
         }
-        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-        if (sz < 0 || sz > 64 * 1024 * 1024) {
-            fclose(f);
-            char err[512]; snprintf(err, sizeof(err), "File too large or invalid: %s", path);
-            pending_exception = value_string_copy(err); has_exception = 1; goto l_OP_THROW;
-        }
-        char *buf = malloc(sz + 1);
-        size_t nread = fread(buf, 1, sz, f); buf[nread] = '\0'; fclose(f);
 
         Node *old_root = root;
         const char *old_file = compiling_file;
