@@ -91,6 +91,26 @@ func notes(req, res):
 end
 ```
 
+### Checking request bodies
+`import "schema"` checks data against a JSON Schema and lists every problem,
+so a handler can answer 400 with all of them at once:
+
+```
+import "schema"
+let new_note = {"type": "object", "required": ["text"], "additionalProperties": false,
+    "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 500}}}
+
+@app.post("/notes")
+func add_note(req, res):
+    let problems = schema.validate(req.json_body(), new_note)
+    when len(problems) > 0:
+        res.status(400).send_json({"errors": problems})
+        return none
+    end
+    res.send_json({"saved": true})
+end
+```
+
 ### Starting a project
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,

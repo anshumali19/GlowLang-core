@@ -1,0 +1,113 @@
+# schema.validate / is_valid / check (lib/schema.glow).
+import "schema"
+
+func v(value, s):
+    let errors = schema.validate(value, s)
+    when len(errors) == 0:
+        show "ok"
+    otherwise:
+        for each e in errors:
+            show "  " + e
+        end
+    end
+end
+
+show "--- an API body"
+let user = {
+    "type": "object",
+    "required": ["name", "age", "email"],
+    "additionalProperties": false,
+    "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 20},
+        "age": {"type": "integer", "minimum": 0, "maximum": 150},
+        "email": {"type": "string", "pattern": "^[^@ ]+@[^@ ]+\\.[a-z]+$"},
+        "tags": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "maxItems": 3},
+        "role": {"enum": ["admin", "user"]}
+    }
+}
+v({"name": "Ana", "age": 30, "email": "ana@glow.example", "tags": ["a", "b"], "role": "admin"}, user)
+v({"name": "", "age": -1, "email": "not an email", "tags": ["a", "a", 3, "d"], "role": "root", "extra": 1}, user)
+v({"age": 30.0, "name": "Bo", "email": "bo@x.io"}, user)
+v({"age": 30.5}, user)
+v([], user)
+show schema.is_valid({"name": "Ana", "age": 1, "email": "a@b.co"}, user), schema.is_valid(5, user)
+try:
+    schema.check({"name": "Ana"}, user)
+catch e:
+    show e
+end
+
+show "--- types"
+for each t in ["object", "array", "string", "number", "integer", "boolean", "null"]:
+    let fits = []
+    for each value in [{}, [], "x", 1.5, 2, true, none, 3.0]:
+        when schema.is_valid(value, {"type": t}):
+            fits.push(json.stringify(value))
+        end
+    end
+    show t, fits
+end
+v(none, {"type": ["string", "null"]})
+v(5, {"type": ["string", "null"]})
+
+show "--- numbers"
+v(10, {"exclusiveMinimum": 10})
+v(10, {"exclusiveMaximum": 10})
+v(9, {"multipleOf": 3})
+v(10, {"multipleOf": 3})
+v(7.5, {"multipleOf": 2.5})
+v("not a number", {"minimum": 3})
+
+show "--- combinations"
+let id = {"anyOf": [{"type": "integer"}, {"type": "string", "pattern": "^[a-f0-9]{8}$"}]}
+v(5, id)
+v("deadbeef", id)
+v("nope", id)
+let one = {"oneOf": [{"type": "integer"}, {"minimum": 2}]}
+v(1, one)
+v(5, one)
+v(1.5, one)
+v("x", {"not": {"type": "string"}})
+v(4, {"allOf": [{"minimum": 1}, {"maximum": 3}]})
+v({"a": 1}, {"const": {"a": 1}})
+v({"a": 2}, {"const": {"a": 1}})
+
+show "--- objects"
+v({"a": 1, "b": "x"}, {"additionalProperties": {"type": "integer"}})
+v({}, {"minProperties": 1})
+v({"a": 1, "b": 2}, {"maxProperties": 1})
+v({"a/b": {"c~d": 1}}, {"properties": {"a/b": {"properties": {"c~d": {"type": "string"}}}}})
+
+show "--- arrays"
+v([[1, 2], [2, 1], [1, 2]], {"uniqueItems": true})
+v([{"a": 1, "b": 2}, {"b": 2, "a": 1}], {"uniqueItems": true})
+v([1, 1.0], {"uniqueItems": true})
+v([], {"minItems": 1})
+
+show "--- $ref and boolean schemas"
+let tree = {
+    "$defs": {"node": {"type": "object", "required": ["value"], "properties": {"value": {"type": "integer"}, "children": {"type": "array", "items": {"$ref": "#/$defs/node"}}}}},
+    "$ref": "#/$defs/node"
+}
+v({"value": 1, "children": [{"value": 2}, {"value": "x", "children": [{}]}]}, tree)
+v(42, true)
+v(42, false)
+v({"a": 1}, {"properties": {"a": false}})
+try:
+    schema.validate(1, {"$ref": "https://example.com/s.json"})
+catch e:
+    show e
+end
+try:
+    schema.validate(1, {"$ref": "#/$defs/missing"})
+catch e:
+    show e
+end
+try:
+    schema.validate(1, {"properties": 5, "type": "integer", "allOf": ["x"]})
+catch e:
+    show e
+end
+
+show "--- ignored keywords"
+v("not-an-email", {"type": "string", "format": "email", "title": "Email", "default": "x"})

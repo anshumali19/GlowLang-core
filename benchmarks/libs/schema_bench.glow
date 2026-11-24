@@ -1,0 +1,33 @@
+# Validates an API request body (a user with tags and an address) against a
+# schema for two seconds, once with valid data and once with data that has
+# four problems, and prints validations per second.
+import "schema"
+
+let user = {
+    "type": "object",
+    "required": ["name", "age", "email"],
+    "additionalProperties": false,
+    "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 50},
+        "age": {"type": "integer", "minimum": 0, "maximum": 150},
+        "email": {"type": "string", "pattern": "^[^@ ]+@[^@ ]+\\.[a-z]+$"},
+        "tags": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "address": {"type": "object", "required": ["city"], "properties": {"city": {"type": "string"}, "zip": {"type": "string", "pattern": "^[0-9]{6}$"}}}
+    }
+}
+let good = {"name": "Ana", "age": 30, "email": "ana@glow.example", "tags": ["a", "b", "c"], "address": {"city": "Pune", "zip": "411001"}}
+let bad = {"name": "", "age": -1, "email": "nope", "tags": ["a", "a"], "address": {"zip": "1"}}
+assert(len(schema.validate(good, user)) == 0, "good data failed")
+assert(len(schema.validate(bad, user)) == 6, "bad data gave the wrong errors")
+
+func measure(label, data):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        schema.validate(data, user)
+        n = n + 1
+    end
+    show format(label, "<14"), format(int(n / (os.time() - start)), ",d"), "validations/s"
+end
+measure("valid", good)
+measure("6 problems", bad)

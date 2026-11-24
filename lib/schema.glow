@@ -1,0 +1,318 @@
+# schema.glow — check data (say, a JSON request body) against a JSON Schema.
+#
+#   import "schema"
+#   let user_schema = {"type": "object", "required": ["name", "age"],
+#       "properties": {"name": {"type": "string", "minLength": 1},
+#                      "age": {"type": "integer", "minimum": 0}}}
+#   schema.validate(data, user_schema)   a list of "path: problem" texts,
+#                                        empty when data fits
+#   schema.is_valid(data, user_schema)   true or false
+#   schema.check(data, user_schema)      raises the problems as one error
+#
+# Keywords (JSON Schema 2020-12): type (one or a list of "object", "array",
+# "string", "number", "integer", "boolean", "null"), enum, const; for objects
+# properties, required, additionalProperties (true, false or a schema),
+# minProperties, maxProperties; for arrays items, minItems, maxItems,
+# uniqueItems; for text minLength, maxLength (in characters), pattern (found
+# anywhere in the text, with GlowLang's regular expressions); for numbers
+# minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf; allOf,
+# anyOf, oneOf, not; $ref to "#" or "#/$defs/name" (also "#/definitions/..."),
+# and true / false as whole schemas. Other keywords (format, title, default,
+# ...) are ignored, as the standard allows.
+#
+# Paths are JSON pointers: "/user/tags/0"; the whole value is "/".
+
+import "re"
+
+func _sch_type(value):
+    let t = type(value)
+    when t == "dict":
+        return "object"
+    eif t == "list":
+        return "array"
+    eif t == "int":
+        return "integer"
+    eif t == "float":
+        return "number"
+    eif t == "bool":
+        return "boolean"
+    eif t == "none":
+        return "null"
+    end
+    return t
+end
+
+func _sch_is(value, wanted):
+    let t = _sch_type(value)
+    when t == wanted:
+        return true
+    end
+    when wanted == "number":
+        return t == "integer"
+    end
+    when wanted == "integer" and t == "number":
+        return not math.isinf(value) and not math.isnan(value) and value == floor(value)
+    end
+    return false
+end
+
+# Text that is the same for values JSON Schema calls equal, for uniqueItems.
+func _sch_key(value):
+    let t = type(value)
+    when t == "dict":
+        let parts = []
+        for each k in sorted(value.keys()):
+            parts.push(json.stringify(k) + ":" + _sch_key(value[k]))
+        end
+        return "{" + parts.join(",") + "}"
+    eif t == "list":
+        let parts = []
+        for each v in value:
+            parts.push(_sch_key(v))
+        end
+        return "[" + parts.join(",") + "]"
+    eif t == "float" and value == floor(value) and not math.isinf(value):
+        return str(int(value))
+    end
+    return json.stringify(value)
+end
+
+# "1 item", "2 items".
+func _sch_count(n, word):
+    when n == 1:
+        return "1 " + word
+    end
+    return str(n) + " " + word + "s"
+end
+
+func _sch_path(path, part):
+    return path + "/" + str(part).replace("~", "~0").replace("/", "~1")
+end
+
+blueprint _SchemaCheck:
+    func init(root):
+        self.root = root
+        self.errors = []
+    end
+
+    func add(path, message):
+        let where = path
+        when where == "":
+            where = "/"
+        end
+        self.errors.push(where + ": " + message)
+    end
+
+    func resolve(ref):
+        when ref == "#":
+            return self.root
+        end
+        when not ref.starts_with("#/"):
+            throw "schema: only local $ref values such as #/$defs/name are supported, not " + ref
+        end
+        let node = self.root
+        for each raw in ref.slice(2).split("/"):
+            let part = http.url_decode(raw).replace("~1", "/").replace("~0", "~")
+            when type(node) != "dict" or not node.has(part):
+                throw "schema: $ref " + ref + " points to nothing"
+            end
+            node = node[part]
+        end
+        return node
+    end
+
+    # Whether value fits s, without keeping the problems.
+    func fits(value, s, path):
+        let saved = self.errors
+        self.errors = []
+        self.run(value, s, path)
+        let ok = len(self.errors) == 0
+        self.errors = saved
+        return ok
+    end
+
+    func run(value, s, path):
+        when s == true:
+            return none
+        end
+        when s == false:
+            self.add(path, "no value is allowed here")
+            return none
+        end
+        when type(s) != "dict":
+            throw "schema: a schema must be a dict, true or false"
+        end
+        when s.has("$ref"):
+            self.run(value, self.resolve(s["$ref"]), path)
+        end
+        when s.has("type"):
+            let wanted = s["type"]
+            when type(wanted) != "list":
+                wanted = [wanted]
+            end
+            let ok = false
+            for each w in wanted:
+                when _sch_is(value, w):
+                    ok = true
+                end
+            end
+            when not ok:
+                self.add(path, "must be " + wanted.join(" or ") + ", not " + _sch_type(value))
+                return none
+            end
+        end
+        when s.has("enum") and not s["enum"].contains(value):
+            self.add(path, "must be one of " + json.stringify(s["enum"]))
+        end
+        when s.has("const") and value != s["const"]:
+            self.add(path, "must be " + json.stringify(s["const"]))
+        end
+        let t = _sch_type(value)
+        when t == "object":
+            self.object(value, s, path)
+        eif t == "array":
+            self.array(value, s, path)
+        eif t == "string":
+            self.text(value, s, path)
+        eif t == "integer" or t == "number":
+            self.number(value, s, path)
+        end
+        when s.has("allOf"):
+            for each sub in s["allOf"]:
+                self.run(value, sub, path)
+            end
+        end
+        when s.has("anyOf"):
+            let ok = false
+            for each sub in s["anyOf"]:
+                when not ok and self.fits(value, sub, path):
+                    ok = true
+                end
+            end
+            when not ok:
+                self.add(path, "must match at least one schema in anyOf")
+            end
+        end
+        when s.has("oneOf"):
+            let count = 0
+            for each sub in s["oneOf"]:
+                when self.fits(value, sub, path):
+                    count = count + 1
+                end
+            end
+            when count != 1:
+                self.add(path, "must match exactly one schema in oneOf, matched " + str(count))
+            end
+        end
+        when s.has("not") and self.fits(value, s["not"], path):
+            self.add(path, "must not match the schema in not")
+        end
+    end
+
+    func object(value, s, path):
+        let props = s.get("properties") ?? {}
+        for each name in s.get("required") ?? []:
+            when not value.has(name):
+                self.add(path, "the key " + json.stringify(name) + " is required")
+            end
+        end
+        let extra = s.get("additionalProperties")
+        for each k in value.keys():
+            when props.has(k):
+                self.run(value[k], props[k], _sch_path(path, k))
+            eif extra == false:
+                self.add(_sch_path(path, k), "is not an allowed key")
+            eif extra is not none and extra != true:
+                self.run(value[k], extra, _sch_path(path, k))
+            end
+        end
+        when s.has("minProperties") and len(value) < s["minProperties"]:
+            self.add(path, "must have at least " + _sch_count(s["minProperties"], "key"))
+        end
+        when s.has("maxProperties") and len(value) > s["maxProperties"]:
+            self.add(path, "must have at most " + _sch_count(s["maxProperties"], "key"))
+        end
+    end
+
+    func array(value, s, path):
+        when s.has("items"):
+            let i = 0
+            for each item in value:
+                self.run(item, s["items"], _sch_path(path, i))
+                i = i + 1
+            end
+        end
+        when s.has("minItems") and len(value) < s["minItems"]:
+            self.add(path, "must have at least " + _sch_count(s["minItems"], "item"))
+        end
+        when s.has("maxItems") and len(value) > s["maxItems"]:
+            self.add(path, "must have at most " + _sch_count(s["maxItems"], "item"))
+        end
+        when s.get("uniqueItems") == true:
+            let seen = {}
+            let i = 0
+            for each item in value:
+                let k = _sch_key(item)
+                when seen.has(k):
+                    self.add(_sch_path(path, i), "repeats item " + str(seen[k]))
+                otherwise:
+                    seen[k] = i
+                end
+                i = i + 1
+            end
+        end
+    end
+
+    func text(value, s, path):
+        when s.has("minLength") and len(value) < s["minLength"]:
+            self.add(path, "must have at least " + _sch_count(s["minLength"], "character"))
+        end
+        when s.has("maxLength") and len(value) > s["maxLength"]:
+            self.add(path, "must have at most " + _sch_count(s["maxLength"], "character"))
+        end
+        when s.has("pattern") and re.find(s["pattern"], value) is none:
+            self.add(path, "must match the pattern " + s["pattern"])
+        end
+    end
+
+    func number(value, s, path):
+        when s.has("minimum") and value < s["minimum"]:
+            self.add(path, "must be at least " + str(s["minimum"]))
+        end
+        when s.has("maximum") and value > s["maximum"]:
+            self.add(path, "must be at most " + str(s["maximum"]))
+        end
+        when s.has("exclusiveMinimum") and value <= s["exclusiveMinimum"]:
+            self.add(path, "must be more than " + str(s["exclusiveMinimum"]))
+        end
+        when s.has("exclusiveMaximum") and value >= s["exclusiveMaximum"]:
+            self.add(path, "must be less than " + str(s["exclusiveMaximum"]))
+        end
+        when s.has("multipleOf"):
+            let m = s["multipleOf"]
+            let q = value / m
+            when q != floor(q):
+                self.add(path, "must be a multiple of " + str(m))
+            end
+        end
+    end
+end
+
+func schema_validate(value, s):
+    let c = _SchemaCheck(s)
+    c.run(value, s, "")
+    return c.errors
+end
+
+func schema_is_valid(value, s):
+    return len(schema_validate(value, s)) == 0
+end
+
+func schema_check(value, s):
+    let errors = schema_validate(value, s)
+    when len(errors) > 0:
+        throw "schema: " + errors.join("; ")
+    end
+end
+
+let schema = {"validate": schema_validate, "is_valid": schema_is_valid, "check": schema_check}
