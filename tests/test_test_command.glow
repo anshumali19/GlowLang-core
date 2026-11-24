@@ -1,0 +1,58 @@
+# glowlang test: finds test files, runs each test_ function, reports
+# passes and failures (with what a failing test printed) and exits 1 when
+# anything failed.
+
+let dir = fs.join(os.temp_dir(), "glow_test_cmd_" + str(os.pid()))
+fs.mkdirs(fs.join(dir, "sub"))
+fs.mkdirs(fs.join(dir, ".hidden"))
+
+fs.write(fs.join(dir, "math_utils.glow"), "func add(a, b):\n    return a + b\nend\n")
+fs.write(fs.join(dir, "test_math.glow"), "use \"math_utils\"\n\nfunc test_add():\n    assert(add(2, 3) == 5, \"2 + 3\")\nend\n\nfunc test_text():\n    assert(add(\"a\", \"b\") == \"ab\", \"text\")\nend\n\nfunc helper(x):\n    return x\nend\n")
+fs.write(fs.join(dir, "sub", "test_fail.glow"), "func test_wrong():\n    show \"debug: about to check\"\n    assert(1 + 1 == 3, \"one plus one is three\")\nend\n\nfunc test_raises():\n    let d = {}\n    show d[\"x\"].upper()\nend\n\nfunc test_ok():\n    return 1\nend\n")
+fs.write(fs.join(dir, "sub", "script_test.glow"), "show \"a test written as a script\"\nassert(true, \"fine\")\n")
+fs.write(fs.join(dir, "sub", "test_exit.glow"), "show \"bad\"\nos.exit(3)\n")
+fs.write(fs.join(dir, "sub", "test_broken.glow"), "let broken = \nfunc test_never():\n    return 1\nend\n")
+fs.write(fs.join(dir, ".hidden", "test_h.glow"), "func test_hidden():\n    assert(false, \"must not run\")\nend\n")
+
+func clean(text):
+    let out = []
+    for each line in text.replace("\r\n", "\n").strip().split("\n"):
+        line = line.replace(fs.join(dir, ""), "").replace("\\", "/")
+        # Times change from run to run.
+        let at = line.find("  (")
+        when at > 0 and line.ends_with(" ms)"):
+            line = line[:at]
+        end
+        when line.contains(" in ") and line.ends_with(" s"):
+            line = line[:line.find(" in ")]
+        end
+        # Only the first line of the syntax error's report.
+        when not line.starts_with("      |   in ") and not line.starts_with("      |      "):
+            out.push(line)
+        end
+    end
+    return "\n".join(out)
+end
+
+try:
+    let r = process.run([process.executable, "test", dir], {})
+    show "exit code", r["code"]
+    show clean(r["stdout"])
+
+    show "--- one file"
+    r = process.run([process.executable, "test", fs.join(dir, "test_math.glow")], {})
+    show "exit code", r["code"]
+    show clean(r["stdout"])
+
+    show "--- a hidden folder is searched only when named"
+    r = process.run([process.executable, "test", fs.join(dir, ".hidden")], {})
+    show "exit code", r["code"]
+    show clean(r["stdout"])
+
+    show "--- nothing to run"
+    fs.mkdirs(fs.join(dir, "empty"))
+    r = process.run([process.executable, "test", fs.join(dir, "empty")], {})
+    show "exit code", r["code"], clean(r["stdout"])
+finally:
+    fs.remove_all(dir)
+end

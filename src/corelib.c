@@ -991,6 +991,100 @@ static Value set_m_is_empty(int argc, Value *args) { (void)argc; return value_bo
 
 /* ---- method table ---- */
 
+/* ---- pad_start / pad_end, remove_prefix / remove_suffix, capitalize /
+   title. Widths count characters (code points), not bytes. */
+static size_t utf8_count(const char *p, size_t n) {
+    size_t c = 0;
+    for (size_t i = 0; i < n; i++) if (((unsigned char)p[i] & 0xC0) != 0x80) c++;
+    return c;
+}
+
+static Value pad_impl(int argc, Value *args, int at_start, const char *name) {
+    char msg[96];
+    if (argc < 2 || !IS_INT(args[1])) { snprintf(msg, sizeof msg, "%s(width, fill) needs a whole-number width", name); return raise(msg); }
+    const char *fill = " ";
+    size_t fl = 1;
+    if (argc > 2 && GET_TYPE(args[2]) != VAL_NONE) {
+        if (GET_TYPE(args[2]) != VAL_STRING || utf8_count(AS_STRING(args[2]), rope_length(args[2])) != 1) {
+            snprintf(msg, sizeof msg, "%s(width, fill): fill must be one character", name);
+            return raise(msg);
+        }
+        fill = AS_STRING(args[2]);
+        fl = rope_length(args[2]);
+    }
+    const char *s = AS_STRING(args[0]);
+    size_t n = rope_length(args[0]), have = utf8_count(s, n);
+    int64_t width = AS_INT(args[1]);
+    if (width <= (int64_t)have) return args[0];
+    if (width > 100000000) return raise("pad: the width is too large");
+    size_t add = (size_t)width - have;
+    char *out;
+    Value r = value_string_alloc(n + add * fl, &out);
+    char *o = out;
+    if (!at_start) { memcpy(o, s, n); o += n; }
+    for (size_t i = 0; i < add; i++) { memcpy(o, fill, fl); o += fl; }
+    if (at_start) memcpy(o, s, n);
+    return r;
+}
+static Value s_pad_start(int argc, Value *args) { return pad_impl(argc, args, 1, "pad_start"); }
+static Value s_pad_end(int argc, Value *args) { return pad_impl(argc, args, 0, "pad_end"); }
+
+static Value s_remove_prefix(int argc, Value *args) {
+    if (!arg_is(argc, args, 1, VAL_STRING)) return raise("remove_prefix() needs a string");
+    size_t n = rope_length(args[0]), m = rope_length(args[1]);
+    if (m == 0 || m > n || memcmp(AS_STRING(args[0]), AS_STRING(args[1]), m) != 0) return args[0];
+    char *out;
+    Value r = value_string_alloc(n - m, &out);
+    memcpy(out, AS_STRING(args[0]) + m, n - m);
+    return r;
+}
+static Value s_remove_suffix(int argc, Value *args) {
+    if (!arg_is(argc, args, 1, VAL_STRING)) return raise("remove_suffix() needs a string");
+    size_t n = rope_length(args[0]), m = rope_length(args[1]);
+    if (m == 0 || m > n || memcmp(AS_STRING(args[0]) + (n - m), AS_STRING(args[1]), m) != 0) return args[0];
+    char *out;
+    Value r = value_string_alloc(n - m, &out);
+    memcpy(out, AS_STRING(args[0]), n - m);
+    return r;
+}
+
+/* Each character upper- or lower-cased by str_case (full Unicode tables):
+   upper when it starts a word (title) or the text (capitalize), lower
+   otherwise. A word starts at the start of the text or after a space or
+   punctuation; letters, digits, ' and everything outside ASCII belong to
+   words. */
+static Value recase_words(Value s, int every_word) {
+    const char *p = AS_STRING(s);
+    size_t n = rope_length(s), cap = n * 3 + 16, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) return raise("out of memory");
+    int start = 1;
+    for (size_t i = 0; i < n; ) {
+        size_t cl = 1;
+        while (i + cl < n && ((unsigned char)p[i + cl] & 0xC0) == 0x80) cl++;
+        unsigned char c = (unsigned char)p[i];
+        int word_char = c >= 0x80 || isalnum(c) || c == '\'';
+        char *one;
+        Value ch = value_string_alloc(cl, &one);
+        memcpy(one, p + i, cl);
+        Value done = str_case(ch, word_char && start);
+        size_t dl = rope_length(done);
+        if (len + dl + 1 > cap) { cap = (len + dl) * 2 + 16; char *nb = realloc(buf, cap); if (!nb) { free(buf); return raise("out of memory"); } buf = nb; }
+        memcpy(buf + len, AS_STRING(done), dl);
+        len += dl;
+        if (word_char) start = 0;
+        else if (every_word) start = 1;
+        i += cl;
+    }
+    char *out;
+    Value r = value_string_alloc(len, &out);
+    memcpy(out, buf, len);
+    free(buf);
+    return r;
+}
+static Value s_capitalize(int argc, Value *args) { (void)argc; return recase_words(args[0], 0); }
+static Value s_title(int argc, Value *args) { (void)argc; return recase_words(args[0], 1); }
+
 typedef struct { const char *name; NativeFuncPtr fn; } MethodEntry;
 
 static const MethodEntry string_methods[] = {
@@ -999,7 +1093,9 @@ static const MethodEntry string_methods[] = {
     {"starts_with", s_starts_with}, {"ends_with", s_ends_with}, {"replace", s_replace},
     {"count", s_count}, {"join", s_join}, {"lines", s_lines}, {"is_number", s_is_number},
     {"contains", native_str_contains}, {"find", native_str_find}, {"slice", native_str_slice},
-    {"split", native_str_split}, {"len", native_len}, {"byte_len", s_byte_len}, {"bytes", s_bytes}, {NULL, NULL}
+    {"split", native_str_split}, {"len", native_len}, {"byte_len", s_byte_len}, {"bytes", s_bytes},
+    {"pad_start", s_pad_start}, {"pad_end", s_pad_end}, {"remove_prefix", s_remove_prefix}, {"remove_suffix", s_remove_suffix},
+    {"capitalize", s_capitalize}, {"title", s_title}, {NULL, NULL}
 };
 static const MethodEntry list_methods[] = {
     {"push", native_list_append}, {"append", native_list_append}, {"add", native_list_append},

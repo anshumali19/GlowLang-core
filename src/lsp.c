@@ -328,6 +328,12 @@ static const CompletionEntry builtins[] = {
     {"starts_with","function", "Check if a string starts with a prefix",                          3},
     {"ends_with",  "function", "Check if a string ends with a suffix",                            3},
     {"split",      "function", "Split a string by a delimiter into a list",                       3},
+    {"pad_start",  "function", "Pad a string to a width at the start: \"7\".pad_start(3, \"0\")",    3},
+    {"pad_end",    "function", "Pad a string to a width at the end",                              3},
+    {"remove_prefix", "function", "The string without a prefix, when it has it",                  3},
+    {"remove_suffix", "function", "The string without a suffix, when it has it",                  3},
+    {"capitalize", "function", "First letter upper case, the rest lower case",                    3},
+    {"title",      "function", "First letter of every word upper case",                           3},
     {NULL, NULL, NULL, 0}
 };
 

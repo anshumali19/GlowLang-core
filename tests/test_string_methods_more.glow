@@ -1,0 +1,27 @@
+# pad_start / pad_end, remove_prefix / remove_suffix, capitalize / title.
+
+show "--- pad"
+show "[" + "7".pad_start(3, "0") + "]", "[" + "ab".pad_end(5) + "]", "[" + "abc".pad_start(2) + "]"
+show "[" + "é".pad_start(3, "·") + "]", len("é".pad_end(4, "─"))
+for each row in [["apples", 3], ["kiwi", 12]]:
+    show row[0].pad_end(8, ".") + str(row[1]).pad_start(4)
+end
+for each bad in [["x", "3"], ["x", 3, "ab"], ["x", 3, ""]]:
+    try:
+        when len(bad) == 2:
+            "x".pad_start(bad[1])
+        otherwise:
+            "x".pad_start(bad[1], bad[2])
+        end
+    catch e:
+        show e
+    end
+end
+
+show "--- remove_prefix / remove_suffix"
+show "report.csv".remove_suffix(".csv"), "report.csv".remove_suffix(".txt"), "v1.2".remove_prefix("v")
+show "aa".remove_prefix("aaa"), "".remove_prefix("x"), "abc".remove_prefix("")
+
+show "--- capitalize / title"
+show "hello WORLD".capitalize(), "élan vital".capitalize(), "".capitalize()
+show "the quick-brown fox's tail".title(), "ÉCOLE de paris".title(), "3rd place".title()

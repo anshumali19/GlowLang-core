@@ -1,0 +1,24 @@
+# The REPL's line editing on a terminal (Linux, macOS): arrow keys, history,
+# Ctrl keys, UTF-8, and lines typed ahead. tests/tools/repl_pty_check.py
+# types into it through a pseudo-terminal. Windows (whose console edits
+# lines itself) and systems without python3 skip it.
+let want = ["shown: 42", "shown: 43", "shown: caf!é", "shown: 3", "shown: 99", "shown: in block",
+    "history: let x = 41", "history: show x + 1", "history: show x + 2", "history: show \"caf!é\"",
+    "history: show 1 + 1 + 1", "history: show 99", "history: when x > 1:", "history:     show \"in block\"",
+    "history: end", "history: exit"]
+when os.platform == "windows" or process.find("python3") == none:
+    os.eprint("skipped: needs a Unix terminal and python3")
+    show "ok"
+otherwise:
+    let r = process.run(["python3", "tests/tools/repl_pty_check.py", process.executable], {"timeout": 120})
+    let got = r["stdout"].replace("\r\n", "\n").strip().split("\n")
+    when got == want:
+        show "ok"
+    otherwise:
+        show "got:"
+        for each line in got:
+            show line
+        end
+        show r["stderr"]
+    end
+end
