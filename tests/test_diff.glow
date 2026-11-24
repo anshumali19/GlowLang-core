@@ -61,11 +61,93 @@ for each op in ops:
 end
 show left == a, right == b, edits <= 120
 
+show "--- shortest, also when the work is split in linear space"
+# Edits of a shortest diff, from a table of common-subsequence lengths.
+func lcs_edits(a, b):
+    let prev = [0] * (len(b) + 1)
+    for each x in a:
+        let cur = [0] * (len(b) + 1)
+        let j = 1
+        while j <= len(b):
+            when x == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+            otherwise:
+                cur[j] = max(prev[j], cur[j - 1])
+            end
+            j = j + 1
+        end
+        prev = cur
+    end
+    return len(a) + len(b) - 2 * prev[len(b)]
+end
+func check_random(seed):
+    random_seed(seed)
+    let wrong = 0
+    every t from 1 to 150:
+        let a = []
+        let b = []
+        every i from 1 to random_int(0, 14):
+            a.push(str(random_int(0, 3)))
+        end
+        every i from 1 to random_int(0, 14):
+            b.push(str(random_int(0, 3)))
+        end
+        let left = []
+        let right = []
+        let edits = 0
+        let last = " "
+        let order_ok = true
+        for each op in diff.lines(a, b):
+            when op[0] != "+":
+                left.push(op[1])
+            end
+            when op[0] != "-":
+                right.push(op[1])
+            end
+            when op[0] != " ":
+                edits = edits + 1
+            end
+            when last == "+" and op[0] == "-":
+                order_ok = false
+            end
+            last = op[0]
+        end
+        when left != a or right != b or edits != lcs_edits(a, b) or not order_ok:
+            wrong = wrong + 1
+        end
+    end
+    return wrong
+end
+show check_random(7)
+_DIFF_QUICK_EDITS = 0
+show check_random(8)
+show diff.lines("same
+a
+keep
+b
+end
+", "same
+x
+keep
+y
+end
+")
+
 show "--- past the edit limit the middle is replaced whole"
-_DIFF_MAX_EDITS = 3
-let capped = diff.lines("same\na\nb\nc\nd\nend\n", "same\nw\nx\ny\nz\nend\n")
-show capped
-_DIFF_MAX_EDITS = 2000
+_DIFF_MAX_EDITS = 1
+show diff.lines("same
+a
+keep
+b
+end
+", "same
+x
+keep
+y
+end
+")
+_DIFF_MAX_EDITS = 5000
+_DIFF_QUICK_EDITS = 200
 
 show "--- large texts stay quick"
 let big_a = []

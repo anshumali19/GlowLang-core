@@ -74,7 +74,11 @@
 
 --- the ops rebuild both texts
 true true true
+--- shortest, also when the work is split in linear space
+0
+0
+[[" ", "same"], ["-", "a"], ["+", "x"], [" ", "keep"], ["-", "b"], ["+", "y"], [" ", "end"]]
 --- past the edit limit the middle is replaced whole
-[[" ", "same"], ["-", "a"], ["-", "b"], ["-", "c"], ["-", "d"], ["+", "w"], ["+", "x"], ["+", "y"], ["+", "z"], [" ", "end"]]
+[[" ", "same"], ["-", "a"], ["-", "keep"], ["-", "b"], ["+", "x"], ["+", "keep"], ["+", "y"], [" ", "end"]]
 --- large texts stay quick
 40 true

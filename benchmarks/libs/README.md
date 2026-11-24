@@ -245,3 +245,11 @@ its own matching, which may not be. Runs differed by under 2%. Measured
 |---|---|
 | GlowLang `diff.unified` | 857.9 |
 | Python `difflib.unified_diff` | 119.0 |
+
+Large changes, measured 2026-11-25 with `/usr/bin/time`: a 20,000-line text
+against a copy with one line in ten changed and one in ten removed. Up to
+1.13.0, `diff.lines` gave up past 2,000 edits and reported all 37,922 lines
+as removed and added, with a peak of 679 MB. Since then a change of more
+than 200 edits is split around its middle (Myers' linear-space search):
+it finds a 6,012-edit diff in 0.92 s with a peak of 133 MB. On the
+50-edit benchmark above the two run within 3% of each other.
