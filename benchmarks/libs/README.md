@@ -191,6 +191,18 @@ by under 2%. Measured 2026-11-24.
 | PyYAML `SafeLoader` | 280 |
 | PyYAML `CSafeLoader` | 3,419 |
 
+The same benchmarks then write the parsed value back as text: GlowLang with
+`yaml.stringify`, PyYAML with `yaml.dump(..., sort_keys=False)` and its
+`SafeDumper` (Python) and `CSafeDumper` (C). PyYAML reads GlowLang's text
+back as the same value, apart from the key `on`, which GlowLang writes in
+quotes. Runs differed by under 3%. Measured 2026-11-25.
+
+| Writer | Writes/s |
+|---|---|
+| GlowLang `yaml.stringify` | 5,173 |
+| PyYAML `SafeDumper` | 381 |
+| PyYAML `CSafeDumper` | 3,677 |
+
 ## schema
 
 [schema_bench.glow](schema_bench.glow) validates an API request body (a

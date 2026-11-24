@@ -47,3 +47,67 @@ yaml: line 1: unexpected text after [: 2
 yaml: line 1: bad escape \q
 yaml: line 1: bad block header |x
 yaml: line 2: [ is never closed
+--- writing
+name: shop
+version: 1.2.3
+port: 8080
+whole: 2.0
+"on": true
+nothing: null
+"yes": "yes"
+num_text: "123"
+true_text: "true"
+url: https://x.example/a?b=c
+colon: "a: b"
+ends: "a:"
+hash: "a #b"
+csharp: C#
+dash: "-x"
+empty: ""
+spaced: " pad "
+multi: "line1\nline2"
+quote: "say \"hi\""
+café: naïve
+del: "\x7F"
+list:
+  - 1
+  - two
+  - null
+  - []
+  - {}
+nested:
+  - - 1
+    - 2
+  - - 3
+people:
+  - name: ana
+    tags:
+      - a
+      - b
+  - name: bo
+    address:
+      city: Pune
+deep:
+  a:
+    b:
+      c:
+        - 1
+inf: .inf
+ninf: -.inf
+big: 1e+20
+"": empty key
+"key: odd": 1
+
+true float true true true
+true
+- 1
+- - 2
+  - - 3
+
+"x: y"
+ null
+ {}
+ []
+
+{"server": {"port": 9000}}
+yaml: cannot write native_func (at a[1])

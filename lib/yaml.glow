@@ -1,8 +1,10 @@
-# yaml.glow — read YAML configuration files.
+# yaml.glow — read and write YAML configuration files.
 #
 #   import "yaml"
 #   let config = yaml.parse(text)     dicts, lists, text, numbers, true /
 #   let config = yaml.read(path)      false and none, as the file says
+#   let text = yaml.stringify(config)
+#   yaml.write(path, config)
 #
 # Covers what configuration files use: mappings (key: value) and sequences
 # (- item) nested by indenting, flow forms [a, b] and {a: 1} (also across
@@ -651,4 +653,96 @@ func yaml_read(path):
     return yaml_parse(text)
 end
 
-let yaml = {"parse": yaml_parse, "read": yaml_read}
+# Writing: block style, two spaces per level. Text is written plain when it
+# reads back as the same text, and in double quotes otherwise.
+
+func _yaml_text(s):
+    let q = json.stringify(s)
+    when q.slice(1, len(q) - 1) == s and s != "" and s == s.trim() and not s.contains(chr(127)):
+        let c = s[0]
+        when (c.is_alnum() or "_/.$~^()=+<".contains(c)) and not s.contains(": ") and not s.ends_with(":") and not s.contains(" #"):
+            # YAML 1.1 readers such as PyYAML take these words for booleans.
+            when _yaml_plain(s) == s and not ["yes", "no", "on", "off", "y", "n"].contains(s.lower()):
+                return s
+            end
+        end
+    end
+    # JSON's escapes are YAML's; YAML also wants DEL escaped.
+    return q.replace(chr(127), "\\x7F")
+end
+
+func _yaml_scalar(v, where):
+    let t = type(v)
+    when t == "string":
+        return _yaml_text(v)
+    eif t == "none":
+        return "null"
+    eif t == "int" or t == "bool":
+        return str(v)
+    eif t == "float":
+        when v != v:
+            return ".nan"
+        end
+        let s = str(v)
+        when s == "inf":
+            return ".inf"
+        eif s == "-inf":
+            return "-.inf"
+        eif s.contains(".") or s.contains("e"):
+            return s
+        end
+        return s + ".0"
+    eif t == "dict" and len(v.keys()) == 0:
+        return "{}"
+    eif t == "list" and len(v) == 0:
+        return "[]"
+    end
+    throw "yaml: cannot write " + t + " (at " + where.trim_start(".") + ")"
+end
+
+func _yaml_nested(v):
+    return (type(v) == "dict" and len(v.keys()) > 0) or (type(v) == "list" and len(v) > 0)
+end
+
+func _yaml_block(out, v, pad, where):
+    when type(v) == "dict":
+        for each k in v.keys():
+            let item = v[k]
+            when _yaml_nested(item):
+                out.push(pad + _yaml_text(k) + ":")
+                _yaml_block(out, item, pad + "  ", where + "." + k)
+            otherwise:
+                out.push(pad + _yaml_text(k) + ": " + _yaml_scalar(item, where + "." + k))
+            end
+        end
+        return none
+    end
+    let i = 0
+    for each item in v:
+        let at = where + "[" + str(i) + "]"
+        when _yaml_nested(item):
+            # The item's first line goes on the line of its "- ".
+            let first = len(out)
+            _yaml_block(out, item, pad + "  ", at)
+            out[first] = pad + "- " + out[first].slice(len(pad) + 2)
+        otherwise:
+            out.push(pad + "- " + _yaml_scalar(item, at))
+        end
+        i = i + 1
+    end
+end
+
+func yaml_stringify(data):
+    when not _yaml_nested(data):
+        return _yaml_scalar(data, "") + "\n"
+    end
+    let out = []
+    _yaml_block(out, data, "", "")
+    return out.join("\n") + "\n"
+end
+
+func yaml_write(path, data):
+    fs.write(path, yaml_stringify(data))
+end
+
+let yaml = {"parse": yaml_parse, "read": yaml_read, "stringify": yaml_stringify, "write": yaml_write}

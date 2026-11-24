@@ -1,13 +1,30 @@
 # Parses .github/workflows/ci.yml (191 lines) again and again for two
-# seconds and prints parses per second.
+# seconds, then writes the parsed value back as text for two seconds, and
+# prints how many of each it did per second.
 import "yaml"
 
 let text = fs.read(".github/workflows/ci.yml")
-assert(yaml.parse(text)["jobs"]["build-and-test"]["runs-on"] == "ubuntu-latest", "parsed wrong")
-let n = 0
-let start = os.time()
-while os.time() - start < 2:
-    yaml.parse(text)
-    n = n + 1
+let config = yaml.parse(text)
+assert(config["jobs"]["build-and-test"]["runs-on"] == "ubuntu-latest", "parsed wrong")
+assert(json.stringify(yaml.parse(yaml.stringify(config))) == json.stringify(config), "wrote wrong")
+
+func run(name, work):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        work()
+        n = n + 1
+    end
+    show format(name, "<16"), format(int(n / (os.time() - start)), ",d"), "per second"
 end
-show format("yaml.parse", "<16"), format(int(n / (os.time() - start)), ",d"), "parses/s"
+
+func parse_once():
+    yaml.parse(text)
+end
+
+func write_once():
+    yaml.stringify(config)
+end
+
+run("yaml.parse", parse_once)
+run("yaml.stringify", write_once)
