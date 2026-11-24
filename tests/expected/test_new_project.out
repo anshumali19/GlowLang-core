@@ -10,7 +10,7 @@ true
 true
 false false false
 --- glowlang new
-0 Made notes-api/ with app.glow, test_app.glow and README.md. Next:
+0 Made notes-api/ with app.glow, test_app.glow, README.md. Next:
 ["README.md", "app.glow", "test_app.glow"]
 # notes-api
 glowlang new: notes-api already exists
@@ -33,3 +33,10 @@ ok    delete a note
 ok    a deleted note is gone
 ok    unknown paths answer 404
 0 failed
+--- glowlang new --cli
+0 Made wc-tool/ with wc-tool.glow, words.glow, test_words.glow, README.md. Next:
+["README.md", "test_words.glow", "wc-tool.glow", "words.glow"]
+0
+9 words in 1 file(s)
+  the: 3
+  sat: 2

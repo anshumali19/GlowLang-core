@@ -1,0 +1,41 @@
+#!/usr/bin/env glowlang
+# __NAME__: counts the lines, words and characters of files, and lists the
+# most common words. A starting point for your own command-line tool: the
+# work is in words.glow (tested by test_words.glow), the command line here.
+#
+#   glowlang run __NAME__.glow notes.txt report.md --top 5
+#   glowlang package __NAME__.glow          (one file to copy anywhere)
+import "cli"
+use "words"
+
+let app = ArgParser("__NAME__", "Count lines, words and characters, and the most common words")
+app.positional("files", "The files to read")
+app.option("--top", "How many of the most common words to list", "3", "-t")
+app.flag("--quiet", "Only the totals", "-q")
+let args = app.parse_or_exit()
+
+# The first file is the positional, the rest come after it.
+let files = [args["files"]] + (args["_rest"] ?? [])
+let table = TextTable()
+table.set_headers(["file", "lines", "words", "characters"])
+let all_text = ""
+for each file in files:
+    let text = fs.read(file)
+    when text == none:
+        ColorOutput().error("cannot read " + file)
+        os.exit(1)
+    end
+    let c = count(text)
+    table.add_row([file, str(c["lines"]), str(c["words"]), str(c["chars"])])
+    all_text = all_text + text + "\n"
+end
+when not args["--quiet"]:
+    show table.to_string()
+end
+let total = count(all_text)
+show str(total["words"]) + " words in " + str(len(files)) + " file(s)"
+when not args["--quiet"]:
+    for each pair in most_common(all_text, int(args["--top"])):
+        show "  " + pair[0] + ": " + str(pair[1])
+    end
+end

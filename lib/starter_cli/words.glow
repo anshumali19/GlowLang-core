@@ -1,0 +1,21 @@
+# The tool's work, kept apart from its command line so tests can use it.
+
+# {"lines", "words", "chars"} of a text.
+func count(text):
+    return {"lines": len(text.lines()), "words": len(text.split()), "chars": len(text)}
+end
+
+# The n most common words (lower case, without punctuation at their ends)
+# as [word, times] pairs, most common first, ties in alphabetical order.
+func most_common(text, n):
+    let seen = {}
+    for each w in text.lower().split():
+        w = w.trim(".,;:!?\"'()[]")
+        when w != "":
+            seen[w] = (seen.get(w) ?? 0) + 1
+        end
+    end
+    let pairs = [[w, seen[w]] for each w in sorted(seen.keys())]
+    pairs = sorted(pairs, lambda(p): -p[1])
+    return pairs[:n]
+end
