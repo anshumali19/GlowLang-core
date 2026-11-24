@@ -1500,6 +1500,10 @@ false, and every ordering comparison with NaN is false.
 
 ### HTTP (`http.`)
 Server: `listen(port)`, `accept(server)`, `read(client)`, `send(client, data)`, `close(handle)`.
+`read(client)` returns one request (headers and the `Content-Length` body), or `none` when the
+client has closed; `read(client, seconds)` also gives `none` when nothing arrives in that time.
+GlowWeb keeps a connection open for the next request (HTTP keep-alive) and closes it after 5 idle
+seconds, when the client asks, or when a handler sets `Connection: close`.
 
 Client: `request(method, url, options)` returns `{"status", "body", "headers", "url"}`
 (`url` is where redirects ended). Options: `headers` (dict), `body`, `timeout`
