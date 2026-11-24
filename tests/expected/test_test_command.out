@@ -1,0 +1,27 @@
+exit code 1
+PASS  sub/script_test.glow
+FAIL  sub/test_broken.glow stopped (exit code 1); did not run: test_never
+      | [31mSyntaxError:[0m syntax error
+FAIL  sub/test_exit.glow (exit code 3)
+      | bad
+FAIL  sub/test_fail.glow :: test_wrong
+      Assertion failed: one plus one is three
+      | debug: about to check
+FAIL  sub/test_fail.glow :: test_raises
+      cannot call method 'upper' of none
+PASS  sub/test_fail.glow :: test_ok
+PASS  test_math.glow :: test_add
+PASS  test_math.glow :: test_text
+4 passed, 4 failed
+--- one file
+exit code 0
+PASS  test_math.glow :: test_add
+PASS  test_math.glow :: test_text
+2 passed
+--- a hidden folder is searched only when named
+exit code 1
+FAIL  .hidden/test_h.glow :: test_hidden
+      Assertion failed: must not run
+0 passed, 1 failed
+--- nothing to run
+exit code 1 No test files (test_*.glow or *_test.glow) found.

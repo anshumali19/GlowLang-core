@@ -1166,6 +1166,7 @@ int glow_main(int argc, char **argv) {
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  new <name>        Start a web API project (login, database, tests)\n");
         printf("  watch <file.glow> Run a program, and again each time a .glow file changes\n");
+        printf("  test [paths]      Run the test_ functions in test_*.glow files\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
         printf("  --version         Print the GlowLang version\n\n");
@@ -1183,6 +1184,7 @@ int glow_main(int argc, char **argv) {
     for (int i = 2; strcmp(subcommand, "package") == 0 && i < argc; i++) if (strcmp(argv[i], "--target") == 0) for_target = 1;
     const char *lib_cmd = strcmp(subcommand, "new") == 0 ? "lib/new_project.glow"
                         : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow"
+                        : strcmp(subcommand, "test") == 0 ? "lib/testrunner.glow"
                         : for_target ? "lib/package_target.glow" : NULL;
     if (lib_cmd) {
         const char *found = NULL;
