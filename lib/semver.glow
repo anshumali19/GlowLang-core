@@ -47,13 +47,15 @@ func semver_parse(text):
     when m is none:
         throw "semver: not a version: " + str(text)
     end
+    # One groups list costs less than five group() calls.
+    let g = m.groups
     let build = []
-    when m.group(5) is not none:
-        build = m.group(5).split(".")
+    when g[4] is not none:
+        build = g[4].split(".")
     end
     return {
-        "major": int(m.group(1)), "minor": int(m.group(2)), "patch": int(m.group(3)),
-        "pre": _sv_ids(m.group(4)), "build": build
+        "major": int(g[0]), "minor": int(g[1]), "patch": int(g[2]),
+        "pre": _sv_ids(g[3]), "build": build
     }
 end
 
@@ -102,41 +104,29 @@ func semver_compare(a, b):
     return _sv_cmp(len(pa), len(pb))
 end
 
-# A merge sort of [parsed, text] pairs; equal versions keep their order.
-func _sv_merge_sort(items):
-    let n = len(items)
-    when n < 2:
-        return items
-    end
-    let left = _sv_merge_sort(items[:n >> 1])
-    let right = _sv_merge_sort(items[n >> 1:])
-    let out = []
-    let i = 0
-    let j = 0
-    while i < len(left) and j < len(right):
-        when semver_compare(right[j][0], left[i][0]) < 0:
-            out.push(right[j])
-            j = j + 1
+# A list that sorts as semver_compare orders versions: a release (1) after
+# its pre-releases (0), and in a pre-release numbers [0, n] before words
+# [1, text].
+func _sv_key(v):
+    v = semver_parse(v)
+    let pre = []
+    for each id in v["pre"]:
+        when type(id) == "int":
+            pre.push([0, id])
         otherwise:
-            out.push(left[i])
-            i = i + 1
+            pre.push([1, id])
         end
     end
-    out.extend(left[i:])
-    out.extend(right[j:])
-    return out
+    let release = 0
+    when len(pre) == 0:
+        release = 1
+    end
+    return [v["major"], v["minor"], v["patch"], release, pre]
 end
 
 func semver_sort(versions):
-    let keyed = []
-    for each v in versions:
-        keyed.push([semver_parse(v), v])
-    end
-    let out = []
-    for each k in _sv_merge_sort(keyed):
-        out.push(k[1])
-    end
-    return out
+    # sorted is stable, so equal versions keep their order.
+    return sorted(versions, _sv_key)
 end
 
 func _sv(major, minor, patch, pre):
