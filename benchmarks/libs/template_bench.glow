@@ -1,0 +1,47 @@
+# Renders a page with a 100-row table, three ways: template.render (parses
+# the template every time), a compiled Template, and the same page built by
+# hand with string joins. Prints renders per second for each.
+import "template"
+
+let page = "<h1>{{title}}</h1>\n<table>\n{{#rows}}\n<tr><td>{{id}}</td><td>{{name}}</td><td>{{price}}</td>{{#sale}}<td>sale</td>{{/sale}}</tr>\n{{/rows}}\n</table>\n"
+let rows = []
+every i from 0 to 99:
+    rows.push({"id": i, "name": "item <" + str(i) + ">", "price": i * 3, "sale": i % 7 == 0})
+end
+let data = {"title": "Price list", "rows": rows}
+
+func by_hand(data):
+    let out = ["<h1>", template.escape(data["title"]), "</h1>\n<table>\n"]
+    for each r in data["rows"]:
+        out.push("<tr><td>" + str(r["id"]) + "</td><td>" + template.escape(r["name"]) + "</td><td>" + str(r["price"]) + "</td>")
+        when r["sale"]:
+            out.push("<td>sale</td>")
+        end
+        out.push("</tr>\n")
+    end
+    out.push("</table>\n")
+    return out.join("")
+end
+
+let compiled = template.compile(page)
+assert(compiled.render(data) == by_hand(data), "template and hand-built pages differ")
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<24"), format(int(n / (os.time() - start)), ",d"), "renders/s"
+end
+
+measure("template.render", lambda():
+    template.render(page, data)
+end)
+measure("compiled Template", lambda():
+    compiled.render(data)
+end)
+measure("by hand", lambda():
+    by_hand(data)
+end)

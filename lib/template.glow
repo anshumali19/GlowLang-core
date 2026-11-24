@@ -1,0 +1,305 @@
+# template.glow — Mustache-style text templates, for HTML pages, emails and
+# any other text made from data.
+#
+#   import "template"
+#   template.render(text, data, partials = none)   the text with its tags filled in
+#   template.compile(text, partials = none)        a Template: t.render(data)
+#                                                  skips parsing the text again
+#
+# Tags:
+#   {{name}}            the value, HTML-escaped (& < > " ')
+#   {{{name}}}, {{&name}}   the value as it is
+#   {{a.b}}             key b of key a
+#   {{.}}               the current item, inside a section
+#   {{#name}}...{{/name}}   a section: shown once per item of a list, once with
+#                       a dict's keys in reach, once for any other true value;
+#                       not shown for none, false, 0, "" or an empty list
+#   {{^name}}...{{/name}}   shown only when the section above would not be
+#   {{! a note }}       a comment, left out of the result
+#   {{> name}}          the template partials[name], with the same data
+#
+# A name not found in the current item is looked up in the items around it,
+# and a name found nowhere gives "". A line holding only a section, comment or
+# partial tag is removed whole, so templates can put tags on lines of their own.
+# Values are looked up in dicts only, not in objects.
+
+func _tpl_blank(text, first, upto):
+    let i = first
+    while i < upto:
+        let c = text[i]
+        when c != " " and c != "\t" and c != "\r":
+            return false
+        end
+        i = i + 1
+    end
+    return true
+end
+
+# Where the last line of text starts, or -1 when that line is not blank.
+func _tpl_last_line(text):
+    let i = len(text) - 1
+    while i >= 0 and text[i] != "\n":
+        i = i - 1
+    end
+    when _tpl_blank(text, i + 1, len(text)):
+        return i + 1
+    end
+    return -1
+end
+
+# Where the text after the first line break starts, or -1 when the first line
+# is not blank. With no line break the whole text is the first line.
+func _tpl_first_line(text):
+    let i = 0
+    let n = len(text)
+    while i < n and text[i] != "\n":
+        i = i + 1
+    end
+    when _tpl_blank(text, 0, i):
+        return min(i + 1, n)
+    end
+    return -1
+end
+
+# The text as a list that alternates text and tags: [text, tag, text, ...],
+# a tag being [kind, name]. Kinds: "v" escaped value, "r" raw value,
+# "s" section, "i" inverted section, "e" section end, "c" comment, "p" partial.
+func _tpl_tokens(text):
+    let parts = text.split("{{")
+    let tokens = [parts[0]]
+    let i = 1
+    while i < len(parts):
+        let part = parts[i]
+        let close = "}}"
+        let tag = none
+        let kind = "v"
+        when part.starts_with("{"):
+            close = "}}}"
+            kind = "r"
+        end
+        let upto = part.find(close)
+        when upto < 0:
+            throw "template: no " + close + " after {{" + part.slice(0, 20)
+        end
+        when kind == "r":
+            tag = part.slice(1, upto).trim()
+        otherwise:
+            tag = part.slice(0, upto).trim()
+            let sigil = tag.slice(0, 1)
+            let kinds = {"#": "s", "^": "i", "/": "e", "!": "c", "&": "r", ">": "p"}
+            when kinds.has(sigil):
+                kind = kinds[sigil]
+                tag = tag.slice(1).trim()
+            end
+        end
+        when tag == "" and kind != "c":
+            throw "template: empty tag {{" + part.slice(0, upto + len(close))
+        end
+        tokens.push([kind, tag])
+        tokens.push(part.slice(upto + len(close)))
+        i = i + 1
+    end
+    return tokens
+end
+
+# Remove the lines that hold only a section, comment or partial tag. Every
+# tag is judged on the text as written, then the cuts are made.
+func _tpl_trim(tokens):
+    let n = len(tokens)
+    let cut_start = []
+    let cut_stop = []
+    for each t in tokens:
+        cut_start.push(0)
+        cut_stop.push(-1)
+    end
+    let k = 1
+    while k < n:
+        let kind = tokens[k][0]
+        when kind != "v" and kind != "r":
+            let before = tokens[k - 1]
+            let after = tokens[k + 1]
+            let line = _tpl_last_line(before)
+            when line >= 0 and (k == 1 or line > 0):
+                let rest = _tpl_first_line(after)
+                when rest >= 0 and (k + 1 == n - 1 or after.contains("\n")):
+                    cut_stop[k - 1] = line
+                    cut_start[k + 1] = rest
+                end
+            end
+        end
+        k = k + 2
+    end
+    let i = 0
+    while i < n:
+        when cut_start[i] > 0 or cut_stop[i] >= 0:
+            let upto = cut_stop[i]
+            when upto < 0:
+                upto = len(tokens[i])
+            end
+            tokens[i] = tokens[i].slice(cut_start[i], upto)
+        end
+        i = i + 2
+    end
+    return tokens
+end
+
+# A tree of nodes: ["t", text], [kind, path] for values and partials, and
+# [kind, path, children] for sections. A path is the name split at dots.
+func _tpl_parse(text):
+    let tokens = _tpl_trim(_tpl_tokens(text))
+    let root = []
+    let nodes = root
+    let open = []
+    let i = 0
+    while i < len(tokens):
+        let tok = tokens[i]
+        when i % 2 == 0:
+            when tok != "":
+                nodes.push(["t", tok])
+            end
+        otherwise:
+            let kind = tok[0]
+            let name = tok[1]
+            let path = []
+            when name != ".":
+                path = name.split(".")
+            end
+            when kind == "s" or kind == "i":
+                let node = [kind, path, []]
+                nodes.push(node)
+                open.push([name, nodes])
+                nodes = node[2]
+            eif kind == "e":
+                when len(open) == 0 or open[len(open) - 1][0] != name:
+                    throw "template: {{/" + name + "}} does not close an open section"
+                end
+                nodes = open.pop()[1]
+            eif kind == "p":
+                nodes.push([kind, name])
+            eif kind != "c":
+                nodes.push([kind, path])
+            end
+        end
+        i = i + 1
+    end
+    when len(open) > 0:
+        throw "template: {{#" + open[len(open) - 1][0] + "}} is not closed"
+    end
+    return root
+end
+
+func _tpl_lookup(stack, path):
+    let top = len(stack) - 1
+    when len(path) == 0:
+        return stack[top]
+    end
+    let i = top
+    while i >= 0:
+        let ctx = stack[i]
+        when type(ctx) == "dict" and ctx.has(path[0]):
+            let value = ctx[path[0]]
+            let j = 1
+            while j < len(path):
+                when type(value) != "dict":
+                    return none
+                end
+                value = value.get(path[j])
+                j = j + 1
+            end
+            return value
+        end
+        i = i - 1
+    end
+    return none
+end
+
+func _tpl_text(value):
+    when value is none:
+        return ""
+    end
+    return str(value)
+end
+
+func template_escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
+end
+
+func _tpl_shown(value):
+    when type(value) == "list":
+        return len(value) > 0
+    end
+    return value is not none and value != false and value != 0 and value != ""
+end
+
+blueprint Template:
+    func init(text, partials = none):
+        self.nodes = _tpl_parse(text)
+        self.partials = partials ?? {}
+        self.compiled = {}
+    end
+
+    func render(data = none):
+        let out = []
+        self._run(self.nodes, [data], out)
+        return out.join("")
+    end
+
+    func _partial(name):
+        when not self.compiled.has(name):
+            when not self.partials.has(name):
+                return []
+            end
+            self.compiled[name] = _tpl_parse(self.partials[name])
+        end
+        return self.compiled[name]
+    end
+
+    func _run(nodes, stack, out):
+        for each node in nodes:
+            let kind = node[0]
+            when kind == "t":
+                out.push(node[1])
+            eif kind == "v":
+                let value = _tpl_lookup(stack, node[1])
+                let vt = type(value)
+                # Numbers and booleans never hold a character to escape.
+                when vt == "int" or vt == "float" or vt == "bool":
+                    out.push(str(value))
+                otherwise:
+                    out.push(template_escape(_tpl_text(value)))
+                end
+            eif kind == "r":
+                out.push(_tpl_text(_tpl_lookup(stack, node[1])))
+            eif kind == "s":
+                let value = _tpl_lookup(stack, node[1])
+                when type(value) == "list":
+                    for each item in value:
+                        stack.push(item)
+                        self._run(node[2], stack, out)
+                        stack.pop()
+                    end
+                eif _tpl_shown(value):
+                    stack.push(value)
+                    self._run(node[2], stack, out)
+                    stack.pop()
+                end
+            eif kind == "i":
+                when not _tpl_shown(_tpl_lookup(stack, node[1])):
+                    self._run(node[2], stack, out)
+                end
+            otherwise:
+                self._run(self._partial(node[1]), stack, out)
+            end
+        end
+    end
+end
+
+func template_compile(text, partials = none):
+    return Template(text, partials)
+end
+
+func template_render(text, data = none, partials = none):
+    return Template(text, partials).render(data)
+end
+
+let template = {"render": template_render, "compile": template_compile, "escape": template_escape}
