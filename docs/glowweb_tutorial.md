@@ -50,7 +50,8 @@ end
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,
 and `test_app.glow`, which starts the app and calls every endpoint. Run
-`glowlang run test_app.glow`, then change `app.glow` to suit. `glowlang
+`glowlang run test_app.glow`, then change `app.glow` to suit;
+`glowlang watch app.glow` runs it and restarts it each time you save. `glowlang
 package app.glow` turns it into one file to copy to a server.
 
 ## HTTP API Reference

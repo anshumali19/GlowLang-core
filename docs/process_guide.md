@@ -87,7 +87,10 @@ never block. Line endings are left as the program wrote them; use
 `process.start` keeps a program running so GlowLang can talk to it, one
 request and reply at a time. Its standard input and output are pipes; its
 standard error goes to the terminal by default (`"stderr": "null"` discards
-it). `cwd` and `env` work as for `run`.
+it). `"stdout": "inherit"` shows its output in the terminal instead of
+piping it (then `read_line` gives `none`), and `"stdout": "null"` discards
+it. `cwd` and `env` work as for `run`. When GlowLang ends, including by
+Ctrl+C or SIGTERM, the programs it started are stopped too.
 
 ```glow
 let py = process.start(["python", "-u", "worker.py"], {})

@@ -1,0 +1,10 @@
+--- usage
+1 Usage: glowlang watch <file.glow> [arguments]
+glowlang watch: DIR/missing.glow is not a file
+--- restarts on save
+first ["an argument"]
+second version
+third version, longer
+--- process.start with stdout inherit
+third version, longer
+0 none

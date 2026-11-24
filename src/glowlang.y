@@ -1159,6 +1159,7 @@ int glow_main(int argc, char **argv) {
         printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  new <name>        Start a web API project (login, database, tests)\n");
+        printf("  watch <file.glow> Run a program, and again each time a .glow file changes\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
         printf("  --version         Print the GlowLang version\n\n");
@@ -1167,12 +1168,15 @@ int glow_main(int argc, char **argv) {
         return 0;
     }
 
-    /* glowlang new <name>: runs lib/new_project.glow, which writes the
-       starter project, as `glowlang run new_project.glow <args>`. */
-    if (strcmp(subcommand, "new") == 0) {
+    /* Commands written in GlowLang: `glowlang new <name>` runs
+       lib/new_project.glow and `glowlang watch <file>` lib/watch.glow, as
+       `glowlang run <that file> <args>`. */
+    const char *lib_cmd = strcmp(subcommand, "new") == 0 ? "lib/new_project.glow"
+                        : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow" : NULL;
+    if (lib_cmd) {
         const char *found = NULL;
-        FILE *nf = glow_find_module("lib/new_project.glow", "", &found);
-        if (!nf) { fprintf(stderr, "glowlang new: the standard library (lib/new_project.glow) is missing\n"); return 1; }
+        FILE *nf = glow_find_module(lib_cmd, "", &found);
+        if (!nf) { fprintf(stderr, "glowlang %s: the standard library (%s) is missing\n", subcommand, lib_cmd); return 1; }
         fclose(nf);
         char **nargv = malloc(sizeof(char *) * (size_t)(argc + 2));
         nargv[0] = argv[0]; nargv[1] = "run"; nargv[2] = (char *)found;
