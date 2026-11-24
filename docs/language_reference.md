@@ -1488,6 +1488,25 @@ Every name below exists in the runtime (checked against `<module>.keys()`).
 the constants `pi`, `e`, `tau`, `inf`, `nan`. NaN follows IEEE 754: `math.nan == math.nan` is
 false, and every ordering comparison with NaN is false.
 
+### Caches (`import "lru"`)
+```glow
+import "lru"
+let users = lru.Cache(1000, 60)       # 1,000 items, each kept 60 seconds
+func load_user(id):
+    return users.get_or_set(str(id), lambda():
+        return {"id": id}                 # the slow lookup goes here
+    end)
+end
+show load_user(7), users.stats()      # {"id": 7} {"hits": 0, "misses": 1, "evictions": 0}
+```
+`lru.Cache(max_items, ttl)` keeps up to `max_items` values (default 1,000);
+setting a new key when it is full drops the one used least recently. With
+`ttl` (seconds) each item expires that long after it was set; `set(key,
+value, seconds)` gives one item its own time. Also `get(key, default)`,
+`has(key)`, `remove(key)`, `clear()`, `len()` (it counts expired items not
+looked at since), `get_or_set(key, make)` (calls `make()` only on a miss)
+and `stats()`. Keys are text, as in every dict. Threads may share a cache.
+
 ### Tensors (`tensor.`)
 | Function | Description |
 |----------|-------------|
