@@ -2702,8 +2702,91 @@ static void line_first_word(const char *file, int line, char *out, size_t cap) {
     fclose(f);
 }
 
-
 #include <ctype.h>
+/* Whether the code on line `line` ends with '{' or is a lone '}'. */
+static int line_has_brace(const char *file, int line) {
+    if (!file || line <= 0) return 0;
+    FILE *f = fopen(file, "r");
+    if (!f) return 0;
+    char buf[1024];
+    int curr = 1, yes = 0;
+    while (fgets(buf, sizeof(buf), f)) {
+        if (curr++ != line) continue;
+        size_t n = strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' ' || buf[n - 1] == '\t')) n--;
+        const char *p = buf;
+        while (*p == ' ' || *p == '\t') p++;
+        yes = (n > 0 && buf[n - 1] == '{') || (p[0] == '}' && (size_t)(p - buf) + 1 == n);
+        break;
+    }
+    fclose(f);
+    return yes;
+}
+
+/* When a file ends inside a block: which block has no `end`. Every line
+   ending in ':' opens a block (except eif, otherwise, catch, finally and
+   case, which continue one), and an `end` closes the open block indented
+   as far as it is; a block indented further that is still open is the one
+   missing its `end`. Writes the message to out and returns that block's
+   line, or 0 when the indentation does not tell. */
+static int unclosed_block(const char *file, char *out, size_t cap) {
+    if (!file) return 0;
+    FILE *f = fopen(file, "r");
+    if (!f) return 0;
+    enum { MAXB = 256 };
+    int ind[MAXB], at[MAXB], sp = 0, line = 0, found = 0, end_line = 0, end_with = 0;
+    char word[MAXB][16];
+    char buf[8192];
+    while (fgets(buf, sizeof(buf), f)) {
+        line++;
+        int indent = 0;
+        char *p = buf;
+        for (; *p == ' ' || *p == '\t'; p++) indent += *p == '\t' ? 4 : 1;
+        /* The code part: up to a # that is not inside quotes. */
+        char quote = 0, *q = p;
+        for (; *q && *q != '\n' && *q != '\r'; q++) {
+            if (quote) { if (*q == '\\' && q[1]) q++; else if (*q == quote) quote = 0; }
+            else if (*q == '"' || *q == '\'') quote = *q;
+            else if (*q == '#') break;
+        }
+        while (q > p && (q[-1] == ' ' || q[-1] == '\t')) q--;
+        if (q == p) continue;
+        size_t wl = 0;
+        while (p + wl < q && (isalnum((unsigned char)p[wl]) || p[wl] == '_')) wl++;
+        if (wl == 3 && strncmp(p, "end", 3) == 0) {
+            while (sp > 0 && ind[sp - 1] > indent) {
+                if (!found) { found = sp; end_line = line; }
+                sp--;
+            }
+            if (found && !end_with && sp > 0 && ind[sp - 1] == indent) end_with = at[sp - 1];
+            if (sp > 0 && ind[sp - 1] == indent) sp--;
+            if (found) break;
+            continue;
+        }
+        if (q[-1] != ':') continue;
+        static const char *cont[] = { "eif", "otherwise", "else", "catch", "finally", "case", NULL };
+        int is_cont = 0;
+        for (int i = 0; cont[i]; i++) if (wl == strlen(cont[i]) && strncmp(p, cont[i], wl) == 0) is_cont = 1;
+        if (is_cont || sp == MAXB) continue;
+        ind[sp] = indent; at[sp] = line;
+        snprintf(word[sp], sizeof word[sp], "%.*s", (int)(wl < 15 ? wl : 15), p);
+        sp++;
+    }
+    fclose(f);
+    int b;
+    if (found) {
+        /* The innermost block the end skipped over. */
+        b = found - 1;
+        snprintf(out, cap, "the '%s' block on line %d has no 'end' (the 'end' on line %d lines up with line %d)",
+                 word[b][0] ? word[b] : "block", at[b], end_line, end_with ? end_with : at[b]);
+        return at[b];
+    }
+    if (sp == 0) return 0;
+    b = sp - 1;
+    snprintf(out, cap, "the '%s' block on line %d has no 'end' before the file ends", word[b][0] ? word[b] : "block", at[b]);
+    return at[b];
+}
+
 /* ---- number literals: 1_000, 0xff, 0b1010, 0o17 ---- */
 
 /* The literal without its _ separators (a static buffer, used at once). */
@@ -2758,11 +2841,42 @@ void yyerror(const char *s) {
     }
     /* Other languages' spellings of else-if are a common slip; say what
        GlowLang writes instead of a bare "syntax error". */
-    char word[32], hint[160];
+    char word[32], hint[400];
     line_first_word(compiling_file, line_num, word, sizeof(word));
     if (strcmp(word, "elif") == 0 || strcmp(word, "elseif") == 0 || strcmp(word, "elsif") == 0) {
         snprintf(hint, sizeof(hint), "%s: GlowLang writes else-if as 'eif' (not '%s')", s, word);
         s = hint;
+    }
+    /* Other languages' words for func and let, keywords written with a
+       capital, and braces instead of ':' ... 'end'. */
+    else if (strcmp(word, "def") == 0 || strcmp(word, "function") == 0 || strcmp(word, "fn") == 0 || strcmp(word, "fun") == 0) {
+        snprintf(hint, sizeof(hint), "%s: GlowLang starts a function with 'func' (not '%s')", s, word);
+        s = hint;
+    } else if (strcmp(word, "var") == 0 || strcmp(word, "const") == 0 || strcmp(word, "val") == 0) {
+        snprintf(hint, sizeof(hint), "%s: GlowLang makes a variable with 'let' (not '%s')", s, word);
+        s = hint;
+    } else if (word[0] >= 'A' && word[0] <= 'Z') {
+        static const char *kw[] = { "show", "let", "func", "when", "eif", "otherwise", "for", "while", "return",
+            "end", "blueprint", "action", "try", "catch", "finally", "import", "use", "match", "repeat", "stop",
+            "skip", "spawn", "throw", "every", "with", NULL };
+        char low[32];
+        size_t k = 0;
+        for (; word[k] && k + 1 < sizeof low; k++) low[k] = (char)tolower((unsigned char)word[k]);
+        low[k] = 0;
+        for (int i = 0; kw[i]; i++) if (strcmp(low, kw[i]) == 0) {
+            snprintf(hint, sizeof(hint), "%s: keywords are lowercase, so write '%s', not '%s'", s, kw[i], word);
+            s = hint;
+            break;
+        }
+    } else if (strcmp(word, "else") == 0 || line_has_brace(compiling_file, line_num)) {
+        snprintf(hint, sizeof(hint), "%s: a GlowLang block starts with ':' and closes with 'end' (else-if is 'eif'), not braces", s);
+        s = hint;
+    }
+    /* The file ended inside a block: point at the block missing its end. */
+    char endhint[300];
+    if (error_at_eof && compiling_file && s != numhint) {
+        int at = unclosed_block(compiling_file, endhint, sizeof endhint);
+        if (at > 0) { s = endhint; line_num = at; }
     }
     /* Recorded too, for the LSP's diagnostics and the REPL (they used to
        see no errors at all). */

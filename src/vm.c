@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdbool.h>
 #ifdef _WIN32
 #include "win_pthread.h"
@@ -1472,6 +1473,64 @@ static FILE *open_module_file(const char *p) {
     return fopen(p, "r");
 }
 
+/* Edit distance between a and b (insert, delete, change, or swap two
+   neighbouring letters; letters compared ignoring case), or limit + 1
+   when it is more than limit. */
+static int edit_distance(const char *a, const char *b, int limit) {
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    if (la > 63 || lb > 63 || abs(la - lb) > limit) return limit + 1;
+    int d[64][64];
+    for (int i = 0; i <= la; i++) d[i][0] = i;
+    for (int j = 0; j <= lb; j++) d[0][j] = j;
+    for (int i = 1; i <= la; i++) {
+        int row_min = limit + 1;
+        for (int j = 1; j <= lb; j++) {
+            int cost = tolower((unsigned char)a[i - 1]) != tolower((unsigned char)b[j - 1]);
+            int v = d[i - 1][j] + 1;
+            if (d[i][j - 1] + 1 < v) v = d[i][j - 1] + 1;
+            if (d[i - 1][j - 1] + cost < v) v = d[i - 1][j - 1] + cost;
+            if (i > 1 && j > 1 && tolower((unsigned char)a[i - 1]) == tolower((unsigned char)b[j - 2]) &&
+                tolower((unsigned char)a[i - 2]) == tolower((unsigned char)b[j - 1]) && d[i - 2][j - 2] + 1 < v)
+                v = d[i - 2][j - 2] + 1;
+            d[i][j] = v;
+            if (v < row_min) row_min = v;
+        }
+        if (row_min > limit) return limit + 1;
+    }
+    return d[la][lb];
+}
+
+/* One edit away for names of up to 4 letters, two for longer ones. */
+const char *glow_closest(const char *word, const char *const *cands, int n) {
+    int wl = (int)strlen(word);
+    if (wl < 2) return NULL;
+    int limit = wl <= 4 ? 1 : 2, best = limit + 1;
+    const char *pick = NULL;
+    for (int i = 0; i < n; i++) {
+        /* Names starting with _ are private to a library: suggested only for
+           a word that starts with _ too. */
+        if (!cands[i] || strcmp(cands[i], word) == 0 || (cands[i][0] == '_' && word[0] != '_')) continue;
+        int dist = edit_distance(word, cands[i], limit);
+        if (dist < best) { best = dist; pick = cands[i]; }
+    }
+    return pick;
+}
+
+/* The defined global or function nearest to an undefined name. */
+static const char *glow_suggest_name(const char *word) {
+    int cap = global_table.count + func_table_size + 1, n = 0;
+    const char **cands = malloc(sizeof(char *) * (size_t)cap);
+    if (!cands) return NULL;
+    for (int i = 0; i < global_table.count; i++)
+        if (global_table.names[i] && (global_slot_declared(i) || GET_TYPE(global_table.values[i]) != VAL_NONE))
+            cands[n++] = global_table.names[i];
+    for (int i = 0; i < func_table_size; i++)
+        if (func_table && func_table[i].used && func_table[i].name) cands[n++] = func_table[i].name;
+    const char *pick = glow_closest(word, cands, n);
+    free(cands);
+    return pick;
+}
+
 static FILE *glow_open_module_path(const char *path, const char *importer, const char **found) {
     char cand[1024], dir[768];
     int absolute = path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':');
@@ -2584,8 +2643,10 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                     /* Nothing anywhere declares this name (a typo, or a
                        variable that does not exist); it used to read as
                        none. A declared global that holds none is fine. */
-                    char msg[200];
-                    snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
+                    char msg[320];
+                    const char *suggestion = var_name ? glow_suggest_name(var_name) : NULL;
+                    if (suggestion) snprintf(msg, sizeof(msg), "name '%.120s' is not defined; did you mean '%.120s'?", var_name, suggestion);
+                    else snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
                     pending_exception = value_string_copy(msg);
                     has_exception = 1;
                     goto l_OP_THROW;
@@ -3579,8 +3640,10 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 goto l_OP_THROW;
             }
         } else {
-            char msg[256];
+            char msg[360];
+            const char *suggestion = GET_TYPE(obj) == VAL_NONE ? NULL : glow_suggest_method(obj, mname);
             if (GET_TYPE(obj) == VAL_NONE) snprintf(msg, sizeof msg, "cannot call method '%.100s' of none", mname ? mname : "?");
+            else if (suggestion) snprintf(msg, sizeof msg, "%s has no method '%.100s'; did you mean '%.100s'?", glow_type_name(obj), mname, suggestion);
             else snprintf(msg, sizeof msg, "%s has no method '%.100s'", glow_type_name(obj), mname ? mname : "?");
             pending_exception = value_string_copy(msg);
             has_exception = 1;

@@ -1118,6 +1118,11 @@ Value native_tensor_shape(int argc, Value *args);
 Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing);
 Value glow_property_error(Value o, const char *n);
 int global_slot_declared(int slot);
+/* For "did you mean ...?" in error messages: the candidate closest to word,
+   or NULL when none is close enough. */
+const char *glow_closest(const char *word, const char *const *cands, int n);
+/* The built-in method (or, for a dict, key) of v nearest to name, or NULL. */
+const char *glow_suggest_method(Value v, const char *name);
 void glow_profile_begin(void);
 void glow_profile_report(void);
 Value native_len(int argc, Value *args);

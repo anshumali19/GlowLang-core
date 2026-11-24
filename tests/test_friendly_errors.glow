@@ -1,0 +1,48 @@
+# Error messages that say how to fix the mistake: "did you mean" for
+# misspelled names and methods, the block that is missing its 'end', and
+# other languages' keywords.
+
+let dir = fs.join(os.temp_dir(), "glow_errors_test_" + str(os.pid()))
+fs.mkdirs(dir)
+
+# The first line of the error a program stops with, without colours.
+func first_error(code):
+    let file = fs.join(dir, "prog.glow")
+    fs.write(file, code)
+    let r = process.run([process.executable, "run", file], {})
+    let line = r["stderr"].replace("\r\n", "\n").split("\n")[0]
+    let at = line.find("[0m ")
+    when at >= 0:
+        line = line[at + 4:]
+    end
+    return line
+end
+
+try:
+    show "--- misspelled names"
+    show first_error("let count = 5\nshow cout + 1\n")
+    show first_error("func greet(name):\n    return name\nend\nshow gret(\"ada\")\n")
+    show first_error("let total = 1\nfunc f():\n    return totl\nend\nf()\n")
+    show first_error("show nothing_like_this_anywhere\n")
+
+    show "--- misspelled methods"
+    show first_error("show \"hi\".uppr()\n")
+    show first_error("let xs = [1]\nxs.psuh(2)\n")
+    show first_error("show {\"a\": 1}.kes()\n")
+    show first_error("show fs.exist(\"x\")\n")
+    show first_error("show math.sqr(4)\n")
+    show first_error("let x = 5\nx.push(3)\n")
+
+    show "--- a block without its end"
+    show first_error("func f(x):\n    when x > 1:\n        show x\nend\nf(2)\n")
+    show first_error("func outer():\n    for each x in [1, 2]:\n        when x > 1:\n            show x\n    end\nend\n")
+    show first_error("when true:   # a comment: with a colon\n    show \"a:b\"\n")
+
+    show "--- other languages' words"
+    show first_error("def f(x):\n    return x\nend\n")
+    show first_error("var x = 1\n")
+    show first_error("let x = 1\nWhen x > 0:\n    show x\nend\n")
+    show first_error("when 1 > 0 {\n    show 1\n}\n")
+finally:
+    fs.remove_all(dir)
+end
