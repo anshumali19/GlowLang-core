@@ -1,0 +1,183 @@
+--- headings and paragraphs
+## "# Title\n\nSome *text* here.\nSecond line.\n\n### Third ###\n####### not a heading\n#hashtag"
+<h1>Title</h1>
+<p>Some <em>text</em> here.
+Second line.</p>
+<h3>Third</h3>
+<p>####### not a heading
+#hashtag</p>
+
+## "line one  \nline two\\\nline three"
+<p>line one<br>
+line two<br>
+line three</p>
+
+--- inline
+## "**bold** and __bold__, *em* and _em_, ***both***, snake_case_name, 2 * 3 * 4, a*b*c"
+<p><strong>bold</strong> and <strong>bold</strong>, <em>em</em> and <em>em</em>, <em><strong>both</strong></em>, snake_case_name, 2 * 3 * 4, a<em>b</em>c</p>
+
+## "`code <b>` and ``a ` tick`` and `unclosed"
+<p><code>code &lt;b&gt;</code> and <code>a ` tick</code> and `unclosed</p>
+
+## "\\*not em\\* and \\# and \\\\ and a \\q"
+<p>*not em* and # and \ and a \q</p>
+
+## "**unclosed bold and *em*"
+<p>**unclosed bold and <em>em</em></p>
+
+## "<b>raw html</b> & \"quotes\" 1 < 2"
+<p>&lt;b&gt;raw html&lt;/b&gt; &amp; &quot;quotes&quot; 1 &lt; 2</p>
+
+--- links and images
+## "[GlowLang](https://glow.example \"Home\") and [a [nested] label](/x) and ![logo](/l.png)"
+<p><a href="https://glow.example" title="Home">GlowLang</a> and <a href="/x">a [nested] label</a> and <img src="/l.png" alt="logo"></p>
+
+## "[bad](javascript:alert(1)) [bad2](JavaScript:x) ![ok](data:image/png;base64,AA==) [no](data:text/html,x)"
+<p><a href="#">bad</a> <a href="#">bad2</a> <img src="data:image/png;base64,AA==" alt="ok"> <a href="#">no</a></p>
+
+## "<https://glow.example/a?b=1> <ana@glow.example> <not a link> [text](broken"
+<p><a href="https://glow.example/a?b=1">https://glow.example/a?b=1</a> <a href="mailto:ana@glow.example">ana@glow.example</a> &lt;not a link&gt; [text](broken</p>
+
+## "[a](<url with spaces> 'single')"
+<p><a href="url with spaces" title="single">a</a></p>
+
+--- code blocks
+## "```glow\nshow \"<hi>\"\n\nlet x = 1\n```\nafter"
+<pre><code class="language-glow">show &quot;&lt;hi&gt;&quot;
+
+let x = 1
+</code></pre>
+<p>after</p>
+
+## "~~~\nno language\n~~~"
+<pre><code>no language
+</code></pre>
+
+## "```\nnever closed"
+<pre><code>never closed
+</code></pre>
+
+--- quotes and rules
+## "> quoted *text*\n> more\n>\n> # inside\n\n---\n***\n_ _ _"
+<blockquote>
+<p>quoted <em>text</em>
+more</p>
+<h1>inside</h1>
+</blockquote>
+<hr>
+<hr>
+<hr>
+
+--- lists
+## "- one\n- two\n  - nested a\n  - nested b\n- three"
+<ul>
+<li>one</li>
+<li>two
+<ul>
+<li>nested a</li>
+<li>nested b</li>
+</ul></li>
+<li>three</li>
+</ul>
+
+## "1. first\n2. second\n\n3. third, loose"
+<ol>
+<li><p>first</p></li>
+<li><p>second</p></li>
+<li><p>third, loose</p></li>
+</ol>
+
+## "3) start at three\n4) four"
+<ol start="3">
+<li>start at three</li>
+<li>four</li>
+</ol>
+
+## "* item\ncontinues here\n* next"
+<ul>
+<li>item
+continues here</li>
+<li>next</li>
+</ul>
+
+## "- a\n\n  second paragraph of a\n- b"
+<ul>
+<li><p>a</p>
+<p>second paragraph of a</p></li>
+<li><p>b</p></li>
+</ul>
+
+## "- a\n1. b"
+<ul>
+<li>a</li>
+</ul>
+<ol>
+<li>b</li>
+</ol>
+
+## "- [link](/x) and `code`\n-\n- last"
+<ul>
+<li><a href="/x">link</a> and <code>code</code></li>
+<li></li>
+<li>last</li>
+</ul>
+
+--- tables
+## "| Name | Price | Note |\n|:-----|------:|:----:|\n| tea | 3 | hot |\n| cake | 5 |\n| pipe \\| in cell | `a|b` | x |"
+<table>
+<thead>
+<tr>
+<th align="left">Name</th>
+<th align="right">Price</th>
+<th align="center">Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left">tea</td>
+<td align="right">3</td>
+<td align="center">hot</td>
+</tr>
+<tr>
+<td align="left">cake</td>
+<td align="right">5</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td align="left">pipe | in cell</td>
+<td align="right">`a</td>
+<td align="center">b`</td>
+</tr>
+</tbody>
+</table>
+
+## "a | b\n--|--"
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+</table>
+
+--- edge cases
+## ""
+
+## "\n\n\n"
+
+## "plain"
+<p>plain</p>
+
+## "Windows\r\nlines\r\n\r\n- x\r\n"
+<p>Windows
+lines</p>
+<ul>
+<li>x</li>
+</ul>
+
+## "tab\there"
+<p>tab    here</p>
+
+--- unmatched emphasis stays fast
+true true

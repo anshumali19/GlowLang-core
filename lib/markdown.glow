@@ -1,0 +1,514 @@
+# markdown.glow — Markdown to HTML.
+#
+#   import "markdown"
+#   markdown.to_html(text)     the HTML for the Markdown text
+#
+# Covers headings (# to ######), paragraphs, line breaks (two spaces or a \
+# at the end of a line), *emphasis* and **strong** (also with _), `code`,
+# fenced code blocks (``` or ~~~, with a language), > quotes, - * + and 1.
+# lists (nested by indenting), [links](url "title"), ![images](src),
+# <https://autolinks>, horizontal rules (---, ***, ___) and tables
+# (| a | b | over a |---|:-:| line). A \ before punctuation shows it as is.
+#
+# Text is HTML-escaped and raw HTML is shown as text, so the result is safe
+# to put in a page even when the Markdown comes from users. A link to a
+# javascript:, vbscript: or data: URL gets "#" instead (images may use
+# data:image/).
+#
+# Not covered: headings underlined with === or ---, code blocks marked only
+# by indenting, reference links ([text][1]), footnotes and HTML blocks.
+
+import "re"
+
+let _MD_PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+let _MD_SPECIAL = "\\`![<*_\n"
+
+func _md_escape(text):
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+end
+
+func _md_url(url, image):
+    let u = url.trim().lower()
+    when u.starts_with("javascript:") or u.starts_with("vbscript:") or (u.starts_with("data:") and not (image and u.starts_with("data:image/"))):
+        return "#"
+    end
+    return _md_escape(url)
+end
+
+func _md_word(c):
+    return c != "" and (c.is_alnum() or c == "_")
+end
+
+# Where the closing ] for the [ at i is, or -1.
+func _md_bracket(text, i):
+    let depth = 0
+    let n = len(text)
+    while i < n:
+        let c = text[i]
+        when c == "\\":
+            i = i + 1
+        eif c == "[":
+            depth = depth + 1
+        eif c == "]":
+            depth = depth - 1
+            when depth == 0:
+                return i
+            end
+        end
+        i = i + 1
+    end
+    return -1
+end
+
+# The (url "title") that starts at i: [url, title, index after it], or none.
+func _md_target(text, i):
+    let n = len(text)
+    when i >= n or text[i] != "(":
+        return none
+    end
+    let depth = 0
+    let j = i
+    while j < n:
+        let c = text[j]
+        when c == "\\":
+            j = j + 1
+        eif c == "(":
+            depth = depth + 1
+        eif c == ")":
+            depth = depth - 1
+            when depth == 0:
+                stop
+            end
+        eif c == "\n":
+            return none
+        end
+        j = j + 1
+    end
+    when j >= n:
+        return none
+    end
+    let inside = text.slice(i + 1, j).trim()
+    let m = re.fullmatch("(<[^>]*>|\\S*)(?:\\s+(\"[^\"]*\"|'[^']*'))?", inside)
+    when m is none:
+        return none
+    end
+    let url = m.group(1)
+    when url.starts_with("<"):
+        url = url.slice(1, -1)
+    end
+    let title = m.group(2)
+    when title is not none:
+        title = title.slice(1, -1)
+    end
+    return [url, title, j + 1]
+end
+
+func _md_inline(text):
+    let out = []
+    let failed = {}
+    let n = len(text)
+    let i = 0
+    while i < n:
+        let start = i
+        while i < n and not _MD_SPECIAL.contains(text[i]):
+            i = i + 1
+        end
+        when i > start:
+            out.push(_md_escape(text.slice(start, i)))
+        end
+        when i >= n:
+            stop
+        end
+        let c = text[i]
+        let next = ""
+        when i + 1 < n:
+            next = text[i + 1]
+        end
+        when c == "\\":
+            when next == "\n":
+                out.push("<br>\n")
+                i = i + 2
+            eif next != "" and _MD_PUNCT.contains(next):
+                out.push(_md_escape(next))
+                i = i + 2
+            otherwise:
+                out.push("\\")
+                i = i + 1
+            end
+        eif c == "\n":
+            when i >= 2 and text[i - 1] == " " and text[i - 2] == " ":
+                out[len(out) - 1] = out[len(out) - 1].trim_end(" ")
+                out.push("<br>\n")
+            otherwise:
+                out.push("\n")
+            end
+            i = i + 1
+        eif c == "`":
+            let k = i
+            while k < n and text[k] == "`":
+                k = k + 1
+            end
+            let ticks = text.slice(i, k)
+            let close = text.slice(k).find(ticks)
+            when close < 0:
+                out.push(ticks)
+                i = k
+            otherwise:
+                let code = text.slice(k, k + close).replace("\n", " ")
+                when len(code) > 2 and code.starts_with(" ") and code.ends_with(" "):
+                    code = code.slice(1, -1)
+                end
+                out.push("<code>" + _md_escape(code) + "</code>")
+                i = k + close + len(ticks)
+            end
+        eif c == "[" or (c == "!" and next == "["):
+            let image = c == "!"
+            let open = i
+            when image:
+                open = i + 1
+            end
+            let close = _md_bracket(text, open)
+            let target = none
+            when close >= 0:
+                target = _md_target(text, close + 1)
+            end
+            when target is none:
+                out.push(_md_escape(c))
+                i = i + 1
+            otherwise:
+                let label = text.slice(open + 1, close)
+                let title = ""
+                when target[1] is not none:
+                    title = " title=\"" + _md_escape(target[1]) + "\""
+                end
+                when image:
+                    out.push("<img src=\"" + _md_url(target[0], true) + "\" alt=\"" + _md_escape(label) + "\"" + title + ">")
+                otherwise:
+                    out.push("<a href=\"" + _md_url(target[0], false) + "\"" + title + ">" + _md_inline(label) + "</a>")
+                end
+                i = target[2]
+            end
+        eif c == "<":
+            let close = text.slice(i).find(">")
+            let inner = ""
+            when close > 0:
+                inner = text.slice(i + 1, i + close)
+            end
+            when re.fullmatch("[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\s<>]*", inner) is not none:
+                out.push("<a href=\"" + _md_url(inner, false) + "\">" + _md_escape(inner) + "</a>")
+                i = i + close + 1
+            eif re.fullmatch("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]+", inner) is not none:
+                out.push("<a href=\"mailto:" + _md_escape(inner) + "\">" + _md_escape(inner) + "</a>")
+                i = i + close + 1
+            otherwise:
+                out.push("&lt;")
+                i = i + 1
+            end
+        otherwise:
+            # * or _: emphasis when a closing run of the same size follows.
+            let k = i
+            while k < n and text[k] == c:
+                k = k + 1
+            end
+            let run = k - i
+            let size = min(run, 3)
+            let prev = ""
+            when i > 0:
+                prev = text[i - 1]
+            end
+            let done = false
+            let can_open = next != " " and next != "\n" and not (c == "_" and _md_word(prev))
+            while can_open and size > 0 and not done and not failed.has(c + str(size)):
+                let j = i + size
+                while j < n:
+                    when text[j] == "\\":
+                        j = j + 2
+                        skip
+                    end
+                    when text[j] == "`":
+                        # Delimiters inside a code span do not count.
+                        let t = j
+                        while t < n and text[t] == "`":
+                            t = t + 1
+                        end
+                        let end_code = text.slice(t).find(text.slice(j, t))
+                        when end_code >= 0:
+                            j = t + end_code + (t - j)
+                            skip
+                        end
+                        j = t
+                        skip
+                    end
+                    when text[j] == c:
+                        let r = j
+                        while r < n and text[r] == c:
+                            r = r + 1
+                        end
+                        let after = ""
+                        when r < n:
+                            after = text[r]
+                        end
+                        let before = text[j - 1]
+                        when r - j >= size and j > i + size and before != " " and before != "\n" and not (c == "_" and _md_word(after)):
+                            let inner = _md_inline(text.slice(i + size, j))
+                            when size == 1:
+                                out.push("<em>" + inner + "</em>")
+                            eif size == 2:
+                                out.push("<strong>" + inner + "</strong>")
+                            otherwise:
+                                out.push("<em><strong>" + inner + "</strong></em>")
+                            end
+                            i = j + size
+                            done = true
+                            stop
+                        end
+                        j = r
+                        skip
+                    end
+                    j = j + 1
+                end
+                when not done:
+                    # A closer is searched for to the right only, so no
+                    # later run of this size can find one either.
+                    failed[c + str(size)] = true
+                    size = size - 1
+                    # Only *** may fall back to ** or *; an unclosed ** stays text.
+                    when run < 3:
+                        size = 0
+                    end
+                end
+            end
+            when not done:
+                out.push(text.slice(i, k))
+                i = k
+            end
+        end
+    end
+    return out.join("")
+end
+
+func _md_at(list, k):
+    when k < len(list):
+        return list[k]
+    end
+    return ""
+end
+
+func _md_indent(line):
+    let k = 0
+    while k < len(line) and line[k] == " ":
+        k = k + 1
+    end
+    return k
+end
+
+func _md_cells(line):
+    let t = line.trim().replace("\\|", "\u0001")
+    when t.starts_with("|"):
+        t = t.slice(1)
+    end
+    when t.ends_with("|"):
+        t = t.slice(0, -1)
+    end
+    let cells = []
+    for each cell in t.split("|"):
+        cells.push(cell.trim().replace("\u0001", "|"))
+    end
+    return cells
+end
+
+let _MD_FENCE = "^ {0,3}(`{3,}|~{3,})[ \\t]*([^`\\s]*)"
+let _MD_HEADING = "^ {0,3}(#{1,6})(?:[ \\t]+(.*?))?[ \\t]*$"
+let _MD_RULE = "^ {0,3}(?:(?:-[ \\t]*){3,}|(?:\\*[ \\t]*){3,}|(?:_[ \\t]*){3,})$"
+let _MD_QUOTE = "^ {0,3}> ?"
+let _MD_ITEM = "^( {0,3})([-*+]|[0-9]{1,9}[.)])([ \\t]+|$)(.*)$"
+let _MD_TABLE_RULE = "^ *\\|? *:?-+:? *(?:\\| *:?-+:? *)*\\|? *$"
+
+# Whether the line starts a block other than a paragraph.
+func _md_starts_block(line):
+    return re.find(_MD_FENCE, line) is not none or re.find(_MD_HEADING, line) is not none or re.find(_MD_RULE, line) is not none or re.find(_MD_QUOTE, line) is not none or re.find(_MD_ITEM, line) is not none
+end
+
+func _md_blocks(lines, tight):
+    let out = []
+    let para = []
+    let n = len(lines)
+    let i = 0
+    while i < n:
+        let line = lines[i]
+        when line.trim() == "":
+            i = i + 1
+            skip
+        end
+        let m = re.find(_MD_FENCE, line)
+        when m is not none:
+            let fence = m.group(1)
+            let lang = m.group(2)
+            let code = []
+            i = i + 1
+            while i < n and not (lines[i].trim().starts_with(fence) and lines[i].trim().trim(fence[0]) == ""):
+                code.push(lines[i])
+                i = i + 1
+            end
+            i = i + 1
+            let cls = ""
+            when lang != "":
+                cls = " class=\"language-" + _md_escape(lang) + "\""
+            end
+            let body = code.join("\n")
+            when len(code) > 0:
+                body = body + "\n"
+            end
+            out.push("<pre><code" + cls + ">" + _md_escape(body) + "</code></pre>")
+            skip
+        end
+        m = re.find(_MD_HEADING, line)
+        when m is not none:
+            let level = str(len(m.group(1)))
+            let content = re.replace("(^|[ \\t]+)#+$", m.group(2) ?? "", "")
+            out.push("<h" + level + ">" + _md_inline(content) + "</h" + level + ">")
+            i = i + 1
+            skip
+        end
+        when re.find(_MD_RULE, line) is not none:
+            out.push("<hr>")
+            i = i + 1
+            skip
+        end
+        when re.find(_MD_QUOTE, line) is not none:
+            let quoted = []
+            while i < n and re.find(_MD_QUOTE, lines[i]) is not none:
+                quoted.push(re.replace(_MD_QUOTE, lines[i], "", 1))
+                i = i + 1
+            end
+            out.push("<blockquote>\n" + _md_blocks(quoted, false) + "</blockquote>")
+            skip
+        end
+        m = re.find(_MD_ITEM, line)
+        when m is not none:
+            let ordered = m.group(2)[0].is_digit()
+            let kind = m.group(2)[len(m.group(2)) - 1]
+            let items = []
+            let loose = false
+            let blank = false
+            while i < n:
+                let im = re.find(_MD_ITEM, lines[i])
+                when im is none or im.group(2)[0].is_digit() != ordered or im.group(2)[len(im.group(2)) - 1] != kind or re.find(_MD_RULE, lines[i]) is not none:
+                    stop
+                end
+                when blank:
+                    loose = true
+                end
+                let offset = len(im.group(1)) + len(im.group(2)) + max(len(im.group(3)), 1)
+                let item = [im.group(4)]
+                blank = false
+                i = i + 1
+                while i < n:
+                    let l = lines[i]
+                    when l.trim() == "":
+                        blank = true
+                        item.push("")
+                    eif _md_indent(l) >= offset:
+                        when blank:
+                            loose = true
+                        end
+                        blank = false
+                        item.push(l.slice(offset))
+                    eif not blank and not _md_starts_block(l):
+                        # A paragraph that goes on without indenting.
+                        item.push(l.trim())
+                    otherwise:
+                        stop
+                    end
+                    i = i + 1
+                end
+                while len(item) > 0 and item[len(item) - 1] == "":
+                    item.pop()
+                end
+                items.push(item)
+            end
+            let tag = "ul"
+            let attrs = ""
+            when ordered:
+                tag = "ol"
+                let first = int(m.group(2).slice(0, -1))
+                when first != 1:
+                    attrs = " start=\"" + str(first) + "\""
+                end
+            end
+            let html = ["<" + tag + attrs + ">"]
+            for each item in items:
+                html.push("<li>" + _md_blocks(item, not loose).trim_end() + "</li>")
+            end
+            html.push("</" + tag + ">")
+            out.push(html.join("\n"))
+            skip
+        end
+        when line.contains("|") and i + 1 < n and re.find(_MD_TABLE_RULE, lines[i + 1]) is not none and lines[i + 1].contains("-"):
+            let head = _md_cells(line)
+            let aligns = []
+            for each spec in _md_cells(lines[i + 1]):
+                when spec.starts_with(":") and spec.ends_with(":"):
+                    aligns.push(" align=\"center\"")
+                eif spec.ends_with(":"):
+                    aligns.push(" align=\"right\"")
+                eif spec.starts_with(":"):
+                    aligns.push(" align=\"left\"")
+                otherwise:
+                    aligns.push("")
+                end
+            end
+            let html = ["<table>", "<thead>", "<tr>"]
+            let c = 0
+            while c < len(head):
+                html.push("<th" + _md_at(aligns, c) + ">" + _md_inline(head[c]) + "</th>")
+                c = c + 1
+            end
+            html.push("</tr>")
+            html.push("</thead>")
+            i = i + 2
+            when i < n and lines[i].contains("|") and lines[i].trim() != "":
+                html.push("<tbody>")
+                while i < n and lines[i].contains("|") and lines[i].trim() != "":
+                    let cells = _md_cells(lines[i])
+                    html.push("<tr>")
+                    c = 0
+                    while c < len(head):
+                        html.push("<td" + _md_at(aligns, c) + ">" + _md_inline(_md_at(cells, c)) + "</td>")
+                        c = c + 1
+                    end
+                    html.push("</tr>")
+                    i = i + 1
+                end
+                html.push("</tbody>")
+            end
+            html.push("</table>")
+            out.push(html.join("\n"))
+            skip
+        end
+        # A paragraph: this line and the ones after it up to a blank line or
+        # the start of another block.
+        para = [line.trim_start()]
+        i = i + 1
+        while i < n and lines[i].trim() != "" and not _md_starts_block(lines[i]):
+            para.push(lines[i].trim_start())
+            i = i + 1
+        end
+        let text = _md_inline(para.join("\n").trim_end())
+        when tight:
+            out.push(text)
+        otherwise:
+            out.push("<p>" + text + "</p>")
+        end
+    end
+    when len(out) == 0:
+        return ""
+    end
+    return out.join("\n") + "\n"
+end
+
+func markdown_to_html(text):
+    return _md_blocks(text.replace("\r\n", "\n").replace("\t", "    ").split("\n"), false)
+end
+
+let markdown = {"to_html": markdown_to_html}
