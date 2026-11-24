@@ -1,0 +1,39 @@
+# glowlang fmt: re-indents blocks, keeps bracket continuations, strings and
+# comments as they are, --check reports without writing, and a file that
+# does not pass glowlang check is never rewritten.
+
+let dir = fs.join(os.temp_dir(), "glow_fmt_test_" + str(os.pid()))
+fs.mkdirs(dir)
+let messy = "func f(x):\n  when x > 1:\n        show x\n  eif x == 0:\n   show \"zero\"   \n  otherwise:\n      show \"neg\"\n  end\nend\n\n\n\n\nlet d = {\n        \"a\": 1,\n        \"b\": [1,\n              2]\n}\nmatch d[\"a\"]:\ncase 1:\nshow \"one\"\notherwise:\nshow \"other\"\nend\nlet s = \"\"\"line one\n   keep   this\n\"\"\"\nrouter.get(\"/x\", lambda(req):\nreturn \"hi\"  # comment: ok\nend)\ntry:\nf(1)\ncatch e:\nshow e\nfinally:\nshow \"done\"\nend\n"
+
+func glow(args):
+    let r = process.run([process.executable] + args, {})
+    return [r["code"], r["stdout"].replace("\r\n", "\n").strip().replace(fs.join(dir, ""), "").replace("\\", "/"), r["stderr"].replace("\r\n", "\n").strip().replace(fs.join(dir, ""), "").replace("\\", "/")]
+end
+
+try:
+    let file = fs.join(dir, "app.glow")
+    fs.write(file, messy)
+    show "--- --check on a messy file"
+    let r = glow(["fmt", "--check", file])
+    show r[0], r[1]
+    show fs.read(file) == messy
+
+    show "--- fmt"
+    r = glow(["fmt", file])
+    show r[0], r[1]
+    show fs.read(file).replace("\r\n", "\n")
+
+    show "--- again: nothing changes"
+    r = glow(["fmt", "--check", file])
+    show r[0], r[1]
+
+    show "--- a file that does not parse is left alone"
+    let bad = fs.join(dir, "bad.glow")
+    fs.write(bad, "func f(:\n  show 1\n")
+    r = glow(["fmt", bad])
+    show r[0], r[2]
+    show fs.read(bad) == "func f(:\n  show 1\n"
+finally:
+    fs.remove_all(dir)
+end
