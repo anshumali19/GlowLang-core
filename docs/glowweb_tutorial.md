@@ -49,7 +49,9 @@ end
 ```
 
 Besides `get`, `post`, `put` and `del` there is `patch`, for changing part
-of a resource.
+of a resource. A request for a path that has routes, but none for its
+method, gets `405 Method Not Allowed` with an `Allow` header listing the
+methods that path takes; a path with no routes gets `404`.
 
 ### Cookies
 `req.cookies()` gives the request's cookies as a dict.

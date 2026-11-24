@@ -21,4 +21,6 @@ set_cookie: options may not contain line breaks
 {"session": "s3cret"}
 {"session": null}
 200 {"patched": "7", "body": {"done": true}}
-404
+405 PATCH {"error": "Method Not Allowed"}
+PATCH, GET
+404 405

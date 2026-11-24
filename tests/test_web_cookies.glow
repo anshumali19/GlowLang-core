@@ -1,5 +1,5 @@
-# GlowWeb cookies (req.cookies, res.set_cookie, res.clear_cookie) and PATCH
-# routes.
+# GlowWeb cookies (req.cookies, res.set_cookie, res.clear_cookie), PATCH
+# routes, and 405 for a known path asked with another method.
 use "lib/web.glow"
 
 show "--- reading cookies"
@@ -67,5 +67,13 @@ show http.request("GET", base + "/me", {"headers": {"Cookie": cookie}})["body"]
 show http.request("GET", base + "/me")["body"]
 let p = http.request("PATCH", base + "/notes/7", {"body": json.stringify({"done": true}), "headers": {"Content-Type": "application/json"}})
 show p["status"], p["body"]
-show http.request("PUT", base + "/notes/7")["status"]
+# A known path with another method is 405 with the methods it takes; an
+# unknown path is still 404.
+let wrong = http.request("PUT", base + "/notes/7")
+show wrong["status"], wrong["headers"]["Allow"], wrong["body"]
+server.get("/notes/:id", lambda(req):
+    return "note"
+end)
+show http.request("DELETE", base + "/notes/7")["headers"]["Allow"]
+show http.request("GET", base + "/nowhere")["status"], http.request("POST", base + "/login")["status"]
 os.exit(0)
