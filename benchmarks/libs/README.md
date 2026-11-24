@@ -157,3 +157,16 @@ differed by under 6% in GlowLang and 8% in Python. Measured 2026-11-24.
 | skipped debug call | 7,292,678 calls/s | 14,524,168 calls/s |
 
 `log` opens the file for each line (`fs.append`); Python keeps it open.
+
+## lru
+
+[lru_bench.glow](lru_bench.glow) makes 1,000,000 lookups on a cache of
+1,000 items with keys drawn from 2,000, so about half miss and are then set,
+dropping the oldest item. [lru_bench.py](lru_bench.py) does the same with
+the usual Python LRU: an `OrderedDict` (written in C) with `move_to_end`
+and `popitem`. Runs differed by under 4% in both. Measured 2026-11-24.
+
+| Cache | Lookups/s |
+|---|---|
+| GlowLang `lru.Cache` | 3,147,929 |
+| Python, `OrderedDict` | 6,092,838 |

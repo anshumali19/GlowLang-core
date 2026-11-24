@@ -1,0 +1,63 @@
+# lru.Cache: size limit, least-recently-used order, expiry, get_or_set,
+# stats (lib/lru.glow).
+import "lru"
+
+show "--- size limit and order"
+let c = lru.Cache(3)
+c.set("a", 1)
+c.set("b", 2)
+c.set("c", 3)
+show c.get("a")
+c.set("d", 4)
+show c.has("b"), c.get("a"), c.get("c"), c.get("d"), c.len()
+c.set("c", 30)
+c.set("e", 5)
+show c.has("a"), c.get("c"), c.get("e"), c.len()
+show c.get("missing"), c.get("missing", "fallback")
+show c.stats()
+
+show "--- remove and clear"
+show c.remove("c"), c.remove("c"), c.len()
+c.clear()
+show c.len(), c.get("d")
+c.set(7, "seven")
+show c.get(7), c.get("7")
+
+show "--- expiry"
+let t = lru.Cache(10, 1)
+t.set("short", "s")
+t.set("long", "l", 60)
+t.set("none", false)
+show t.get("short"), t.get("long"), t.get("none"), t.has("none")
+os.sleep(1100)
+show t.get("short"), t.has("short"), t.get("long"), t.len()
+
+show "--- get_or_set"
+let made = 0
+let g = lru.Cache(2)
+func slow_square(n):
+    return lambda():
+        made = made + 1
+        return n * n
+    end
+end
+show g.get_or_set("4", slow_square(4)), g.get_or_set("4", slow_square(4)), made
+show g.get_or_set("5", slow_square(5)), g.get_or_set("6", slow_square(6)), g.get_or_set("4", slow_square(4)), made
+show g.stats()
+
+show "--- many keys"
+let big = lru.Cache(1000)
+every i from 1 to 5000:
+    big.set("k" + str(i), i)
+end
+show big.len(), big.has("k4000"), big.has("k4001"), big.get("k5000"), big.stats()["evictions"]
+
+show "--- errors"
+for each bad in [0, -1, 2.5, "10"]:
+    try:
+        lru.Cache(bad)
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end

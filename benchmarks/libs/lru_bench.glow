@@ -1,0 +1,18 @@
+# 1,000,000 lookups on a cache of 1,000 items, with keys drawn from 2,000,
+# so about half miss and are then set (which evicts the oldest). Prints
+# operations per second.
+import "lru"
+
+random_seed(5)
+let keys = []
+every i from 1 to 1000000:
+    keys.push("k" + str(random_int(1, 2000)))
+end
+let c = lru.Cache(1000)
+let start = os.time()
+for each k in keys:
+    when c.get(k) is none:
+        c.set(k, k)
+    end
+end
+show format("lru.Cache", "<14"), format(int(1000000 / (os.time() - start)), ",d"), "lookups/s", c.stats()

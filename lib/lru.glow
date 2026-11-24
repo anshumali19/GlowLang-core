@@ -1,0 +1,110 @@
+# lru.glow — a cache with a size limit and optional expiry, for keeping
+# results of slow work (database queries, HTTP calls) in memory.
+#
+#   import "lru"
+#   let c = lru.Cache(1000)           at most 1,000 items
+#   let c = lru.Cache(1000, 60)       and each one expires after 60 seconds
+#   c.set(key, value)                 c.set(key, value, seconds) for its own expiry
+#   c.get(key)                        the value, or none (c.get(key, default))
+#   c.has(key), c.remove(key), c.clear(), c.len()
+#   c.get_or_set(key, make)           the value, or make() stored and returned
+#   c.stats()                         {"hits", "misses", "evictions"}
+#
+# When the cache is full, setting a new key drops the key used least
+# recently. Keys are text, as in every dict (a number key is stored as its
+# text). An expired item counts as missing and is dropped when it is next
+# looked at or when it is the oldest; len() counts it until then. Threads
+# may share a cache: a race between them can at worst count a hit as a miss.
+
+blueprint Cache:
+    func init(max_items = 1000, ttl = none):
+        when type(max_items) != "int" or max_items < 1:
+            throw "lru.Cache: max_items must be a whole number of at least 1"
+        end
+        self.max_items = max_items
+        self.ttl = ttl
+        # key -> [value, expiry time or none]; the dict keeps keys in the
+        # order they were last used, oldest first.
+        self.items = {}
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+    end
+
+    # The entry for key, moved to the newest end, or none when missing or
+    # expired.
+    func _entry(key):
+        let items = self.items
+        let entry = items.get(key)
+        when entry is none:
+            return none
+        end
+        items.remove(key)
+        when entry[1] is not none and os.time() >= entry[1]:
+            return none
+        end
+        items[key] = entry
+        return entry
+    end
+
+    func get(key, fallback = none):
+        let entry = self._entry(key)
+        when entry is none:
+            self.misses = self.misses + 1
+            return fallback
+        end
+        self.hits = self.hits + 1
+        return entry[0]
+    end
+
+    func has(key):
+        return self._entry(key) is not none
+    end
+
+    func set(key, value, seconds = none):
+        let ttl = seconds ?? self.ttl
+        let expires = none
+        when ttl is not none:
+            expires = os.time() + ttl
+        end
+        let items = self.items
+        items.remove(key)
+        while len(items) >= self.max_items:
+            for each oldest in items:
+                items.remove(oldest)
+                stop
+            end
+            self.evictions = self.evictions + 1
+        end
+        items[key] = [value, expires]
+        return value
+    end
+
+    func get_or_set(key, make, seconds = none):
+        let entry = self._entry(key)
+        when entry is not none:
+            self.hits = self.hits + 1
+            return entry[0]
+        end
+        self.misses = self.misses + 1
+        return self.set(key, make(), seconds)
+    end
+
+    func remove(key):
+        return self.items.remove(key) is not none
+    end
+
+    func clear():
+        self.items = {}
+    end
+
+    func len():
+        return len(self.items)
+    end
+
+    func stats():
+        return {"hits": self.hits, "misses": self.misses, "evictions": self.evictions}
+    end
+end
+
+let lru = {"Cache": Cache}
