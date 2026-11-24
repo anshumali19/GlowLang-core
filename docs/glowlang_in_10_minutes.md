@@ -210,6 +210,14 @@ show most_common(tokenize("the cat and the hat and the bat"), 2)
 # [["the", 3], ["and", 2]]
 ```
 
+## 10. The tools
+
+`glowlang new myapi` writes a working web API with its tests
+(`--cli` for a command-line tool). `glowlang test` runs every
+`test_*.glow` file, `glowlang watch app.glow` reruns the program on each
+save, `glowlang fmt` re-indents your files and `glowlang package app.glow`
+makes one executable to copy anywhere.
+
 ## Where next
 
 - [language_reference.md](language_reference.md): the full language
