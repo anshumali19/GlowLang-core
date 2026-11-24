@@ -212,6 +212,7 @@ glowlang new myapi
 cd myapi
 glowlang run test_app.glow    # 16 checks
 glowlang run app.glow         # http://localhost:8000
+glowlang watch app.glow       # restarts it each time you save a .glow file
 ```
 
 ### A database

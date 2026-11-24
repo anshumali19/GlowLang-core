@@ -214,7 +214,7 @@ static int parse_args(const char *fn, int argc, Value *args, int started, Opts *
         if (o->timeout < 0) o->timeout = 0;
     } else if (GET_TYPE(v) != VAL_NONE) { proc_error("%s: timeout must be a number of seconds", fn); opts_free(o); return 0; }
 
-    if (!started && !parse_mode(dict_get(d, "stdout"), 0, &o->out_mode, fn, "stdout")) { opts_free(o); return 0; }
+    if (!parse_mode(dict_get(d, "stdout"), 0, &o->out_mode, fn, "stdout")) { opts_free(o); return 0; }
     if (!parse_mode(dict_get(d, "stderr"), !started, &o->err_mode, fn, "stderr")) { opts_free(o); return 0; }
     if (started && o->err_mode == IO_PIPE) {
         /* An unread stderr pipe fills up and blocks the program. */
@@ -994,6 +994,9 @@ static Proc procs[MAX_PROCS];
 static int procs_ready;
 
 static void procs_cleanup(void);
+#ifndef _WIN32
+static void procs_watch_signals(void);
+#endif
 
 static Proc *get_proc(int argc, Value *args, const char *fn) {
     if (argc < 1 || GET_TYPE(args[0]) != VAL_INT) { proc_error("%s: expected a process handle", fn); return NULL; }
@@ -1017,18 +1020,28 @@ static Value process_start(int argc, Value *args) {
     int idx = -1;
     for (int i = 0; i < MAX_PROCS; i++) if (!procs[i].used) { idx = i; break; }
     if (idx < 0) { opts_free(&o); return proc_error("process.start: too many open processes (close some with process.close)"); }
-    if (!procs_ready) { procs_ready = 1; atexit(procs_cleanup); }
+    if (!procs_ready) {
+        procs_ready = 1;
+        atexit(procs_cleanup);
+#ifndef _WIN32
+        procs_watch_signals();
+#endif
+    }
     Proc *p = &procs[idx];
     int gen = p->gen + 1;
     memset(p, 0, sizeof(*p));
     p->gen = gen & 0x7FFFFFF;
     char err[1200];
     if (!start_child(&o, 1, 1, &p->c, err, sizeof(err))) { opts_free(&o); return proc_error("process.start: %s", err); }
+    /* With stdout "inherit" or "null" there is nothing to read: read_line
+       and read_all give none at once. */
+    int piped = o.out_mode == IO_PIPE;
+    if (!piped) p->eof = 1;
     opts_free(&o);
 #ifdef _WIN32
     InitializeCriticalSection(&p->cs);
     InitializeConditionVariable(&p->cv);
-    p->reader = CreateThread(NULL, 0, start_reader, p, 0, NULL);
+    if (piped) p->reader = CreateThread(NULL, 0, start_reader, p, 0, NULL);
 #endif
     p->used = 1;
     return value_int(((int64_t)p->gen << 16) | (idx + 1));
@@ -1267,6 +1280,26 @@ static Value process_close(int argc, Value *args) {
 static void procs_cleanup(void) {
     for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used) kill_proc(&procs[i]);
 }
+
+#ifndef _WIN32
+/* Ctrl+C (SIGINT), SIGTERM or SIGHUP end GlowLang but not the programs that
+   process.start ran, which have process groups of their own: stop them too,
+   then end the way the signal would have. (On Windows the job object does
+   this.) Only signals nobody else handles are taken over. */
+static void procs_on_signal(int sig) {
+    for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used) kill_tree(procs[i].c.pid);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void procs_watch_signals(void) {
+    int sigs[] = { SIGINT, SIGTERM, SIGHUP };
+    for (int i = 0; i < 3; i++) {
+        struct sigaction old;
+        if (sigaction(sigs[i], NULL, &old) == 0 && old.sa_handler == SIG_DFL) signal(sigs[i], procs_on_signal);
+    }
+}
+#endif
 
 /* The current folder, as an absolute path. */
 static Value process_cwd(int argc, Value *args) {

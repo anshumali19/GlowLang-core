@@ -1,0 +1,37 @@
+# glowlang watch: runs a program, and again when a .glow file changes.
+# Also process.start with "stdout": "inherit".
+
+let dir = fs.join(os.temp_dir(), "glow_watch_test_" + str(os.pid()))
+fs.mkdirs(dir)
+let prog = fs.join(dir, "app.glow")
+
+func glow(args):
+    let r = process.run([process.executable] + args, {})
+    return [r["code"], r["stdout"].replace("\r\n", "\n").strip(), r["stderr"].replace("\r\n", "\n").strip()]
+end
+
+try:
+    show "--- usage"
+    let r = glow(["watch"])
+    show r[0], r[1].split("\n")[0]
+    show glow(["watch", fs.join(dir, "missing.glow")])[2].replace(dir, "DIR").replace("\\", "/")
+
+    show "--- restarts on save"
+    # The first version keeps running until the watcher restarts it.
+    fs.write(prog, "show \"first\", os.args\nos.sleep(120000)\n")
+    let w = process.start([process.executable, "watch", prog, "an argument"], {"stderr": "null"})
+    show process.read_line(w, 60)
+    fs.write(prog, "show \"second version\"\n")
+    show process.read_line(w, 60)
+    fs.write(prog, "show \"third version, longer\"\n")
+    show process.read_line(w, 60)
+    process.kill(w)
+    process.close(w)
+
+    show "--- process.start with stdout inherit"
+    let h = process.start([process.executable, "run", prog], {"stdout": "inherit"})
+    show process.wait(h, 60), process.read_line(h, 1)
+    process.close(h)
+finally:
+    fs.remove_all(dir)
+end

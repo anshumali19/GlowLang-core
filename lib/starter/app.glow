@@ -1,6 +1,7 @@
 # __NAME__: a web API with sign-up, login and notes, stored in SQLite.
 #
 #   glowlang run app.glow              (serves on http://localhost:8000)
+#   glowlang watch app.glow            (the same, restarted on every save)
 #   glowlang run test_app.glow         (runs the tests)
 #   glowlang package app.glow          (one file to copy to a server)
 #
