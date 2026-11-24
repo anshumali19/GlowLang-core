@@ -1,0 +1,57 @@
+# csv.parse / parse_dicts / stringify / read / write (lib/csv.glow):
+# quoted cells, line breaks inside quotes, \r\n lines and other separators.
+import "csv"
+
+show "--- parse"
+show csv.parse("a,b,c\n1,2,3\n")
+show csv.parse("name,note\n\"Lee, Ann\",\"said \"\"hi\"\"\"\nBo,\"two\nlines\"\n")
+show csv.parse("x,y\r\n1,2\r\n\"a\r\nb\",3\r\n")
+show csv.parse("\n\na,,\n,\n\n")
+show csv.parse("5\" pipe,\"\",end")
+show csv.parse("a;b;\"c;d\"", ";")
+show csv.parse("a\tb\tc", "\t")
+show csv.parse("é,ü\n\"ñ,ö\",x")
+show csv.parse(""), csv.parse("only")
+
+show "--- parse_dicts"
+show csv.parse_dicts("id,name,city\n1,Ana\n2,Bo,Pune,extra\n")
+show csv.parse_dicts("id\n"), csv.parse_dicts("")
+
+show "--- stringify"
+let rows = [["name", "note"], ["Lee, Ann", "said \"hi\""], ["Bo", "two\nlines"], [1, none, 2.5, true]]
+let text = csv.stringify(rows)
+show text
+show csv.parse(text)
+show csv.stringify([["a;b", "c"]], ";")
+show csv.stringify([])
+
+show "--- files"
+let path = "test_csv_quotes_tmp.csv"
+try:
+    csv.write(path, [["id", "text"], ["1", "a, b"], ["2", "x\"y"]])
+    show csv.read(path)
+    show csv.read_dicts(path)
+    let w = writer(path)
+    w.writerow(["k", "v"])
+    w.writerows([["one", "1,000"]])
+    w.save()
+    show reader(path).read(), reader(path).read_dict()
+    show reader("no_such_file.csv").read()
+    try:
+        csv.read("no_such_file.csv")
+    catch e:
+        show e
+    end
+finally:
+    fs.remove(path)
+end
+
+show "--- errors"
+for each bad in [["a,\"open", ","], ["a,b", ",,"], ["a,b", "\""], ["a,b", ""]]:
+    try:
+        csv.parse(bad[0], bad[1])
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end

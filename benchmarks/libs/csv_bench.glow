@@ -1,0 +1,21 @@
+# Parses and writes 100,000 rows of 5 cells, one row in ten with a quoted
+# cell holding a comma. Prints rows per second.
+import "csv"
+
+let rows = [["id", "name", "city", "price", "note"]]
+every i from 1 to 100000:
+    let note = "plain"
+    when i % 10 == 0:
+        note = "has, comma"
+    end
+    rows.push([str(i), "name" + str(i), "Pune", str(i * 7 % 1000), note])
+end
+
+let start = os.time()
+let text = csv.stringify(rows)
+show format("csv.stringify", "<16"), format(int(100001 / (os.time() - start)), ",d"), "rows/s"
+
+start = os.time()
+let back = csv.parse(text)
+show format("csv.parse", "<16"), format(int(100001 / (os.time() - start)), ",d"), "rows/s"
+assert(back == rows, "parse(stringify(rows)) differs")

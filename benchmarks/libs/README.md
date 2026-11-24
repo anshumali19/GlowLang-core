@@ -10,7 +10,8 @@ python3 benchmarks/libs/<name>_bench.py     # where there is one
 
 All results below were measured on an Intel i7-14650HX, Linux under WSL 2,
 with GlowLang built by `make` and Python 3.14.4. Each was run three times
-and the middle run is shown; GlowLang's runs agreed within 3%.
+and the middle run is shown. The runs of template and collections in
+GlowLang agreed within 3%; other sections say how far theirs differed.
 
 ## template
 
@@ -43,3 +44,16 @@ numbers varied by up to 25% between runs. Measured 2026-11-24.
 | heap push and pop | 4,162,027 | 4,903,224 |
 | deque push and pop | 24,047,426 | 46,670,012 |
 | counting words | 17,965,297 | 39,983,451 |
+
+## csv
+
+[csv_bench.glow](csv_bench.glow) writes 100,000 rows of 5 cells with
+`csv.stringify`, one row in ten with a cell that needs quotes, and reads
+them back with `csv.parse`. [csv_bench.py](csv_bench.py) does the same with
+Python's `csv` module, which is written in C. Runs differed by up to 15% in
+GlowLang and 13% in Python. Measured 2026-11-24.
+
+| Work | GlowLang (rows/s) | Python (rows/s) |
+|---|---|---|
+| writing | 1,129,701 | 3,978,096 |
+| reading | 1,267,392 | 2,962,192 |

@@ -1,5 +1,180 @@
-# csv.glow
-# Core CSV library for GlowLang
+# csv.glow — read and write CSV text (RFC 4180).
+#
+#   import "csv"
+#   csv.parse(text, sep = ",")          the rows, each a list of text cells
+#   csv.parse_dicts(text, sep = ",")    a dict per row, keyed by the first row
+#   csv.stringify(rows, sep = ",")      CSV text for a list of rows
+#   csv.read(path, sep = ","), csv.read_dicts(path, sep = ",")
+#   csv.write(path, rows, sep = ",")
+#
+# A cell in double quotes may hold the separator, line breaks and "" for one
+# quote. Lines may end in \n or \r\n; a line break inside quotes is read as
+# \n. Empty lines are skipped. parse_dicts gives "" for a cell missing at the
+# end of a short row and leaves out cells past the header's length.
+# stringify quotes the cells that need it, writes none as an empty cell and
+# ends every line with \n.
+#
+# The older reader(path) / writer(path) objects use the same parser.
+
+func _csv_sep(sep):
+    when type(sep) != "string" or len(sep) != 1 or sep == "\"" or sep == "\n" or sep == "\r":
+        throw "csv: the separator must be one character other than a quote or a line break"
+    end
+end
+
+# One record that has quotes, starting at lines[i]. Returns [cells, next i].
+func _csv_quoted(lines, i, sep):
+    let cells = []
+    let cell = []
+    let quoted = false
+    let was_quoted = false
+    let line = lines[i]
+    while true:
+        let n = len(line)
+        let j = 0
+        while j < n:
+            let c = line[j]
+            when quoted:
+                when c == "\"":
+                    when j + 1 < n and line[j + 1] == "\"":
+                        cell.push("\"")
+                        j = j + 1
+                    otherwise:
+                        quoted = false
+                    end
+                otherwise:
+                    cell.push(c)
+                end
+            eif c == "\"" and len(cell) == 0 and not was_quoted:
+                quoted = true
+                was_quoted = true
+            eif c == sep:
+                cells.push(cell.join(""))
+                cell = []
+                was_quoted = false
+            otherwise:
+                cell.push(c)
+            end
+            j = j + 1
+        end
+        when not quoted:
+            cells.push(cell.join(""))
+            return [cells, i + 1]
+        end
+        i = i + 1
+        when i >= len(lines):
+            throw "csv: a quoted cell is never closed"
+        end
+        cell.push("\n")
+        line = lines[i]
+        when line.ends_with("\r"):
+            line = line.slice(0, -1)
+        end
+    end
+end
+
+func csv_parse(text, sep = ","):
+    _csv_sep(sep)
+    let lines = text.split("\n")
+    let rows = []
+    let i = 0
+    let n = len(lines)
+    while i < n:
+        let line = lines[i]
+        when line.ends_with("\r"):
+            line = line.slice(0, -1)
+            lines[i] = line
+        end
+        when line == "":
+            i = i + 1
+        eif line.contains("\""):
+            let r = _csv_quoted(lines, i, sep)
+            rows.push(r[0])
+            i = r[1]
+        otherwise:
+            rows.push(line.split(sep))
+            i = i + 1
+        end
+    end
+    return rows
+end
+
+func csv_parse_dicts(text, sep = ","):
+    let rows = csv_parse(text, sep)
+    let out = []
+    when len(rows) == 0:
+        return out
+    end
+    let header = rows[0]
+    let width = len(header)
+    let r = 1
+    while r < len(rows):
+        let row = rows[r]
+        let d = {}
+        let j = 0
+        while j < width:
+            when j < len(row):
+                d[header[j]] = row[j]
+            otherwise:
+                d[header[j]] = ""
+            end
+            j = j + 1
+        end
+        out.push(d)
+        r = r + 1
+    end
+    return out
+end
+
+func _csv_cell(value, sep):
+    when value is none:
+        return ""
+    end
+    let text = str(value)
+    when text.contains(sep) or text.contains("\"") or text.contains("\n") or text.contains("\r"):
+        return "\"" + text.replace("\"", "\"\"") + "\""
+    end
+    return text
+end
+
+func csv_stringify(rows, sep = ","):
+    _csv_sep(sep)
+    let out = []
+    for each row in rows:
+        let cells = []
+        for each value in row:
+            cells.push(_csv_cell(value, sep))
+        end
+        out.push(cells.join(sep))
+        out.push("\n")
+    end
+    return out.join("")
+end
+
+func _csv_file(path):
+    let text = fs.read(path)
+    when text is none:
+        throw "csv: cannot read " + str(path)
+    end
+    return text
+end
+
+func csv_read(path, sep = ","):
+    return csv_parse(_csv_file(path), sep)
+end
+
+func csv_read_dicts(path, sep = ","):
+    return csv_parse_dicts(_csv_file(path), sep)
+end
+
+func csv_write(path, rows, sep = ","):
+    fs.write(path, csv_stringify(rows, sep))
+end
+
+let csv = {
+    "parse": csv_parse, "parse_dicts": csv_parse_dicts, "stringify": csv_stringify,
+    "read": csv_read, "read_dicts": csv_read_dicts, "write": csv_write
+}
 
 class CSVReader:
     func init(filepath):
@@ -11,67 +186,21 @@ class CSVReader:
         self.delimiter = delim
     end
 
+    # A missing file gives no rows, as it always has.
     func read():
         let content = fs.read(self.filepath)
-        if content == none:
+        when content is none:
             return []
         end
-        
-        let lines = content.split("\n")
-        let result = []
-        
-        let i = 0
-        while i < len(lines):
-            let line = lines[i]
-            if line != "":
-                let columns = line.split(self.delimiter)
-                append(result, columns)
-            end
-            i = i + 1
-        end
-        return result
+        return csv_parse(content, self.delimiter)
     end
 
     func read_dict():
         let content = fs.read(self.filepath)
-        if content == none:
+        when content is none:
             return []
         end
-        
-        let lines = content.split("\n")
-        if len(lines) == 0:
-            return []
-        end
-
-        let header_line = lines[0]
-        if header_line == "":
-            return []
-        end
-
-        let headers = header_line.split(self.delimiter)
-        let result = []
-        
-        let i = 1
-        while i < len(lines):
-            let line = lines[i]
-            if line != "":
-                let cols = line.split(self.delimiter)
-                let row_dict = {}
-                let j = 0
-                while j < len(headers):
-                    let key = headers[j]
-                    let val = ""
-                    if j < len(cols):
-                        val = cols[j]
-                    end
-                    row_dict[key] = val
-                    j = j + 1
-                end
-                append(result, row_dict)
-            end
-            i = i + 1
-        end
-        return result
+        return csv_parse_dicts(content, self.delimiter)
     end
 end
 
@@ -79,7 +208,7 @@ class CSVWriter:
     func init(filepath):
         self.filepath = filepath
         self.delimiter = ","
-        self.buffer = text_builder()
+        self.rows = []
     end
 
     func set_delimiter(delim):
@@ -87,28 +216,17 @@ class CSVWriter:
     end
 
     func writerow(row):
-        let i = 0
-        let last_idx = len(row) - 1
-        while i < len(row):
-            append(self.buffer, row[i])
-            if i < last_idx:
-                append(self.buffer, self.delimiter)
-            end
-            i = i + 1
-        end
-        append(self.buffer, "\n")
+        self.rows.push(row)
     end
 
     func writerows(rows):
-        let i = 0
-        while i < len(rows):
-            self.writerow(rows[i])
-            i = i + 1
+        for each row in rows:
+            self.rows.push(row)
         end
     end
 
     func save():
-        fs.write(self.filepath, build(self.buffer))
+        csv_write(self.filepath, self.rows, self.delimiter)
     end
 end
 
