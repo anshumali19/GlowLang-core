@@ -1,0 +1,256 @@
+# glowlang fmt [--check] [files or folders]: re-indents .glow files the
+# same way everywhere: 4 spaces per block, no spaces at line ends, at most
+# two blank lines in a row, one newline at the end.
+#
+# A line ending in ':' opens a block and `end` closes it; eif, otherwise,
+# else, catch and finally line up with their block's first line; case lines
+# sit one step inside their match. Inside brackets only a line with lambda
+# or func opens a block, and other lines continuing a bracket keep their
+# place relative to the line that opened it. Text inside multi-line strings
+# and comments' content are left alone. A file is only rewritten when the
+# result still passes `glowlang check`.
+#
+# --check changes nothing and exits with 1 when a file would change (for CI).
+import "re"
+
+let CONT = {"eif": true, "otherwise": true, "else": true, "catch": true, "finally": true}
+
+# What a line holds once scanned: its code without the comment, how the
+# bracket depth changes, and the string state at its end.
+blueprint LineScan:
+    action init(text, quote):
+        self.code = ""
+        self.delta = 0
+        self.quote = quote          # "" outside a string, else ", ', or """
+        let i = 0
+        let n = len(text)
+        let code_end = n
+        while i < n:
+            let c = text[i]
+            when self.quote == "\"\"\"":
+                when text[i:i + 3] == "\"\"\"":
+                    self.quote = ""
+                    i = i + 2
+                end
+            eif self.quote != "":
+                when c == "\\":
+                    i = i + 1
+                eif c == self.quote:
+                    self.quote = ""
+                end
+            eif text[i:i + 3] == "\"\"\"":
+                self.quote = "\"\"\""
+                i = i + 2
+            eif c == "\"" or c == "'":
+                self.quote = c
+            eif c == "#":
+                code_end = i
+                stop
+            eif c == "(" or c == "[" or c == "{":
+                self.delta = self.delta + 1
+            eif c == ")" or c == "]" or c == "}":
+                self.delta = self.delta - 1
+            end
+            i = i + 1
+        end
+        self.code = text[:code_end].trim()
+    end
+end
+
+func first_word(code):
+    let m = re.find("^[A-Za-z_][A-Za-z0-9_]*", code)
+    when m == none:
+        return ""
+    end
+    return m.text
+end
+
+func indent_of(line):
+    let n = 0
+    for each c in line:
+        when c == " ":
+            n = n + 1
+        eif c == "\t":
+            n = n + 4
+        otherwise:
+            stop
+        end
+    end
+    return n
+end
+
+# The formatted text of a file.
+func format_text(text):
+    let out = []
+    let blocks = []            # each [kind, bracket depth it was opened at]
+    let depth = 0
+    let quote = ""
+    let blank = 0
+    let stmt_orig = 0          # where the current statement started, before and after
+    let stmt_new = 0
+    for each raw in text.replace("\r\n", "\n").split("\n"):
+        when quote != "":
+            # Inside a multi-line string: the line stays exactly as it is.
+            out.push(raw)
+            let rest = LineScan(raw, quote)
+            depth = depth + rest.delta
+            quote = rest.quote
+            skip
+        end
+        let line = raw.trim_end()
+        let body = line.trim_start()
+        when body == "":
+            blank = blank + 1
+            when blank <= 2:
+                out.push("")
+            end
+            skip
+        end
+        blank = 0
+        let scan = LineScan(body, "")
+        let word = first_word(scan.code)
+        let base = 0
+        when len(blocks) > 0:
+            base = blocks[-1][1]
+        end
+        let level = len(blocks)
+        let new_indent = 0
+        when depth > base:
+            # Continues a bracket opened on an earlier line.
+            new_indent = stmt_new + indent_of(line) - stmt_orig
+            when new_indent < stmt_new:
+                new_indent = stmt_new
+            end
+        otherwise:
+            when word == "end" and len(blocks) > 0:
+                when blocks[-1][0] == "case" and len(blocks) > 1:
+                    blocks.pop()
+                end
+                blocks.pop()
+                level = len(blocks)
+            eif word == "case" and len(blocks) > 0 and blocks[-1][0] == "case":
+                blocks.pop()
+                level = len(blocks)
+            eif CONT.has(word) and level > 0:
+                level = level - 1
+            end
+            new_indent = 4 * level
+            stmt_orig = indent_of(line)
+            stmt_new = new_indent
+        end
+        out.push(" " * new_indent + body)
+        depth = depth + scan.delta
+        quote = scan.quote
+        # A line ending in ':' opens a block: at statement level, or inside
+        # brackets when it starts a lambda or func.
+        when scan.code.ends_with(":") and not CONT.has(word) and word != "end":
+            let opens_here = depth == base or depth <= 0
+            # (Inside brackets: `lambda(x):` or `func(x):`, never a dict key such as "func":)
+            let header = scan.code.ends_with("):") and (scan.code.contains("lambda") or scan.code.contains("func"))
+            when opens_here or header:
+                let kind = "block"
+                when word == "case":
+                    kind = "case"
+                end
+                blocks.push([kind, depth])
+            end
+        end
+    end
+    while len(out) > 0 and out[-1] == "":
+        out.pop()
+    end
+    return "\n".join(out) + "\n"
+end
+
+func glow_files(paths):
+    let found = []
+    for each p in paths:
+        when fs.is_file(p):
+            found.push(p)
+        eif fs.is_dir(p):
+            let pp = p.replace("\\", "/").trim_end("/")
+            for each f in fs.walk(p):
+                let fp = f.replace("\\", "/")
+                let rel = "/" + fp
+                when fp.starts_with(pp + "/"):
+                    rel = fp[len(pp):]
+                end
+                when f.ends_with(".glow") and not rel.contains("/."):
+                    found.push(f)
+                end
+            end
+        otherwise:
+            os.eprint("glowlang fmt: " + p + " is not a file or folder")
+            os.exit(1)
+        end
+    end
+    return sorted(found)
+end
+
+# Whether text passes `glowlang check`.
+func parses(text):
+    let tmp = fs.join(os.temp_dir(), "glowfmt_" + str(os.pid()) + ".glow")
+    fs.write(tmp, text)
+    let r = process.run([process.executable, "check", tmp], {})
+    fs.remove(tmp)
+    return r["code"] == 0
+end
+
+when len(os.args) > 0 and (os.args[0] == "-h" or os.args[0] == "--help"):
+    show "Usage: glowlang fmt [--check] [files or folders]"
+    show ""
+    show "Re-indents .glow files (the current folder when none are named)."
+    show "--check changes nothing and exits with 1 when a file would change."
+    os.exit(0)
+end
+let check_only = false
+let paths = []
+for each a in os.args:
+    when a == "--check":
+        check_only = true
+    otherwise:
+        paths.push(a)
+    end
+end
+when len(paths) == 0:
+    paths = ["."]
+end
+
+let changed = 0
+let refused = 0
+let files = glow_files(paths)
+for each file in files:
+    let text = fs.read(file)
+    when text == none:
+        skip
+    end
+    let done = format_text(text)
+    when done == text.replace("\r\n", "\n"):
+        skip
+    end
+    when check_only:
+        show "would change " + file
+        changed = changed + 1
+        skip
+    end
+    # Never write something that stopped parsing (or never parsed).
+    when not parses(done):
+        os.eprint("glowlang fmt: left " + file + " as it is: it does not pass 'glowlang check' when formatted")
+        refused = refused + 1
+        skip
+    end
+    fs.write(file, done)
+    show "formatted " + file
+    changed = changed + 1
+end
+when check_only:
+    show str(changed) + " of " + str(len(files)) + " files would change"
+    when changed > 0:
+        os.exit(1)
+    end
+otherwise:
+    show str(changed) + " of " + str(len(files)) + " files formatted"
+end
+when refused > 0:
+    os.exit(1)
+end

@@ -89,6 +89,15 @@ glowlang run hello.glow
 `glowlang` with no arguments opens the REPL. `glowlang check app.glow` finds syntax errors
 without running anything, and `gdu install <package>` adds a package to the project.
 
+| Command | What it does |
+|---|---|
+| `glowlang new myapi` | A working web API: sign-up, login, a database and tests |
+| `glowlang watch app.glow` | Runs it, and again each time you save a `.glow` file |
+| `glowlang test` | Runs the `test_` functions in every `test_*.glow` file ([guide](docs/testing_your_code.md)) |
+| `glowlang fmt` | Re-indents every `.glow` file the same way (`--check` for CI) |
+| `glowlang package app.glow` | One executable to copy anywhere; `--target linux-x64` and friends build for another system |
+| `glowlang profile app.glow` | Runs it, then lists the lines that ran most |
+
 ## 🏗️ The language at a glance
 
 ```glow

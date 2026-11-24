@@ -1303,6 +1303,7 @@ int glow_main(int argc, char **argv) {
         printf("  new <name>        Start a web API project (login, database, tests)\n");
         printf("  watch <file.glow> Run a program, and again each time a .glow file changes\n");
         printf("  test [paths]      Run the test_ functions in test_*.glow files\n");
+        printf("  fmt [--check] [paths] Re-indent .glow files the same way everywhere\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
         printf("  --version         Print the GlowLang version\n\n");
@@ -1321,6 +1322,7 @@ int glow_main(int argc, char **argv) {
     const char *lib_cmd = strcmp(subcommand, "new") == 0 ? "lib/new_project.glow"
                         : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow"
                         : strcmp(subcommand, "test") == 0 ? "lib/testrunner.glow"
+                        : strcmp(subcommand, "fmt") == 0 ? "lib/fmt.glow"
                         : for_target ? "lib/package_target.glow" : NULL;
     if (lib_cmd) {
         const char *found = NULL;
