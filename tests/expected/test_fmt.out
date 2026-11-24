@@ -1,0 +1,48 @@
+--- --check on a messy file
+1 would change app.glow
+1 of 1 files would change
+true
+--- fmt
+0 formatted app.glow
+1 of 1 files formatted
+func f(x):
+    when x > 1:
+        show x
+    eif x == 0:
+        show "zero"
+    otherwise:
+        show "neg"
+    end
+end
+
+
+let d = {
+        "a": 1,
+        "b": [1,
+              2]
+}
+match d["a"]:
+    case 1:
+        show "one"
+    otherwise:
+        show "other"
+end
+let s = """line one
+   keep   this
+"""
+router.get("/x", lambda(req):
+    return "hi"  # comment: ok
+end)
+try:
+    f(1)
+catch e:
+    show e
+finally:
+    show "done"
+end
+
+--- again: nothing changes
+0 0 of 1 files would change
+--- a file that does not parse is left alone
+1 glowlang fmt: left bad.glow as it is: it does not pass 'glowlang check' when formatted
+true

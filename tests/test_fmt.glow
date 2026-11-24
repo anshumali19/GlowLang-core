@@ -30,10 +30,10 @@ try:
 
     show "--- a file that does not parse is left alone"
     let bad = fs.join(dir, "bad.glow")
-    fs.write(bad, "func f(:\n  show 1\n")
+    fs.write(bad, "when true:\nshow 1\nlet = 2\nend\n")
     r = glow(["fmt", bad])
     show r[0], r[2]
-    show fs.read(bad) == "func f(:\n  show 1\n"
+    show fs.read(bad) == "when true:\nshow 1\nlet = 2\nend\n"
 finally:
     fs.remove_all(dir)
 end
