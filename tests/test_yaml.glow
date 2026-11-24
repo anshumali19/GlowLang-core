@@ -52,7 +52,8 @@ finally:
 end
 
 show "--- errors"
-for each bad in ["a: 1\na: 2", "x: -", "x: - a", "a: 1\n  b: 2", "- a\n  - b", "a: [1, 2", "a: {x: 1", "a: \"open", "a: &anchor 1", "a: *alias", "a: !!str 1", "? key", "a:\n\tb: 1", "a: 1\n---\nb: 2", "a: \"x\" y", "a: [1] 2", "a: \"\\q\"", "a: |x\n  b", "just: [1,\n2"]:
+for each bad in ["a: 1\na: 2", "x: -", "x: - a", "a: 1\n  b: 2", "- a\n  - b", "a: [1, 2", "a: {x: 1", "a: \"open", "a: & 1", "a: *alias", "a: !!str 1", "a: [&x 1]", "b: &x c: 2", "<<: 5", "a:
+  <<: [1]", "? key", "a:\n\tb: 1", "a: 1\n---\nb: 2", "a: \"x\" y", "a: [1] 2", "a: \"\\q\"", "a: |x\n  b", "just: [1,\n2"]:
     try:
         yaml.parse(bad)
         show "allowed", json.stringify(bad)
@@ -60,6 +61,42 @@ for each bad in ["a: 1\na: 2", "x: -", "x: - a", "a: 1\n  b: 2", "- a\n  - b", "
         show e
     end
 end
+
+show "--- anchors, aliases and merge keys"
+let shared = yaml.parse("defaults: &defaults
+  adapter: postgres
+  pool: 5
+development:
+  <<: *defaults
+  database: dev
+test:
+  database: test
+  <<: *defaults
+  pool: 2
+ports: &ports [80, 443]
+web:
+  ports: *ports
+  name: &n web-1
+  again: *n
+list:
+  - &first
+    a: 1
+  - &second
+    b: 2
+  - *first
+  - &s plain
+  - *s
+flow: [*n, *ports, {x: *n}]
+multi:
+  <<: [*first, *second]
+  a: 9
+")
+show shared["development"], shared["test"]
+show shared["web"], shared["flow"]
+show shared["list"], shared["multi"]
+# An alias gives the same value, not a copy.
+shared["list"][0]["a"] = 5
+show shared["list"][2]["a"]
 
 show "--- writing"
 let data = {"name": "shop", "version": "1.2.3", "port": 8080, "whole": 2.0, "on": true, "nothing": none, "yes": "yes", "num_text": "123", "true_text": "true", "url": "https://x.example/a?b=c", "colon": "a: b", "ends": "a:", "hash": "a #b", "csharp": "C#", "dash": "-x", "empty": "", "spaced": " pad ", "multi": "line1\nline2", "quote": "say \"hi\"", "café": "naïve", "del": chr(127), "list": [1, "two", none, [], {}], "nested": [[1, 2], [3]], "people": [{"name": "ana", "tags": ["a", "b"]}, {"name": "bo", "address": {"city": "Pune"}}], "deep": {"a": {"b": {"c": [1]}}}, "inf": math.inf, "ninf": -math.inf, "big": 1e20, "": "empty key", "key: odd": 1}
