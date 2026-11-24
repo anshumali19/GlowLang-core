@@ -1,0 +1,35 @@
+# http.url_decode, and GlowWeb decoding query strings and :name route parts.
+use "lib/web.glow"
+
+show "--- http.url_decode"
+show http.url_decode("hello%20world%21")
+show http.url_decode("caf%C3%A9 %E2%9C%93")
+show http.url_decode("a+b"), http.url_decode("a+b", true)
+show http.url_decode("100%"), http.url_decode("%zz%4"), http.url_decode("%41%4a%6B")
+# Not UTF-8 once decoded, or a zero byte: the text comes back unchanged.
+show http.url_decode("%FF%FE"), http.url_decode("a%00b")
+show http.url_decode("")
+try:
+    http.url_decode(5)
+catch e:
+    show e
+end
+
+show "--- query strings"
+let req = Request("GET /search?q=hello+world%21&tag=caf%C3%A9&a%26b=1%3D2&empty= HTTP/1.1\r\nHost: x\r\n\r\n")
+show req.path
+show req.query_params["q"], req.query_params["tag"], req.query_params["a&b"], req.query_params["empty"] == ""
+show req.query_string
+
+show "--- :name route parts"
+func handler(req):
+    return none
+end
+let r = Router()
+r.get("/files/:name", handler)
+let p = {}
+show r.find_route("GET", "/files/my%20notes%2Etxt", p).path, p["name"]
+p = {}
+# A + in a path is a plus, not a space; %2F is a slash inside one part.
+r.find_route("GET", "/files/a+b%2Fc", p)
+show p["name"]

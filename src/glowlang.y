@@ -959,7 +959,9 @@ static void pack_scan(PackFile **files, int *count, int idx) {
     }
 }
 
-static int glow_package(const char *src_file, const char *out_file) {
+/* runtime: the GlowLang binary to put the program on (NULL: this one);
+   exe_suffix: whether the default output name ends in .exe. */
+static int glow_package(const char *src_file, const char *out_file, const char *runtime, int exe_suffix) {
     PackFile *files = malloc(sizeof(PackFile));
     long src_size = 0;
     char *src = pack_read(src_file, &src_size);
@@ -978,22 +980,26 @@ static int glow_package(const char *src_file, const char *out_file) {
         snprintf(out_buf, sizeof(out_buf), "%s", base);
         size_t bl = strlen(out_buf);
         if (bl > 5 && strcmp(out_buf + bl - 5, ".glow") == 0) out_buf[bl - 5] = '\0';
-#ifdef _WIN32
-        strncat(out_buf, ".exe", sizeof(out_buf) - strlen(out_buf) - 1);
-#endif
+        if (exe_suffix) strncat(out_buf, ".exe", sizeof(out_buf) - strlen(out_buf) - 1);
         out_file = out_buf;
     }
 
     char self_path[1024];
-    int self_len = get_self_exe_path(self_path, sizeof(self_path) - 1);
-    FILE *fself = self_len == -1 ? NULL : (self_path[self_len] = '\0', fopen(self_path, "rb"));
+    FILE *fself = NULL;
+    if (runtime) {
+        fself = fopen(runtime, "rb");
+        if (!fself) { fprintf(stderr, "Error: Could not open the runtime '%s'\n", runtime); return 1; }
+    } else {
+        int self_len = get_self_exe_path(self_path, sizeof(self_path) - 1);
+        fself = self_len == -1 ? NULL : (self_path[self_len] = '\0', fopen(self_path, "rb"));
+    }
     FILE *fout = fself ? fopen(out_file, "wb") : NULL;
     if (!fout) {
         fprintf(stderr, "Error: Could not write '%s'\n", out_file);
         if (fself) fclose(fself);
         return 1;
     }
-    /* This executable may itself be a package: copy only the runtime. */
+    /* The runtime may itself be a package: copy only the runtime part. */
     fseek(fself, 0, SEEK_END);
     long runtime_size = ftell(fself);
     if (runtime_size >= 20) {
@@ -1165,14 +1171,19 @@ int glow_main(int argc, char **argv) {
         printf("  --version         Print the GlowLang version\n\n");
         printf("Options:\n");
         printf("  -o <output>       Specify output file for 'package' subcommand\n");
+        printf("  --target <os-cpu> 'package' for linux-x64, macos-arm64, macos-x64 or windows-x64\n");
+        printf("  --runtime <file>  'package' onto this GlowLang binary instead of this one\n");
         return 0;
     }
 
     /* Commands written in GlowLang: `glowlang new <name>` runs
        lib/new_project.glow and `glowlang watch <file>` lib/watch.glow, as
        `glowlang run <that file> <args>`. */
+    int for_target = 0;   /* glowlang package ... --target T: lib/package_target.glow */
+    for (int i = 2; strcmp(subcommand, "package") == 0 && i < argc; i++) if (strcmp(argv[i], "--target") == 0) for_target = 1;
     const char *lib_cmd = strcmp(subcommand, "new") == 0 ? "lib/new_project.glow"
-                        : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow" : NULL;
+                        : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow"
+                        : for_target ? "lib/package_target.glow" : NULL;
     if (lib_cmd) {
         const char *found = NULL;
         FILE *nf = glow_find_module(lib_cmd, "", &found);
@@ -1186,9 +1197,20 @@ int glow_main(int argc, char **argv) {
     }
 
     if (strcmp(subcommand, "package") == 0) {
-        if (argc < 3) { fprintf(stderr, "Usage: glowlang package <file.glow> [-o output]\n"); return 1; }
-        const char *out_file = argc > 4 && strcmp(argv[3], "-o") == 0 ? argv[4] : NULL;
-        return glow_package(argv[2], out_file);
+        const char *usage = "Usage: glowlang package <file.glow> [-o output] [--target linux-x64|macos-arm64|macos-x64|windows-x64] [--runtime glowlang-binary]\n";
+        if (argc < 3) { fprintf(stderr, "%s", usage); return 1; }
+        const char *out_file = NULL, *runtime = NULL;
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_file = argv[++i];
+            else if (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc) runtime = argv[++i];
+            else { fprintf(stderr, "glowlang package: unexpected '%s'\n%s", argv[i], usage); return 1; }
+        }
+#ifdef _WIN32
+        int exe_suffix = 1;
+#else
+        int exe_suffix = 0;
+#endif
+        return glow_package(argv[2], out_file, runtime, runtime ? 0 : exe_suffix);
     }
 
     if (strcmp(subcommand, "repl") == 0) {

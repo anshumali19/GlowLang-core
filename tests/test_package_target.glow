@@ -1,0 +1,32 @@
+# glowlang package --runtime and --target: argument checks, and a package
+# made on an explicitly given runtime. (--target downloads a release, so
+# only its checks run here.)
+
+let dir = fs.join(os.temp_dir(), "glow_pkg_target_test_" + str(os.pid()))
+fs.mkdirs(dir)
+
+func glow(args):
+    let r = process.run([process.executable] + args, {})
+    return [r["code"], r["stdout"].replace("\r\n", "\n").strip(), r["stderr"].replace("\r\n", "\n").strip()]
+end
+
+try:
+    show "--- --runtime"
+    let exe = fs.join(dir, "tool")
+    when os.platform == "windows":
+        exe = exe + ".exe"
+    end
+    let made = glow(["package", "tests/modules/package_tool.glow", "--runtime", process.executable, "-o", exe])
+    show made[0], made[1].contains("(4 files)")
+    let ran = process.run([exe, "one", "two words"], {"cwd": dir})
+    show ran["code"], ran["stdout"].replace("\r\n", "\n").strip()
+    show glow(["package", "tests/modules/package_tool.glow", "--runtime", fs.join(dir, "missing")])[2].replace(dir, "DIR").replace("\\", "/")
+    show glow(["package", "tests/modules/package_tool.glow", "--bogus"])[2].split("\n")[0]
+
+    show "--- --target checks"
+    show glow(["package", "tests/modules/package_tool.glow", "--target", "plan9"])[2]
+    show glow(["package", "--target", "linux-x64"])[2].split("\n")[0]
+    show glow(["package", "a.glow", "b.glow", "--target", "linux-x64"])[2].split("\n")[0]
+finally:
+    fs.remove_all(dir)
+end

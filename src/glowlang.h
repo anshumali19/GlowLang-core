@@ -1013,7 +1013,8 @@ static inline int glow_stack_low(void) {
 
 /* Global interpreter lock. Exactly one thread runs GlowLang code at a time;
    blocking natives release it (glow_gil_release / glow_gil_acquire) and the
-   interpreter hands it over at loop back-edges when another thread waits. */
+   interpreter hands it over at calls and loop back-edges once another thread
+   has waited a switch interval (glow_gil_waiters, set by that thread). */
 void glow_gil_acquire(void);
 void glow_gil_release(void);
 void glow_gil_yield(void);
@@ -1118,6 +1119,11 @@ Value native_tensor_shape(int argc, Value *args);
 Value glow_get_property(Value o, const char *n, Instruction *pc, int *missing);
 Value glow_property_error(Value o, const char *n);
 int global_slot_declared(int slot);
+/* For "did you mean ...?" in error messages: the candidate closest to word,
+   or NULL when none is close enough. */
+const char *glow_closest(const char *word, const char *const *cands, int n);
+/* The built-in method (or, for a dict, key) of v nearest to name, or NULL. */
+const char *glow_suggest_method(Value v, const char *name);
 void glow_profile_begin(void);
 void glow_profile_report(void);
 Value native_len(int argc, Value *args);

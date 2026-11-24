@@ -155,12 +155,18 @@ Reading a name that nothing declares is an error, so a typo is reported where
 it happens instead of running on as `none`:
 ```glow
 let total = 10
-show totl            # error: name 'totl' is not defined
+show totl            # error: name 'totl' is not defined; did you mean 'total'?
 ```
 `none` and `pass` (a statement that does nothing) are predefined. A variable
 that holds `none` is fine; only names that were never declared are errors. A
 global declared further down the file can be used by a function that runs
 after that declaration.
+
+Error messages suggest the fix where they can: the defined name or function
+closest to a misspelled one, the method closest to a misspelled one
+(`"hi".uppr()`, `fs.exist(...)`), the block that has no `end` (found from how
+the lines are indented), and GlowLang's word when another language's slipped
+in (`def`, `var`, `When`, braces).
 
 ---
 
@@ -1499,6 +1505,12 @@ and host name against the system's trusted roots; `"verify": false` turns
 that off for test servers. Chunked responses are decoded. A failure raises an
 error that says what went wrong (cannot resolve host, timed out, certificate
 not trusted, ...). `lib/http_client.glow` builds on this.
+
+`url_decode(text, plus)` turns `%XX` back into the bytes they stand for
+(`"caf%C3%A9"` is `"café"`); with `plus` true, `+` becomes a space as in
+query strings. A `%` without two hex digits stays as it is, and text that
+would not be valid UTF-8 comes back unchanged. GlowWeb decodes query
+parameters and `:name` route parts with it.
 
 ```glow
 let r = http.request("GET", "https://example.com/", {"timeout": 10})

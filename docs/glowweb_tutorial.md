@@ -36,7 +36,9 @@ app.start()
 
 ### Path parameters
 A part of a route path that starts with `:` matches any one part of the
-request path, and what it matched is in `req.params`. Routes without such
+request path, and what it matched is in `req.params`, decoded
+(`/files/my%20notes` gives `"my notes"`). Query parameters, in
+`req.query_params`, are decoded too, with `+` as a space. Routes without such
 parts are tried first, so `/notes/latest` wins over `/notes/:id`.
 
 ```

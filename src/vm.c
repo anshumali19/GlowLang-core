@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdbool.h>
 #ifdef _WIN32
 #include "win_pthread.h"
@@ -188,15 +189,26 @@ THREAD_LOCAL CallFrame call_stack[65536];
 THREAD_LOCAL int call_stack_ptr = 0;
 
 /* ---- Global interpreter lock -------------------------------------------
-   A FIFO ticket lock: each acquirer takes a ticket and waits until it is
-   served, so a thread that yields at a loop back-edge cannot immediately
-   re-grab the lock ahead of a waiter. Before releasing, a thread records its
-   stack pointer and callee-saved registers so the GC (which only ever runs on
-   the thread holding the lock) can scan the parked thread's C stack. */
+   A lock any thread may take while it is free (so a thread whose blocking
+   call just returned goes on at once, instead of queueing behind threads
+   that are still asleep), plus a switch interval for fairness: a thread
+   that has waited GIL_SWITCH_MS sets glow_gil_waiters, and the holder hands
+   the lock over at its next poll (a call or a loop back-edge: GLOW_GIL_POLL
+   and the JIT's gil poll) and does not take it back until another thread
+   has had it. This is CPython's design since 3.2. The FIFO ticket lock used
+   before handed over at every poll whenever anyone waited and woke every
+   waiter each time: with 8 busy web connections a server ran 4x slower
+   than with one.
+   Before releasing, a thread records its stack pointer and callee-saved
+   registers so the GC (which only ever runs on the thread holding the lock)
+   can scan the parked thread's C stack. */
 static pthread_mutex_t gil_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t gil_cond = PTHREAD_COND_INITIALIZER;
-static unsigned long gil_next_ticket = 0;
-static unsigned long gil_now_serving = 0;
+static pthread_cond_t gil_cond = PTHREAD_COND_INITIALIZER;          /* the lock became free */
+static pthread_cond_t gil_switch_cond = PTHREAD_COND_INITIALIZER;   /* someone took the lock */
+static int gil_locked = 0;
+static int gil_waiting = 0;
+static unsigned long gil_switches = 0;   /* how many times the lock was taken */
+#define GIL_SWITCH_MS 1
 volatile int glow_gil_waiters = 0;
 THREAD_LOCAL GlowThreadCtx glow_thread_ctx;
 
@@ -243,12 +255,32 @@ void glow_thread_ctx_init(void) {
     glow_thread_ctx.stack_limit = lo + margin;
 }
 
+/* Wait on c (with m held) for at most ms; true when the time ran out. */
+static int cond_timed_wait(pthread_cond_t *c, pthread_mutex_t *m, long ms) {
+#ifdef _WIN32
+    return !SleepConditionVariableSRW(c, m, (DWORD)ms, 0);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += ms / 1000;
+    ts.tv_nsec += (ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    return pthread_cond_timedwait(c, m, &ts) != 0;
+#endif
+}
+#define gil_timed_wait(c, ms) cond_timed_wait((c), &gil_mutex, (ms))
+
 void glow_gil_acquire(void) {
     pthread_mutex_lock(&gil_mutex);
-    unsigned long ticket = gil_next_ticket++;
-    glow_gil_waiters++;
-    while (ticket != gil_now_serving) pthread_cond_wait(&gil_cond, &gil_mutex);
-    glow_gil_waiters--;
+    gil_waiting++;
+    while (gil_locked)
+        if (gil_timed_wait(&gil_cond, GIL_SWITCH_MS) && gil_locked) glow_gil_waiters = 1;
+    gil_waiting--;
+    gil_locked = 1;
+    gil_switches++;
+    /* The new holder gets a full interval before anyone asks again. */
+    glow_gil_waiters = 0;
+    pthread_cond_broadcast(&gil_switch_cond);
     pthread_mutex_unlock(&gil_mutex);
 }
 
@@ -262,13 +294,21 @@ void glow_gil_release(void) {
     setjmp(glow_thread_ctx.regs);
     glow_thread_ctx.stack_lo = here;
     pthread_mutex_lock(&gil_mutex);
-    gil_now_serving++;
-    pthread_cond_broadcast(&gil_cond);
+    gil_locked = 0;
+    pthread_cond_signal(&gil_cond);
     pthread_mutex_unlock(&gil_mutex);
 }
 
+/* At a poll, after another thread asked for the lock: hand it over, and
+   take it back only once another thread has had it. */
 void glow_gil_yield(void) {
+    pthread_mutex_lock(&gil_mutex);
+    unsigned long seen = gil_switches;
+    pthread_mutex_unlock(&gil_mutex);
     glow_gil_release();
+    pthread_mutex_lock(&gil_mutex);
+    while (gil_switches == seen && gil_waiting > 0) gil_timed_wait(&gil_switch_cond, GIL_SWITCH_MS);
+    pthread_mutex_unlock(&gil_mutex);
     glow_gil_acquire();
 }
 
@@ -1052,12 +1092,72 @@ static Bytecode *spawn_target(Value callee, const char *name, int *params, const
     return NULL;
 }
 
+/* Threads whose spawned function has returned wait here for the next
+   spawn, which then reuses the OS thread and its VM stack: making both
+   cost about 0.5 ms (most of a small web request, as GlowWeb spawns one per
+   connection), handing a task to a waiting thread a few microseconds. A
+   thread that has waited SPAWN_IDLE_MS with nothing to do ends. */
+#define SPAWN_IDLE_MS 10000
+static pthread_mutex_t spawn_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t spawn_pool_cond = PTHREAD_COND_INITIALIZER;
+static ThreadData *spawn_queue[MAX_PENDING_SPAWNS];
+static int spawn_queue_len = 0;
+static int spawn_idle = 0;
+
+/* Gives td to a waiting thread; false when none is free. */
+static int spawn_reuse(ThreadData *td) {
+    pthread_mutex_lock(&spawn_pool_mutex);
+    int ok = spawn_idle > spawn_queue_len && spawn_queue_len < MAX_PENDING_SPAWNS;
+    if (ok) {
+        spawn_queue[spawn_queue_len++] = td;
+        pthread_cond_signal(&spawn_pool_cond);
+    }
+    pthread_mutex_unlock(&spawn_pool_mutex);
+    return ok;
+}
+
+/* Called without the GIL: the next task, or NULL after SPAWN_IDLE_MS. */
+static ThreadData *spawn_next_task(void) {
+    pthread_mutex_lock(&spawn_pool_mutex);
+    spawn_idle++;
+    while (spawn_queue_len == 0)
+        if (cond_timed_wait(&spawn_pool_cond, &spawn_pool_mutex, SPAWN_IDLE_MS) && spawn_queue_len == 0) break;
+    ThreadData *td = NULL;
+    if (spawn_queue_len > 0) {
+        td = spawn_queue[0];
+        memmove(spawn_queue, spawn_queue + 1, sizeof(spawn_queue[0]) * (size_t)--spawn_queue_len);
+    }
+    spawn_idle--;
+    pthread_mutex_unlock(&spawn_pool_mutex);
+    return td;
+}
+
+static void run_spawned(ThreadData *td);
+
 static void* thread_wrapper(void *arg) {
     ThreadData *td = (ThreadData*)arg;
     /* All VM and heap state is shared, so a spawned thread runs only while it
        holds the GIL, exactly like the main thread. */
     glow_gil_acquire();
     vm_stack_init();
+    while (td) {
+        run_spawned(td);
+        /* Nothing the task left on the VM stack may keep objects alive (the
+           GC scans 65536 slots above the top) while the thread waits. */
+        int used = vm_stack_top + 65536 < vm_stack_size ? vm_stack_top + 65536 : vm_stack_size;
+        memset(vm_stack, 0, sizeof(Value) * (size_t)used);
+        vm_stack_top = 0;
+        sp = 0;
+        glow_gil_release();
+        td = spawn_next_task();
+        glow_gil_acquire();
+    }
+    vm_stack_cleanup();
+    glow_gil_release();
+    return NULL;
+}
+
+static void run_spawned(ThreadData *td) {
     // Push arguments onto the new thread's vm_stack
     if (GET_TYPE(td->callee) == VAL_OBJECT && (td->callee & MASK_PAYLOAD) && GET_OBJ_TYPE(td->callee) == OBJ_BOUND_METHOD) {
         BoundMethod *bm = AS_BOUND_METHOD(td->callee);
@@ -1128,13 +1228,10 @@ static void* thread_wrapper(void *arg) {
 
     int counted = !td->daemon;
     free(td->args); free(td);
-    vm_stack_cleanup();
     pthread_mutex_lock(&threads_done_mutex);
     threads_alive -= counted;
     pthread_cond_broadcast(&threads_done_cond);
     pthread_mutex_unlock(&threads_done_mutex);
-    glow_gil_release();
-    return NULL;
 }
 
 
@@ -1470,6 +1567,64 @@ static FILE *open_module_file(const char *p) {
     struct stat st;
     if (stat(p, &st) != 0 || (st.st_mode & S_IFMT) == S_IFDIR) return NULL;
     return fopen(p, "r");
+}
+
+/* Edit distance between a and b (insert, delete, change, or swap two
+   neighbouring letters; letters compared ignoring case), or limit + 1
+   when it is more than limit. */
+static int edit_distance(const char *a, const char *b, int limit) {
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    if (la > 63 || lb > 63 || abs(la - lb) > limit) return limit + 1;
+    int d[64][64];
+    for (int i = 0; i <= la; i++) d[i][0] = i;
+    for (int j = 0; j <= lb; j++) d[0][j] = j;
+    for (int i = 1; i <= la; i++) {
+        int row_min = limit + 1;
+        for (int j = 1; j <= lb; j++) {
+            int cost = tolower((unsigned char)a[i - 1]) != tolower((unsigned char)b[j - 1]);
+            int v = d[i - 1][j] + 1;
+            if (d[i][j - 1] + 1 < v) v = d[i][j - 1] + 1;
+            if (d[i - 1][j - 1] + cost < v) v = d[i - 1][j - 1] + cost;
+            if (i > 1 && j > 1 && tolower((unsigned char)a[i - 1]) == tolower((unsigned char)b[j - 2]) &&
+                tolower((unsigned char)a[i - 2]) == tolower((unsigned char)b[j - 1]) && d[i - 2][j - 2] + 1 < v)
+                v = d[i - 2][j - 2] + 1;
+            d[i][j] = v;
+            if (v < row_min) row_min = v;
+        }
+        if (row_min > limit) return limit + 1;
+    }
+    return d[la][lb];
+}
+
+/* One edit away for names of up to 4 letters, two for longer ones. */
+const char *glow_closest(const char *word, const char *const *cands, int n) {
+    int wl = (int)strlen(word);
+    if (wl < 2) return NULL;
+    int limit = wl <= 4 ? 1 : 2, best = limit + 1;
+    const char *pick = NULL;
+    for (int i = 0; i < n; i++) {
+        /* Names starting with _ are private to a library: suggested only for
+           a word that starts with _ too. */
+        if (!cands[i] || strcmp(cands[i], word) == 0 || (cands[i][0] == '_' && word[0] != '_')) continue;
+        int dist = edit_distance(word, cands[i], limit);
+        if (dist < best) { best = dist; pick = cands[i]; }
+    }
+    return pick;
+}
+
+/* The defined global or function nearest to an undefined name. */
+static const char *glow_suggest_name(const char *word) {
+    int cap = global_table.count + func_table_size + 1, n = 0;
+    const char **cands = malloc(sizeof(char *) * (size_t)cap);
+    if (!cands) return NULL;
+    for (int i = 0; i < global_table.count; i++)
+        if (global_table.names[i] && (global_slot_declared(i) || GET_TYPE(global_table.values[i]) != VAL_NONE))
+            cands[n++] = global_table.names[i];
+    for (int i = 0; i < func_table_size; i++)
+        if (func_table && func_table[i].used && func_table[i].name) cands[n++] = func_table[i].name;
+    const char *pick = glow_closest(word, cands, n);
+    free(cands);
+    return pick;
 }
 
 static FILE *glow_open_module_path(const char *path, const char *importer, const char **found) {
@@ -2584,8 +2739,10 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                     /* Nothing anywhere declares this name (a typo, or a
                        variable that does not exist); it used to read as
                        none. A declared global that holds none is fine. */
-                    char msg[200];
-                    snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
+                    char msg[320];
+                    const char *suggestion = var_name ? glow_suggest_name(var_name) : NULL;
+                    if (suggestion) snprintf(msg, sizeof(msg), "name '%.120s' is not defined; did you mean '%.120s'?", var_name, suggestion);
+                    else snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
                     pending_exception = value_string_copy(msg);
                     has_exception = 1;
                     goto l_OP_THROW;
@@ -3579,8 +3736,10 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                 goto l_OP_THROW;
             }
         } else {
-            char msg[256];
+            char msg[360];
+            const char *suggestion = GET_TYPE(obj) == VAL_NONE ? NULL : glow_suggest_method(obj, mname);
             if (GET_TYPE(obj) == VAL_NONE) snprintf(msg, sizeof msg, "cannot call method '%.100s' of none", mname ? mname : "?");
+            else if (suggestion) snprintf(msg, sizeof msg, "%s has no method '%.100s'; did you mean '%.100s'?", glow_type_name(obj), mname, suggestion);
             else snprintf(msg, sizeof msg, "%s has no method '%.100s'", glow_type_name(obj), mname ? mname : "?");
             pending_exception = value_string_copy(msg);
             has_exception = 1;
@@ -3697,7 +3856,7 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             has_exception = 1;
             goto l_OP_THROW;
         }
-        if (pending_spawn_count >= MAX_PENDING_SPAWNS || active_stack_count >= 120) {
+        if (pending_spawn_count >= MAX_PENDING_SPAWNS) {
             pending_exception = value_string_copy("Runtime Error: too many threads");
             has_exception = 1;
             goto l_OP_THROW;
@@ -3719,14 +3878,15 @@ Value glow_slice(Value obj, Value startV, Value endV) {
         pthread_mutex_lock(&threads_done_mutex);
         threads_alive += counted;
         pthread_mutex_unlock(&threads_done_mutex);
+        if (spawn_reuse(td)) { pc++; goto l_DISPATCH; }
         pthread_t t;
-        if (pthread_create(&t, NULL, thread_wrapper, td) != 0) {
+        if (active_stack_count >= 120 || pthread_create(&t, NULL, thread_wrapper, td) != 0) {
             pending_spawn_remove(td);
             free(td->args); free(td);
             pthread_mutex_lock(&threads_done_mutex);
             threads_alive -= counted;
             pthread_mutex_unlock(&threads_done_mutex);
-            pending_exception = value_string_copy("Runtime Error: could not start thread");
+            pending_exception = value_string_copy(active_stack_count >= 120 ? "Runtime Error: too many threads" : "Runtime Error: could not start thread");
             has_exception = 1;
             goto l_OP_THROW;
         }
