@@ -28,6 +28,9 @@ end
 show bad, semver.compare("1.0.0+a", "1.0.0+b"), semver.compare("v2.0.0", "2.0.0")
 show semver.sort(["10.0.0", "1.0.0", "1.0.0-rc.1", "2.0.0", "1.0.0-alpha", "1.10.0", "1.2.0", "1.0.0+build"])
 show semver.sort([]), semver.sort(["1.0.0"])
+# semver.org's precedence example, shuffled; equal versions keep their order.
+show semver.sort(["1.0.0", "1.0.0-beta.11", "1.0.0-alpha.beta", "1.0.0-rc.1", "1.0.0-alpha", "1.0.0-beta", "1.0.0-alpha.1", "1.0.0-beta.2"])
+show semver.sort(["1.0.0+b", "v1.0.0", "1.0.0+a", "0.0.1"]), semver.sort([semver.parse("2.0.0"), "1.0.0"])
 
 show "--- satisfies"
 let cases = [
