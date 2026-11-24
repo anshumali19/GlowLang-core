@@ -1,0 +1,6 @@
+wrong results: 0
+[["a", "1"], ["b", "2"]] a#b# ["a", "b", "c"]
+true bbb true
+[["c", "3"]] z# ["x", "y"]
+1 invalid regular expression: missing )
+2 invalid regular expression: missing )

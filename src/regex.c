@@ -655,6 +655,32 @@ int glow_regex_each(const GlowRegex *re, const char *text, int len, int limit,
     return count;
 }
 
+/* Compiled patterns by their text, so a pattern used in a loop is compiled
+   once. Only GIL holders call this, and none releases the GIL while it uses
+   the regex, so the table needs no lock of its own. A regex is not changed
+   by matching, so callers share it; they must not free it. */
+#define RX_CACHE_SLOTS 64
+static struct { char *pattern; GlowRegex *re; } rx_cache[RX_CACHE_SLOTS];
+
+GlowRegex *glow_regex_cached(const char *pattern, char *err, size_t errlen) {
+    uint32_t h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)pattern; *p; p++) h = (h ^ *p) * 16777619u;
+    int slot = (int)(h % RX_CACHE_SLOTS);
+    if (rx_cache[slot].pattern && strcmp(rx_cache[slot].pattern, pattern) == 0) return rx_cache[slot].re;
+    GlowRegex *re = glow_regex_compile(pattern, err, errlen);
+    char *copy = re ? strdup(pattern) : NULL;
+    if (!copy) {
+        if (re && err && errlen) snprintf(err, errlen, "out of memory");
+        glow_regex_free(re);
+        return NULL;
+    }
+    free(rx_cache[slot].pattern);
+    glow_regex_free(rx_cache[slot].re);
+    rx_cache[slot].pattern = copy;
+    rx_cache[slot].re = re;
+    return re;
+}
+
 static int rx_first(void *ctx, const int *caps) {
     int *span = ctx;
     span[0] = caps[0]; span[1] = caps[1];
@@ -665,11 +691,10 @@ static int rx_first(void *ctx, const int *caps) {
    is invalid (with a message in err). */
 int glow_regex_search(const char *pattern, const char *text, int *match_start, int *match_len,
                       char *err, size_t errlen) {
-    GlowRegex *re = glow_regex_compile(pattern, err, errlen);
+    GlowRegex *re = glow_regex_cached(pattern, err, errlen);
     if (!re) return -1;
     int span[2];
     int found = glow_regex_each(re, text, (int)strlen(text), 1, rx_first, span);
-    glow_regex_free(re);
     if (!found) return 0;
     *match_start = span[0];
     *match_len = span[1] - span[0];

@@ -5290,12 +5290,14 @@ static void rb_add(ReBuf *b, const char *s, size_t n) {
 
 GlowRegex *glow_regex_compile(const char *pattern, char *err, size_t errlen);
 void glow_regex_free(GlowRegex *re);
+GlowRegex *glow_regex_cached(const char *pattern, char *err, size_t errlen);
 int glow_regex_groups(const GlowRegex *re);
 const char *glow_regex_group_name(const GlowRegex *re, int i);
 int glow_regex_each(const GlowRegex *re, const char *text, int len, int limit,
                     int (*on_match)(void *ctx, const int *caps), void *ctx);
 
-/* Compiles args[0], raising the error if it is not a valid pattern. */
+/* The compiled args[0], raising the error if it is not a valid pattern. It
+   comes from a cache and is shared: callers must not free it. */
 static GlowRegex *re_compile_arg(Value pattern, const char *fn) {
     char err[160];
     if (GET_TYPE(pattern) != VAL_STRING) {
@@ -5303,7 +5305,7 @@ static GlowRegex *re_compile_arg(Value pattern, const char *fn) {
         pending_exception = value_string_copy(err); has_exception = 1;
         return NULL;
     }
-    GlowRegex *re = glow_regex_compile(AS_STRING(pattern), err, sizeof(err));
+    GlowRegex *re = glow_regex_cached(AS_STRING(pattern), err, sizeof(err));
     if (!re) { pending_exception = value_string_copy(err); has_exception = 1; }
     return re;
 }
@@ -5380,12 +5382,11 @@ static Value native_re_find(int argc, Value *args) {
     if (argc < 2) return value_none();
     GlowRegex *re = re_compile_arg(args[0], "find");
     if (!re) return value_none();
-    if (!re_text_arg(args[1], "find")) { glow_regex_free(re); return value_none(); }
+    if (!re_text_arg(args[1], "find")) return value_none();
     const char *text = AS_STRING(args[1]);
     ReCollect c = { re, text, list_new(1), 0, args[1], 0, 0 };
     glow_regex_each(re, text, (int)strlen(text), 1, re_collect, &c);
     Value r = c.out->size ? c.out->items[0] : value_none();
-    glow_regex_free(re);
     return r;
 }
 
@@ -5395,11 +5396,10 @@ static Value native_re_all(int argc, Value *args) {
     if (argc < 2) return value_list(list_new(0));
     GlowRegex *re = re_compile_arg(args[0], "findall");
     if (!re) return value_none();
-    if (!re_text_arg(args[1], "findall")) { glow_regex_free(re); return value_none(); }
+    if (!re_text_arg(args[1], "findall")) return value_none();
     const char *text = AS_STRING(args[1]);
     ReCollect c = { re, text, list_new(4), argc > 2 && GET_TYPE(args[2]) == VAL_BOOL && AS_BOOL(args[2]), args[1], 0, 0 };
     glow_regex_each(re, text, (int)strlen(text), 0, re_collect, &c);
-    glow_regex_free(re);
     return value_list(c.out);
 }
 
@@ -5450,12 +5450,11 @@ static Value native_re_replace(int argc, Value *args) {
     if (argc < 3) return value_none();
     GlowRegex *re = re_compile_arg(args[0], "replace");
     if (!re) return value_none();
-    if (!re_text_arg(args[1], "replace") || !re_text_arg(args[2], "replace")) { glow_regex_free(re); return value_none(); }
+    if (!re_text_arg(args[1], "replace") || !re_text_arg(args[2], "replace")) return value_none();
     const char *text = AS_STRING(args[1]);
     int count = argc > 3 && GET_TYPE(args[3]) == VAL_INT ? (int)AS_INT(args[3]) : 0;
     ReReplace r = { re, text, AS_STRING(args[2]), { NULL, 0, 0 }, 0, NULL };
     glow_regex_each(re, text, (int)strlen(text), count, re_replace_one, &r);
-    glow_regex_free(re);
     if (r.err) { free(r.sb.p); pending_exception = value_string_copy(r.err); has_exception = 1; return value_none(); }
     rb_add(&r.sb, text + r.last, strlen(text + r.last));
     Value out = value_string_copy_len(r.sb.p ? r.sb.p : "", r.sb.n);
@@ -5486,13 +5485,12 @@ static Value native_re_split(int argc, Value *args) {
     if (argc < 2) return value_none();
     GlowRegex *re = re_compile_arg(args[0], "split");
     if (!re) return value_none();
-    if (!re_text_arg(args[1], "split")) { glow_regex_free(re); return value_none(); }
+    if (!re_text_arg(args[1], "split")) return value_none();
     const char *text = AS_STRING(args[1]);
     int maxsplit = argc > 2 && GET_TYPE(args[2]) == VAL_INT ? (int)AS_INT(args[2]) : 0;
     ReSplit s = { re, text, list_new(4), 0 };
     glow_regex_each(re, text, (int)strlen(text), maxsplit, re_split_one, &s);
     list_push(s.out, value_string_copy(text + s.last));
-    glow_regex_free(re);
     return value_list(s.out);
 }
 

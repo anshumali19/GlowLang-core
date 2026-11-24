@@ -1,0 +1,32 @@
+# Compiled patterns are cached by their text (src/regex.c). Results must not
+# depend on what is in the cache: many patterns sharing slots, the same
+# pattern on other text, and a bad pattern asked for twice.
+import "re"
+
+let wrong = 0
+every round from 1 to 3:
+    every i from 0 to 199:
+        let pattern = "item" + str(i) + "=(\\d+)"
+        let m = re.find(pattern, "x item" + str(i) + "=" + str(i * round) + " y")
+        when m is none or m.group(1) != str(i * round):
+            wrong = wrong + 1
+        end
+        when re.find(pattern, "item" + str(i + 1000) + "=5") is not none:
+            wrong = wrong + 1
+        end
+    end
+end
+show "wrong results:", wrong
+
+# Every function that compiles a pattern.
+show re.findall("(\\w)(\\d)", "a1 b2"), re.replace("\\d", "a1b2", "#"), re.split(",\\s*", "a, b,c")
+show re.match("^ab", "abc"), re.search("b+", "abbbc"), re.fullmatch("a+", "aaa") is not none
+show re.findall("(\\w)(\\d)", "c3"), re.replace("\\d", "z9", "#"), re.split(",\\s*", "x,y")
+
+for each n in [1, 2]:
+    try:
+        re.find("(unclosed", "text")
+    catch e:
+        show n, e
+    end
+end
