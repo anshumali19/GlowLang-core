@@ -1,0 +1,11 @@
+--- --runtime
+0 true
+0 args: ["one", "two words"]
+42 23416728348467685
+class
+Error: Could not open the runtime 'DIR/missing'
+glowlang package: unexpected '--bogus'
+--- --target checks
+glowlang package: unknown target 'plan9'; use one of linux-x64, macos-arm64, macos-x64, windows-x64
+glowlang package: a file and a --target are needed
+glowlang package: unexpected 'b.glow'
