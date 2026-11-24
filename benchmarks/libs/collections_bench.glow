@@ -1,0 +1,47 @@
+# Heap: push 200,000 random numbers, then pop them all. Deque: 1,000,000
+# push_back and pop_front pairs, 1,000 items queued. count: 1,000,000 words.
+# Prints operations per second for each.
+import "collections"
+
+func rate(label, ops, start):
+    show format(label, "<22"), format(int(ops / (os.time() - start)), ",d"), "ops/s"
+end
+
+random_seed(1)
+let nums = []
+every i from 1 to 200000:
+    nums.push(random_int(0, 1000000))
+end
+let start = os.time()
+let h = collections.Heap()
+for each x in nums:
+    h.push(x)
+end
+let last = -1
+while not h.is_empty():
+    let x = h.pop()
+    assert(x >= last, "heap order")
+    last = x
+end
+rate("Heap push+pop", 400000, start)
+
+start = os.time()
+let q = collections.Deque()
+every i from 1 to 1000:
+    q.push_back(i)
+end
+every i from 1 to 1000000:
+    q.push_back(i)
+    q.pop_front()
+end
+rate("Deque push+pop", 2000000, start)
+
+let vocab = ["alpha", "beta", "gamma", "delta", "eps", "zeta", "eta", "theta", "iota", "kappa"]
+let words = []
+every i from 1 to 1000000:
+    words.push(vocab[random_int(0, 9)])
+end
+start = os.time()
+let counts = collections.count(words)
+rate("count", 1000000, start)
+assert(sum(counts.values()) == 1000000, "count total")

@@ -1,0 +1,237 @@
+# collections.glow — a heap (priority queue), a double-ended queue and
+# counting.
+#
+#   import "collections"
+#   let h = collections.Heap()        smallest first; Heap(key, descending)
+#   h.push(x), h.pop(), h.peek(), h.len(), h.is_empty()
+#   let q = collections.Deque()       Deque(items) starts with those items
+#   q.push_back(x), q.push_front(x), q.pop_back(), q.pop_front(),
+#   q.peek_back(), q.peek_front(), q.len(), q.is_empty(), q.to_list()
+#   collections.count(items)          {item: how many times it occurs}
+#   collections.most_common(counts, n = none)   [[item, count], ...], most first
+#
+# A Heap orders by key(item) when a key function is given, else by the items
+# themselves; pushing and popping take O(log n). A Deque adds and removes at
+# either end in O(1). Popping or peeking an empty Heap or Deque is an error.
+
+blueprint Heap:
+    func init(key = none, descending = false):
+        self.key = key
+        self.descending = descending
+        # Keys and items side by side, so a key is computed once per push
+        # and items with equal keys are never compared.
+        self.keys = []
+        self.items = []
+    end
+
+    func push(item):
+        let k = item
+        when self.key is not none:
+            k = self.key(item)
+        end
+        let keys = self.keys
+        let items = self.items
+        let desc = self.descending
+        keys.push(k)
+        items.push(item)
+        let i = len(keys) - 1
+        while i > 0:
+            let parent = (i - 1) >> 1
+            let pk = keys[parent]
+            when (desc and k > pk) or (not desc and k < pk):
+                keys[i] = pk
+                items[i] = items[parent]
+                i = parent
+            otherwise:
+                stop
+            end
+        end
+        keys[i] = k
+        items[i] = item
+    end
+
+    func pop():
+        let keys = self.keys
+        let items = self.items
+        when len(keys) == 0:
+            throw "Heap.pop: the heap is empty"
+        end
+        let top = items[0]
+        let k = keys.pop()
+        let item = items.pop()
+        let n = len(keys)
+        when n == 0:
+            return top
+        end
+        let desc = self.descending
+        let i = 0
+        while true:
+            let c = 2 * i + 1
+            when c >= n:
+                stop
+            end
+            let ck = keys[c]
+            when c + 1 < n:
+                let rk = keys[c + 1]
+                when (desc and rk > ck) or (not desc and rk < ck):
+                    c = c + 1
+                    ck = rk
+                end
+            end
+            when (desc and ck > k) or (not desc and ck < k):
+                keys[i] = ck
+                items[i] = items[c]
+                i = c
+            otherwise:
+                stop
+            end
+        end
+        keys[i] = k
+        items[i] = item
+        return top
+    end
+
+    func peek():
+        when len(self.items) == 0:
+            throw "Heap.peek: the heap is empty"
+        end
+        return self.items[0]
+    end
+
+    func len():
+        return len(self.items)
+    end
+
+    func is_empty():
+        return len(self.items) == 0
+    end
+end
+
+# A ring buffer whose size is a power of two, so a position wraps with & mask.
+blueprint Deque:
+    func init(items = none):
+        self.buf = [none, none, none, none, none, none, none, none]
+        self.head = 0
+        self.count = 0
+        for each x in items ?? []:
+            self.push_back(x)
+        end
+    end
+
+    func _grow():
+        let old = self.buf
+        let cap = len(old)
+        let buf = []
+        let i = 0
+        while i < cap:
+            buf.push(old[(self.head + i) & (cap - 1)])
+            i = i + 1
+        end
+        while i < 2 * cap:
+            buf.push(none)
+            i = i + 1
+        end
+        self.buf = buf
+        self.head = 0
+    end
+
+    func push_back(x):
+        when self.count == len(self.buf):
+            self._grow()
+        end
+        let buf = self.buf
+        buf[(self.head + self.count) & (len(buf) - 1)] = x
+        self.count = self.count + 1
+    end
+
+    func push_front(x):
+        when self.count == len(self.buf):
+            self._grow()
+        end
+        let buf = self.buf
+        self.head = (self.head - 1) & (len(buf) - 1)
+        buf[self.head] = x
+        self.count = self.count + 1
+    end
+
+    func pop_front():
+        when self.count == 0:
+            throw "Deque.pop_front: the deque is empty"
+        end
+        let buf = self.buf
+        let x = buf[self.head]
+        buf[self.head] = none
+        self.head = (self.head + 1) & (len(buf) - 1)
+        self.count = self.count - 1
+        return x
+    end
+
+    func pop_back():
+        when self.count == 0:
+            throw "Deque.pop_back: the deque is empty"
+        end
+        let buf = self.buf
+        let i = (self.head + self.count - 1) & (len(buf) - 1)
+        let x = buf[i]
+        buf[i] = none
+        self.count = self.count - 1
+        return x
+    end
+
+    func peek_front():
+        when self.count == 0:
+            throw "Deque.peek_front: the deque is empty"
+        end
+        return self.buf[self.head]
+    end
+
+    func peek_back():
+        when self.count == 0:
+            throw "Deque.peek_back: the deque is empty"
+        end
+        return self.buf[(self.head + self.count - 1) & (len(self.buf) - 1)]
+    end
+
+    func len():
+        return self.count
+    end
+
+    func is_empty():
+        return self.count == 0
+    end
+
+    func to_list():
+        let out = []
+        let mask = len(self.buf) - 1
+        let i = 0
+        while i < self.count:
+            out.push(self.buf[(self.head + i) & mask])
+            i = i + 1
+        end
+        return out
+    end
+end
+
+func collections_count(items):
+    let counts = {}
+    for each x in items:
+        counts[x] = (counts.get(x) ?? 0) + 1
+    end
+    return counts
+end
+
+# Ties keep the order in which the items were first counted.
+func collections_most_common(counts, n = none):
+    let ranked = sorted(counts.items(), lambda(p):
+        return -p[1]
+    end)
+    when n is not none and n < len(ranked):
+        return ranked[:n]
+    end
+    return ranked
+end
+
+let collections = {
+    "Heap": Heap, "Deque": Deque,
+    "count": collections_count, "most_common": collections_most_common
+}
