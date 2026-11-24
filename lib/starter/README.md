@@ -32,6 +32,10 @@ text, and every SQL value is a bound parameter.
 
 ## Settings
 
+`glowlang new` wrote them to `.env`, with a secret made for this project.
+The app reads that file at start; a variable that is already set in the
+environment wins over it. `.env` is in `.gitignore`: keep it out of git.
+
 | Variable | Default | |
 |---|---|---|
 | `PORT` | `8000` | |
