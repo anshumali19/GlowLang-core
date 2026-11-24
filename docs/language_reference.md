@@ -1632,10 +1632,20 @@ of JSON Schema 2020-12: `type` (one or a list), `enum`, `const`;
 `properties`, `required`, `additionalProperties`, `minProperties`,
 `maxProperties`; `items`, `minItems`, `maxItems`, `uniqueItems`;
 `minLength`, `maxLength`, `pattern` (GlowLang's regular expressions, found
-anywhere in the text); `minimum`, `maximum`, `exclusiveMinimum`,
+anywhere in the text), `format`; `minimum`, `maximum`, `exclusiveMinimum`,
 `exclusiveMaximum`, `multipleOf`; `allOf`, `anyOf`, `oneOf`, `not`; `$ref`
 to `#` or `#/$defs/name`; and `true` / `false` as whole schemas. Other
-keywords, such as `format`, are ignored, as the standard allows.
+keywords, such as `title`, are ignored, as the standard allows.
+
+`format` checks text against `date` (`2026-11-25`, a real day), `time`
+(`09:30:00Z`, `09:30:00.5+05:30`), `date-time` (the two joined by `T`),
+`email`, `hostname`, `ipv4`, `ipv6`, `uri` (with a scheme, such as
+`https:` or `mailto:`) and `uuid`. Other formats, and values that are not
+text, pass.
+```glow
+show schema.validate({"when": "2026-02-30"}, {"properties": {"when": {"format": "date"}}})
+# ["/when: must be a valid date"]
+```
 
 ### JSON (`json.`)
 `parse(text)`, `stringify(value)`.

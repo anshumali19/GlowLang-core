@@ -1,6 +1,7 @@
 # Validates an API request body (a user with tags and an address) against a
 # schema for two seconds, once with valid data and once with data that has
-# four problems, and prints validations per second.
+# six problems, then with data whose texts have formats (uuid, date-time,
+# email, ipv4), and prints validations per second.
 import "schema"
 
 let user = {
@@ -20,14 +21,20 @@ let bad = {"name": "", "age": -1, "email": "nope", "tags": ["a", "a"], "address"
 assert(len(schema.validate(good, user)) == 0, "good data failed")
 assert(len(schema.validate(bad, user)) == 6, "bad data gave the wrong errors")
 
-func measure(label, data):
+let event = {"type": "object", "properties": {"id": {"format": "uuid"}, "at": {"format": "date-time"}, "by": {"format": "email"}, "from": {"format": "ipv4"}}}
+let happened = {"id": "123e4567-e89b-12d3-a456-426614174000", "at": "2026-11-25T09:30:00Z", "by": "ana@glow.example", "from": "192.168.1.20"}
+assert(len(schema.validate(happened, event)) == 0, "formats failed")
+assert(len(schema.validate({"at": "2026-02-30T00:00:00Z"}, event)) == 1, "a bad date passed")
+
+func measure(label, data, s):
     let n = 0
     let start = os.time()
     while os.time() - start < 2:
-        schema.validate(data, user)
+        schema.validate(data, s)
         n = n + 1
     end
     show format(label, "<14"), format(int(n / (os.time() - start)), ",d"), "validations/s"
 end
-measure("valid", good)
-measure("6 problems", bad)
+measure("valid", good, user)
+measure("6 problems", bad, user)
+measure("formats", happened, event)

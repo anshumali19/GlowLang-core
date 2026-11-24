@@ -110,4 +110,34 @@ catch e:
 end
 
 show "--- ignored keywords"
-v("not-an-email", {"type": "string", "format": "email", "title": "Email", "default": "x"})
+v("x", {"type": "string", "title": "Text", "default": "x", "examples": ["y"]})
+
+show "--- format"
+let formats = {
+    "date": [["2024-02-29", "2026-12-31", "2000-02-29"], ["2023-02-29", "1900-02-29", "2026-13-01", "2026-04-31", "2026-00-10", "2026-1-01", "26-01-01"]],
+    "time": [["23:59:60Z", "08:30:00.123+05:30", "00:00:00z"], ["24:00:00Z", "12:60:00Z", "12:00:00", "12:00:00+24:00", "1:00:00Z"]],
+    "date-time": [["2026-11-25T09:30:00Z", "2026-11-25t09:30:00.5-01:00"], ["2026-11-25 09:30:00Z", "2026-11-31T09:30:00Z", "2026-11-25T09:30Z", "2026-11-25"]],
+    "email": [["ana@glow.example", "a.b+c@x-y.example", "x@localhost"], ["ana", "@glow.example", "ana@", "a b@x.example", "ana@-x.example", "ana@x..example"]],
+    "hostname": [["glow.example", "a", "x-1.example"], ["", "-x.example", "x-.example", "a..b", "a_b.example"]],
+    "ipv4": [["0.0.0.0", "192.168.1.255"], ["256.1.1.1", "1.2.3", "01.2.3.4", "1.2.3.4.5", "a.b.c.d"]],
+    "ipv6": [["::", "::1", "2001:db8::8a2e:370:7334", "1:2:3:4:5:6:7:8", "::ffff:192.0.2.1", "fe80::"], ["1:2:3:4:5:6:7:8:9", "1::2::3", "12345::", ":1", "1:2:3:4:5:6:7", "::ffff:999.0.2.1", "1.2.3.4::"]],
+    "uri": [["https://glow.example/a?b=c", "mailto:ana@glow.example", "urn:isbn:0451450523"], ["glow.example", "/path", "https://a b", "1http://x"]],
+    "uuid": [["123e4567-e89b-12d3-a456-426614174000", "123E4567-E89B-12D3-A456-426614174000"], ["123e4567e89b12d3a456426614174000", "123e4567-e89b-12d3-a456-42661417400g"]]
+}
+for each name in formats.keys():
+    let s = {"format": name}
+    for each good in formats[name][0]:
+        when not schema.is_valid(good, s):
+            show "rejected", name, json.stringify(good)
+        end
+    end
+    for each bad in formats[name][1]:
+        when schema.is_valid(bad, s):
+            show "allowed", name, json.stringify(bad)
+        end
+    end
+    show name, "checked"
+end
+v({"email": "nope", "when": "2026-02-30"}, {"properties": {"email": {"type": "string", "format": "email"}, "when": {"format": "date"}}})
+v(42, {"format": "email"})
+v("anything", {"format": "credit-card"})

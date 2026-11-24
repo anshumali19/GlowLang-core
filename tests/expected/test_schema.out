@@ -64,3 +64,17 @@ schema: $ref #/$defs/missing points to nothing
 schema: a schema must be a dict, true or false
 --- ignored keywords
 ok
+--- format
+date checked
+time checked
+date-time checked
+email checked
+hostname checked
+ipv4 checked
+ipv6 checked
+uri checked
+uuid checked
+  /email: must be a valid email
+  /when: must be a valid date
+ok
+ok
