@@ -10,6 +10,9 @@ of every size are welcome:
 * tooling, editor support and documentation,
 * example programs and tests.
 
+[AGENTS.md](AGENTS.md) is the working guide for this repository, for developers and AI
+coding agents alike: the strict rules, how a change is made and tested, and how to check it.
+
 ---
 
 ## How to contribute
@@ -25,8 +28,8 @@ of every size are welcome:
 5. Run the test suite — it compares every program's output, not just its exit code:
    * Windows: `.\run_all_tests.bat`
    * Linux/macOS: `make test`
-   For runtime changes, also run with the JIT off (`GLOW_NOJITEXEC=1`) and under GC stress
-   (`GLOWLANG_GC_STRESS=1`).
+   For runtime changes, run `scripts/test-all-modes.sh`, which runs the suite with the JIT, with
+   the JIT off (`GLOW_NOJITEXEC=1`), under GC stress and under AddressSanitizer.
 6. Commit with a sign-off (see below) and open a pull request against `main`.
 
 For large changes to the compiler, VM, JIT or GC, please open an issue or discussion first so
