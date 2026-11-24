@@ -34,6 +34,25 @@ app.route("/api/health", lambda(req): '{"status":"ok"}')
 app.start()
 ```
 
+### Path parameters
+A part of a route path that starts with `:` matches any one part of the
+request path, and what it matched is in `req.params`. Routes without such
+parts are tried first, so `/notes/latest` wins over `/notes/:id`.
+
+```
+@app.get("/notes/:id")
+func note(req):
+    return {"id": req.params["id"]}
+end
+```
+
+### Starting a project
+`glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
+login with JWT tokens, passwords stored as salted hashes, notes in SQLite,
+and `test_app.glow`, which starts the app and calls every endpoint. Run
+`glowlang run test_app.glow`, then change `app.glow` to suit. `glowlang
+package app.glow` turns it into one file to copy to a server.
+
 ## HTTP API Reference
 
 ### Core Functions

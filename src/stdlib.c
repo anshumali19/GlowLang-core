@@ -2904,6 +2904,66 @@ static Value crypto_equal(int argc, Value *args) {
     return value_bool(la == 0 || CRYPTO_memcmp(a, b, la) == 0);
 }
 
+/* crypto.password_hash(password): a slow, salted hash for storing a
+   password, as "pbkdf2_sha256$<iterations>$<salt>$<hash>" (the format Django
+   uses). crypto.password_check(password, stored) says whether a password
+   matches one. PBKDF2-HMAC-SHA256 with 600000 iterations (OWASP's 2023
+   figure) takes a few hundred milliseconds, so other threads run meanwhile. */
+#define PW_ITERATIONS 600000
+static int pw_derive(const char *pw, size_t pwlen, const char *salt, long iter, unsigned char out[32]) {
+    char *p = malloc(pwlen + 1), *s = strdup(salt);
+    if (!p || !s) { free(p); free(s); return 0; }
+    memcpy(p, pw, pwlen); p[pwlen] = 0;
+    glow_gil_release();
+    int ok = PKCS5_PBKDF2_HMAC(p, (int)pwlen, (unsigned char*)s, (int)strlen(s), (int)iter, EVP_sha256(), 32, out) == 1;
+    glow_gil_acquire();
+    OPENSSL_cleanse(p, pwlen);
+    free(p); free(s);
+    return ok;
+}
+
+static Value crypto_password_hash(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) {
+        pending_exception = value_string_copy("crypto.password_hash: the password must be a string");
+        has_exception = 1;
+        return value_none();
+    }
+    unsigned char raw[12], dk[32];
+    char salt[17];
+    if (RAND_bytes(raw, sizeof(raw)) != 1) {
+        pending_exception = value_string_copy("crypto.password_hash: the secure random source failed");
+        has_exception = 1;
+        return value_none();
+    }
+    EVP_EncodeBlock((unsigned char*)salt, raw, sizeof(raw));
+    if (!pw_derive(AS_STRING(args[0]), rope_length(args[0]), salt, PW_ITERATIONS, dk)) {
+        pending_exception = value_string_copy("crypto.password_hash: hashing failed");
+        has_exception = 1;
+        return value_none();
+    }
+    char h64[48], out[128];
+    EVP_EncodeBlock((unsigned char*)h64, dk, 32);
+    snprintf(out, sizeof(out), "pbkdf2_sha256$%d$%s$%s", PW_ITERATIONS, salt, h64);
+    OPENSSL_cleanse(dk, sizeof(dk));
+    return value_string_copy(out);
+}
+
+static Value crypto_password_check(int argc, Value *args) {
+    if (argc < 2 || GET_TYPE(args[0]) != VAL_STRING || GET_TYPE(args[1]) != VAL_STRING) return value_bool(0);
+    const char *stored = AS_STRING(args[1]);
+    char salt[128], h64[128];
+    long iter = 0;
+    /* Anything not in the expected form simply does not match. */
+    if (strncmp(stored, "pbkdf2_sha256$", 14) != 0 || rope_length(args[1]) > 300) return value_bool(0);
+    if (sscanf(stored + 14, "%ld$%127[^$]$%127s", &iter, salt, h64) != 3 || iter < 1 || iter > 10000000) return value_bool(0);
+    unsigned char dk[32];
+    if (!pw_derive(AS_STRING(args[0]), rope_length(args[0]), salt, iter, dk)) return value_bool(0);
+    char mine[48];
+    EVP_EncodeBlock((unsigned char*)mine, dk, 32);
+    OPENSSL_cleanse(dk, sizeof(dk));
+    return value_bool(strlen(h64) == strlen(mine) && CRYPTO_memcmp(h64, mine, strlen(mine)) == 0);
+}
+
 /* crypto.uuid4(): a random (version 4) UUID. */
 static Value crypto_uuid4(int argc, Value *args) {
     (void)argc; (void)args;
@@ -7567,6 +7627,8 @@ void std_init(void) {
     dict_set(crypto, "random_hex", native_func_new("random_hex", crypto_random_hex));
     dict_set(crypto, "equal", native_func_new("equal", crypto_equal));
     dict_set(crypto, "uuid4", native_func_new("uuid4", crypto_uuid4));
+    dict_set(crypto, "password_hash", native_func_new("password_hash", crypto_password_hash));
+    dict_set(crypto, "password_check", native_func_new("password_check", crypto_password_check));
     dict_set(crypto, "base64", native_func_new("base64", crypto_base64_native));
     dict_set(crypto, "unbase64", native_func_new("unbase64", crypto_unbase64_native));
     dict_set(crypto, "random_token", native_func_new("random_token", crypto_random_token_native));

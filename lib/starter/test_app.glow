@@ -1,0 +1,93 @@
+# Tests for app.glow: starts it on a spare port with an empty database,
+# calls every endpoint, then stops it. Exit code 1 if any check fails.
+#
+#   glowlang run test_app.glow
+
+let PORT = 18000 + os.pid() % 1000
+let BASE = "http://127.0.0.1:" + str(PORT)
+let DB = fs.join(os.temp_dir(), "__NAME___test_" + str(os.pid()) + ".db")
+let here = fs.dirname(fs.abspath(os.script))
+
+let failed = 0
+func check(name, ok):
+    when ok:
+        show "ok    " + name
+    otherwise:
+        show "FAIL  " + name
+        failed = failed + 1
+    end
+end
+
+# method, path, the JSON to send (or none), the login token (or none)
+# -> [status, the JSON answer]
+func call(method, path, data = none, token = none):
+    let opts = {"headers": {"Content-Type": "application/json"}, "timeout": 10}
+    when data != none:
+        opts["body"] = json.stringify(data)
+    end
+    when token != none:
+        opts["headers"]["Authorization"] = "Bearer " + token
+    end
+    let r = http.request(method, BASE + path, opts)
+    let answer = none
+    try:
+        answer = json.parse(r["body"])
+    catch e:
+        answer = r["body"]
+    end
+    return [r["status"], answer]
+end
+
+let server = process.start([process.executable, "run", fs.join(here, "app.glow")],
+    {"env": {"PORT": str(PORT), "DB_PATH": DB, "APP_SECRET": "test-secret-that-is-at-least-32-characters-long"}})
+
+try:
+    let up = false
+    let tries = 0
+    while not up and tries < 100:
+        try:
+            up = http.request("GET", BASE + "/health", {"timeout": 2})["status"] == 200
+        catch e:
+            os.sleep(100)
+            tries = tries + 1
+        end
+    end
+    check("the server starts", up)
+
+    let r = call("POST", "/signup", {"email": "Ada@Example.com", "password": "correct horse"})
+    check("sign up", r[0] == 201)
+    check("the same email cannot sign up twice", call("POST", "/signup", {"email": "ada@example.com", "password": "another one"})[0] == 409)
+    check("short passwords are refused", call("POST", "/signup", {"email": "bob@example.com", "password": "short"})[0] == 400)
+    check("a body that is not a JSON object is refused", call("POST", "/signup", "not json")[0] == 400)
+
+    check("a wrong password cannot log in", call("POST", "/login", {"email": "ada@example.com", "password": "wrong horse"})[0] == 401)
+    r = call("POST", "/login", {"email": "ada@example.com", "password": "correct horse"})
+    check("log in", r[0] == 200 and type(r[1]) == "dict" and r[1].has("token"))
+    let token = r[1]["token"]
+
+    check("notes need a login", call("GET", "/notes")[0] == 401)
+    check("a forged token is refused", call("GET", "/notes", none, token + "x")[0] == 401)
+    r = call("POST", "/notes", {"text": "buy milk"}, token)
+    check("add a note", r[0] == 201 and r[1]["text"] == "buy milk")
+    let id = r[1]["id"]
+    r = call("GET", "/notes", none, token)
+    check("list notes", r[0] == 200 and len(r[1]) == 1 and r[1][0]["text"] == "buy milk")
+
+    call("POST", "/signup", {"email": "eve@example.com", "password": "eve's password"})
+    let eve = call("POST", "/login", {"email": "eve@example.com", "password": "eve's password"})[1]["token"]
+    check("others do not see your notes", len(call("GET", "/notes", none, eve)[1]) == 0)
+    check("others cannot delete your notes", call("DELETE", "/notes/" + str(id), none, eve)[0] == 404)
+
+    check("delete a note", call("DELETE", "/notes/" + str(id), none, token)[0] == 200)
+    check("a deleted note is gone", len(call("GET", "/notes", none, token)[1]) == 0)
+    check("unknown paths answer 404", call("GET", "/nothing")[0] == 404)
+finally:
+    process.kill(server)
+    process.close(server)
+    fs.remove(DB)
+end
+
+show str(failed) + " failed"
+when failed > 0:
+    os.exit(1)
+end

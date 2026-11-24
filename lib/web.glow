@@ -239,6 +239,24 @@ blueprint Response:
     end
 end
 
+# What a route path like /notes/:id matched in path, or none.
+func _web_match(pattern, path):
+    let want = pattern.split("/")
+    let have = path.split("/")
+    when len(want) != len(have):
+        return none
+    end
+    let got = {}
+    for each i, w in want:
+        when w.starts_with(":") and have[i] != "":
+            got[w[1:]] = have[i]
+        eif w != have[i]:
+            return none
+        end
+    end
+    return got
+end
+
 # ─── Route Entry ───
 blueprint Route:
     action init(method, path, handler):
@@ -283,7 +301,10 @@ blueprint Router:
         return self.add("DELETE", path, handler)
     end
 
-    action find_route(method, path):
+    # The route for a request. A route path may have :name parts, as in
+    # /notes/:id; what they matched goes into params (req.params), when given.
+    # Routes without :name parts win over those with them.
+    action find_route(method, path, params = none):
         for each r in self.routes:
             when r.method == method and r.path == path:
                 return r
@@ -293,6 +314,19 @@ blueprint Router:
         for each r in self.routes:
             when r.method == "ANY" and r.path == path:
                 return r
+            end
+        end
+        for each r in self.routes:
+            when (r.method == method or r.method == "ANY") and r.path.contains("/:"):
+                let got = _web_match(r.path, path)
+                when got is not none:
+                    when params is not none:
+                        for each k in got.keys():
+                            params[k] = got[k]
+                        end
+                    end
+                    return r
+                end
             end
         end
         return none
@@ -572,7 +606,7 @@ blueprint Server:
 
         when not res.sent:
             # Try to find route
-            let matched = self.router.find_route(req.method, req.path)
+            let matched = self.router.find_route(req.method, req.path, req.params)
             when matched is not none:
                 try:
                     # A handler may fill in res, or return the response:

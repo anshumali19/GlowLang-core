@@ -7,8 +7,9 @@
 #   let token = hash.random_hex(16)
 #   show hash.uuid4()
 #
-# For signing and verifying messages, see kavach.glow. For passwords, do not
-# store a plain hash: use a slow password hash (not provided yet).
+# For signing and verifying messages, see kavach.glow. For passwords, never
+# store a plain hash: store hash.password(pw) and check with
+# hash.check_password(pw, stored).
 
 blueprint Hash:
     action init():
@@ -43,6 +44,16 @@ blueprint Hash:
     # Compare two secrets without leaking where they differ.
     action equal(a, b):
         return crypto.equal(a, b)
+    end
+
+    # A slow, salted hash to store instead of a password (PBKDF2-SHA256).
+    action password(pw):
+        return crypto.password_hash(pw)
+    end
+
+    # Whether pw is the password that hash.password() turned into stored.
+    action check_password(pw, stored):
+        return crypto.password_check(pw, stored)
     end
 
     # A random version-4 UUID.

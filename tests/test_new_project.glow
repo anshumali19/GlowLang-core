@@ -1,0 +1,57 @@
+# glowlang new: the project it writes, and that project's own tests pass.
+# Also the two things the starter relies on: :name route parts and
+# password hashes.
+use "lib/web.glow"
+use "lib/crypto.glow"
+
+show "--- routes with :name parts"
+func handler(req):
+    return none
+end
+let r = Router()
+r.get("/notes", handler)
+r.get("/notes/:id", handler)
+r.get("/notes/latest", handler)
+r.del("/users/:user/notes/:id", handler)
+let p = {}
+show r.find_route("GET", "/notes/42", p).path, p
+show r.find_route("GET", "/notes/latest").path
+p = {}
+show r.find_route("DELETE", "/users/ada/notes/7", p).path, p
+show r.find_route("GET", "/notes/") == none, r.find_route("GET", "/notes/1/2") == none, r.find_route("POST", "/notes/1") == none
+
+show "--- password hashes"
+let h = hash.password("correct horse")
+show h.starts_with("pbkdf2_sha256$600000$"), len(h.split("$"))
+show hash.check_password("correct horse", h), hash.check_password("correct horsE", h)
+show hash.password("correct horse") != h
+# One made by Python's hashlib.pbkdf2_hmac (and Django) checks out too.
+show hash.check_password("pw", "pbkdf2_sha256$1000$salt$CjglNVXON/XHKmtwP5loFOvyQfIDrxRuk9zesDHFVn4=")
+show hash.check_password("x", "junk"), hash.check_password("x", "pbkdf2_sha256$0$a$b"), hash.check_password("x", none)
+
+show "--- glowlang new"
+let dir = fs.join(os.temp_dir(), "glow_new_test_" + str(os.pid()))
+fs.mkdirs(dir)
+# Run from here, with full paths, so the standard library is found where
+# the test binary sits apart from lib/ (bin/Release on Windows CI).
+func clean(t):
+    return t.replace("\r\n", "\n").strip().replace(fs.join(dir, ""), "")
+end
+func glow(args):
+    let res = process.run([process.executable] + args, {})
+    return [res["code"], clean(res["stdout"]), clean(res["stderr"])]
+end
+let project = fs.join(dir, "notes-api")
+try:
+    let made = glow(["new", project])
+    show made[0], made[1].split("\n")[0]
+    show sorted(fs.list(project))
+    show fs.read(fs.join(project, "README.md")).split("\n")[0]
+    show glow(["new", project])[2]
+    show glow(["new", fs.join(dir, "bad name")])[2]
+    let t = glow(["run", fs.join(project, "test_app.glow")])
+    show t[0]
+    show t[1]
+finally:
+    fs.remove_all(dir)
+end

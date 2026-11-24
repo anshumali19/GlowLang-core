@@ -1,0 +1,31 @@
+# glowlang new <name>: makes the folder <name> with a working web API
+# (sign-up, login, notes in SQLite), its tests and a README, from the
+# templates in lib/starter.
+import "cli"
+import "re"
+
+let cli_app = ArgParser("glowlang new", "Start a web API project: login, a database and tests")
+cli_app.positional("name", "The project's folder (letters, digits, - and _)")
+let args = cli_app.parse_or_exit()
+let name = args["name"]
+let base = fs.basename(name)
+
+when re.find("^[A-Za-z0-9_-]+$", base) == none:
+    os.eprint("glowlang new: use letters, digits, - and _ in the name, not \"" + base + "\"")
+    os.exit(1)
+end
+when fs.exists(name):
+    os.eprint("glowlang new: " + name + " already exists")
+    os.exit(1)
+end
+
+let templates = fs.join(fs.dirname(fs.abspath(os.script)), "starter")
+fs.mkdirs(name)
+for each pair in [["app.glow", "app.glow"], ["test_app.glow", "test_app.glow"], ["README.md", "README.md"], ["gitignore", ".gitignore"]]:
+    fs.write(fs.join(name, pair[1]), fs.read(fs.join(templates, pair[0])).replace("__NAME__", base))
+end
+
+show "Made " + name + "/ with app.glow, test_app.glow and README.md. Next:"
+show "  cd " + name
+show "  glowlang run test_app.glow"
+show "  glowlang run app.glow        (http://localhost:8000)"
