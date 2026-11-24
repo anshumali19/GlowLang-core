@@ -1,0 +1,81 @@
+# diff.lines and diff.unified (lib/diff.glow). The unified outputs below are
+# what GNU diff -u prints for the same texts.
+import "diff"
+
+show "--- lines"
+show diff.lines("a\nb\nc\n", "a\nB\nc\nd\n")
+show diff.lines(["x", "y"], ["y", "z"])
+show diff.lines("", ""), diff.lines("same", "same")
+
+show "--- unified"
+show diff.unified("a\nb\nc\n", "a\nB\nc\n")
+show diff.unified("a\nb\nc", "a\nb\nc\n", "old.txt", "new.txt")
+show diff.unified("", "x\ny\n")
+show diff.unified("x\ny\n", "")
+show json.stringify(diff.unified("same\n", "same\n"))
+
+show "--- hunks and context"
+let base = []
+every i from 1 to 30:
+    base.push("line " + str(i))
+end
+let changed = base.copy()
+changed[2] = "line 3 changed"
+changed[9] = "line 10 changed"
+changed.insert(25, "inserted")
+show diff.unified(base, changed)
+show diff.unified(base, changed, "a", "b", 0)
+
+show "--- the ops rebuild both texts"
+random_seed(4)
+let a = []
+every i from 1 to 400:
+    a.push("w" + str(random_int(1, 6)))
+end
+let b = a.copy()
+every e from 1 to 60:
+    let at = random_int(0, len(b) - 1)
+    let what = random_int(0, 2)
+    when what == 0:
+        b = b[:at] + b[at + 1:]
+    eif what == 1:
+        b.insert(at, "new" + str(e))
+    otherwise:
+        b[at] = "changed" + str(e)
+    end
+end
+let ops = diff.lines(a, b)
+let left = []
+let right = []
+let edits = 0
+for each op in ops:
+    when op[0] != "+":
+        left.push(op[1])
+    end
+    when op[0] != "-":
+        right.push(op[1])
+    end
+    when op[0] != " ":
+        edits = edits + 1
+    end
+end
+show left == a, right == b, edits <= 120
+
+show "--- past the edit limit the middle is replaced whole"
+_DIFF_MAX_EDITS = 3
+let capped = diff.lines("same\na\nb\nc\nd\nend\n", "same\nw\nx\ny\nz\nend\n")
+show capped
+_DIFF_MAX_EDITS = 2000
+
+show "--- large texts stay quick"
+let big_a = []
+every i from 1 to 20000:
+    big_a.push("row " + str(i))
+end
+let big_b = big_a.copy()
+every e from 1 to 40:
+    big_b[e * 400] = "edited " + str(e)
+end
+let start = os.time()
+let d = diff.unified(big_a, big_b)
+show d.count("@@ -"), os.time() - start < 10

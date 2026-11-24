@@ -1,0 +1,29 @@
+# Unified diff of a 5,000-line text against a copy with 50 lines changed,
+# inserted or removed (the same edits as diff_bench.py), for two seconds.
+# Prints diffs per second.
+import "diff"
+
+let a = []
+every i from 0 to 4999:
+    a.push("line " + str(i) + " of the file")
+end
+let b = a.copy()
+every e from 1 to 50:
+    let at = e * 97
+    when e % 3 == 0:
+        b[at] = "changed " + str(e)
+    eif e % 3 == 1:
+        b.insert(at, "inserted " + str(e))
+    otherwise:
+        b = b[:at] + b[at + 1:]
+    end
+end
+let ta = a.join("\n") + "\n"
+let tb = b.join("\n") + "\n"
+let n = 0
+let start = os.time()
+while os.time() - start < 2:
+    diff.unified(ta, tb)
+    n = n + 1
+end
+show format("diff.unified", "<22"), format(n / (os.time() - start), ".1f"), "diffs/s"

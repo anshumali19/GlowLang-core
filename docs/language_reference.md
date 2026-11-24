@@ -1676,6 +1676,29 @@ no catastrophic backtracking. `.`, sets (`[é-ë]`, `[^a]`) and literals match
 whole characters, and positions count characters like string indexes; `\d \w
 \s`, `\b` and `(?i)` cover ASCII only (as Python's `re.ASCII`).
 
+### Text differences (`import "diff"`)
+```glow
+import "diff"
+show diff.lines("a\nb\nc\n", "a\nB\nc\n")   # [[" ", "a"], ["-", "b"], ["+", "B"], [" ", "c"]]
+show diff.unified("a\nb\nc\n", "a\nB\nc\n", "old.txt", "new.txt")
+# --- old.txt
+# +++ new.txt
+# @@ -1,3 +1,3 @@
+#  a
+# -b
+# +B
+#  c
+```
+`diff.lines(a, b)` gives `[op, line]` pairs: `" "` for a line in both,
+`"-"` for one only in `a`, `"+"` for one only in `b`.
+`diff.unified(a, b, from_name, to_name, context)` gives the text `diff -u`
+and `git diff` print (3 lines of context unless given), or `""` when the
+texts are the same. `a` and `b` are texts or lists of lines. The diff is a
+shortest one (Myers' algorithm); a last line without a line break differs
+from the same line with one and is marked `\ No newline at end of file`.
+Past 2,000 changed lines the middle of the texts is shown as removed and
+added whole.
+
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
 `exit(code)`, `gc_info()`.

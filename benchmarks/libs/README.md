@@ -200,3 +200,17 @@ error as `schema.validate` does. Runs differed by under 4%. Measured
 |---|---|---|
 | valid | 75,199 | 35,928 |
 | six problems | 88,504 | 24,881 |
+
+## diff
+
+[diff_bench.glow](diff_bench.glow) makes the unified diff of a 5,000-line
+text against a copy with 50 lines changed, inserted or removed.
+[diff_bench.py](diff_bench.py) makes it with Python's `difflib.unified_diff`
+(written in Python). `diff.unified` finds a shortest diff; `difflib` uses
+its own matching, which may not be. Runs differed by under 2%. Measured
+2026-11-24.
+
+| Function | Diffs/s |
+|---|---|
+| GlowLang `diff.unified` | 857.9 |
+| Python `difflib.unified_diff` | 119.0 |
