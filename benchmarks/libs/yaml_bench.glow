@@ -1,0 +1,13 @@
+# Parses .github/workflows/ci.yml (191 lines) again and again for two
+# seconds and prints parses per second.
+import "yaml"
+
+let text = fs.read(".github/workflows/ci.yml")
+assert(yaml.parse(text)["jobs"]["build-and-test"]["runs-on"] == "ubuntu-latest", "parsed wrong")
+let n = 0
+let start = os.time()
+while os.time() - start < 2:
+    yaml.parse(text)
+    n = n + 1
+end
+show format("yaml.parse", "<16"), format(int(n / (os.time() - start)), ",d"), "parses/s"

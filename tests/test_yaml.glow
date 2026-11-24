@@ -1,0 +1,62 @@
+# yaml.parse and yaml.read (lib/yaml.glow).
+import "yaml"
+
+func y(text):
+    show json.stringify(yaml.parse(text))
+end
+
+show "--- a workflow file"
+let text = "# CI\n---\nname: build and test\non:\n  push:\n    branches: [main, \"release/*\"]\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    env: {CC: gcc, DEBUG: false}\n    steps:\n      - uses: actions/checkout@v4\n      - name: Build\n        run: make -j8\n      - name: Test\n        run: |\n          scripts/run-tests.sh\n          echo done\n        if: always()\n"
+y(text)
+
+show "--- scalars"
+y("a: 12\nb: -3\nc: 1.5\nd: 1e3\ne: 0x1F\nf: 0o17\ni: true\nj: False\nk: null\nl: ~\nm:\nn: yes\no: 1.2.3\np: 012\nq: +7\nr: 1_000\ns: 12:30\nt: http://x.example/a#b\nu: a # comment\nv: 'it''s # not a comment'\nw: \"tab\\there \\u00e9 \\\"q\\\"\"\ny: ''\nz: \"\"")
+let special = yaml.parse("g: .inf\nh: -.inf\nn: .nan")
+show special["g"], special["h"], special["n"]
+
+show "--- sequences"
+y("- a\n- b\n-\n  - c\n  - d\n- - e\n  - f\n- k: v\n  k2: v2\n-")
+y("items:\n- 1\n- 2\nafter: x")
+y("list:\n  - name: one\n    tags: [a, b]\n  - name: two\n    nested:\n      deep: true")
+
+show "--- blocks"
+y("lit: |\n  line one\n    indented\n\n  line three\n\nnext: 1")
+y("fold: >\n  folded\n  text\n\n  new paragraph\nkeep: |+\n  kept\n\nstrip: |-\n  stripped\nend: 1")
+y("empty: |\nother: 2")
+
+show "--- flow forms over lines"
+y("a: [1, 2,\n    3]\nb: {x: 1,\n    y: [true, null, 'q, r']}\nc: []\nd: {}\ne: {k}")
+
+show "--- plain text over lines"
+y("desc: a long\n  value that goes\n  on\nnext: 2")
+
+show "--- top-level values"
+for each top in ["just text", "42", "[1, 2]", "", "# only a comment\n", "---\n...\n"]:
+    y(top)
+end
+y("\"quoted key\": 1\n'single': 2\nwith space: 3")
+y("a:\r\n  b: 1\r\n")
+
+show "--- files"
+let path = "test_yaml_tmp.yml"
+try:
+    fs.write(path, "server:\n  port: 9000\n")
+    show yaml.read(path)
+    try:
+        yaml.read("no_such_file.yml")
+    catch e:
+        show e
+    end
+finally:
+    fs.remove(path)
+end
+
+show "--- errors"
+for each bad in ["a: 1\na: 2", "x: -", "x: - a", "a: 1\n  b: 2", "- a\n  - b", "a: [1, 2", "a: {x: 1", "a: \"open", "a: &anchor 1", "a: *alias", "a: !!str 1", "? key", "a:\n\tb: 1", "a: 1\n---\nb: 2", "a: \"x\" y", "a: [1] 2", "a: \"\\q\"", "a: |x\n  b", "just: [1,\n2"]:
+    try:
+        yaml.parse(bad)
+        show "allowed", json.stringify(bad)
+    catch e:
+        show e
+    end
+end

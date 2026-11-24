@@ -1,0 +1,49 @@
+--- a workflow file
+{"name": "build and test", "on": {"push": {"branches": ["main", "release/*"]}, "pull_request": null}, "jobs": {"test": {"runs-on": "ubuntu-latest", "timeout-minutes": 30, "env": {"CC": "gcc", "DEBUG": false}, "steps": [{"uses": "actions/checkout@v4"}, {"name": "Build", "run": "make -j8"}, {"name": "Test", "run": "scripts/run-tests.sh\necho done\n", "if": "always()"}]}}}
+--- scalars
+{"a": 12, "b": -3, "c": 1.5, "d": 1000, "e": 31, "f": 15, "i": true, "j": false, "k": null, "l": null, "m": null, "n": "yes", "o": "1.2.3", "p": 12, "q": 7, "r": 1000, "s": "12:30", "t": "http://x.example/a#b", "u": "a", "v": "it's # not a comment", "w": "tab\there é \"q\"", "y": "", "z": ""}
+inf -inf nan
+--- sequences
+["a", "b", ["c", "d"], ["e", "f"], {"k": "v", "k2": "v2"}, null]
+{"items": [1, 2], "after": "x"}
+{"list": [{"name": "one", "tags": ["a", "b"]}, {"name": "two", "nested": {"deep": true}}]}
+--- blocks
+{"lit": "line one\n  indented\n\nline three\n", "next": 1}
+{"fold": "folded text\nnew paragraph\n", "keep": "kept\n\n", "strip": "stripped", "end": 1}
+{"empty": "", "other": 2}
+--- flow forms over lines
+{"a": [1, 2, 3], "b": {"x": 1, "y": [true, null, "q, r"]}, "c": [], "d": {}, "e": {"k": null}}
+--- plain text over lines
+{"desc": "a long value that goes on", "next": 2}
+--- top-level values
+"just text"
+42
+[1, 2]
+null
+null
+null
+{"quoted key": 1, "single": 2, "with space": 3}
+{"a": {"b": 1}}
+--- files
+{"server": {"port": 9000}}
+yaml: cannot read no_such_file.yml
+--- errors
+yaml: line 2: the key a appears twice
+yaml: line 1: a - list cannot start on the line of its key; put it on the next line
+yaml: line 1: a - list cannot start on the line of its key; put it on the next line
+yaml: line 2: this line is indented more than the key above it
+yaml: line 2: this line is indented more than the - above it
+yaml: line 1: [ is never closed
+yaml: line 1: { is never closed
+yaml: line 1: a quoted value is never closed
+yaml: line 1: anchors, aliases and tags are not supported
+yaml: line 1: anchors, aliases and tags are not supported
+yaml: line 1: anchors, aliases and tags are not supported
+yaml: line 1: keys written with ? are not supported
+yaml: line 2: tabs cannot be used for indenting
+yaml: line 2: several documents in one text are not supported
+yaml: line 1: unexpected text after the quoted value
+yaml: line 1: unexpected text after [: 2
+yaml: line 1: bad escape \q
+yaml: line 1: bad block header |x
+yaml: line 2: [ is never closed

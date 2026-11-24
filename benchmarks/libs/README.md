@@ -170,3 +170,18 @@ and `popitem`. Runs differed by under 4% in both. Measured 2026-11-24.
 |---|---|
 | GlowLang `lru.Cache` | 3,147,929 |
 | Python, `OrderedDict` | 6,092,838 |
+
+## yaml
+
+[yaml_bench.glow](yaml_bench.glow) parses this repository's
+`.github/workflows/ci.yml` (191 lines). [yaml_bench.py](yaml_bench.py)
+parses it with PyYAML 6.0.3: its `SafeLoader` (written in Python) and its
+`CSafeLoader` (libyaml, written in C). All three give the same values,
+except that PyYAML reads the key `on` as `True` (YAML 1.1). Runs differed
+by under 2%. Measured 2026-11-24.
+
+| Parser | Parses/s |
+|---|---|
+| GlowLang `yaml.parse` | 1,838 |
+| PyYAML `SafeLoader` | 280 |
+| PyYAML `CSafeLoader` | 3,419 |
