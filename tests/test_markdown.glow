@@ -1,0 +1,61 @@
+# markdown.to_html (lib/markdown.glow).
+import "markdown"
+
+func md(text):
+    show "## " + json.stringify(text)
+    show markdown.to_html(text)
+end
+
+show "--- headings and paragraphs"
+md("# Title\n\nSome *text* here.\nSecond line.\n\n### Third ###\n####### not a heading\n#hashtag")
+md("line one  \nline two\\\nline three")
+
+show "--- inline"
+md("**bold** and __bold__, *em* and _em_, ***both***, snake_case_name, 2 * 3 * 4, a*b*c")
+md("`code <b>` and ``a ` tick`` and `unclosed")
+md("\\*not em\\* and \\# and \\\\ and a \\q")
+md("**unclosed bold and *em*")
+md("<b>raw html</b> & \"quotes\" 1 < 2")
+
+show "--- links and images"
+md("[GlowLang](https://glow.example \"Home\") and [a [nested] label](/x) and ![logo](/l.png)")
+md("[bad](javascript:alert(1)) [bad2](JavaScript:x) ![ok](data:image/png;base64,AA==) [no](data:text/html,x)")
+md("<https://glow.example/a?b=1> <ana@glow.example> <not a link> [text](broken")
+md("[a](<url with spaces> 'single')")
+
+show "--- code blocks"
+md("```glow\nshow \"<hi>\"\n\nlet x = 1\n```\nafter")
+md("~~~\nno language\n~~~")
+md("```\nnever closed")
+
+show "--- quotes and rules"
+md("> quoted *text*\n> more\n>\n> # inside\n\n---\n***\n_ _ _")
+
+show "--- lists"
+md("- one\n- two\n  - nested a\n  - nested b\n- three")
+md("1. first\n2. second\n\n3. third, loose")
+md("3) start at three\n4) four")
+md("* item\ncontinues here\n* next")
+md("- a\n\n  second paragraph of a\n- b")
+md("- a\n1. b")
+md("- [link](/x) and `code`\n-\n- last")
+
+show "--- tables"
+md("| Name | Price | Note |\n|:-----|------:|:----:|\n| tea | 3 | hot |\n| cake | 5 |\n| pipe \\| in cell | `a|b` | x |")
+md("a | b\n--|--")
+
+show "--- edge cases"
+md("")
+md("\n\n\n")
+md("plain")
+md("Windows\r\nlines\r\n\r\n- x\r\n")
+md("tab\there")
+
+show "--- unmatched emphasis stays fast"
+let many = ""
+every i from 1 to 3000:
+    many = many + "*a "
+end
+let start = os.time()
+let html = markdown.to_html(many)
+show len(html) > 9000, os.time() - start < 5

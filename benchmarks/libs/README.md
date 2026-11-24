@@ -88,3 +88,19 @@ Measured 2026-11-24.
 
 That is about 0.1 ms for the file; `dotenv.load` runs once when a program
 starts.
+
+## markdown
+
+[markdown_bench.glow](markdown_bench.glow) renders
+`docs/language_reference.md` (about 1,700 lines of headings, tables, lists
+and code blocks) to HTML, and then one paragraph of 3,000 unmatched `*`.
+No Python Markdown package is installed on this machine, so there is no
+Python column. Runs differed by under 3%. Measured 2026-11-24.
+
+| Work | Time |
+|---|---|
+| language_reference.md | 4.7 ms per render (15 MB/s) |
+| 3,000 unmatched `*` | 3.1 ms |
+
+The second line checks that text full of delimiters with no partner does
+not take quadratic time.

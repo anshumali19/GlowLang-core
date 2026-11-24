@@ -1,0 +1,21 @@
+# Renders docs/language_reference.md (about 1,700 lines) to HTML a few times,
+# and a 3,000-word paragraph full of unmatched * once, and prints the times.
+import "markdown"
+
+let text = fs.read("docs/language_reference.md")
+let runs = 0
+let start = os.time()
+while os.time() - start < 3:
+    markdown.to_html(text)
+    runs = runs + 1
+end
+let seconds = (os.time() - start) / runs
+show format("language_reference.md", "<24"), format(seconds * 1000, ".1f"), "ms per render,", format(len(text) / seconds / 1000000, ".2f"), "MB/s"
+
+let many = []
+every i from 1 to 3000:
+    many.push("*a")
+end
+start = os.time()
+markdown.to_html(many.join(" "))
+show format("3,000 unmatched *", "<24"), format((os.time() - start) * 1000, ".1f"), "ms"

@@ -1543,6 +1543,26 @@ separated by `;`.
 ### JSON (`json.`)
 `parse(text)`, `stringify(value)`.
 
+### Markdown (`import "markdown"`)
+```glow
+import "markdown"
+show markdown.to_html("# Notes\n\n- **buy** milk\n- see [docs](/docs)")
+# <h1>Notes</h1>
+# <ul>
+# <li><strong>buy</strong> milk</li>
+# <li>see <a href="/docs">docs</a></li>
+# </ul>
+```
+`markdown.to_html(text)` covers headings (`#`), paragraphs, line breaks (two
+spaces or `\` at a line's end), `*em*`, `**strong**`, `` `code` ``, fenced
+code blocks (with a language: `class="language-glow"`), `>` quotes, `-` and
+`1.` lists (nested by indenting), links, images, `<https://...>` autolinks,
+horizontal rules and tables. Text is HTML-escaped and raw HTML is shown as
+text, so Markdown written by users is safe to put in a page; a link to a
+`javascript:`, `vbscript:` or `data:` URL gets `#` instead. Headings
+underlined with `===`, code marked only by indenting, reference links and
+footnotes are not supported.
+
 ### Regular Expressions (`import "re"`)
 ```glow
 import "re"
