@@ -141,9 +141,13 @@ git -c core.autocrlf=false archive -o /tmp/change.tar $(git write-tree)
 mkdir ~/t && cd ~/t && tar xf /mnt/c/.../change.tar && scripts/test-all-modes.sh
 ```
 
-Some files are stored with CRLF line endings (`lib/web.glow`,
-`docs/language_reference.md`, `docs/web_guide.md`, `src/win_pthread.h`). Keep
-their CRLF when you edit them, or the diff rewrites every line.
+Some files are stored with CRLF line endings, among them `src/glowlang.y`,
+`src/compiler.c`, `lib/web.glow` and `docs/language_reference.md`;
+`git ls-files --eol <file>` shows `i/crlf` for them. Keep their CRLF when you
+edit them (`sed -i` and some editors drop it), or the diff rewrites every
+line. After every edit made through a shell or a script, look at
+`git diff --stat`: a few changed lines should show as a few, and a lost
+backslash or quote shows up in `git diff` before it breaks the build.
 
 Tests that need a server start one on a fixed, unusual port inside the test
 (see `tests/test_tools.glow`) or run the program under test as a separate
