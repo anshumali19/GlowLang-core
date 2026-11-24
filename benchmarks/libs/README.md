@@ -122,12 +122,15 @@ caches its last 128 results. Runs differed by under 2%. Measured 2026-11-24.
 | Work | GlowLang (calls/s) | Python (calls/s) |
 |---|---|---|
 | parse | 235,248 | 330,629 |
-| encode | 267,388 | 1,446,273 |
-| query string from a dict | 154,547 | 435,761 |
+| encode | 475,246 | 1,446,273 |
+| query string from a dict | 180,761 | 435,761 |
 | join | 253,020 | 406,728 |
 
 Python's `quote` turns the text into bytes and maps them through a table in
-one call; `url.encode` looks at one character at a time.
+one call; `url.encode` looks at one character at a time. Since 2026-11-25 it
+looks each ASCII character up in a table of 128 answers instead of testing
+its ranges, which took encode from 267,388 to 475,246 calls/s and query
+from 154,547 to 180,761 (measured that day, runs within 4%).
 
 ## semver
 

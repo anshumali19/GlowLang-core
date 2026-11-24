@@ -27,6 +27,11 @@ show url.build(changed)
 show "--- encode and decode"
 show url.encode("safe-._~09AZaz"), url.encode("a b&c=d/é?#%+")
 show url.decode(url.encode("tea & cake / café 😀")), url.encode(42)
+let ascii = []
+every i from 1 to 127:
+    ascii.push(chr(i))
+end
+show url.encode(ascii.join(""))
 show url.query({"q": "tea & cake", "tag": ["a", "b c"], "empty": "", "flag": none})
 show url.parse_query("?q=tea+%26+cake&tag=a&tag=b%20c&empty=&flag&&=x")
 show url.query({})
