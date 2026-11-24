@@ -1,0 +1,24 @@
+--- reading cookies
+{"session": "abc123", "theme": "dark", "empty": ""}
+{}
+--- setting cookies
+Set-Cookie: session=abc123; Path=/; HttpOnly; SameSite=Lax
+Set-Cookie: theme=dark; Path=/; Max-Age=3600; Secure; SameSite=Strict
+Set-Cookie: n=42; Path=/app; Domain=example.com; HttpOnly; SameSite=Lax
+Set-Cookie: old=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax
+--- refused
+set_cookie: "" is not a valid cookie name
+set_cookie: "a b" is not a valid cookie name
+set_cookie: "a;b" is not a valid cookie name
+set_cookie: the value for "s" may only hold ASCII letters, digits and !#$%&'()*+-./:<=>?@[]^_`{|}~ (no spaces, quotes, commas or semicolons)
+set_cookie: the value for "s" may only hold ASCII letters, digits and !#$%&'()*+-./:<=>?@[]^_`{|}~ (no spaces, quotes, commas or semicolons)
+set_cookie: the value for "s" may only hold ASCII letters, digits and !#$%&'()*+-./:<=>?@[]^_`{|}~ (no spaces, quotes, commas or semicolons)
+set_cookie: the value for "s" may only hold ASCII letters, digits and !#$%&'()*+-./:<=>?@[]^_`{|}~ (no spaces, quotes, commas or semicolons)
+set_cookie: options may not contain line breaks
+--- a real server
+[GlowWeb] Starting server on port 29893
+200 logged in session=s3cret; Path=/; HttpOnly; SameSite=Lax
+{"session": "s3cret"}
+{"session": null}
+200 {"patched": "7", "body": {"done": true}}
+404

@@ -1,0 +1,71 @@
+# GlowWeb cookies (req.cookies, res.set_cookie, res.clear_cookie) and PATCH
+# routes.
+use "lib/web.glow"
+
+show "--- reading cookies"
+let req = Request("GET / HTTP/1.1\r\nHost: x\r\ncookie: session=abc123; theme=dark ;empty=; =bad; flag\r\n\r\n")
+show req.cookies()
+show Request("GET / HTTP/1.1\r\nHost: x\r\n\r\n").cookies()
+
+show "--- setting cookies"
+let res = Response()
+res.set_cookie("session", "abc123")
+res.set_cookie("theme", "dark", {"max_age": 3600, "secure": true, "same_site": "Strict", "http_only": false})
+res.set_cookie("n", 42, {"path": "/app", "domain": "example.com"})
+res.clear_cookie("old")
+res.text("hi")
+for each line in res.build().split("\r\n"):
+    when line.starts_with("Set-Cookie"):
+        show line
+    end
+end
+
+show "--- refused"
+for each bad in [["", "x"], ["a b", "x"], ["a;b", "x"], ["s", "two words"], ["s", "a;b=c"], ["s", "é"], ["s", "x\r\nSet-Cookie: admin=1"]]:
+    try:
+        Response().set_cookie(bad[0], bad[1])
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end
+try:
+    Response().set_cookie("s", "x", {"path": "/\r\nX-Evil: 1"})
+catch e:
+    show e
+end
+
+show "--- a real server"
+let port = 29893
+let server = Server(port)
+server.get("/login", lambda(req, res):
+    res.set_cookie("session", "s3cret")
+    res.text("logged in")
+end)
+server.get("/me", lambda(req):
+    return {"session": req.cookies()["session"] ?? none}
+end)
+server.patch("/notes/:id", lambda(req):
+    return {"patched": req.params["id"], "body": req.json_body()}
+end)
+spawn server.start()
+
+let base = "http://127.0.0.1:" + str(port)
+let r = none
+let tries = 0
+while r == none and tries < 100:
+    try:
+        r = http.request("GET", base + "/login")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+show r["status"], r["body"], r["headers"]["Set-Cookie"]
+let cookie = r["headers"]["Set-Cookie"].split(";")[0]
+show http.request("GET", base + "/me", {"headers": {"Cookie": cookie}})["body"]
+show http.request("GET", base + "/me")["body"]
+let p = http.request("PATCH", base + "/notes/7", {"body": json.stringify({"done": true}), "headers": {"Content-Type": "application/json"}})
+show p["status"], p["body"]
+show http.request("PUT", base + "/notes/7")["status"]
+os.exit(0)

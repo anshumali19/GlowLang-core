@@ -48,6 +48,31 @@ func note(req):
 end
 ```
 
+Besides `get`, `post`, `put` and `del` there is `patch`, for changing part
+of a resource.
+
+### Cookies
+`req.cookies()` gives the request's cookies as a dict.
+`res.set_cookie(name, value, options)` sets one; it is `HttpOnly` (scripts in
+the page cannot read it), `SameSite=Lax` and `Path=/` unless the options say
+otherwise: `max_age` (seconds), `path`, `domain`, `secure`, `http_only`,
+`same_site`. `res.clear_cookie(name)` removes it. A name or value with
+spaces, quotes, commas, semicolons or characters outside ASCII is refused
+with an error, so a value cannot add headers of its own.
+
+```
+@app.get("/login")
+func login(req, res):
+    res.set_cookie("session", "s3cret", {"max_age": 86400, "secure": true})
+    res.text("logged in")
+end
+
+@app.get("/me")
+func me(req):
+    return {"session": req.cookies()["session"] ?? none}
+end
+```
+
 ### Starting a project
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,
