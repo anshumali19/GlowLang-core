@@ -1,0 +1,14 @@
+--- pad
+[007] [ab   ] [abc]
+[··é] 4
+apples..   3
+kiwi....  12
+pad_start(width, fill) needs a whole-number width
+pad_start(width, fill): fill must be one character
+pad_start(width, fill): fill must be one character
+--- remove_prefix / remove_suffix
+report report.csv 1.2
+aa  abc
+--- capitalize / title
+Hello world Élan vital 
+The Quick-Brown Fox's Tail École De Paris 3rd Place
