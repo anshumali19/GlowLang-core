@@ -134,6 +134,23 @@ blueprint Request:
         return none
     end
 
+    # The request's cookies as a dict (empty when there are none).
+    action cookies():
+        let found = {}
+        let header = self.get_header("Cookie")
+        when header is none:
+            return found
+        end
+        for each raw_part in header.split(";"):
+            let part = raw_part.trim()
+            let eq = part.find("=")
+            when eq > 0:
+                found[part.slice(0, eq).trim()] = part.slice(eq + 1, len(part)).trim()
+            end
+        end
+        return found
+    end
+
     action json_body():
         when len(self.body) > 0:
             return json.parse(self.body)
@@ -160,6 +177,45 @@ blueprint Response:
         self.headers = {}
         self.body = ""
         self.sent = false
+        self.cookies = []
+    end
+
+    # Sets a cookie in the browser. HttpOnly (scripts in the page cannot
+    # read it), SameSite=Lax and Path=/ unless options say otherwise:
+    # max_age (seconds), path, domain, secure, http_only, same_site.
+    action set_cookie(name, value, options = none):
+        let o = options ?? {}
+        when name == "" or not _web_cookie_chars(name, "!#$%&'*+.^_`|~-"):
+            throw "set_cookie: \"" + name + "\" is not a valid cookie name"
+        end
+        value = str(value)
+        when not _web_cookie_chars(value, "!#$%&'()*+-./:<=>?@[]^_`{|}~"):
+            throw "set_cookie: the value for \"" + name + "\" may only hold ASCII letters, digits and !#$%&'()*+-./:<=>?@[]^_`{|}~ (no spaces, quotes, commas or semicolons)"
+        end
+        let line = name + "=" + value + "; Path=" + (o["path"] ?? "/")
+        when o.has("max_age"):
+            line = line + "; Max-Age=" + str(int(o["max_age"]))
+        end
+        when o.has("domain"):
+            line = line + "; Domain=" + o["domain"]
+        end
+        when o["secure"] ?? false:
+            line = line + "; Secure"
+        end
+        when o["http_only"] ?? true:
+            line = line + "; HttpOnly"
+        end
+        line = line + "; SameSite=" + (o["same_site"] ?? "Lax")
+        when line.contains("\r") or line.contains("\n"):
+            throw "set_cookie: options may not contain line breaks"
+        end
+        append(self.cookies, line)
+        return self
+    end
+
+    # Removes a cookie from the browser (path must match the one it was set with).
+    action clear_cookie(name, path = "/"):
+        return self.set_cookie(name, "", {"max_age": 0, "path": path})
     end
 
     action status(code):
@@ -235,6 +291,9 @@ blueprint Response:
         for each key in self.headers:
             result = result + key + ": " + self.headers[key] + "\r\n"
         end
+        for each c in self.cookies:
+            result = result + "Set-Cookie: " + c + "\r\n"
+        end
         result = result + "Content-Length: " + str(self.body).byte_len() + "\r\n"
         result = result + "\r\n" + self.body
         return result
@@ -276,6 +335,17 @@ func _web_keep_alive(req):
         return not conn.contains("close")
     end
     return conn.contains("keep-alive")
+end
+
+# Whether text has only ASCII letters, digits and the characters in extra
+# (what a cookie name or value may hold; anything else could end the header).
+func _web_cookie_chars(text, extra):
+    for each c in text:
+        when not ((c.byte_len() == 1 and c.is_alnum()) or extra.contains(c)):
+            return false
+        end
+    end
+    return true
 end
 
 # What a route path like /notes/:id matched in path, or none.
@@ -334,6 +404,10 @@ blueprint Router:
 
     action put(path, handler):
         return self.add("PUT", path, handler)
+    end
+
+    action patch(path, handler):
+        return self.add("PATCH", path, handler)
     end
 
     action del(path, handler):
@@ -569,6 +643,17 @@ blueprint Server:
             end
         end
         self.router.put(path, handler)
+        return self
+    end
+
+    action patch(path, handler = none):
+        when handler is none:
+            return lambda(h):
+                self.router.patch(path, h)
+                return h
+            end
+        end
+        self.router.patch(path, handler)
         return self
     end
 
