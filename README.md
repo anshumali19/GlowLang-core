@@ -335,7 +335,7 @@ under [Install](#-install).
 `glowlang run file.glow`. With no file, `glowlang` opens an interactive REPL.
 
 **Is GlowLang faster than Python?**
-On the benchmarks above it finishes 1.4× to 7.1× sooner than CPython 3.14, startup included. It
+On the benchmarks above it finishes 1.4× to 6.7× sooner than CPython 3.14, startup included. It
 is not as fast as compiled languages like C, Go or Rust.
 
 **Is GlowLang like Python?**
