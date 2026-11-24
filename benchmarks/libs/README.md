@@ -74,3 +74,17 @@ also written in Python. Runs differed by under 2% in both. Measured
 
 Most of the time goes to reading the text one character at a time; one
 parse of this file takes 0.22 ms.
+
+## dotenv
+
+[dotenv_bench.glow](dotenv_bench.glow) parses a 60-line `.env` text with
+plain, double-quoted and commented values. python-dotenv is not installed
+on this machine, so there is no Python column. Runs differed by under 1%.
+Measured 2026-11-24.
+
+| Parser | Parses/s |
+|---|---|
+| GlowLang `dotenv.parse` | 9,778 |
+
+That is about 0.1 ms for the file; `dotenv.load` runs once when a program
+starts.

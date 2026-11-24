@@ -1,0 +1,24 @@
+--- parse
+PORT "8000"
+APP_SECRET "s3cr#et"
+NAME "Glow \"Shop\""
+MULTI "one\ntwo"
+RAW "C:\\path\\n #not a comment"
+URL "postgres://u:p@h/db?x=1"
+EMPTY ""
+SPACED "padded value"
+DOTTED.name-1 "x"
+{} {}
+--- load
+{"GLOW_DOTENV_A": "from the file", "GLOW_DOTENV_B": "from the file"}
+from the file | from the environment
+from the file
+{}
+--- errors
+dotenv: line 2: expected NAME=value
+dotenv: line 2: expected NAME=value
+dotenv: line 2: bad name 1BAD
+dotenv: line 2: bad name A B
+dotenv: line 2: the quote is never closed
+dotenv: line 2: the quote is never closed
+dotenv: line 2: text after the closing quote

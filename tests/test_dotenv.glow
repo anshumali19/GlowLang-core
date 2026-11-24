@@ -1,0 +1,38 @@
+# dotenv.parse and dotenv.load (lib/dotenv.glow).
+import "dotenv"
+
+show "--- parse"
+let text = "# settings\n\nPORT=8000\nexport APP_SECRET = s3cr#et\nNAME=\"Glow \\\"Shop\\\"\" # quoted\nMULTI=\"one\\ntwo\"\nRAW='C:\\path\\n #not a comment'\nURL=postgres://u:p@h/db?x=1 # comment\nEMPTY=\nSPACED =   padded value   \r\nDOTTED.name-1=x\n"
+let v = dotenv.parse(text)
+for each k in v.keys():
+    show k, json.stringify(v[k])
+end
+show dotenv.parse(""), dotenv.parse("# nothing\n\n")
+
+show "--- load"
+let path = "test_dotenv_tmp.env"
+try:
+    os.unsetenv("GLOW_DOTENV_A")
+    os.unsetenv("GLOW_DOTENV_B")
+    os.setenv("GLOW_DOTENV_B", "from the environment")
+    fs.write(path, "GLOW_DOTENV_A=from the file\nGLOW_DOTENV_B=from the file\n")
+    show dotenv.load(path)
+    show os.getenv("GLOW_DOTENV_A"), "|", os.getenv("GLOW_DOTENV_B")
+    dotenv.load(path, true)
+    show os.getenv("GLOW_DOTENV_B")
+    show dotenv.load("no_such_file.env")
+finally:
+    fs.remove(path)
+    os.unsetenv("GLOW_DOTENV_A")
+    os.unsetenv("GLOW_DOTENV_B")
+end
+
+show "--- errors"
+for each bad in ["NOEQUALS", "=value", "1BAD=x", "A B=x", "A=\"open", "A='open", "A=\"x\" trailing"]:
+    try:
+        dotenv.parse("OK=1\n" + bad)
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end

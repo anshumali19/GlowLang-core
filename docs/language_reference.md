@@ -1585,6 +1585,22 @@ Scripts: `args` (the arguments after the program file), `script` (its path),
 `eprint(values...)` / `ewrite(values...)` (standard error). See the
 [shell scripting guide](shell_scripting.md).
 
+### Settings from a .env file (`import "dotenv"`)
+```glow
+import "dotenv"
+dotenv.load()                          # reads .env next to where you run
+let port = int(os.getenv("PORT", "8000"))
+```
+`dotenv.load(path, override)` reads `NAME=value` lines (default path
+`.env`) into the environment and returns them as a dict; a missing file
+gives `{}`. Variables that are already set keep their value unless
+`override` is true, so a server's real environment wins over the file.
+`dotenv.parse(text)` gives the dict without setting anything. Lines may start
+with `export `; empty lines and `#` lines are skipped. A value in double
+quotes may hold `\n`, `\t`, `\"` and `\\`; one in single quotes is taken as
+written; an unquoted value ends at ` #` and loses its outer spaces. A value
+cannot span several lines.
+
 ### Files (`fs.`)
 `read(path)`, `write(path, text)`, `append(path, text)`, `exists(path)`,
 `is_file(path)`, `is_dir(path)`, `remove(path)`, `remove_all(path)`

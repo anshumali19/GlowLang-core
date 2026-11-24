@@ -1,0 +1,19 @@
+# Parses a 60-line .env text (plain, quoted and commented values) for two
+# seconds and prints parses per second.
+import "dotenv"
+
+let lines = ["# service settings"]
+every i from 1 to 20:
+    lines.push("PLAIN_" + str(i) + "=value" + str(i))
+    lines.push("export QUOTED_" + str(i) + "=\"line one\\nline " + str(i) + "\"")
+    lines.push("URL_" + str(i) + "=https://host" + str(i) + ".example/path # where to send")
+end
+let text = lines.join("\n")
+assert(len(dotenv.parse(text)) == 60, "parsed wrong")
+let n = 0
+let start = os.time()
+while os.time() - start < 2:
+    dotenv.parse(text)
+    n = n + 1
+end
+show format("dotenv.parse", "<16"), format(int(n / (os.time() - start)), ",d"), "parses/s"

@@ -1,0 +1,97 @@
+# dotenv.glow — settings from a .env file, so secrets stay out of the code.
+#
+#   import "dotenv"
+#   dotenv.load()                     reads .env into the environment
+#   dotenv.load(path, override)       override true replaces variables that
+#                                     are already set
+#   dotenv.parse(text)                the settings as a dict
+#
+# A .env file has one NAME=value per line. Lines may start with `export `;
+# empty lines and lines starting with # are skipped. A value in "double
+# quotes" may hold \n, \t, \" and \\ escapes and # signs; one in 'single
+# quotes' is taken as written; an unquoted value ends at " #" (a comment) and
+# has its outer spaces removed. load leaves variables that are already set
+# alone, so the real environment of a server wins over the file, and returns
+# the dict it read; a missing file gives {}.
+
+import "re"
+
+func _dotenv_unquote(rest, line_no):
+    let q = rest[0]
+    let out = []
+    let i = 1
+    let n = len(rest)
+    while i < n:
+        let c = rest[i]
+        when c == q:
+            let after = rest.slice(i + 1).trim()
+            when after != "" and not after.starts_with("#"):
+                throw "dotenv: line " + str(line_no) + ": text after the closing quote"
+            end
+            return out.join("")
+        end
+        when c == "\\" and q == "\"" and i + 1 < n:
+            let e = rest[i + 1]
+            let escapes = {"n": "\n", "t": "\t", "r": "\r", "\"": "\"", "\\": "\\"}
+            when escapes.has(e):
+                out.push(escapes[e])
+                i = i + 2
+                skip
+            end
+        end
+        out.push(c)
+        i = i + 1
+    end
+    throw "dotenv: line " + str(line_no) + ": the quote is never closed"
+end
+
+func dotenv_parse(text):
+    let values = {}
+    let line_no = 0
+    for each raw in text.split("\n"):
+        line_no = line_no + 1
+        let line = raw.trim()
+        when line == "" or line.starts_with("#"):
+            skip
+        end
+        when line.starts_with("export "):
+            line = line.slice(7).trim_start()
+        end
+        let eq = line.find("=")
+        when eq <= 0:
+            throw "dotenv: line " + str(line_no) + ": expected NAME=value"
+        end
+        let name = line.slice(0, eq).trim()
+        when re.fullmatch("[A-Za-z_][A-Za-z0-9_.-]*", name) is none:
+            throw "dotenv: line " + str(line_no) + ": bad name " + name
+        end
+        let rest = line.slice(eq + 1).trim()
+        let value = rest
+        when rest.starts_with("\"") or rest.starts_with("'"):
+            value = _dotenv_unquote(rest, line_no)
+        otherwise:
+            let hash = rest.find(" #")
+            when hash >= 0:
+                value = rest.slice(0, hash).trim()
+            end
+        end
+        values[name] = value
+    end
+    return values
+end
+
+func dotenv_load(path = ".env", override = false):
+    let text = fs.read(path)
+    when text is none:
+        return {}
+    end
+    let values = dotenv_parse(text)
+    for each name in values.keys():
+        when override or os.getenv(name) is none:
+            os.setenv(name, values[name])
+        end
+    end
+    return values
+end
+
+let dotenv = {"load": dotenv_load, "parse": dotenv_parse}
