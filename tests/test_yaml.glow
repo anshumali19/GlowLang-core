@@ -60,3 +60,26 @@ for each bad in ["a: 1\na: 2", "x: -", "x: - a", "a: 1\n  b: 2", "- a\n  - b", "
         show e
     end
 end
+
+show "--- writing"
+let data = {"name": "shop", "version": "1.2.3", "port": 8080, "whole": 2.0, "on": true, "nothing": none, "yes": "yes", "num_text": "123", "true_text": "true", "url": "https://x.example/a?b=c", "colon": "a: b", "ends": "a:", "hash": "a #b", "csharp": "C#", "dash": "-x", "empty": "", "spaced": " pad ", "multi": "line1\nline2", "quote": "say \"hi\"", "café": "naïve", "del": chr(127), "list": [1, "two", none, [], {}], "nested": [[1, 2], [3]], "people": [{"name": "ana", "tags": ["a", "b"]}, {"name": "bo", "address": {"city": "Pune"}}], "deep": {"a": {"b": {"c": [1]}}}, "inf": math.inf, "ninf": -math.inf, "big": 1e20, "": "empty key", "key: odd": 1}
+let text = yaml.stringify(data)
+show text
+let back = yaml.parse(text)
+show json.stringify(back) == json.stringify(data), type(back["whole"]), back["del"] == chr(127), back["inf"] == math.inf, back["ninf"] == -math.inf
+let nan = yaml.parse(yaml.stringify({"x": math.nan}))["x"]
+show nan != nan
+show yaml.stringify([1, [2, [3]]])
+show yaml.stringify("x: y"), yaml.stringify(none), yaml.stringify({}), yaml.stringify([])
+let out_path = "test_yaml_out.yml"
+try:
+    yaml.write(out_path, {"server": {"port": 9000}})
+    show yaml.read(out_path)
+finally:
+    fs.remove(out_path)
+end
+try:
+    yaml.stringify({"a": [1, len]})
+catch e:
+    show e
+end

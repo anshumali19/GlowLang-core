@@ -1596,6 +1596,21 @@ numbers. Anchors and aliases (`&`, `*`), tags (`!!str`), several documents
 and `? ` keys are not supported; they, and other mistakes, raise an error
 that names the line.
 
+`yaml.stringify(value)` gives YAML text and `yaml.write(path, value)` saves
+it, in block style with two spaces per level. Text is written plain when it
+reads back as the same text; otherwise it is put in double quotes, as are
+`yes`, `no`, `on` and `off`, which YAML 1.1 readers such as PyYAML would take
+for booleans. `none` is written as `null`. A value that is not a dict, list,
+text, number, boolean or `none` raises an error.
+```glow
+show yaml.stringify({"name": "shop", "ports": [80, 443], "debug": "no"})
+# name: shop
+# ports:
+#   - 80
+#   - 443
+# debug: "no"
+```
+
 ### Redis (`redis.`)
 `connect(host, port)`, `get(conn, key)`, `set(conn, key, value)`.
 
