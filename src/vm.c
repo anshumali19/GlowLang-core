@@ -2644,8 +2644,8 @@ Value glow_slice(Value obj, Value startV, Value endV) {
                        variable that does not exist); it used to read as
                        none. A declared global that holds none is fine. */
                     char msg[320];
-                    const char *near = var_name ? glow_suggest_name(var_name) : NULL;
-                    if (near) snprintf(msg, sizeof(msg), "name '%.120s' is not defined; did you mean '%.120s'?", var_name, near);
+                    const char *suggestion = var_name ? glow_suggest_name(var_name) : NULL;
+                    if (suggestion) snprintf(msg, sizeof(msg), "name '%.120s' is not defined; did you mean '%.120s'?", var_name, suggestion);
                     else snprintf(msg, sizeof(msg), "name '%.120s' is not defined", var_name ? var_name : "?");
                     pending_exception = value_string_copy(msg);
                     has_exception = 1;
@@ -3641,9 +3641,9 @@ Value glow_slice(Value obj, Value startV, Value endV) {
             }
         } else {
             char msg[360];
-            const char *near = GET_TYPE(obj) == VAL_NONE ? NULL : glow_suggest_method(obj, mname);
+            const char *suggestion = GET_TYPE(obj) == VAL_NONE ? NULL : glow_suggest_method(obj, mname);
             if (GET_TYPE(obj) == VAL_NONE) snprintf(msg, sizeof msg, "cannot call method '%.100s' of none", mname ? mname : "?");
-            else if (near) snprintf(msg, sizeof msg, "%s has no method '%.100s'; did you mean '%.100s'?", glow_type_name(obj), mname, near);
+            else if (suggestion) snprintf(msg, sizeof msg, "%s has no method '%.100s'; did you mean '%.100s'?", glow_type_name(obj), mname, suggestion);
             else snprintf(msg, sizeof msg, "%s has no method '%.100s'", glow_type_name(obj), mname ? mname : "?");
             pending_exception = value_string_copy(msg);
             has_exception = 1;
