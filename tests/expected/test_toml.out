@@ -1,0 +1,68 @@
+--- a config file
+Glow "shop" 8080 false 0.75
+{"url": "sqlite:///C:\\data\\app.db", "pool": {"min": 1, "max": 10}, "tags": ["a", "b"]}
+{"alpha": {"ip": "10.0.0.1"}}
+[{"name": "ana", "roles": ["admin", "dev"]}, {"name": "bo", "prefs": {"theme": "dark"}}]
+--- keys
+{"a": {"b": {"c": 1, "d": 2}}, "quoted key": 3, "lit.key": 4, "site": {"google.com": true}, "-dash_": 5, "1234": 6}
+--- strings
+a "tab\thereé😀"
+b "C:\\no\\escapes"
+c "line one\nline two"
+d "joined here"
+e "raw \\n text\n"
+f "two \"\"quotes\"\""
+g ""
+h "é ü 😀"
+--- numbers
+a 99 int
+b -17 int
+c 0 int
+d 1000000 int
+e 3735928559 int
+f 493 int
+g 13 int
+h 3.14 float
+i -0.01 float
+j 5e+22 float
+k 6.626e-34 float
+l inf float
+m -inf float
+o nan float
+p 9223372036854775807 int
+--- dates stay text
+{"a": "1979-05-27T07:32:00Z", "b": "1979-05-27 07:32:00-07:00", "c": "1979-05-27", "d": "07:32:00"}
+--- arrays and inline tables
+{"a": [[1, 2], ["x"], []], "b": [{"x": 1}, {"y": {"z": 2}}], "c": {}, "d": []}
+--- line endings
+{"a": 1, "t": {"b": "x\ny"}}
+{} {}
+--- files
+{"server": {"port": 9000}}
+toml: cannot read no_such_file.toml
+--- errors
+toml: line 2: key a is defined twice
+toml: line 2: table [t] is defined twice
+toml: line 2: key a already holds a value
+toml: line 2: key a already holds a value
+toml: line 1: a string is never closed
+toml: line 2: a line break inside a "string" (use """ for several lines)
+toml: line 1: a string is never closed
+toml: line 1: a multi-line string is never closed
+toml: line 1: bad number 01 (leading zero)
+toml: line 1: bad number 1__0
+toml: line 1: bad number _1
+toml: line 1: expected , or ] in an array
+toml: line 1: expected , or } in an inline table
+toml: line 1: unexpected b after a value
+toml: line 1: expected a key, found =
+toml: line 1: expected = after the key a
+toml: line 1: expected a value, found the end
+toml: line 1: bad escape \q
+toml: line 1: bad escape \uD800
+toml: line 1: a table header must end with ]
+toml: line 1: a table header must end with ]
+toml: line 2: [[x]] names something that is not an array of tables
+toml: line 2: [[a]] names something that is not an array of tables
+toml: line 1: bad value truth
+toml: line 1: bad value 1.2.3

@@ -1,0 +1,65 @@
+# A made-up service configuration, used by toml_bench.glow and toml_bench.py.
+title = "Glow shop"
+version = "2.4.1"
+debug = false
+started = 2026-11-24T09:30:00Z
+
+[server]
+host = "0.0.0.0"
+port = 8_080
+workers = 16
+timeout = 30.5
+allowed_origins = ["https://glow.example", "https://admin.glow.example"]
+
+[database]
+url = 'postgres://shop@localhost:5432/shop'
+pool = { min = 2, max = 20, idle_seconds = 300 }
+replicas = [
+  "10.0.0.11",  # zone a
+  "10.0.0.12",  # zone b
+]
+
+[cache]
+enabled = true
+ttl = 600
+max_bytes = 0x4000_0000
+
+[logging]
+level = "info"
+format = """
+{time} {level} {message}
+"""
+files = { access = "/var/log/shop/access.log", error = "/var/log/shop/error.log" }
+
+[[routes]]
+path = "/"
+handler = "home"
+methods = ["GET"]
+
+[[routes]]
+path = "/cart"
+handler = "cart"
+methods = ["GET", "POST"]
+auth = true
+
+[[routes]]
+path = "/orders/:id"
+handler = "order"
+methods = ["GET", "PATCH", "DELETE"]
+auth = true
+rate = { per_minute = 120, burst = 20 }
+
+[features]
+new_checkout = true
+dark_mode = false
+recommendations = { enabled = true, model = "v3", weight = 0.35 }
+
+[payments.razorpay]
+key_id = "rzp_test_example"
+webhook_path = "/hooks/razorpay"
+currencies = ["INR", "USD"]
+
+[payments.limits]
+min = 1
+max = 500_000
+daily = 2_000_000

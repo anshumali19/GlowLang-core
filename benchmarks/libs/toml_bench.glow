@@ -1,0 +1,14 @@
+# Parses toml_config.toml (about 70 lines) again and again for two seconds and
+# prints parses per second.
+import "toml"
+
+let text = fs.read("benchmarks/libs/toml_config.toml")
+let config = toml.parse(text)
+assert(config["routes"][2]["rate"]["burst"] == 20, "parsed wrong")
+let n = 0
+let start = os.time()
+while os.time() - start < 2:
+    toml.parse(text)
+    n = n + 1
+end
+show format("toml.parse", "<16"), format(int(n / (os.time() - start)), ",d"), "parses/s"
