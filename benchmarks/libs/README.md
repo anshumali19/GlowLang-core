@@ -75,6 +75,11 @@ also written in Python. Runs differed by under 2% in both. Measured
 Most of the time goes to reading the text one character at a time; one
 parse of this file takes 0.22 ms.
 
+The same benchmark then writes the parsed dict back with `toml.stringify`:
+13,105 times a second, 0.08 ms each (runs differed by under 4%, measured
+2026-11-25). Python's standard library has no TOML writer and `tomli_w` is
+not installed on this machine, so there is no Python figure.
+
 ## dotenv
 
 [dotenv_bench.glow](dotenv_bench.glow) parses a 60-line `.env` text with

@@ -66,3 +66,49 @@ toml: line 2: [[x]] names something that is not an array of tables
 toml: line 2: [[a]] names something that is not an array of tables
 toml: line 1: bad value truth
 toml: line 1: bad value 1.2.3
+--- writing
+title = "Example"
+n = 3
+pi = 3.0
+ok = true
+tags = ["a", "b"]
+"odd key" = "x\ty\""
+"café" = "\u007F"
+empty = []
+mixed = [1, { a = 2, b = {} }]
+
+[server]
+host = "h"
+port = 80
+
+[server.tls]
+on = false
+
+[deep.a.b]
+c = 1
+
+[[users]]
+name = "ana"
+
+[users.roles]
+admin = true
+
+[[users]]
+
+[blank]
+
+true float
+""
+f = 1e+20
+g = -0.5
+i = inf
+j = -inf
+k = nan
+big = 12345678901234
+
+{"server": {"port": 9000}}
+toml: cannot write none (at a)
+toml: cannot write none (at t.a)
+toml: cannot write native_func (at f)
+toml: can only write a dict, not list
+toml: can only write a dict, not string

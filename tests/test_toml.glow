@@ -57,3 +57,26 @@ for each bad in ["a = 1\na = 2", "[t]\n[t]", "a = 1\n[a]", "a = 1\na.b = 2", "a 
         show e
     end
 end
+
+show "--- writing"
+let data = {"title": "Example", "n": 3, "pi": 3.0, "ok": true, "tags": ["a", "b"], "odd key": "x\ty\"", "café": chr(127), "empty": [], "mixed": [1, {"a": 2, "b": {}}], "server": {"host": "h", "port": 80, "tls": {"on": false}}, "deep": {"a": {"b": {"c": 1}}}, "users": [{"name": "ana", "roles": {"admin": true}}, {}], "blank": {}}
+let text = toml.stringify(data)
+show text
+show json.stringify(toml.parse(text)) == json.stringify(data), type(toml.parse(text)["pi"])
+show json.stringify(toml.stringify({}))
+show toml.stringify({"f": 1e20, "g": -0.5, "i": math.inf, "j": -math.inf, "k": math.nan, "big": 12345678901234})
+let out_path = "test_toml_out.toml"
+try:
+    toml.write(out_path, {"server": {"port": 9000}})
+    show toml.read(out_path)
+finally:
+    fs.remove(out_path)
+end
+for each bad in [{"a": none}, {"t": {"a": [1, none]}}, {"f": len}, [1], "x"]:
+    try:
+        toml.stringify(bad)
+        show "allowed"
+    catch e:
+        show e
+    end
+end

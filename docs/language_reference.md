@@ -1918,6 +1918,21 @@ Dates and times stay text (`"1979-05-27T07:32:00Z"`); `datetime.parse`
 reads them. A key or table defined twice, or any other mistake, raises an
 error that names the line.
 
+`toml.stringify(dict)` gives TOML text and `toml.write(path, dict)` saves
+it. Each table lists its plain values first and its tables after; a nested
+dict becomes a `[table]`, a list of dicts an array of tables `[[name]]`, and
+a dict inside a list an inline table. Text that was a date when read is
+written back as a quoted string. TOML has no null, so a `none` value raises
+an error, as does any value that is not a dict, list, text, number or
+boolean.
+```glow
+show toml.stringify({"name": "shop", "server": {"port": 8080}})
+# name = "shop"
+#
+# [server]
+# port = 8080
+```
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection
