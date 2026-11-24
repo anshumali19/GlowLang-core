@@ -1692,6 +1692,28 @@ them as `hash.password(pw)` and `hash.check_password(pw, stored)`.
 ### Threads (`threads.`)
 `join_all()`, `active()`. See also `lib/async.glow` and `lib/sync.glow`.
 
+### Logging (`import "log"`)
+```glow
+import "log"
+log.info("server started", {"port": 8080})
+# 2026-11-24T09:30:00.123Z INFO server started port=8080
+let req_log = log.child({"request_id": "a1"})
+req_log.warn("slow answer", {"ms": 950})
+# 2026-11-24T09:30:01.456Z WARN slow answer request_id=a1 ms=950
+```
+`log.debug`, `log.info`, `log.warn` and `log.error` take a message and a dict
+of fields and write one line to standard error. `log.set_level(level)` skips
+lines below `"debug"`, `"info"` (the default), `"warn"` or `"error"`, or all
+with `"off"`; the `LOG_LEVEL` environment variable sets it at start.
+`log.set_format("json")` writes one JSON object per line (`time`, `level`,
+`msg`, then the fields; a field with one of those names replaces it), and
+`log.set_output(path)` appends to a file instead (`none` goes back to
+standard error). `log.child(fields)` gives a Logger that adds those fields
+to every line; it has the same four methods and its own `child`. Times are
+UTC with milliseconds. In text lines, values with spaces, quotes, `=` or
+line breaks are written as JSON strings, so a line can always be split
+again.
+
 ### Debugging (`debug.`)
 `assert(condition, message)`, `stacktrace()`, `dump_stack()`, `profile_start()`, `profile_stop()`.
 

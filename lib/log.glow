@@ -1,0 +1,161 @@
+# log.glow — log lines with a level, a time and fields.
+#
+#   import "log"
+#   log.info("server started", {"port": 8080})
+#   # 2026-11-24T09:30:00.123Z INFO server started port=8080
+#   log.debug(...), log.warn(...), log.error(...)
+#   log.set_level("debug")      lines below this level are skipped;
+#                               "debug", "info" (the default), "warn", "error"
+#                               or "off". The LOG_LEVEL variable sets it too.
+#   log.set_format("json")      one JSON object per line instead
+#   log.set_output("app.log")   append to a file; none goes back to stderr
+#   let req_log = log.child({"request_id": "a1"})  a Logger that adds these
+#                               fields to every line; it has the same
+#                               debug/info/warn/error and its own child()
+#
+# Times are UTC with milliseconds. In text lines a value with a space, a
+# quote, = or a line break is quoted as JSON, so every line stays one line
+# and can be split again. Logging is safe from several threads at once.
+
+import "datetime"
+
+let _LOG_RANK = {"debug": 10, "info": 20, "warn": 30, "error": 40, "off": 99}
+let _log_level = 20
+let _log_json = false
+let _log_path = none
+
+func _log_rank(level):
+    let name = str(level).lower()
+    when not _LOG_RANK.has(name):
+        throw "log: the level must be debug, info, warn, error or off, not " + str(level)
+    end
+    return _LOG_RANK[name]
+end
+
+when os.getenv("LOG_LEVEL") is not none:
+    _log_level = _log_rank(os.getenv("LOG_LEVEL"))
+end
+
+func log_set_level(level):
+    _log_level = _log_rank(level)
+end
+
+func log_set_format(format_name):
+    when format_name != "text" and format_name != "json":
+        throw "log: the format must be text or json, not " + str(format_name)
+    end
+    _log_json = format_name == "json"
+end
+
+func log_set_output(path):
+    _log_path = path
+end
+
+func _log_value(value):
+    let text = str(value)
+    when type(value) == "string":
+        when text == "" or text.contains(" ") or text.contains("\"") or text.contains("=") or text.contains("\n") or text.contains("\r") or text.contains("\t"):
+            return json.stringify(text)
+        end
+        return text
+    end
+    when type(value) == "list" or type(value) == "dict":
+        return json.stringify(json.stringify(value))
+    end
+    return text
+end
+
+func _log_write(level, message, base, fields):
+    when _LOG_RANK[level] < _log_level:
+        return none
+    end
+    let stamp = datetime.utcnow().format("%Y-%m-%dT%H:%M:%S.%f").slice(0, 23) + "Z"
+    let line = ""
+    when _log_json:
+        let record = {"time": stamp, "level": level, "msg": str(message)}
+        for each source in [base, fields]:
+            when source is not none:
+                for each k in source.keys():
+                    record[k] = source[k]
+                end
+            end
+        end
+        line = json.stringify(record)
+    otherwise:
+        let parts = [stamp, level.upper(), str(message).replace("\r", "\\r").replace("\n", "\\n")]
+        for each source in [base, fields]:
+            when source is not none:
+                for each k in source.keys():
+                    parts.push(str(k) + "=" + _log_value(source[k]))
+                end
+            end
+        end
+        line = parts.join(" ")
+    end
+    when _log_path is none:
+        os.eprint(line)
+    otherwise:
+        fs.append(_log_path, line + "\n")
+    end
+end
+
+blueprint Logger:
+    func init(fields = none):
+        self.fields = fields ?? {}
+    end
+
+    func child(fields):
+        let merged = {}
+        for each k in self.fields.keys():
+            merged[k] = self.fields[k]
+        end
+        for each k in fields.keys():
+            merged[k] = fields[k]
+        end
+        return Logger(merged)
+    end
+
+    func debug(message, fields = none):
+        _log_write("debug", message, self.fields, fields)
+    end
+
+    func info(message, fields = none):
+        _log_write("info", message, self.fields, fields)
+    end
+
+    func warn(message, fields = none):
+        _log_write("warn", message, self.fields, fields)
+    end
+
+    func error(message, fields = none):
+        _log_write("error", message, self.fields, fields)
+    end
+end
+
+let _log_root = Logger()
+
+func log_debug(message, fields = none):
+    _log_write("debug", message, none, fields)
+end
+
+func log_info(message, fields = none):
+    _log_write("info", message, none, fields)
+end
+
+func log_warn(message, fields = none):
+    _log_write("warn", message, none, fields)
+end
+
+func log_error(message, fields = none):
+    _log_write("error", message, none, fields)
+end
+
+func log_child(fields):
+    return _log_root.child(fields)
+end
+
+let log = {
+    "debug": log_debug, "info": log_info, "warn": log_warn, "error": log_error,
+    "child": log_child, "set_level": log_set_level, "set_format": log_set_format,
+    "set_output": log_set_output
+}

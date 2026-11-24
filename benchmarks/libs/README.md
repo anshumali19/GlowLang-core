@@ -142,3 +142,18 @@ Measured 2026-11-24.
 
 `packaging` builds a key once per version and compares the keys;
 `semver.compare` compares field by field each time.
+
+## log
+
+[log_bench.glow](log_bench.glow) writes 100,000 info lines with two fields
+to a file, then makes 1,000,000 debug calls that the level skips.
+[log_bench.py](log_bench.py) does the same with Python's `logging` module
+(written in Python) and a FileHandler with the same kind of line. Runs
+differed by under 6% in GlowLang and 8% in Python. Measured 2026-11-24.
+
+| Work | GlowLang | Python |
+|---|---|---|
+| info line to a file | 277,295 lines/s | 208,212 lines/s |
+| skipped debug call | 7,292,678 calls/s | 14,524,168 calls/s |
+
+`log` opens the file for each line (`fs.append`); Python keeps it open.
