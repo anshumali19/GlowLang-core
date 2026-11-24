@@ -1671,6 +1671,37 @@ line that holds only a section, comment or partial tag is removed whole.
 Values are looked up in dicts, not in objects. `template.escape(text)` is
 the HTML escaping on its own.
 
+### Heaps, Deques and Counting (`import "collections"`)
+```glow
+import "collections"
+let jobs = collections.Heap(lambda(j):
+    return j["priority"]
+end)
+jobs.push({"priority": 2, "name": "deploy"})
+jobs.push({"priority": 1, "name": "test"})
+show jobs.pop()["name"], jobs.len()          # test 1
+
+let q = collections.Deque([1, 2])
+q.push_front(0)
+q.push_back(3)
+show q.pop_front(), q.pop_back(), q.to_list()  # 0 3 [1, 2]
+
+let counts = collections.count("a b a c a b".split(" "))
+show counts                                   # {"a": 3, "b": 2, "c": 1}
+show collections.most_common(counts, 2)       # [["a", 3], ["b", 2]]
+```
+`collections.Heap(key, descending)` gives the smallest item first (the
+largest with `descending` true), ordered by `key(item)` when a key is given;
+`push` and `pop` take O(log n), and items with equal keys are never compared
+with each other. It has `push`, `pop`, `peek`, `len` and `is_empty`.
+`collections.Deque(items)` adds and removes at both ends in O(1): `push_back`,
+`push_front`, `pop_back`, `pop_front`, `peek_back`, `peek_front`, `len`,
+`is_empty` and `to_list`. Popping or peeking an empty one is an error.
+`collections.count(items)` gives a dict of how often each item occurs (the
+keys are text, as in every dict: `count([3, 3])` is `{"3": 2}`), and
+`collections.most_common(counts, n)` the `n` most frequent as `[item, count]`
+pairs, ties in the order first counted.
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection

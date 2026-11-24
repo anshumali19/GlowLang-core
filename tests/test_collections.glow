@@ -1,0 +1,119 @@
+# Heap, Deque, count and most_common (lib/collections.glow).
+import "collections"
+
+show "--- heap"
+let h = collections.Heap()
+for each x in [5, 3, 8, 1, 9, 2, 7, 3, 0, 6]:
+    h.push(x)
+end
+show h.len(), h.peek()
+let out = []
+while not h.is_empty():
+    out.push(h.pop())
+end
+show out, h.len()
+
+let big = collections.Heap(none, true)
+for each x in [5, 3, 8, 1, 9]:
+    big.push(x)
+end
+show big.pop(), big.pop(), big.pop(), big.pop(), big.pop()
+
+# Tasks by priority; equal priorities are never compared as dicts.
+let tasks = collections.Heap(lambda(t):
+    return t["p"]
+end)
+tasks.push({"p": 2, "name": "write"})
+tasks.push({"p": 1, "name": "plan"})
+tasks.push({"p": 2, "name": "test"})
+tasks.push({"p": 0, "name": "wake"})
+let names = []
+while not tasks.is_empty():
+    names.push(tasks.pop()["name"])
+end
+show names.len(), names[0], names[1], sorted([names[2], names[3]])
+
+let words = collections.Heap()
+for each w in ["pear", "apple", "fig"]:
+    words.push(w)
+end
+show words.pop(), words.pop(), words.pop()
+
+# Random pushes and pops agree with sorting.
+random_seed(7)
+let rh = collections.Heap()
+let kept = []
+every i from 1 to 2000:
+    let v = random_int(0, 500)
+    rh.push(v)
+    kept.push(v)
+    when i % 3 == 0:
+        kept = sorted(kept)
+        let want = kept[0]
+        kept = kept[1:]
+        when rh.pop() != want:
+            show "heap order broken at", i
+        end
+    end
+end
+let rest = []
+while not rh.is_empty():
+    rest.push(rh.pop())
+end
+show rest == sorted(kept), len(rest)
+
+show "--- deque"
+let q = collections.Deque([1, 2, 3])
+q.push_back(4)
+q.push_front(0)
+show q.to_list(), q.len(), q.peek_front(), q.peek_back()
+show q.pop_front(), q.pop_back(), q.to_list()
+# Grows past its first size while wrapped around.
+let d = collections.Deque()
+every i from 1 to 6:
+    d.push_back(i)
+end
+d.pop_front()
+d.pop_front()
+every i from 7 to 30:
+    d.push_back(i)
+end
+d.push_front(2)
+show d.len(), d.to_list()
+let drained = []
+while not d.is_empty():
+    drained.push(d.pop_back())
+end
+show drained.len(), drained[0], drained[28], d.to_list()
+
+show "--- counting"
+let counts = collections.count("the cat and the hat and the bat".split(" "))
+show counts
+show collections.most_common(counts, 2)
+show collections.most_common(collections.count([3, 1, 3, 2, 1, 3]))
+show collections.count([]), collections.most_common({}), collections.most_common(counts, 0)
+show collections.count("hello")
+
+show "--- errors"
+let empty_heap = collections.Heap()
+let empty_q = collections.Deque()
+for each what in ["pop", "peek", "pop_front", "pop_back", "peek_front", "peek_back"]:
+    try:
+        when what == "pop":
+            empty_heap.pop()
+        eif what == "peek":
+            empty_heap.peek()
+        eif what == "pop_front":
+            empty_q.pop_front()
+        eif what == "pop_back":
+            empty_q.pop_back()
+        eif what == "peek_front":
+            empty_q.peek_front()
+        otherwise:
+            empty_q.peek_back()
+        end
+        show "allowed", what
+    catch e:
+        show e
+    end
+end
