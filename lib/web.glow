@@ -444,6 +444,17 @@ blueprint Router:
         end
         return none
     end
+
+    # The methods that have a route for path, in the order they were added.
+    action methods_for(path):
+        let found = []
+        for each r in self.routes:
+            when (r.path == path or (r.path.contains("/:") and _web_match(r.path, path) is not none)) and not found.contains(r.method):
+                found.push(r.method)
+            end
+        end
+        return found
+    end
 end
 
 # ─── Middleware Chain ───
@@ -773,8 +784,13 @@ blueprint Server:
                     res.status(500).send_json({"error": "Internal Server Error"})
                 end
             otherwise:
-                # Try static files
-                when self.static_dir is not none:
+                # A known path asked with another method: 405 and the methods
+                # it takes, then static files, then 404.
+                let allowed = self.router.methods_for(req.path)
+                when len(allowed) > 0:
+                    res.headers["Allow"] = ", ".join(allowed)
+                    res.status(405).send_json({"error": "Method Not Allowed"})
+                eif self.static_dir is not none:
                     serve_static(self.static_dir, req, res)
                 otherwise:
                     res.status(404).send_json({"error": "Not Found"})
