@@ -1,0 +1,474 @@
+# toml.glow — read TOML 1.0 configuration files.
+#
+#   import "toml"
+#   let config = toml.parse(text)     a dict
+#   let config = toml.read(path)
+#
+# Covers tables [a.b], arrays of tables [[a]], dotted and quoted keys, basic
+# and literal strings (also the """ and ''' multi-line kinds), integers
+# (with _, 0x, 0o, 0b), floats (inf, nan), booleans, arrays and inline
+# tables. Dates and times are kept as their text ("1979-05-27T07:32:00Z");
+# pass them to datetime.parse to work with them. A key or table defined
+# twice, or any other mistake, raises an error that names the line.
+
+blueprint _TomlParser:
+    func init(text):
+        self.s = text
+        self.n = len(text)
+        self.i = 0
+        self.root = {}
+        # Tables made by a [header], by id, so a second [header] is an error.
+        self.defined = {}
+        self.current = self.root
+    end
+
+    func found():
+        when self.i >= self.n:
+            return "the end"
+        end
+        return self.s[self.i]
+    end
+
+    func fail(message):
+        let line = self.s.slice(0, self.i).count("\n") + 1
+        throw "toml: line " + str(line) + ": " + message
+    end
+
+    func peek(k = 0):
+        when self.i + k < self.n:
+            return self.s[self.i + k]
+        end
+        return ""
+    end
+
+    func skip_spaces():
+        while self.i < self.n:
+            let c = self.s[self.i]
+            when c != " " and c != "\t":
+                return none
+            end
+            self.i = self.i + 1
+        end
+    end
+
+    func skip_comment():
+        when self.peek() == "#":
+            while self.i < self.n and self.s[self.i] != "\n":
+                self.i = self.i + 1
+            end
+        end
+    end
+
+    # Spaces, comments and line breaks, as allowed inside arrays.
+    func skip_blank():
+        while true:
+            self.skip_spaces()
+            self.skip_comment()
+            let c = self.peek()
+            when c == "\n":
+                self.i = self.i + 1
+            eif c == "\r" and self.peek(1) == "\n":
+                self.i = self.i + 2
+            otherwise:
+                return none
+            end
+        end
+    end
+
+    # After a key/value pair or a header only a comment may follow on the line.
+    func end_line():
+        self.skip_spaces()
+        self.skip_comment()
+        let c = self.peek()
+        when c == "\n":
+            self.i = self.i + 1
+        eif c == "\r" and self.peek(1) == "\n":
+            self.i = self.i + 2
+        eif c != "":
+            self.fail("unexpected " + c + " after a value")
+        end
+    end
+
+    func parse():
+        while true:
+            self.skip_blank()
+            when self.i >= self.n:
+                return self.root
+            end
+            when self.peek() == "[":
+                self.header()
+            otherwise:
+                self.pair(self.current)
+            end
+            self.end_line()
+        end
+    end
+
+    func bare_key():
+        let start = self.i
+        while self.i < self.n:
+            let c = self.s[self.i]
+            when not (c.is_alnum() and c.byte_len() == 1) and c != "_" and c != "-":
+                stop
+            end
+            self.i = self.i + 1
+        end
+        when self.i == start:
+            self.fail("expected a key, found " + self.found())
+        end
+        return self.s.slice(start, self.i)
+    end
+
+    # A key, maybe dotted: a list of its parts.
+    func key():
+        let parts = []
+        while true:
+            self.skip_spaces()
+            let c = self.peek()
+            when c == "\"":
+                parts.push(self.basic_string())
+            eif c == "'":
+                parts.push(self.literal_string())
+            otherwise:
+                parts.push(self.bare_key())
+            end
+            self.skip_spaces()
+            when self.peek() != ".":
+                return parts
+            end
+            self.i = self.i + 1
+        end
+    end
+
+    # The table at path below table, made when missing. Returns [table, id].
+    func walk(table, path, id):
+        for each k in path:
+            when not table.has(k):
+                table[k] = {}
+            end
+            let next = table[k]
+            when type(next) == "list" and len(next) > 0 and type(next[len(next) - 1]) == "dict":
+                id = id + "\n" + k + "#" + str(len(next))
+                table = next[len(next) - 1]
+            eif type(next) == "dict":
+                id = id + "\n" + k
+                table = next
+            otherwise:
+                self.fail("key " + k + " already holds a value")
+            end
+        end
+        return [table, id]
+    end
+
+    func header():
+        self.i = self.i + 1
+        let many = self.peek() == "["
+        when many:
+            self.i = self.i + 1
+        end
+        let path = self.key()
+        when self.peek() != "]" or (many and self.peek(1) != "]"):
+            self.fail("a table header must end with ]")
+        end
+        self.i = self.i + 1
+        when many:
+            self.i = self.i + 1
+            let parent = self.walk(self.root, path[:-1], "")
+            let last = path[len(path) - 1]
+            let t = parent[0]
+            when not t.has(last):
+                t[last] = []
+            eif type(t[last]) != "list":
+                self.fail("[[" + path.join(".") + "]] names something that is not an array of tables")
+            end
+            let item = {}
+            t[last].push(item)
+            self.current = item
+        otherwise:
+            let found = self.walk(self.root, path, "")
+            when self.defined.has(found[1]):
+                self.fail("table [" + path.join(".") + "] is defined twice")
+            end
+            self.defined[found[1]] = true
+            self.current = found[0]
+        end
+    end
+
+    func pair(table):
+        let path = self.key()
+        when self.peek() != "=":
+            self.fail("expected = after the key " + path.join("."))
+        end
+        self.i = self.i + 1
+        self.skip_spaces()
+        let value = self.value()
+        let t = self.walk(table, path[:-1], "")[0]
+        let last = path[len(path) - 1]
+        when t.has(last):
+            self.fail("key " + path.join(".") + " is defined twice")
+        end
+        t[last] = value
+    end
+
+    func value():
+        let c = self.peek()
+        when c == "\"":
+            when self.peek(1) == "\"" and self.peek(2) == "\"":
+                return self.multiline("\"")
+            end
+            return self.basic_string()
+        eif c == "'":
+            when self.peek(1) == "'" and self.peek(2) == "'":
+                return self.multiline("'")
+            end
+            return self.literal_string()
+        eif c == "[":
+            return self.array()
+        eif c == "{":
+            return self.inline_table()
+        end
+        return self.scalar()
+    end
+
+    func escape():
+        let c = self.peek()
+        self.i = self.i + 1
+        let simple = {"n": "\n", "t": "\t", "r": "\r", "\"": "\"", "\\": "\\", "b": chr(8), "f": chr(12), "e": chr(27)}
+        when simple.has(c):
+            return simple[c]
+        end
+        when c == "u" or c == "U":
+            let size = 4
+            when c == "U":
+                size = 8
+            end
+            let hex = self.s.slice(self.i, self.i + size)
+            let code = -1
+            try:
+                when len(hex) == size and not hex.contains("-") and not hex.contains("+"):
+                    code = int(hex, 16)
+                end
+            catch e:
+                code = -1
+            end
+            when code < 0 or code > 1114111 or (code >= 55296 and code <= 57343):
+                self.fail("bad escape \\" + c + hex)
+            end
+            self.i = self.i + size
+            return chr(code)
+        end
+        self.fail("bad escape \\" + c)
+    end
+
+    func basic_string():
+        self.i = self.i + 1
+        let out = []
+        while true:
+            when self.i >= self.n:
+                self.fail("a string is never closed")
+            end
+            let c = self.s[self.i]
+            self.i = self.i + 1
+            when c == "\"":
+                return out.join("")
+            eif c == "\\":
+                out.push(self.escape())
+            eif c == "\n":
+                self.fail("a line break inside a \"string\" (use \"\"\" for several lines)")
+            otherwise:
+                out.push(c)
+            end
+        end
+    end
+
+    func literal_string():
+        self.i = self.i + 1
+        let start = self.i
+        while self.i < self.n and self.s[self.i] != "'":
+            when self.s[self.i] == "\n":
+                self.fail("a line break inside a 'string' (use ''' for several lines)")
+            end
+            self.i = self.i + 1
+        end
+        when self.i >= self.n:
+            self.fail("a string is never closed")
+        end
+        self.i = self.i + 1
+        return self.s.slice(start, self.i - 1)
+    end
+
+    # """...""" (escapes, and \ at a line end joins lines) or '''...'''.
+    func multiline(q):
+        self.i = self.i + 3
+        when self.peek() == "\n":
+            self.i = self.i + 1
+        eif self.peek() == "\r" and self.peek(1) == "\n":
+            self.i = self.i + 2
+        end
+        let out = []
+        while true:
+            when self.i >= self.n:
+                self.fail("a multi-line string is never closed")
+            end
+            let c = self.s[self.i]
+            when c == q and self.peek(1) == q and self.peek(2) == q:
+                # Up to two quotes right before the closing three belong to the text.
+                when self.peek(3) == q:
+                    out.push(q)
+                    self.i = self.i + 1
+                otherwise:
+                    self.i = self.i + 3
+                    return out.join("")
+                end
+            eif c == "\\" and q == "\"":
+                self.i = self.i + 1
+                let k = 0
+                while self.peek(k) == " " or self.peek(k) == "\t":
+                    k = k + 1
+                end
+                when self.peek(k) == "\n" or (self.peek(k) == "\r" and self.peek(k + 1) == "\n"):
+                    self.i = self.i + k
+                    while self.peek() == " " or self.peek() == "\t" or self.peek() == "\n" or self.peek() == "\r":
+                        self.i = self.i + 1
+                    end
+                otherwise:
+                    out.push(self.escape())
+                end
+            eif c == "\r" and self.peek(1) == "\n":
+                out.push("\n")
+                self.i = self.i + 2
+            otherwise:
+                out.push(c)
+                self.i = self.i + 1
+            end
+        end
+    end
+
+    func array():
+        self.i = self.i + 1
+        let items = []
+        while true:
+            self.skip_blank()
+            when self.peek() == "]":
+                self.i = self.i + 1
+                return items
+            end
+            items.push(self.value())
+            self.skip_blank()
+            let c = self.peek()
+            when c == ",":
+                self.i = self.i + 1
+            eif c != "]":
+                self.fail("expected , or ] in an array")
+            end
+        end
+    end
+
+    func inline_table():
+        self.i = self.i + 1
+        let table = {}
+        self.skip_spaces()
+        when self.peek() == "}":
+            self.i = self.i + 1
+            return table
+        end
+        while true:
+            self.pair(table)
+            self.skip_spaces()
+            let c = self.peek()
+            self.i = self.i + 1
+            when c == "}":
+                return table
+            eif c != ",":
+                self.i = self.i - 1
+                self.fail("expected , or } in an inline table")
+            end
+        end
+    end
+
+    # A number, boolean, date or time: the text up to the next separator.
+    func scalar():
+        let start = self.i
+        while self.i < self.n:
+            let c = self.s[self.i]
+            when c == " " and self.i - start == 10 and self.peek(1).is_digit():
+                # The space between a date and its time.
+                self.i = self.i + 1
+            eif c.is_alnum() or c == "_" or c == "-" or c == "+" or c == "." or c == ":":
+                self.i = self.i + 1
+            otherwise:
+                stop
+            end
+        end
+        let t = self.s.slice(start, self.i)
+        when t == "":
+            self.fail("expected a value, found " + self.found())
+        end
+        when t == "true":
+            return true
+        eif t == "false":
+            return false
+        eif t == "inf" or t == "+inf":
+            return math.inf
+        eif t == "-inf":
+            return -math.inf
+        eif t == "nan" or t == "+nan" or t == "-nan":
+            return math.nan
+        end
+        when t.contains(":") or (len(t) >= 10 and t[4] == "-" and t[7] == "-"):
+            return t
+        end
+        return self.number(t)
+    end
+
+    func number(t):
+        let digits = t
+        when t.contains("_"):
+            when t.starts_with("_") or t.ends_with("_") or t.contains("__") or t.contains("_.") or t.contains("._"):
+                self.fail("bad number " + t)
+            end
+            digits = t.replace("_", "")
+        end
+        try:
+            let prefix = digits.slice(0, 2)
+            when prefix == "0x":
+                return int(digits.slice(2), 16)
+            eif prefix == "0o":
+                return int(digits.slice(2), 8)
+            eif prefix == "0b":
+                return int(digits.slice(2), 2)
+            end
+            let body = digits.trim_start("+-")
+            when len(body) > 1 and body[0] == "0" and body[1].is_digit():
+                self.fail("bad number " + t + " (leading zero)")
+            end
+            when digits.contains(".") or digits.contains("e") or digits.contains("E"):
+                return float(digits)
+            end
+            let v = int(body)
+            when digits.starts_with("-"):
+                return -v
+            end
+            return v
+        catch e:
+            when str(e).starts_with("toml:"):
+                throw e
+            end
+        end
+        self.fail("bad value " + t)
+    end
+end
+
+func toml_parse(text):
+    return _TomlParser(text).parse()
+end
+
+func toml_read(path):
+    let text = fs.read(path)
+    when text is none:
+        throw "toml: cannot read " + str(path)
+    end
+    return toml_parse(text)
+end
+
+let toml = {"parse": toml_parse, "read": toml_read}

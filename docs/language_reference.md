@@ -1721,6 +1721,20 @@ or a line break, writes `none` as an empty cell and ends each line with `\n`.
 the separator, `""` for a quote, and line breaks (read as `\n`); lines may
 end in `\n` or `\r\n`; empty lines are skipped. `sep` is `","` unless given.
 
+### TOML configuration (`import "toml"`)
+```glow
+import "toml"
+let config = toml.parse("[server]\nport = 8_080\nhosts = [\"a\", \"b\"]\n\n[[users]]\nname = \"ana\"\n")
+show config["server"]["port"], config["users"][0]["name"]   # 8080 ana
+```
+`toml.parse(text)` and `toml.read(path)` give a dict. They read TOML 1.0:
+tables `[a.b]`, arrays of tables `[[a]]`, dotted and quoted keys, basic and
+literal strings (with the `"""` and `'''` multi-line kinds), integers (`_`,
+`0x`, `0o`, `0b`), floats (`inf`, `nan`), booleans, arrays and inline tables.
+Dates and times stay text (`"1979-05-27T07:32:00Z"`); `datetime.parse`
+reads them. A key or table defined twice, or any other mistake, raises an
+error that names the line.
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection

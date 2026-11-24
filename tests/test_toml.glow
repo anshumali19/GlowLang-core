@@ -1,0 +1,59 @@
+# toml.parse and toml.read (lib/toml.glow).
+import "toml"
+
+show "--- a config file"
+let text = "# app settings\ntitle = \"Glow \\\"shop\\\"\"   # trailing comment\nport = 8_080\ndebug = false\nratio = 0.75\n\n[database]\nurl = 'sqlite:///C:\\data\\app.db'\npool = { min = 1, max = 10 }\ntags = [\n  \"a\",  # first\n  \"b\",\n]\n\n[servers.alpha]\nip = \"10.0.0.1\"\n\n[[users]]\nname = \"ana\"\nroles = [\"admin\", \"dev\"]\n\n[[users]]\nname = \"bo\"\n[users.prefs]\ntheme = \"dark\"\n"
+let c = toml.parse(text)
+show c["title"], c["port"], c["debug"], c["ratio"]
+show c["database"]
+show c["servers"]
+show c["users"]
+
+show "--- keys"
+show toml.parse("a.b.c = 1\na.b.d = 2\n\"quoted key\" = 3\n'lit.key' = 4\nsite.\"google.com\" = true\n-dash_ = 5\n1234 = 6")
+
+show "--- strings"
+let s = toml.parse("a = \"tab\\there\\u00e9\\U0001F600\"\nb = 'C:\\no\\escapes'\nc = \"\"\"\nline one\nline two\"\"\"\nd = \"\"\"joined \\\n     here\"\"\"\ne = '''\nraw \\n text\n'''\nf = \"\"\"two \"\"quotes\"\"\"\"\"\ng = \"\"\nh = \"é ü 😀\"")
+for each k in s.keys():
+    show k, json.stringify(s[k])
+end
+
+show "--- numbers"
+let n = toml.parse("a = +99\nb = -17\nc = 0\nd = 1_000_000\ne = 0xDEAD_beef\nf = 0o755\ng = 0b1101\nh = 3.14\ni = -0.01\nj = 5e+22\nk = 6.626e-34\nl = inf\nm = -inf\no = nan\np = 9_223_372_036_854_775_807")
+for each k in n.keys():
+    show k, n[k], type(n[k])
+end
+
+show "--- dates stay text"
+show toml.parse("a = 1979-05-27T07:32:00Z\nb = 1979-05-27 07:32:00-07:00\nc = 1979-05-27\nd = 07:32:00")
+
+show "--- arrays and inline tables"
+show toml.parse("a = [ [1, 2], [\"x\"], [] ]\nb = [{ x = 1 }, { y.z = 2 }]\nc = {}\nd = [\n]\n")
+
+show "--- line endings"
+show toml.parse("a = 1\r\n[t]\r\nb = \"\"\"x\r\ny\"\"\"\r\n")
+show toml.parse(""), toml.parse("# only a comment\n\n")
+
+show "--- files"
+let path = "test_toml_tmp.toml"
+try:
+    fs.write(path, "[server]\nport = 9000\n")
+    show toml.read(path)
+    try:
+        toml.read("no_such_file.toml")
+    catch e:
+        show e
+    end
+finally:
+    fs.remove(path)
+end
+
+show "--- errors"
+for each bad in ["a = 1\na = 2", "[t]\n[t]", "a = 1\n[a]", "a = 1\na.b = 2", "a = \"open", "a = \"x\ny\"", "a = 'open", "a = \"\"\"open", "a = 01", "a = 1__0", "a = _1", "a = [1 2]", "a = {x = 1", "a = 1 b = 2", "= 1", "a 1", "a = ", "a = \"\\q\"", "a = \"\\uD800\"", "[t", "[[t]\n", "x = 1\n[[x]]", "[a]\n[[a]]", "a = truth", "a = 1.2.3"]:
+    try:
+        toml.parse(bad)
+        show "allowed", json.stringify(bad)
+    catch e:
+        show e
+    end
+end

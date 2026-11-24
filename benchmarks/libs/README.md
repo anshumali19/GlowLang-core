@@ -57,3 +57,20 @@ GlowLang and 13% in Python. Measured 2026-11-24.
 |---|---|---|
 | writing | 1,129,701 | 3,978,096 |
 | reading | 1,267,392 | 2,962,192 |
+
+## toml
+
+[toml_bench.glow](toml_bench.glow) parses
+[toml_config.toml](toml_config.toml), a 65-line service configuration with
+tables, arrays of tables, inline tables and a multi-line string.
+[toml_bench.py](toml_bench.py) parses it with Python's `tomllib`, which is
+also written in Python. Runs differed by under 2% in both. Measured
+2026-11-24.
+
+| Parser | Parses/s |
+|---|---|
+| GlowLang `toml.parse` | 4,646 |
+| Python `tomllib.loads` | 7,454 |
+
+Most of the time goes to reading the text one character at a time; one
+parse of this file takes 0.22 ms.
