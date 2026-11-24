@@ -80,7 +80,15 @@ jobs:
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install winflexbison3 --no-progress
+          # The Chocolatey feed sometimes answers 503 or 504, and choco then
+          # exits as if all went well: try again, and fail here if win_bison
+          # is still missing (instead of later, in CMake).
+          for ($i = 1; $i -le 4; $i++) {
+            choco install winflexbison3 --no-progress
+            if (Get-Command win_bison -ErrorAction SilentlyContinue) { break }
+            if ($i -eq 4) { Write-Error "winflexbison3 could not be installed"; exit 1 }
+            Start-Sleep -Seconds (20 * $i)
+          }
           vcpkg install openssl:x64-windows-static sqlite3:x64-windows-static
 
       # OpenSSL is linked statically so the binaries do not need it installed.
