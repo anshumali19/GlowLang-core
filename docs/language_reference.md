@@ -1599,6 +1599,29 @@ that names the line.
 ### Redis (`redis.`)
 `connect(host, port)`, `get(conn, key)`, `set(conn, key, value)`.
 
+### JSON Schema (`import "schema"`)
+```glow
+import "schema"
+let new_user = {"type": "object", "required": ["name", "age"],
+    "additionalProperties": false,
+    "properties": {"name": {"type": "string", "minLength": 1},
+                   "age": {"type": "integer", "minimum": 0}}}
+show schema.validate({"name": "", "age": -1, "admin": true}, new_user)
+# ["/name: must have at least 1 character", "/age: must be at least 0", "/admin: is not an allowed key"]
+show schema.is_valid({"name": "Ana", "age": 30}, new_user)   # true
+```
+`schema.validate(value, s)` gives every problem as `"path: problem"` (the
+path is a JSON pointer such as `/tags/0`), or `[]`; `schema.is_valid` gives
+true or false and `schema.check` raises the problems as one error. Keywords
+of JSON Schema 2020-12: `type` (one or a list), `enum`, `const`;
+`properties`, `required`, `additionalProperties`, `minProperties`,
+`maxProperties`; `items`, `minItems`, `maxItems`, `uniqueItems`;
+`minLength`, `maxLength`, `pattern` (GlowLang's regular expressions, found
+anywhere in the text); `minimum`, `maximum`, `exclusiveMinimum`,
+`exclusiveMaximum`, `multipleOf`; `allOf`, `anyOf`, `oneOf`, `not`; `$ref`
+to `#` or `#/$defs/name`; and `true` / `false` as whole schemas. Other
+keywords, such as `format`, are ignored, as the standard allows.
+
 ### JSON (`json.`)
 `parse(text)`, `stringify(value)`.
 

@@ -1,0 +1,66 @@
+--- an API body
+ok
+  /name: must have at least 1 character
+  /age: must be at least 0
+  /email: must match the pattern ^[^@ ]+@[^@ ]+\.[a-z]+$
+  /tags/2: must be string, not integer
+  /tags: must have at most 3 items
+  /tags/1: repeats item 0
+  /role: must be one of ["admin", "user"]
+  /extra: is not an allowed key
+ok
+  /: the key "name" is required
+  /: the key "email" is required
+  /age: must be integer, not number
+  /: must be object, not array
+true false
+schema: /: the key "age" is required; /: the key "email" is required
+--- types
+object ["{}"]
+array ["[]"]
+string ["\"x\""]
+number ["1.5", "2", "3"]
+integer ["2", "3"]
+boolean ["true"]
+null ["null"]
+ok
+  /: must be string or null, not integer
+--- numbers
+  /: must be more than 10
+  /: must be less than 10
+ok
+  /: must be a multiple of 3
+ok
+ok
+--- combinations
+ok
+ok
+  /: must match at least one schema in anyOf
+ok
+  /: must match exactly one schema in oneOf, matched 2
+  /: must match exactly one schema in oneOf, matched 0
+  /: must not match the schema in not
+  /: must be at most 3
+ok
+  /: must be {"a": 1}
+--- objects
+  /b: must be integer, not string
+  /: must have at least 1 key
+  /: must have at most 1 key
+  /a~1b/c~0d: must be string, not integer
+--- arrays
+  /2: repeats item 0
+  /1: repeats item 0
+  /1: repeats item 0
+  /: must have at least 1 item
+--- $ref and boolean schemas
+  /children/1/value: must be integer, not string
+  /children/1/children/0: the key "value" is required
+ok
+  /: no value is allowed here
+  /a: no value is allowed here
+schema: only local $ref values such as #/$defs/name are supported, not https://example.com/s.json
+schema: $ref #/$defs/missing points to nothing
+schema: a schema must be a dict, true or false
+--- ignored keywords
+ok

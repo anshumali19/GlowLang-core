@@ -185,3 +185,18 @@ by under 2%. Measured 2026-11-24.
 | GlowLang `yaml.parse` | 1,838 |
 | PyYAML `SafeLoader` | 280 |
 | PyYAML `CSafeLoader` | 3,419 |
+
+## schema
+
+[schema_bench.glow](schema_bench.glow) validates an API request body (a
+user with tags and an address) against a JSON Schema,
+once with valid data and once with data that has six problems.
+[schema_bench.py](schema_bench.py) does the same with Python's `jsonschema`
+4.19.2 (written in Python), its validator built once, collecting every
+error as `schema.validate` does. Runs differed by under 4%. Measured
+2026-11-24.
+
+| Data | GlowLang (validations/s) | Python (validations/s) |
+|---|---|---|
+| valid | 75,199 | 35,928 |
+| six problems | 88,504 | 24,881 |
