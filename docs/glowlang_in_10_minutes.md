@@ -218,6 +218,16 @@ show most_common(tokenize("the cat and the hat and the bat"), 2)
 save, `glowlang fmt` re-indents your files and `glowlang package app.glow`
 makes one executable to copy anywhere.
 
+`import "name"` loads a standard module: `csv`, `toml`, `yaml`, `dotenv`,
+`template`, `markdown`, `schema`, `url`, `log`, `lru`, `collections`,
+`semver`, `diff`, `re`, `datetime` and more, each in the
+[language reference](language_reference.md#18-standard-library).
+
+```glow
+import "markdown"
+show markdown.to_html("**Hello** from GlowLang")   # <p><strong>Hello</strong> from GlowLang</p>
+```
+
 ## Where next
 
 - [language_reference.md](language_reference.md): the full language
