@@ -1702,6 +1702,25 @@ keys are text, as in every dict: `count([3, 3])` is `{"3": 2}`), and
 `collections.most_common(counts, n)` the `n` most frequent as `[item, count]`
 pairs, ties in the order first counted.
 
+### CSV (`import "csv"`)
+```glow
+import "csv"
+let rows = csv.parse("name,note\n\"Lee, Ann\",\"said \"\"hi\"\"\"\n")
+show rows[1]                       # ["Lee, Ann", "said \"hi\""]
+show csv.stringify([["a,b", 1]])   # "a,b",1
+let people = csv.parse_dicts("id,name\n1,Ana\n")
+show people[0]["name"]             # Ana
+```
+`csv.parse(text, sep)` gives the rows as lists of text cells;
+`csv.parse_dicts(text, sep)` a dict per row, keyed by the first row (a cell
+missing from a short row is `""`, cells past the header are left out).
+`csv.stringify(rows, sep)` quotes the cells that hold the separator, a quote
+or a line break, writes `none` as an empty cell and ends each line with `\n`.
+`csv.read(path, sep)`, `csv.read_dicts(path, sep)` and
+`csv.write(path, rows, sep)` do the same with files. Quoted cells may hold
+the separator, `""` for a quote, and line breaks (read as `\n`); lines may
+end in `\n` or `\r\n`; empty lines are skipped. `sep` is `","` unless given.
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection
