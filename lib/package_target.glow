@@ -1,0 +1,99 @@
+# glowlang package <file.glow> --target <platform> [-o output]: the program
+# as one executable for another platform. It downloads the released
+# GlowLang runtime of the same version for that platform (once; it is kept
+# in ~/.glowlang/runtimes) and runs `glowlang package --runtime` with it.
+# Downloading and unpacking use curl and tar (and unzip for a Windows
+# runtime on Linux, or Python's zipfile), which Windows 10+, macOS and most
+# Linux systems have.
+
+let targets = {"linux-x64": ".tar.gz", "macos-arm64": ".tar.gz", "macos-x64": ".tar.gz", "windows-x64": ".zip"}
+let usage = "Usage: glowlang package <file.glow> --target linux-x64|macos-arm64|macos-x64|windows-x64 [-o output]"
+
+func fail(msg):
+    os.eprint("glowlang package: " + msg)
+    os.exit(1)
+end
+
+let src = none
+let target = none
+let out = none
+let i = 0
+while i < len(os.args):
+    let a = os.args[i]
+    when a == "--target" and i + 1 < len(os.args):
+        target = os.args[i + 1]
+        i = i + 1
+    eif a == "-o" and i + 1 < len(os.args):
+        out = os.args[i + 1]
+        i = i + 1
+    eif src == none and not a.starts_with("-"):
+        src = a
+    otherwise:
+        fail("unexpected '" + a + "'\n" + usage)
+    end
+    i = i + 1
+end
+when src == none or target == none:
+    fail("a file and a --target are needed\n" + usage)
+end
+when not targets.has(target):
+    fail("unknown target '" + target + "'; use one of " + ", ".join(sorted(targets.keys())))
+end
+
+let version = process.run([process.executable, "--version"], {})["stdout"].strip().replace("GlowLang ", "")
+# Packages hold every module since 1.12.0; older runtimes read only the
+# format from before that and would not run the program.
+let parts = [int(x) for each x in (version.split("-")[0] + ".0.0").split(".")[:3]]
+when parts[0] * 10000 + parts[1] * 100 + parts[2] < 11200:
+    fail("--target needs GlowLang 1.12.0 or later (this is " + version + "); earlier runtimes read an older package format")
+end
+let exe_name = "glowlang"
+when target == "windows-x64":
+    exe_name = "glowlang.exe"
+end
+let dir = fs.join(os.home(), ".glowlang", "runtimes", version, target)
+let runtime = fs.join(dir, exe_name)
+
+when not fs.is_file(runtime):
+    when process.find("curl") == none or process.find("tar") == none:
+        fail("--target needs curl and tar to download the runtime")
+    end
+    fs.mkdirs(dir)
+    let archive = fs.join(dir, "glowlang-" + target + targets[target])
+    let url = "https://github.com/anshumali19/GlowLang-packages/releases/download/v" + version + "/glowlang-" + target + targets[target]
+    os.eprint("Downloading the GlowLang " + version + " runtime for " + target + "...")
+    let got = process.run(["curl", "-fsSL", "--retry", "3", "-o", archive, url], {"stderr": "pipe"})
+    when not got["ok"]:
+        fs.remove_all(dir)
+        fail("could not download " + url + " (" + got["stderr"].strip() + "). Is GlowLang " + version + " released for " + target + "?")
+    end
+    let unpacked = process.run(["tar", "-xf", archive, "-C", dir], {"stderr": "pipe"})
+    # GNU tar cannot read zip files: try unzip, then Python's zipfile.
+    when not unpacked["ok"] and targets[target] == ".zip":
+        for each cmd in [["unzip", "-oq", archive, "-d", dir], ["python3", "-m", "zipfile", "-e", archive, dir]]:
+            when process.find(cmd[0]) != none and not unpacked["ok"]:
+                unpacked = process.run(cmd, {"stderr": "pipe"})
+            end
+        end
+    end
+    fs.remove(archive)
+    when not unpacked["ok"] or not fs.is_file(runtime):
+        fs.remove_all(dir)
+        fail("could not unpack the runtime for " + target)
+    end
+end
+
+when out == none:
+    out = fs.basename(src)
+    when out.ends_with(".glow"):
+        out = out[:len(out) - 5]
+    end
+    when target == "windows-x64":
+        out = out + ".exe"
+    end
+end
+let r = process.run([process.executable, "package", src, "-o", out, "--runtime", runtime], {"stdout": "inherit", "stderr": "inherit"})
+when r["code"] != 0:
+    os.exit(r["code"])
+end
+show "Built for " + target + " with the GlowLang " + version + " runtime."

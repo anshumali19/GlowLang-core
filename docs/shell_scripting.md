@@ -84,8 +84,19 @@ Package created: deploy (3 files)
 - Modules are found from `use` and `import` lines with the path written out.
   A module loaded by a path built while the program runs is not packed, and
   must be on disk next to it.
-- The executable runs on the same kind of system it was made on (Linux x64,
-  macOS, Windows x64).
+- The executable runs on the same kind of system it was made on, unless you
+  name another with `--target`:
+
+  ```bash
+  glowlang package deploy.glow --target linux-x64     # also macos-arm64, macos-x64, windows-x64
+  ```
+
+  This downloads the released GlowLang runtime of the same version for that
+  platform once (with `curl` and `tar`), keeps it in `~/.glowlang/runtimes`,
+  and puts the program on it. It needs GlowLang 1.12.0 or later, and a build
+  of GlowLang between releases gets the runtime of the release it is
+  numbered as. `--runtime path/to/glowlang` uses a GlowLang binary you
+  already have instead.
 - On Windows the executable is not signed, so SmartScreen or Smart App Control
   may block it on other machines.
 
