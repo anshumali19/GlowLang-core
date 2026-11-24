@@ -1,0 +1,234 @@
+# diff.glow — the differences between two texts, line by line.
+#
+#   import "diff"
+#   diff.lines(a, b)       [[op, line], ...] with op " " (in both), "-" (only
+#                          in a) or "+" (only in b)
+#   diff.unified(a, b, from_name = "a", to_name = "b", context = 3)
+#                          the differences in the format of diff -u and
+#                          git diff, or "" when there are none
+#
+# a and b are texts, or lists of lines. The diff is a shortest one (Myers'
+# algorithm), as GNU diff finds; a line that lacks a final line break differs
+# from the same line with one, and diff.unified marks it with "\ No newline
+# at end of file", as diff -u does.
+
+let _DIFF_MAX_EDITS = 2000
+
+# The lines of a text, each with its line break; a list of lines gets one.
+func _diff_split(value):
+    let lines = []
+    when type(value) == "list":
+        for each line in value:
+            lines.push(str(line) + "\n")
+        end
+        return lines
+    end
+    let parts = value.split("\n")
+    let i = 0
+    while i < len(parts) - 1:
+        lines.push(parts[i] + "\n")
+        i = i + 1
+    end
+    when parts[len(parts) - 1] != "":
+        lines.push(parts[len(parts) - 1])
+    end
+    return lines
+end
+
+# Myers' algorithm on a[sa:ea] against b[sb:eb]: the ops, as [op, line].
+func _diff_myers(a, sa, ea, b, sb, eb):
+    let n = ea - sa
+    let m = eb - sb
+    let v = {"1": 0}
+    let trace = []
+    let found = false
+    let d = 0
+    while d <= n + m and not found:
+        when d > _DIFF_MAX_EDITS:
+            # shortcut: past this many edits the middle is reported as all
+            # removed and all added; a linear-space search would be needed.
+            let ops = []
+            every i from sa to ea - 1:
+                ops.push(["-", a[i]])
+            end
+            every i from sb to eb - 1:
+                ops.push(["+", b[i]])
+            end
+            return ops
+        end
+        trace.push(v.copy())
+        let k = -d
+        while k <= d:
+            let x = 0
+            when k == -d or (k != d and v[str(k - 1)] < v[str(k + 1)]):
+                x = v[str(k + 1)]
+            otherwise:
+                x = v[str(k - 1)] + 1
+            end
+            let y = x - k
+            while x < n and y < m and a[sa + x] == b[sb + y]:
+                x = x + 1
+                y = y + 1
+            end
+            v[str(k)] = x
+            when x >= n and y >= m:
+                found = true
+                stop
+            end
+            k = k + 2
+        end
+        when not found:
+            d = d + 1
+        end
+    end
+    # Walk back from the end through the saved rounds.
+    let ops = []
+    let x = n
+    let y = m
+    let round = d
+    while round >= 0:
+        let vp = trace[round]
+        let k = x - y
+        let prev_k = k - 1
+        when k == -round or (k != round and vp[str(k - 1)] < vp[str(k + 1)]):
+            prev_k = k + 1
+        end
+        let prev_x = vp[str(prev_k)]
+        let prev_y = prev_x - prev_k
+        while x > prev_x and y > prev_y:
+            ops.push([" ", a[sa + x - 1]])
+            x = x - 1
+            y = y - 1
+        end
+        when round > 0:
+            when x == prev_x:
+                ops.push(["+", b[sb + prev_y]])
+            otherwise:
+                ops.push(["-", a[sa + prev_x]])
+            end
+        end
+        x = prev_x
+        y = prev_y
+        round = round - 1
+    end
+    ops.reverse()
+    return ops
+end
+
+# The ops with each line still holding its line break.
+func _diff_ops(a, b):
+    let n = len(a)
+    let m = len(b)
+    let start = 0
+    while start < n and start < m and a[start] == b[start]:
+        start = start + 1
+    end
+    let ea = n
+    let eb = m
+    while ea > start and eb > start and a[ea - 1] == b[eb - 1]:
+        ea = ea - 1
+        eb = eb - 1
+    end
+    let ops = []
+    every i from 0 to start - 1:
+        ops.push([" ", a[i]])
+    end
+    when ea > start or eb > start:
+        ops.extend(_diff_myers(a, start, ea, b, start, eb))
+    end
+    every i from ea to n - 1:
+        ops.push([" ", a[i]])
+    end
+    return ops
+end
+
+func _diff_text(line):
+    when line.ends_with("\n"):
+        return line.slice(0, -1)
+    end
+    return line
+end
+
+func diff_lines(a, b):
+    let out = []
+    for each op in _diff_ops(_diff_split(a), _diff_split(b)):
+        out.push([op[0], _diff_text(op[1])])
+    end
+    return out
+end
+
+func _diff_range(start, count):
+    when count == 1:
+        return str(start)
+    end
+    when count == 0:
+        return str(start) + ",0"
+    end
+    return str(start) + "," + str(count)
+end
+
+func diff_unified(a, b, from_name = "a", to_name = "b", context = 3):
+    let ops = _diff_ops(_diff_split(a), _diff_split(b))
+    let changes = []
+    let i = 0
+    while i < len(ops):
+        when ops[i][0] != " ":
+            changes.push(i)
+        end
+        i = i + 1
+    end
+    when len(changes) == 0:
+        return ""
+    end
+    # Lines of a and of b before each op.
+    let a_at = []
+    let b_at = []
+    let na = 0
+    let nb = 0
+    for each op in ops:
+        a_at.push(na)
+        b_at.push(nb)
+        when op[0] != "+":
+            na = na + 1
+        end
+        when op[0] != "-":
+            nb = nb + 1
+        end
+    end
+    a_at.push(na)
+    b_at.push(nb)
+    let out = ["--- " + from_name + "\n", "+++ " + to_name + "\n"]
+    let g = 0
+    while g < len(changes):
+        let first = changes[g]
+        let last = first
+        while g + 1 < len(changes) and changes[g + 1] - last <= 2 * context + 1:
+            g = g + 1
+            last = changes[g]
+        end
+        g = g + 1
+        let lo = max(0, first - context)
+        let hi = min(len(ops), last + context + 1)
+        let a_count = a_at[hi] - a_at[lo]
+        let b_count = b_at[hi] - b_at[lo]
+        let a_start = a_at[lo]
+        when a_count > 0:
+            a_start = a_start + 1
+        end
+        let b_start = b_at[lo]
+        when b_count > 0:
+            b_start = b_start + 1
+        end
+        out.push("@@ -" + _diff_range(a_start, a_count) + " +" + _diff_range(b_start, b_count) + " @@\n")
+        every j from lo to hi - 1:
+            let line = ops[j][1]
+            out.push(ops[j][0] + line)
+            when not line.ends_with("\n"):
+                out.push("\n\\ No newline at end of file\n")
+            end
+        end
+    end
+    return out.join("")
+end
+
+let diff = {"lines": diff_lines, "unified": diff_unified}
