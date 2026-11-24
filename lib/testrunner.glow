@@ -1,0 +1,180 @@
+# glowlang test [files or folders]: finds test files (test_*.glow and
+# *_test.glow; the current folder when none are named) and runs them.
+#
+# In a test file, every top-level function whose name starts with test_
+# and that takes no arguments is a test: it passes when it returns and
+# fails when it raises, for example through assert(condition, message).
+# The file's own top-level code runs first, once. A file without test_
+# functions is run as a program and passes when it exits with code 0.
+#
+# Each file runs in a process of its own, so a crash in one does not stop
+# the others. The exit code is 1 when anything failed.
+import "re"
+
+let MARK = "@@glowtest@@"
+
+when len(os.args) > 0 and (os.args[0] == "-h" or os.args[0] == "--help"):
+    show "Usage: glowlang test [files or folders]"
+    show ""
+    show "Runs test_*.glow and *_test.glow files (in the current folder when none"
+    show "are named). In them, each top-level func test_...() is a test."
+    os.exit(0)
+end
+
+func is_test_file(path):
+    let name = fs.basename(path)
+    return name.ends_with(".glow") and (name.starts_with("test_") or name.ends_with("_test.glow"))
+end
+
+# The test files under the given paths, sorted; folders starting with "."
+# (.git, .glow_pkg) are skipped.
+func find_files(paths):
+    let found = []
+    for each p in paths:
+        when fs.is_file(p):
+            found.push(p)
+        eif fs.is_dir(p):
+            for each f in fs.walk(p):
+                # Hidden folders are judged below p only, so a project inside
+                # ~/.cache still has its tests found.
+                let fp = f.replace("\\", "/")
+                let pp = p.replace("\\", "/").trim_end("/")
+                let rel = "/" + fp
+                when fp.starts_with(pp + "/"):
+                    rel = fp[len(pp):]
+                end
+                when is_test_file(f) and not rel.contains("/."):
+                    found.push(f)
+                end
+            end
+        otherwise:
+            os.eprint("glowlang test: " + p + " is not a file or folder")
+            os.exit(1)
+        end
+    end
+    return sorted(found)
+end
+
+# The names of the test functions in a file: top-level `func test_x():`.
+func test_names(text):
+    let names = []
+    for each line in text.replace("\r\n", "\n").split("\n"):
+        let m = re.find("^func (test_[A-Za-z0-9_]*)\\(\\s*\\)\\s*:", line)
+        when m != none:
+            names.push(m.group(1))
+        end
+    end
+    return names
+end
+
+# A program that loads the test file and runs each test, reporting each one
+# on a line starting with MARK.
+func runner_source(path, names):
+    let src = "use \"" + fs.abspath(path).replace("\\", "/") + "\"\n"
+    for each name in names:
+        src = src + "show \"" + MARK + " START " + name + "\"\n"
+        src = src + "let __t0 = os.time()\ntry:\n    " + name + "()\n"
+        src = src + "    show \"" + MARK + " PASS " + name + " \" + str(round((os.time() - __t0) * 1000))\n"
+        src = src + "catch __e:\n    show \"" + MARK + " FAIL " + name + " \" + str(round((os.time() - __t0) * 1000)) + \" \" + str(__e).replace(\"\\n\", \" \")\nend\n"
+    end
+    return src
+end
+
+let paths = os.args
+when len(paths) == 0:
+    paths = ["."]
+end
+let files = find_files(paths)
+when len(files) == 0:
+    show "No test files (test_*.glow or *_test.glow) found."
+    os.exit(1)
+end
+
+let passed = 0
+let failed = 0
+let started = os.time()
+let tmp = fs.join(os.temp_dir(), "glowtest_" + str(os.pid()) + ".glow")
+try:
+    for each file in files:
+        let names = test_names(fs.read(file) ?? "")
+        let r = none
+        when len(names) == 0:
+            r = process.run([process.executable, "run", file], {"stderr": "stdout", "timeout": 600})
+            let out = r["stdout"].replace("\r\n", "\n").strip()
+            when r["code"] == 0:
+                passed = passed + 1
+                show "PASS  " + file
+            otherwise:
+                failed = failed + 1
+                show "FAIL  " + file + " (exit code " + str(r["code"]) + ")"
+                for each line in out.split("\n")[-15:]:
+                    show "      | " + line
+                end
+            end
+            skip
+        end
+        fs.write(tmp, runner_source(file, names))
+        r = process.run([process.executable, "run", tmp], {"stderr": "stdout", "timeout": 600})
+        # What each test printed goes with it (a START line opens each one);
+        # what came before the first test is the file's own top level.
+        let current = ""
+        let printed = {"": []}
+        let seen = {}
+        for each line in r["stdout"].replace("\r\n", "\n").split("\n"):
+            when not line.starts_with(MARK + " "):
+                when line != "":
+                    printed[current].push(line)
+                end
+                skip
+            end
+            let parts = line[len(MARK) + 1:].split(" ")
+            let name = parts[1]
+            when parts[0] == "START":
+                current = name
+                printed[name] = []
+            eif parts[0] == "PASS":
+                seen[name] = true
+                passed = passed + 1
+                show "PASS  " + file + " :: " + name + "  (" + parts[2] + " ms)"
+            otherwise:
+                seen[name] = true
+                failed = failed + 1
+                show "FAIL  " + file + " :: " + name
+                show "      " + " ".join(parts[3:])
+                for each out in printed[name][-15:]:
+                    show "      | " + out
+                end
+            end
+        end
+        # Tests that never reported: the file stopped before or during them
+        # (an error at its top level, or a crash). Its output says why; the
+        # runner's own lines after "Failed to load module" add nothing.
+        let missing = [n for each n in names if not seen.has(n)]
+        when len(missing) > 0:
+            failed = failed + len(missing)
+            show "FAIL  " + file + " stopped (exit code " + str(r["code"]) + "); did not run: " + ", ".join(missing)
+            let why = printed[current]
+            for each i, out in why:
+                when out.contains("Failed to load module"):
+                    why = why[:i]
+                    stop
+                end
+            end
+            for each out in why[-15:]:
+                show "      | " + out
+            end
+        end
+    end
+finally:
+    when fs.exists(tmp):
+        fs.remove(tmp)
+    end
+end
+
+let secs = format(os.time() - started, ".2f")
+when failed == 0:
+    show str(passed) + " passed in " + secs + " s"
+otherwise:
+    show str(passed) + " passed, " + str(failed) + " failed in " + secs + " s"
+    os.exit(1)
+end
