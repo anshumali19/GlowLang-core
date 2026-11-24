@@ -268,6 +268,23 @@ glow> double(21)
 
 ---
 
+## Starting a Project
+
+```bash
+glowlang new myapi            # a web API: sign-up, login, SQLite, tests
+glowlang new mytool --cli     # or a command-line tool
+cd myapi
+glowlang test                 # runs the test_*.glow files
+glowlang watch app.glow       # runs the app again on every save
+glowlang fmt                  # re-indents every .glow file here
+glowlang package app.glow     # one executable to copy anywhere
+```
+
+See [Testing your code](testing_your_code.md) and
+[Shipping a script as one file](shell_scripting.md#shipping-a-script-as-one-file).
+
+---
+
 ## Running Examples
 
 GlowLang ships with a rich set of examples:
