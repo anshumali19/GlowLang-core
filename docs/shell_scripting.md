@@ -64,6 +64,11 @@ code.
 
 ## Shipping a script as one file
 
+`glowlang new mytool --cli` starts a command-line tool that is ready for
+this: `mytool.glow` (arguments, `--help`, a table of results), `words.glow`
+with the work, its tests in `test_words.glow` (`glowlang test`), and a
+README. Change the work to your own and package it:
+
 ```bash
 glowlang package deploy.glow
 ```

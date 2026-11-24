@@ -52,6 +52,22 @@ try:
     let t = glow(["run", fs.join(project, "test_app.glow")])
     show t[0]
     show t[1]
+
+    show "--- glowlang new --cli"
+    let tool = fs.join(dir, "wc-tool")
+    made = glow(["new", tool, "--cli"])
+    show made[0], made[1].split("\n")[0]
+    show sorted(fs.list(tool))
+    let notes = fs.join(tool, "notes.txt")
+    fs.write(notes, "The cat sat. The dog sat too!\nThe end.\n")
+    let ran = glow(["run", fs.join(tool, "wc-tool.glow"), notes, "--top", "2"])
+    show ran[0]
+    # The table's width depends on the temporary folder's path: skip it.
+    for each line in ran[1].split("\n"):
+        when not line.starts_with("+") and not line.starts_with("|"):
+            show line
+        end
+    end
 finally:
     fs.remove_all(dir)
 end

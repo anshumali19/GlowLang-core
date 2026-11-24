@@ -1,11 +1,13 @@
-# glowlang new <name>: makes the folder <name> with a working web API
-# (sign-up, login, notes in SQLite), its tests and a README, from the
-# templates in lib/starter.
+# glowlang new <name> [--cli]: makes the folder <name> with a working
+# project from the templates in lib/starter (a web API: sign-up, login,
+# notes in SQLite) or, with --cli, lib/starter_cli (a command-line tool
+# ready for glowlang package), each with its tests and a README.
 import "cli"
 import "re"
 
-let cli_app = ArgParser("glowlang new", "Start a web API project: login, a database and tests")
+let cli_app = ArgParser("glowlang new", "Start a project: a web API (login, a database, tests), or a command-line tool with --cli")
 cli_app.positional("name", "The project's folder (letters, digits, - and _)")
+cli_app.flag("--cli", "A command-line tool instead of a web API")
 let args = cli_app.parse_or_exit()
 let name = args["name"]
 let base = fs.basename(name)
@@ -19,13 +21,24 @@ when fs.exists(name):
     os.exit(1)
 end
 
-let templates = fs.join(fs.dirname(fs.abspath(os.script)), "starter")
+let lib_dir = fs.dirname(fs.abspath(os.script))
+# Each template file and the name it gets in the project.
+let templates = fs.join(lib_dir, "starter")
+let files = [["app.glow", "app.glow"], ["test_app.glow", "test_app.glow"], ["README.md", "README.md"], ["gitignore", ".gitignore"]]
+let next = ["glowlang test", "glowlang watch app.glow     (http://localhost:8000)"]
+when args["--cli"]:
+    templates = fs.join(lib_dir, "starter_cli")
+    files = [["tool.glow", base + ".glow"], ["words.glow", "words.glow"], ["test_words.glow", "test_words.glow"], ["README.md", "README.md"]]
+    next = ["glowlang test", "glowlang run " + base + ".glow README.md", "glowlang package " + base + ".glow"]
+end
 fs.mkdirs(name)
-for each pair in [["app.glow", "app.glow"], ["test_app.glow", "test_app.glow"], ["README.md", "README.md"], ["gitignore", ".gitignore"]]:
+for each pair in files:
     fs.write(fs.join(name, pair[1]), fs.read(fs.join(templates, pair[0])).replace("__NAME__", base))
 end
 
-show "Made " + name + "/ with app.glow, test_app.glow and README.md. Next:"
+let made = [p[1] for each p in files if not p[1].starts_with(".")]
+show "Made " + name + "/ with " + ", ".join(made) + ". Next:"
 show "  cd " + name
-show "  glowlang run test_app.glow"
-show "  glowlang run app.glow        (http://localhost:8000)"
+for each step in next:
+    show "  " + step
+end

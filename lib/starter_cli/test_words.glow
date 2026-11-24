@@ -1,0 +1,19 @@
+# Run with: glowlang test
+use "words"
+
+func test_count():
+    let c = count("one two\nthree\n")
+    assert(c["lines"] == 2, "lines")
+    assert(c["words"] == 3, "words")
+    assert(c["chars"] == 14, "characters")
+end
+
+func test_empty_text():
+    let c = count("")
+    assert(c["words"] == 0 and c["chars"] == 0, "nothing in, nothing counted")
+end
+
+func test_most_common():
+    let top = most_common("The cat. The dog, the END. Dog!", 2)
+    assert(top == [["the", 3], ["dog", 2]], "got " + str(top))
+end
