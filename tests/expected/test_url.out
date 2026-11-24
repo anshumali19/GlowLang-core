@@ -1,0 +1,29 @@
+--- parse
+scheme https
+user ana
+password s3cret
+host shop.example
+port 8443
+path /a/b%20c
+query q=tea+cake&n=1&n=2&flag
+fragment top
+params {"q": "tea cake", "n": "2", "flag": ""}
+[::1] 8080
+{"scheme": "", "user": "", "password": "", "host": "", "port": none, "path": "/just/a/path", "query": "x=1", "fragment": "", "params": {"x": "1"}}
+{"scheme": "mailto", "user": "", "password": "", "host": "", "port": none, "path": "ana@glow.example", "query": "", "fragment": "", "params": {}}
+{"scheme": "", "user": "", "password": "", "host": "", "port": none, "path": "", "query": "", "fragment": "", "params": {}}
+url: bad host or port in http://host:80x/
+--- build
+https://ana:s3cret@shop.example:8443/a/b%20c?q=tea+cake&n=1&n=2&flag#top
+https://api.example/search?q=glow%20lang&page=2
+/a?x=1#f
+http://h/p?a=2
+--- encode and decode
+safe-._~09AZaz a%20b%26c%3Dd%2F%C3%A9%3F%23%25%2B
+tea & cake / café 😀 42
+q=tea%20%26%20cake&tag=a&tag=b%20c&empty=&flag
+{"q": "tea & cake", "tag": "b c", "empty": "", "flag": "", "": "x"}
+
+--- join (RFC 3986, 5.4)
+41 cases, 0 wrong
+https://shop.example/cart https://other.example/x

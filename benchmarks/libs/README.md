@@ -104,3 +104,22 @@ Python column. Runs differed by under 3%. Measured 2026-11-24.
 
 The second line checks that text full of delimiters with no partner does
 not take quadratic time.
+
+## url
+
+[url_bench.glow](url_bench.glow) times `url.parse` (cycling through 1,000
+different links), `url.encode`, `url.query` and `url.join`.
+[url_bench.py](url_bench.py) does the same with Python's `urllib.parse`,
+which is written in Python; its parse also asks for the port and the decoded
+query, as `url.parse` gives them. 1,000 links are used because `urlsplit`
+caches its last 128 results. Runs differed by under 2%. Measured 2026-11-24.
+
+| Work | GlowLang (calls/s) | Python (calls/s) |
+|---|---|---|
+| parse | 235,248 | 330,629 |
+| encode | 267,388 | 1,446,273 |
+| query string from a dict | 154,547 | 435,761 |
+| join | 253,020 | 406,728 |
+
+Python's `quote` turns the text into bytes and maps them through a table in
+one call; `url.encode` looks at one character at a time.

@@ -1,0 +1,62 @@
+# url.parse, build, join, encode, decode, query, parse_query (lib/url.glow).
+import "url"
+
+show "--- parse"
+let u = url.parse("HTTPS://ana:s3cret@shop.example:8443/a/b%20c?q=tea+cake&n=1&n=2&flag#top")
+for each k in ["scheme", "user", "password", "host", "port", "path", "query", "fragment", "params"]:
+    show k, u[k]
+end
+show url.parse("http://[::1]:8080/x")["host"], url.parse("http://[::1]:8080/x")["port"]
+show url.parse("/just/a/path?x=1")
+show url.parse("mailto:ana@glow.example")
+show url.parse("")
+try:
+    url.parse("http://host:80x/")
+catch e:
+    show e
+end
+
+show "--- build"
+show url.build(u)
+show url.build({"scheme": "https", "host": "api.example", "path": "search", "query": {"q": "glow lang", "page": 2}})
+show url.build({"path": "/a", "query": "x=1", "fragment": "f"})
+let changed = url.parse("http://h/p?a=1")
+changed["query"] = {"a": "2"}
+show url.build(changed)
+
+show "--- encode and decode"
+show url.encode("safe-._~09AZaz"), url.encode("a b&c=d/é?#%+")
+show url.decode(url.encode("tea & cake / café 😀")), url.encode(42)
+show url.query({"q": "tea & cake", "tag": ["a", "b c"], "empty": "", "flag": none})
+show url.parse_query("?q=tea+%26+cake&tag=a&tag=b%20c&empty=&flag&&=x")
+show url.query({})
+
+show "--- join (RFC 3986, 5.4)"
+let base = "http://a/b/c/d;p?q"
+let cases = [
+    ["g:h", "g:h"], ["g", "http://a/b/c/g"], ["./g", "http://a/b/c/g"],
+    ["g/", "http://a/b/c/g/"], ["/g", "http://a/g"], ["//g", "http://g"],
+    ["?y", "http://a/b/c/d;p?y"], ["g?y", "http://a/b/c/g?y"], ["#s", "http://a/b/c/d;p?q#s"],
+    ["g#s", "http://a/b/c/g#s"], ["g?y#s", "http://a/b/c/g?y#s"], [";x", "http://a/b/c/;x"],
+    ["g;x", "http://a/b/c/g;x"], ["g;x?y#s", "http://a/b/c/g;x?y#s"], ["", "http://a/b/c/d;p?q"],
+    [".", "http://a/b/c/"], ["./", "http://a/b/c/"], ["..", "http://a/b/"],
+    ["../", "http://a/b/"], ["../g", "http://a/b/g"], ["../..", "http://a/"],
+    ["../../", "http://a/"], ["../../g", "http://a/g"],
+    ["../../../g", "http://a/g"], ["../../../../g", "http://a/g"], ["/./g", "http://a/g"],
+    ["/../g", "http://a/g"], ["g.", "http://a/b/c/g."], [".g", "http://a/b/c/.g"],
+    ["g..", "http://a/b/c/g.."], ["..g", "http://a/b/c/..g"], ["./../g", "http://a/b/g"],
+    ["./g/.", "http://a/b/c/g/"], ["g/./h", "http://a/b/c/g/h"], ["g/../h", "http://a/b/c/h"],
+    ["g;x=1/./y", "http://a/b/c/g;x=1/y"], ["g;x=1/../y", "http://a/b/c/y"],
+    ["g?y/./x", "http://a/b/c/g?y/./x"], ["g?y/../x", "http://a/b/c/g?y/../x"],
+    ["g#s/./x", "http://a/b/c/g#s/./x"], ["g#s/../x", "http://a/b/c/g#s/../x"]
+]
+let wrong = 0
+for each c in cases:
+    let got = url.join(base, c[0])
+    when got != c[1]:
+        show "join", c[0], "gave", got, "not", c[1]
+        wrong = wrong + 1
+    end
+end
+show len(cases), "cases,", wrong, "wrong"
+show url.join("https://shop.example", "cart"), url.join("https://shop.example/a/b.html", "https://other.example/x")
