@@ -39,7 +39,7 @@ func call(method, path, data = none, token = none):
 end
 
 let server = process.start([process.executable, "run", fs.join(here, "app.glow")],
-    {"cwd": here, "env": {"PORT": str(PORT), "DB_PATH": DB, "APP_SECRET": "test-secret-that-is-at-least-32-characters-long"}})
+    {"env": {"PORT": str(PORT), "DB_PATH": DB, "APP_SECRET": "test-secret-that-is-at-least-32-characters-long"}})
 
 try:
     let up = false

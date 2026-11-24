@@ -32,18 +32,24 @@ show hash.check_password("x", "junk"), hash.check_password("x", "pbkdf2_sha256$0
 show "--- glowlang new"
 let dir = fs.join(os.temp_dir(), "glow_new_test_" + str(os.pid()))
 fs.mkdirs(dir)
-func glow(args, cwd):
-    let res = process.run([process.executable] + args, {"cwd": cwd})
-    return [res["code"], res["stdout"].replace("\r\n", "\n").strip(), res["stderr"].replace("\r\n", "\n").strip()]
+# Run from here, with full paths, so the standard library is found where
+# the test binary sits apart from lib/ (bin/Release on Windows CI).
+func clean(t):
+    return t.replace("\r\n", "\n").strip().replace(fs.join(dir, ""), "")
 end
+func glow(args):
+    let res = process.run([process.executable] + args, {})
+    return [res["code"], clean(res["stdout"]), clean(res["stderr"])]
+end
+let project = fs.join(dir, "notes-api")
 try:
-    let made = glow(["new", "notes-api"], dir)
+    let made = glow(["new", project])
     show made[0], made[1].split("\n")[0]
-    show sorted(fs.list(fs.join(dir, "notes-api")))
-    show fs.read(fs.join(dir, "notes-api", "README.md")).split("\n")[0]
-    show glow(["new", "notes-api"], dir)[2]
-    show glow(["new", "bad name"], dir)[2]
-    let t = glow(["run", "test_app.glow"], fs.join(dir, "notes-api"))
+    show sorted(fs.list(project))
+    show fs.read(fs.join(project, "README.md")).split("\n")[0]
+    show glow(["new", project])[2]
+    show glow(["new", fs.join(dir, "bad name")])[2]
+    let t = glow(["run", fs.join(project, "test_app.glow")])
     show t[0]
     show t[1]
 finally:
