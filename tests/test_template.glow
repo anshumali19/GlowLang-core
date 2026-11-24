@@ -1,0 +1,50 @@
+# Mustache-style templates (lib/template.glow).
+import "template"
+
+show "--- values"
+show template.render("Hello {{name}}!", {"name": "Ana"})
+show template.render("{{a.b.c}}|{{a.x.c}}|{{missing}}|{{n}}|{{f}}|{{none_v}}", {"a": {"b": {"c": "deep"}}, "n": 0, "f": 2.5, "none_v": none})
+show template.render("{{html}} {{{html}}} {{& html}}", {"html": "<b class=\"x\">Tom & 'Jerry'</b>"})
+show template.render("{{ spaced }}", {"spaced": "ok"})
+show template.render("héllo {{who}} ✓ {{#l}}é{{.}}{{/l}}", {"who": "wörld", "l": ["ä", "ö"]})
+show template.render("{{list}} {{d}} {{yes}}", {"list": ["<a>"], "d": {"k": "'"}, "yes": true})
+show template.render("no tags at all")
+show template.render("", {})
+
+show "--- sections"
+let data = {"items": [{"name": "tea", "price": 3}, {"name": "cake", "price": 5}], "shop": "Glow Cafe", "empty": [], "flag": true, "off": false, "user": {"name": "Ravi"}}
+show template.render("{{#items}}{{name}}={{price}} at {{shop}}; {{/items}}", data)
+show template.render("[{{#empty}}never{{/empty}}][{{^empty}}no items{{/empty}}]", data)
+show template.render("[{{#flag}}on{{/flag}}][{{#off}}never{{/off}}][{{^off}}off{{/off}}][{{#missing}}never{{/missing}}]", data)
+show template.render("{{#user}}hi {{name}} from {{shop}}{{/user}}", data)
+show template.render("{{#list}}{{.}},{{/list}}", {"list": [1, 2, 3]})
+show template.render("{{#rows}}({{#.}}{{.}}{{/.}}){{/rows}}", {"rows": [[1, 2], [3]]})
+show template.render("{{#zero}}never{{/zero}}{{^zero}}zero{{/zero}}{{#blank}}never{{/blank}}", {"zero": 0, "blank": ""})
+show template.render("a{{! a comment }}b")
+
+show "--- whole lines"
+let page = "<ul>\n  {{#items}}\n  <li>{{name}}</li>\n  {{/items}}\n  {{^items}}\n  <li>none</li>\n  {{/items}}\n</ul>\n"
+show template.render(page, data)
+show template.render(page, {"items": []})
+show template.render("{{#flag}}\nyes\n{{/flag}}", data)
+show template.render("a {{#flag}}inline{{/flag}} b\n", data)
+show template.render("  {{! note }}\r\nline\r\n", {}).replace("\r", "<CR>")
+
+show "--- partials"
+let partials = {"item": "<li>{{name}}</li>", "head": "<h1>{{shop}}</h1>\n"}
+show template.render("{{> head}}{{#items}}{{> item}}{{/items}}{{> nope}}", data, partials)
+
+show "--- compiled"
+let t = template.compile("{{greeting}}, {{name}}")
+show t.render({"greeting": "Hi", "name": "A"}), t.render({"greeting": "Bye", "name": "B"}), t.render()
+show template.escape("<&>")
+
+show "--- errors"
+for each bad in ["{{name", "{{#a}}x", "{{#a}}x{{/b}}", "x{{/a}}", "{{}}", "{{{x}}"]:
+    try:
+        template.render(bad, {})
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end

@@ -1648,6 +1648,29 @@ month is Feb 28 or 29). Format codes: `%Y %y %m %d %e %H %I %p %M %S %f %B
 not supported; use offsets. Parsing and formatting are built in, so they
 behave the same on every platform.
 
+### Templates (`import "template"`)
+```glow
+import "template"
+let page = "<h1>{{title}}</h1>\n{{#items}}\n<p>{{name}}: {{price}}</p>\n{{/items}}\n{{^items}}\n<p>Nothing yet.</p>\n{{/items}}\n"
+show template.render(page, {"title": "Menu", "items": [{"name": "Tea & cake", "price": 5}]})
+# <h1>Menu</h1>
+# <p>Tea &amp; cake: 5</p>
+let t = template.compile(page)    # parse once, render many times
+show t.render({"title": "Empty", "items": []})
+```
+Mustache-style tags: `{{name}}` the value, HTML-escaped; `{{{name}}}` or
+`{{& name}}` the value as it is; `{{a.b}}` a key of a key; `{{.}}` the
+current item. `{{#name}}...{{/name}}` is shown once per item of a list, once
+with a dict's keys in reach, once for any other true value, and not for
+`none`, `false`, `0`, `""` or `[]`; `{{^name}}...{{/name}}` is shown only
+when that section is not. `{{! note }}` is a comment, and `{{> name}}`
+inserts `partials[name]` from `template.render(text, data, partials)` or
+`template.compile(text, partials)`. A name missing from the current item is
+looked up in the items around it, and a name found nowhere gives `""`. A
+line that holds only a section, comment or partial tag is removed whole.
+Values are looked up in dicts, not in objects. `template.escape(text)` is
+the HTML escaping on its own.
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection

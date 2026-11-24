@@ -75,6 +75,22 @@ func me(req):
 end
 ```
 
+### HTML pages from templates
+`import "template"` fills Mustache-style templates (`{{name}}`,
+`{{#list}}...{{/list}}`; see the language reference). Values are
+HTML-escaped, so text from users cannot add tags to the page. Compile a
+template once, outside the handler:
+
+```
+import "template"
+let notes_page = template.compile(fs.read("views/notes.html"))
+
+@app.get("/notes")
+func notes(req, res):
+    res.html(notes_page.render({"notes": [{"text": "buy milk"}]}))
+end
+```
+
 ### Starting a project
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,

@@ -1,0 +1,47 @@
+--- values
+Hello Ana!
+deep|||0|2.5|
+&lt;b class=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/b&gt; <b class="x">Tom & 'Jerry'</b> <b class="x">Tom & 'Jerry'</b>
+ok
+héllo wörld ✓ éäéö
+[&quot;&lt;a&gt;&quot;] {&quot;k&quot;: &quot;&#39;&quot;} true
+no tags at all
+
+--- sections
+tea=3 at Glow Cafe; cake=5 at Glow Cafe; 
+[][no items]
+[on][][off][]
+hi Ravi from Glow Cafe
+1,2,3,
+(12)(3)
+zero
+ab
+--- whole lines
+<ul>
+  <li>tea</li>
+  <li>cake</li>
+</ul>
+
+<ul>
+  <li>none</li>
+</ul>
+
+yes
+
+a inline b
+
+line<CR>
+
+--- partials
+<h1>Glow Cafe</h1>
+<li>tea</li><li>cake</li>
+--- compiled
+Hi, A Bye, B , 
+&lt;&amp;&gt;
+--- errors
+template: no }} after {{name
+template: {{#a}} is not closed
+template: {{/b}} does not close an open section
+template: {{/a}} does not close an open section
+template: empty tag {{}}
+template: no }}} after {{{x}}
