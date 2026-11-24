@@ -1,0 +1,11 @@
+# The benchmark API in GlowWeb: GET /notes/:id returns one note as JSON.
+use "web"
+
+let app = Server(int(os.getenv("PORT", "18081")))
+
+@app.get("/notes/:id")
+func note(req):
+    return {"id": int(req.params["id"]), "text": "buy milk", "done": false}
+end
+
+app.start()
