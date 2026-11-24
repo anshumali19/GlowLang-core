@@ -1,0 +1,80 @@
+# glowlang watch <file.glow> [arguments]: runs the program, and runs it
+# again each time a .glow file in its folder (or a folder below) is saved.
+# Made for servers and scripts you are working on: save, and the new
+# version is running. Ctrl+C stops both.
+
+when len(os.args) == 0 or os.args[0] == "-h" or os.args[0] == "--help":
+    show "Usage: glowlang watch <file.glow> [arguments]"
+    show ""
+    show "Runs the program, and runs it again each time a .glow file in its"
+    show "folder, or a folder below it, changes. Ctrl+C stops it."
+    when len(os.args) == 0:
+        os.exit(1)
+    end
+    os.exit(0)
+end
+
+let script = os.args[0]
+when not fs.is_file(script):
+    os.eprint("glowlang watch: " + script + " is not a file")
+    os.exit(1)
+end
+let root = fs.dirname(fs.abspath(script))
+let cmd = [process.executable, "run", script] + os.args[1:]
+
+# When each .glow file under root was last changed, and its size.
+# shortcut: looks at every file every half second, fine for a project's
+# own folder (a folder with tens of thousands of files would want OS
+# events); times are whole seconds, so two saves in one second that keep
+# the size are seen as one.
+func snapshot():
+    let stamps = {}
+    for each path in fs.walk(root):
+        when path.ends_with(".glow"):
+            let st = fs.stat(path)
+            when st != none:
+                stamps[path] = str(st["modified"]) + ":" + str(st["size"])
+            end
+        end
+    end
+    return stamps
+end
+
+# The first file that is new, changed or gone between two snapshots.
+func changed(old, now):
+    for each path in now.keys():
+        when not old.has(path) or old[path] != now[path]:
+            return path
+        end
+    end
+    for each path in old.keys():
+        when not now.has(path):
+            return path
+        end
+    end
+    return none
+end
+
+func start():
+    return process.start(cmd, {"stdout": "inherit"})
+end
+
+let seen = snapshot()
+let child = start()
+let reported = false
+while true:
+    os.sleep(500)
+    let now = snapshot()
+    let file = changed(seen, now)
+    when file != none:
+        seen = now
+        os.eprint("[watch] " + fs.basename(file) + " changed, restarting")
+        process.kill(child)
+        process.close(child)
+        child = start()
+        reported = false
+    eif not reported and not process.alive(child):
+        os.eprint("[watch] the program ended with code " + str(process.wait(child, 0)) + "; waiting for a change")
+        reported = true
+    end
+end

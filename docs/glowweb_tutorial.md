@@ -36,7 +36,9 @@ app.start()
 
 ### Path parameters
 A part of a route path that starts with `:` matches any one part of the
-request path, and what it matched is in `req.params`. Routes without such
+request path, and what it matched is in `req.params`, decoded
+(`/files/my%20notes` gives `"my notes"`). Query parameters, in
+`req.query_params`, are decoded too, with `+` as a space. Routes without such
 parts are tried first, so `/notes/latest` wins over `/notes/:id`.
 
 ```
@@ -50,7 +52,8 @@ end
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,
 and `test_app.glow`, which starts the app and calls every endpoint. Run
-`glowlang run test_app.glow`, then change `app.glow` to suit. `glowlang
+`glowlang run test_app.glow`, then change `app.glow` to suit;
+`glowlang watch app.glow` runs it and restarts it each time you save. `glowlang
 package app.glow` turns it into one file to copy to a server.
 
 ## HTTP API Reference

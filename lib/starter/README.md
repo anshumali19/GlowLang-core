@@ -6,6 +6,7 @@ sign-up, login with tokens, and notes stored in SQLite. Everything is in
 
 ```bash
 glowlang run app.glow          # serves on http://localhost:8000
+glowlang watch app.glow        # the same, restarted each time you save a .glow file
 glowlang run test_app.glow     # starts it, calls every endpoint, stops it
 ```
 
