@@ -98,7 +98,7 @@ show double(21)            # 42
 `action` and `can` mean the same as `func`. Hot functions are compiled to
 machine code automatically, with nothing for you to switch on: on the
 [benchmarks in the README](../README.md#-performance) GlowLang finishes 1.4x to
-7.7x sooner than CPython 3.14.
+6.7x sooner than CPython 3.14.
 
 ## 6. Classes
 
