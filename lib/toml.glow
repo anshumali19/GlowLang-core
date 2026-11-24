@@ -1,8 +1,10 @@
-# toml.glow — read TOML 1.0 configuration files.
+# toml.glow — read and write TOML 1.0 configuration files.
 #
 #   import "toml"
 #   let config = toml.parse(text)     a dict
 #   let config = toml.read(path)
+#   let text = toml.stringify(config)
+#   toml.write(path, config)
 #
 # Covers tables [a.b], arrays of tables [[a]], dotted and quoted keys, basic
 # and literal strings (also the """ and ''' multi-line kinds), integers
@@ -10,6 +12,11 @@
 # tables. Dates and times are kept as their text ("1979-05-27T07:32:00Z");
 # pass them to datetime.parse to work with them. A key or table defined
 # twice, or any other mistake, raises an error that names the line.
+#
+# Writing gives back what parse reads. TOML has no null, so a none value
+# raises an error, as does a function or any other value TOML cannot hold.
+
+import "re"
 
 blueprint _TomlParser:
     func init(text):
@@ -471,4 +478,123 @@ func toml_read(path):
     return toml_parse(text)
 end
 
-let toml = {"parse": toml_parse, "read": toml_read}
+# Writing. Each table lists its plain values first and its tables after, as
+# TOML requires; a list of dicts becomes an array of tables [[name]].
+
+func _toml_string(s):
+    # JSON's escapes are TOML's, except that TOML also escapes DEL.
+    return json.stringify(s).replace(chr(127), "\\u007F")
+end
+
+func _toml_key(k):
+    when re.fullmatch("[A-Za-z0-9_-]+", k) is not none:
+        return k
+    end
+    return _toml_string(k)
+end
+
+func _toml_is_tables(v):
+    when type(v) == "dict":
+        return true
+    end
+    when type(v) != "list" or len(v) == 0:
+        return false
+    end
+    for each x in v:
+        when type(x) != "dict":
+            return false
+        end
+    end
+    return true
+end
+
+func _toml_value(v, where):
+    let t = type(v)
+    when t == "string":
+        return _toml_string(v)
+    eif t == "int" or t == "bool":
+        return str(v)
+    eif t == "float":
+        when v != v:
+            return "nan"
+        end
+        let s = str(v)
+        when s == "inf" or s == "-inf" or s.contains(".") or s.contains("e"):
+            return s
+        end
+        return s + ".0"
+    eif t == "list":
+        let items = []
+        for each x in v:
+            items.append(_toml_value(x, where))
+        end
+        return "[" + items.join(", ") + "]"
+    eif t == "dict":
+        when len(v.keys()) == 0:
+            return "{}"
+        end
+        let pairs = []
+        for each k in v.keys():
+            pairs.append(_toml_key(k) + " = " + _toml_value(v[k], where + "." + k))
+        end
+        return "{ " + pairs.join(", ") + " }"
+    end
+    throw "toml: cannot write " + t + " (at " + where + ")"
+end
+
+func _toml_table(out, table, name, prefix):
+    let tables = []
+    for each k in table.keys():
+        when _toml_is_tables(table[k]):
+            tables.append(k)
+        otherwise:
+            out.append(_toml_key(k) + " = " + _toml_value(table[k], prefix + k))
+        end
+    end
+    for each k in tables:
+        let v = table[k]
+        let path = name + [_toml_key(k)]
+        when type(v) == "list":
+            for each item in v:
+                out.append("")
+                out.append("[[" + path.join(".") + "]]")
+                _toml_table(out, item, path, prefix + k + ".")
+            end
+        otherwise:
+            # A table that holds only tables needs no header of its own.
+            let only_tables = len(v.keys()) > 0
+            for each sub in v.keys():
+                when not _toml_is_tables(v[sub]):
+                    only_tables = false
+                    stop
+                end
+            end
+            when not only_tables:
+                out.append("")
+                out.append("[" + path.join(".") + "]")
+            end
+            _toml_table(out, v, path, prefix + k + ".")
+        end
+    end
+end
+
+func toml_stringify(data):
+    when type(data) != "dict":
+        throw "toml: can only write a dict, not " + type(data)
+    end
+    let out = []
+    _toml_table(out, data, [], "")
+    when len(out) == 0:
+        return ""
+    end
+    when out[0] == "":
+        out = out[1:]
+    end
+    return out.join("\n") + "\n"
+end
+
+func toml_write(path, data):
+    fs.write(path, toml_stringify(data))
+end
+
+let toml = {"parse": toml_parse, "read": toml_read, "stringify": toml_stringify, "write": toml_write}
