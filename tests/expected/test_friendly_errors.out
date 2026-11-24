@@ -1,0 +1,21 @@
+--- misspelled names
+name 'cout' is not defined; did you mean 'count'?
+name 'gret' is not defined; did you mean 'greet'?
+name 'totl' is not defined; did you mean 'total'?
+name 'nothing_like_this_anywhere' is not defined
+--- misspelled methods
+string has no method 'uppr'; did you mean 'upper'?
+list has no method 'psuh'; did you mean 'push'?
+dict has no method 'kes'; did you mean 'keys'?
+dict has no method 'exist'; did you mean 'exists'?
+dict has no method 'sqr'; did you mean 'sqrt'?
+int has no method 'push'
+--- a block without its end
+the 'when' block on line 2 has no 'end' (the 'end' on line 4 lines up with line 1)
+the 'when' block on line 3 has no 'end' (the 'end' on line 5 lines up with line 2)
+the 'when' block on line 1 has no 'end' before the file ends
+--- other languages' words
+syntax error: GlowLang starts a function with 'func' (not 'def')
+syntax error: GlowLang makes a variable with 'let' (not 'var')
+syntax error: keywords are lowercase, so write 'when', not 'When'
+syntax error: a GlowLang block starts with ':' and closes with 'end' (else-if is 'eif'), not braces

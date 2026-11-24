@@ -1,0 +1,81 @@
+# spawn reuses threads whose function has returned. Many short tasks, one
+# that raises, deep recursion followed by a garbage collection, methods on
+# objects and arguments must all behave as with a new thread every time.
+
+let results = []
+func record(i):
+    results.push(i * i)
+end
+
+for each round in range(5):
+    for each i in range(40):
+        spawn record(round * 40 + i)
+    end
+    threads.join_all()
+end
+show "tasks run:", len(results)
+show "sum is right:", sum(results) == sum([i * i for each i in range(200)])
+
+# A task that raises does not leave the error to the next task on the
+# same thread.
+let caught = []
+func risky(i):
+    try:
+        when i % 2 == 0:
+            throw "even " + str(i)
+        end
+        caught.push("ok " + str(i))
+    catch e:
+        caught.push(e)
+    end
+end
+for each i in range(6):
+    spawn risky(i)
+end
+threads.join_all()
+show sorted(caught)
+
+# Deep recursion leaves many values on a thread's VM stack; later tasks on
+# that thread allocate enough to collect garbage several times.
+func depth(n):
+    when n == 0:
+        return [1, 2, 3]
+    end
+    let keep = [n, str(n)]
+    return depth(n - 1)
+end
+let sizes = []
+func deep():
+    sizes.push(len(depth(3000)))
+end
+func churn(k):
+    let total = 0
+    for each i in range(20000):
+        let item = {"i": i, "s": "x" + str(i)}
+        total = total + item["i"]
+    end
+    sizes.push(total + k)
+end
+spawn deep()
+threads.join_all()
+for each k in range(4):
+    spawn churn(k)
+end
+threads.join_all()
+show sorted(sizes)
+
+# Methods on objects, with arguments.
+blueprint Counter:
+    action init():
+        self.count = 0
+    end
+    action add(n):
+        self.count = self.count + n
+    end
+end
+let c = Counter()
+for each i in range(50):
+    spawn c.add(i)
+end
+threads.join_all()
+show "counter:", c.count

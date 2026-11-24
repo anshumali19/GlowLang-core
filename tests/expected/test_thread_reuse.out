@@ -1,0 +1,5 @@
+tasks run: 200
+sum is right: true
+["even 0", "even 2", "even 4", "ok 1", "ok 3", "ok 5"]
+[3, 199990000, 199990001, 199990002, 199990003]
+counter: 1225

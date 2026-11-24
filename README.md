@@ -305,7 +305,7 @@ memory from 138 MB to 76 MB compared with 1.7.0
 - Packages: [writing a package](docs/package_authoring.md), [the ecosystem](docs/ecosystem_guide.md)
 
 **Running and shipping**
-- [Debugger](docs/debugger_guide.md), [profiler](docs/profiler_guide.md), [optimization](docs/optimization_guide.md)
+- [Testing your code with `glowlang test`](docs/testing_your_code.md), [debugger](docs/debugger_guide.md), [profiler](docs/profiler_guide.md), [optimization](docs/optimization_guide.md)
 - [Deployment](docs/deployment_guide.md), [production deployment](docs/production_deployment.md), [CI/CD](docs/cicd_setup.md)
 
 **Inside GlowLang**

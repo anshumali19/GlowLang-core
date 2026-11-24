@@ -22,7 +22,11 @@ spawn worker("B")
 - GlowLang uses a GIL (Global Interpreter Lock) for thread safety
 - Only one thread executes GlowLang bytecode at a time
 - The GIL is released during `os.sleep`, `os.system` and HTTP/TLS socket calls (not during SQLite calls)
-- A running thread hands the GIL to a waiting one at loop back-edges and function calls
+- A running thread hands the GIL to a waiting one at loop back-edges and function calls, once that
+  thread has waited 1 ms (the switch interval); a thread whose blocking call returns takes the GIL at
+  once if it is free
+- A thread whose spawned function has returned waits up to 10 seconds for the next `spawn`, which
+  reuses it, so spawning per request or connection is cheap (a few microseconds instead of about 0.5 ms)
 - CPU-bound parallelism is NOT achieved — use spawn for I/O-bound concurrency
 
 ### Waiting for threads

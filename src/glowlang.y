@@ -904,6 +904,142 @@ static void glow_pass_script_args(const char *filename, int argc, char **argv) {
    use/import "..."; one loaded by a path built at run time is not packed. */
 typedef struct { char *key; char *path; char *data; long size; } PackFile;
 
+#ifndef _WIN32
+#include <termios.h>
+/* ---- Line editing for the REPL in a terminal (Linux, macOS) ------------
+   The Windows console edits a line and keeps a history by itself; fgets on
+   a Unix terminal does neither (the arrow keys print ^[[A). This is a small
+   readline: Left/Right, Home/End, Backspace/Delete, Tab (4 spaces),
+   Ctrl+A/E (start/end), Ctrl+U/K (delete to start/end), Ctrl+L (clear the
+   screen), Ctrl+C (drop what was typed), Ctrl+D on an empty line (quit),
+   and Up/Down through the history, kept in ~/.glowlang_history.
+   shortcut: the cursor is placed by counting characters, so a line wider
+   than the terminal or with double-width characters is redrawn wrongly;
+   good enough for typing statements, a full terminal library would fix it. */
+#define REPL_HIST_MAX 500
+static char *repl_hist[REPL_HIST_MAX];
+static int repl_hist_len = 0;
+static char repl_hist_path[1024];
+
+static void repl_hist_add(const char *s) {
+    if (!*s || (repl_hist_len && strcmp(repl_hist[repl_hist_len - 1], s) == 0)) return;
+    if (repl_hist_len == REPL_HIST_MAX) {
+        free(repl_hist[0]);
+        memmove(repl_hist, repl_hist + 1, sizeof(char *) * (REPL_HIST_MAX - 1));
+        repl_hist_len--;
+    }
+    repl_hist[repl_hist_len++] = strdup(s);
+}
+
+static void repl_hist_load(void) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    snprintf(repl_hist_path, sizeof repl_hist_path, "%s/.glowlang_history", home);
+    FILE *f = fopen(repl_hist_path, "r");
+    if (!f) return;
+    char b[4096];
+    int lines = 0;
+    while (fgets(b, sizeof b, f)) { b[strcspn(b, "\r\n")] = 0; repl_hist_add(b); lines++; }
+    fclose(f);
+    /* Appending forever would grow the file: keep the last REPL_HIST_MAX. */
+    if (lines > 2 * REPL_HIST_MAX && (f = fopen(repl_hist_path, "w"))) {
+        for (int i = 0; i < repl_hist_len; i++) fprintf(f, "%s\n", repl_hist[i]);
+        fclose(f);
+    }
+}
+
+static void repl_hist_save(const char *s) {
+    if (!repl_hist_path[0] || !*s) return;
+    FILE *f = fopen(repl_hist_path, "a");
+    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+}
+
+static void repl_redraw(const char *prompt, const char *buf, size_t len, size_t pos) {
+    size_t cols = strlen(prompt);
+    for (size_t i = 0; i < pos; i++) if ((buf[i] & 0xC0) != 0x80) cols++;
+    printf("\r%s%.*s\x1b[K\r", prompt, (int)len, buf);
+    if (cols) printf("\x1b[%zuC", cols);
+    fflush(stdout);
+}
+
+/* Reads a line into out, ending in '\n'. Returns 1 for a line, 0 at the end
+   of input (Ctrl+D on an empty line) and 2 when Ctrl+C dropped it. */
+static int repl_read_line(const char *prompt, char *out, size_t cap) {
+    struct termios old, raw;
+    if (tcgetattr(0, &old) != 0) {
+        fputs(prompt, stdout); fflush(stdout);
+        return fgets(out, (int)cap, stdin) ? 1 : 0;
+    }
+    raw = old;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG | IEXTEN);
+    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;
+    tcsetattr(0, TCSANOW, &raw);   /* not TCSAFLUSH: that drops pasted lines still to come */
+    char buf[4096], saved[4096] = "";
+    size_t len = 0, pos = 0, max = cap - 2 < sizeof buf - 1 ? cap - 2 : sizeof buf - 1;
+    int h = repl_hist_len, result = 1;
+    for (;;) {
+        repl_redraw(prompt, buf, len, pos);
+        unsigned char c;
+        if (read(0, &c, 1) != 1) { result = 0; break; }
+        if (c == '\r' || c == '\n') break;
+        if (c == 4) {                                    /* Ctrl+D */
+            if (len == 0) { result = 0; break; }
+            if (pos < len) { size_t e = pos + 1; while (e < len && (buf[e] & 0xC0) == 0x80) e++; memmove(buf + pos, buf + e, len - e); len -= e - pos; }
+        } else if (c == 3) { result = 2; break; }        /* Ctrl+C */
+        else if (c == 127 || c == 8) {                   /* Backspace */
+            if (pos > 0) { size_t s = pos - 1; while (s > 0 && (buf[s] & 0xC0) == 0x80) s--; memmove(buf + s, buf + pos, len - pos); len -= pos - s; pos = s; }
+        } else if (c == 1) pos = 0;
+        else if (c == 5) pos = len;
+        else if (c == 21) { memmove(buf, buf + pos, len - pos); len -= pos; pos = 0; }
+        else if (c == 11) len = pos;
+        else if (c == 12) { printf("\x1b[H\x1b[2J"); }
+        else if (c == 27) {                              /* escape sequences */
+            unsigned char s[3] = {0, 0, 0};
+            if (read(0, &s[0], 1) != 1 || read(0, &s[1], 1) != 1) continue;
+            if (s[0] == '[' && s[1] >= '0' && s[1] <= '9') {
+                if (read(0, &s[2], 1) != 1) continue;
+                if (s[2] == '~') {
+                    if (s[1] == '3' && pos < len) { size_t e = pos + 1; while (e < len && (buf[e] & 0xC0) == 0x80) e++; memmove(buf + pos, buf + e, len - e); len -= e - pos; }
+                    else if (s[1] == '1' || s[1] == '7') pos = 0;
+                    else if (s[1] == '4' || s[1] == '8') pos = len;
+                }
+            } else if (s[0] == '[' || s[0] == 'O') {
+                if (s[1] == 'C' && pos < len) { pos++; while (pos < len && (buf[pos] & 0xC0) == 0x80) pos++; }
+                else if (s[1] == 'D' && pos > 0) { pos--; while (pos > 0 && (buf[pos] & 0xC0) == 0x80) pos--; }
+                else if (s[1] == 'H') pos = 0;
+                else if (s[1] == 'F') pos = len;
+                else if ((s[1] == 'A' && h > 0) || (s[1] == 'B' && h < repl_hist_len)) {
+                    if (h == repl_hist_len) { memcpy(saved, buf, len); saved[len] = 0; }
+                    h += s[1] == 'A' ? -1 : 1;
+                    const char *line = h == repl_hist_len ? saved : repl_hist[h];
+                    len = strlen(line);
+                    if (len > max) len = max;
+                    memcpy(buf, line, len);
+                    pos = len;
+                }
+            }
+        } else if (c == '\t' || c >= 32) {
+            const char *ins = c == '\t' ? "    " : (const char *)&c;
+            size_t n = c == '\t' ? 4 : 1;
+            if (len + n <= max) { memmove(buf + pos + n, buf + pos, len - pos); memcpy(buf + pos, ins, n); len += n; pos += n; }
+        }
+    }
+    pos = len;
+    repl_redraw(prompt, buf, len, pos);
+    printf(result == 2 ? "^C\r\n" : "\r\n");
+    fflush(stdout);
+    tcsetattr(0, TCSANOW, &old);
+    if (result != 1) return result;
+    buf[len] = 0;
+    repl_hist_add(buf);
+    repl_hist_save(buf);
+    memcpy(out, buf, len);
+    out[len] = '\n'; out[len + 1] = 0;
+    return 1;
+}
+#endif
+
 static char *pack_read(const char *path, long *size) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -1166,6 +1302,7 @@ int glow_main(int argc, char **argv) {
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  new <name>        Start a web API project (login, database, tests)\n");
         printf("  watch <file.glow> Run a program, and again each time a .glow file changes\n");
+        printf("  test [paths]      Run the test_ functions in test_*.glow files\n");
         printf("  --dump-bc <file>  Dump compiled bytecode for debugging\n");
         printf("  --lsp             Start the Language Server Protocol (LSP) mode\n");
         printf("  --version         Print the GlowLang version\n\n");
@@ -1183,6 +1320,7 @@ int glow_main(int argc, char **argv) {
     for (int i = 2; strcmp(subcommand, "package") == 0 && i < argc; i++) if (strcmp(argv[i], "--target") == 0) for_target = 1;
     const char *lib_cmd = strcmp(subcommand, "new") == 0 ? "lib/new_project.glow"
                         : strcmp(subcommand, "watch") == 0 ? "lib/watch.glow"
+                        : strcmp(subcommand, "test") == 0 ? "lib/testrunner.glow"
                         : for_target ? "lib/package_target.glow" : NULL;
     if (lib_cmd) {
         const char *found = NULL;
@@ -1349,6 +1487,11 @@ l_REPL:;
     int interactive = isatty(fileno(stdin));
 #endif
     if (interactive) printf("GlowLang %s Interactive REPL\nType 'exit' to quit.\n", GLOWLANG_VERSION);
+#ifndef _WIN32
+    const char *term = getenv("TERM");
+    int line_editing = interactive && isatty(fileno(stdout)) && !(term && strcmp(term, "dumb") == 0);
+    if (line_editing) repl_hist_load();
+#endif
     /* What has been typed so far: a statement can take several lines (a
        block up to its `end`, or brackets left open), so lines are added
        here, with a "...." prompt, until the parser no longer stops short.
@@ -1358,9 +1501,19 @@ l_REPL:;
     int first_line = 1, src_lines = 0, blank_run = 0;
     compiling_file = "<stdin>";
     while (1) {
-        if (interactive) printf(src_len ? "....  " : "glow> ");
-        fflush(stdout);
-        int at_eof = !fgets(line_buf, sizeof(line_buf), stdin);
+        int at_eof;
+#ifndef _WIN32
+        if (line_editing) {
+            int got = repl_read_line(src_len ? "....  " : "glow> ", line_buf, sizeof(line_buf));
+            if (got == 2) { src_len = 0; src_lines = 0; blank_run = 0; continue; }   /* Ctrl+C */
+            at_eof = got == 0;
+        } else
+#endif
+        {
+            if (interactive) printf(src_len ? "....  " : "glow> ");
+            fflush(stdout);
+            at_eof = !fgets(line_buf, sizeof(line_buf), stdin);
+        }
         if (at_eof && !src_len) break;
         if (!at_eof) {
             if (!src_len) {

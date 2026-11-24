@@ -1049,6 +1049,29 @@ NativeFuncPtr glow_builtin_method(Value v, const char *name) {
     }
 }
 
+const char *glow_suggest_method(Value v, const char *name) {
+    const MethodEntry *t = NULL;
+    switch (GET_TYPE(v)) {
+        case VAL_STRING: t = string_methods; break;
+        case VAL_LIST: t = list_methods; break;
+        case VAL_DICT: t = dict_methods; break;
+        default: if (is_set(v)) t = set_methods; break;
+    }
+    if (!t || !name) return NULL;
+    const char *cands[160];
+    int n = 0;
+    for (; t->name && n < 64; t++) cands[n++] = t->name;
+    /* A dict's own keys too: module functions such as fs.remove. */
+    if (GET_TYPE(v) == VAL_DICT) {
+        Value keys = native_dict_keys(1, &v);
+        List *kl = AS_LIST(keys);
+        for (int i = 0; i < kl->size && n < 160; i++)
+            if (GET_TYPE(kl->items[i]) == VAL_STRING) cands[n++] = AS_STRING(kl->items[i]);
+        return glow_closest(name, cands, n);   /* keys stay alive: keys is not freed before this */
+    }
+    return glow_closest(name, cands, n);
+}
+
 /* glow_builtin_method with a cache in the calling instruction (pc may be
    NULL). cache[2] holds the built-in found for a string, list or dict
    receiver; the name is fixed per instruction, so the receiver kind is the

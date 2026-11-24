@@ -257,7 +257,12 @@ glow> double(21)
 
 - An expression on its own shows its value (unless it is `none`).
 - A block (`func`, `when`, `for`, `class`, ...) continues on `....` lines until its `end`, and so does a line that leaves a bracket open.
-- To give up on an unfinished block, press Enter on two empty lines.
+- To give up on an unfinished block, press Enter on two empty lines, or Ctrl+C.
+- Up and Down bring back earlier lines, also from earlier sessions (they are kept in
+  `~/.glowlang_history` on Linux and macOS; the Windows console keeps its own). Left, Right,
+  Home, End, Backspace and Delete edit the line; Ctrl+A and Ctrl+E jump to its start and end,
+  Ctrl+U and Ctrl+K delete to them, Ctrl+L clears the screen, Tab puts in four spaces, and
+  Ctrl+D on an empty line quits.
 - An error is reported and the session carries on. Type `exit` to quit.
 - `glowlang repl < session.glow` runs a file as if it were typed in, without the prompts.
 
