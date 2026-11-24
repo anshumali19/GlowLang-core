@@ -1,4 +1,5 @@
-# pad_start / pad_end, remove_prefix / remove_suffix, capitalize / title.
+# pad_start / pad_end, remove_prefix / remove_suffix, capitalize / title,
+# is_digit / is_alpha / is_alnum / is_space.
 
 show "--- pad"
 show "[" + "7".pad_start(3, "0") + "]", "[" + "ab".pad_end(5) + "]", "[" + "abc".pad_start(2) + "]"
@@ -25,3 +26,17 @@ show "aa".remove_prefix("aaa"), "".remove_prefix("x"), "abc".remove_prefix("")
 show "--- capitalize / title"
 show "hello WORLD".capitalize(), "élan vital".capitalize(), "".capitalize()
 show "the quick-brown fox's tail".title(), "ÉCOLE de paris".title(), "3rd place".title()
+
+show "--- is_digit / is_alpha / is_alnum / is_space"
+for each s in ["2026", "12.5", "-3", "abc", "Zoë", "ÉCOLE", "ab1", "a b", " \t\n", "", "日本", "€", "٣"]:
+    show "[" + s + "]", s.is_digit(), s.is_alpha(), s.is_alnum(), s.is_space()
+end
+# Scanning a word character by character, which needed regex before.
+let word = ""
+for each c in "count42 = 7":
+    when not c.is_alnum():
+        stop
+    end
+    word = word + c
+end
+show word
