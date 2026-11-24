@@ -281,15 +281,16 @@ memory from 138 MB to 76 MB compared with 1.7.0
 | **Syntax** | `show`, `when` / `eif` / `otherwise`, `every`, `for each key, value in`, `is in`, `blueprint` / `class`, `action` / `func`, `match` / `case`, `enum`, `try` / `catch` / `finally`, `with` blocks, generators (`yield`, `yield from`, `next`), decorators (`@cache`), unpacking (`let a, b = b, a`), named arguments, `...rest` / `**opts` and `...spread` / `**dict`, `??` and `?.`, list / dict / set comprehensions |
 | **Runtime** | Register bytecode VM; JIT compilers for x86-64 (Windows and System V) and ARM64 (Apple silicon, ARM Linux) with on-stack replacement for hot loops; generational, non-moving garbage collector |
 | **Numbers** | Integers of any size (never overflow), floats, exact `**`, Python-style `//` and `%`, bitwise `& \| ^ ~ << >>`, literals like `0xff`, `0b1010` and `1_000` |
-| **Collections** | Lists, dicts and sets compared by contents; slices with steps; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`, `enumerate`, `zip` |
-| **Web** | HTTP server and HTTPS client (`http.request`: certificate checks, redirects, timeouts), the GlowWeb framework, WebSocket client and server (RFC 6455) |
+| **Collections** | Lists, dicts and sets compared by contents; slices with steps; `sort`, `map`, `filter`, `reduce`, `sorted`, `min`, `max`, `sum`, `enumerate`, `zip`; a heap, a deque and counting (`collections`); a size-limited cache with expiry (`lru`) |
+| **Web** | HTTP server and HTTPS client (`http.request`: certificate checks, redirects, timeouts), the GlowWeb framework, WebSocket client and server (RFC 6455); URLs (`url`), Mustache templates (`template`), Markdown to HTML (`markdown`), JSON Schema checks (`schema`) |
 | **Databases** | SQLite built in; a PostgreSQL client with TLS, SCRAM logins, parameterized queries and transactions; Redis |
 | **Security** | SHA-256, HMAC, BLAKE3, random tokens; JWT signing and checking (HS / RS / ES); OAuth 2.0 and OpenID Connect sign-in with Google, Microsoft and GitHub presets |
 | **Services** | Clients for Razorpay, WhatsApp Cloud API, SMS through Twilio and Google Sheets |
 | **Data and AI** | SIMD tensors (AVX2 + FMA when the CPU has them); `glownum`, `glowframe`, `glowlearn`, `glowgrad` and `glowtext`, libraries like NumPy, pandas, scikit-learn and PyTorch written in GlowLang |
 | **Concurrency** | `spawn` on OS threads with a global interpreter lock; `parallel.map` over worker processes for every core; channels, tasks and timers in `lib/async.glow` |
-| **Text** | Unicode strings (lengths and slices count characters), f-strings, regular expressions, JSON, CSV |
+| **Text** | Unicode strings (lengths and slices count characters), f-strings, regular expressions, JSON, CSV with quoted cells, TOML and YAML config files, line diffs in `diff -u` form (`diff`) |
 | **Tooling** | `check`, `trace`, `debug`, `profile` and `package` subcommands; a language server (errors, completion, hover, go-to-definition); the `gdu` package manager |
+| **Apps** | Log lines with levels and fields, as text or JSON (`log`); settings from `.env` files (`dotenv`); semantic versions and npm-style ranges (`semver`) |
 | **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
 
 ## 📖 Documentation
@@ -307,6 +308,7 @@ memory from 138 MB to 76 MB compared with 1.7.0
 - Logins and services: [JWT and OAuth](docs/jwt_oauth.md), [Razorpay, WhatsApp, SMS, Google Sheets](docs/services.md)
 - Programs and scripts: [concurrency](docs/concurrency_guide.md), [async](docs/async_guide.md), [processes](docs/process_guide.md), [shell scripting](docs/shell_scripting.md), [FFI](docs/ffi_guide.md)
 - Packages: [writing a package](docs/package_authoring.md), [the ecosystem](docs/ecosystem_guide.md)
+- Standard modules (CSV, TOML, YAML, `.env`, templates, Markdown, JSON Schema, URLs, logging, caches, diffs, ...): [the reference](docs/language_reference.md#18-standard-library), and their speed against Python in [benchmarks/libs](benchmarks/libs/README.md)
 
 **Running and shipping**
 - [Testing your code with `glowlang test`](docs/testing_your_code.md), [debugger](docs/debugger_guide.md), [profiler](docs/profiler_guide.md), [optimization](docs/optimization_guide.md)
