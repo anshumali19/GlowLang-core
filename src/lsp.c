@@ -334,6 +334,10 @@ static const CompletionEntry builtins[] = {
     {"remove_suffix", "function", "The string without a suffix, when it has it",                  3},
     {"capitalize", "function", "First letter upper case, the rest lower case",                    3},
     {"title",      "function", "First letter of every word upper case",                           3},
+    {"is_digit",   "function", "Whether the string is not empty and all digits 0-9",              3},
+    {"is_alpha",   "function", "Whether the string is not empty and all letters",                 3},
+    {"is_alnum",   "function", "Whether the string is not empty and all letters or digits",       3},
+    {"is_space",   "function", "Whether the string is not empty and all spaces, tabs, newlines",  3},
     {NULL, NULL, NULL, 0}
 };
 

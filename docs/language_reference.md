@@ -326,6 +326,7 @@ Indexing pure-ASCII text is constant-time, and walking any string with
 | `s.split(sep)`, `s.lines()` | List of parts; `s.split()` with no separator gives the words (split at any spaces, tabs and new lines, none empty) |
 | `sep.join(list)` | Items joined with `sep` |
 | `s.is_number()` | Whether `float(s)` would succeed |
+| `s.is_digit()`, `s.is_alpha()`, `s.is_alnum()`, `s.is_space()` | Whether `s` is not empty and every character is a digit `0`-`9`, a letter, a letter or digit, or a space, tab or new line: `"2026".is_digit()`, `"Zoë".is_alpha()`. A letter outside ASCII counts when it has an upper and lower case, so Chinese or Arabic letters do not |
 | `s.pad_start(width, fill)`, `s.pad_end(width, fill)` | Padded to `width` characters with `fill` (one character, a space by default) in front or behind: `"7".pad_start(3, "0")` is `"007"`; longer text is unchanged |
 | `s.remove_prefix(p)`, `s.remove_suffix(p)` | Without `p` at the start or end, when it is there: `"report.csv".remove_suffix(".csv")` |
 | `s.capitalize()`, `s.title()` | First letter of the text, or of every word, in upper case and the rest in lower case: `"the quick fox".title()` is `"The Quick Fox"` |

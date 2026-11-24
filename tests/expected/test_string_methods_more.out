@@ -12,3 +12,19 @@ aa  abc
 --- capitalize / title
 Hello world Élan vital 
 The Quick-Brown Fox's Tail École De Paris 3rd Place
+--- is_digit / is_alpha / is_alnum / is_space
+[2026] true false true false
+[12.5] false false false false
+[-3] false false false false
+[abc] false true true false
+[Zoë] false true true false
+[ÉCOLE] false true true false
+[ab1] false false true false
+[a b] false false false false
+[ 	
+] false false false true
+[] false false false false
+[日本] false false false false
+[€] false false false false
+[٣] false false false false
+count42

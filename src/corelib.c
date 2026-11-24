@@ -1085,6 +1085,48 @@ static Value recase_words(Value s, int every_word) {
 static Value s_capitalize(int argc, Value *args) { (void)argc; return recase_words(args[0], 0); }
 static Value s_title(int argc, Value *args) { (void)argc; return recase_words(args[0], 1); }
 
+/* is_digit / is_alpha / is_alnum / is_space: true when the text is not
+   empty and every character is of that kind. Digits and spaces are ASCII.
+   shortcut: a non-ASCII character is a letter when it has an upper and a
+   lower case form, so letters of scripts without case (Chinese, Arabic) are
+   not; use a Unicode table if someone needs them. */
+enum { CH_DIGIT = 1, CH_ALPHA = 2, CH_SPACE = 4 };
+static Value char_kinds(Value s, int kinds) {
+    const char *p = AS_STRING(s);
+    size_t n = rope_length(s);
+    if (n == 0) return value_bool(0);
+    for (size_t i = 0; i < n; ) {
+        unsigned char c = (unsigned char)p[i];
+        size_t cl = 1;
+        while (i + cl < n && ((unsigned char)p[i + cl] & 0xC0) == 0x80) cl++;
+        int ok;
+        if (c < 0x80) {
+            ok = ((kinds & CH_DIGIT) && isdigit(c)) || ((kinds & CH_ALPHA) && isalpha(c)) ||
+                 ((kinds & CH_SPACE) && isspace(c));
+        } else if (kinds & CH_ALPHA) {
+            /* Each result is compared before the next allocation, so nothing
+               needs to stay alive across a collection. */
+            ok = 0;
+            for (int upper = 0; upper < 2 && !ok; upper++) {
+                char *one;
+                Value ch = value_string_alloc(cl, &one);
+                memcpy(one, p + i, cl);
+                Value r = str_case(ch, upper);
+                ok = rope_length(r) != cl || memcmp(AS_STRING(r), p + i, cl) != 0;
+            }
+        } else {
+            ok = 0;
+        }
+        if (!ok) return value_bool(0);
+        i += cl;
+    }
+    return value_bool(1);
+}
+static Value s_is_digit(int argc, Value *args) { (void)argc; return char_kinds(args[0], CH_DIGIT); }
+static Value s_is_alpha(int argc, Value *args) { (void)argc; return char_kinds(args[0], CH_ALPHA); }
+static Value s_is_alnum(int argc, Value *args) { (void)argc; return char_kinds(args[0], CH_ALPHA | CH_DIGIT); }
+static Value s_is_space(int argc, Value *args) { (void)argc; return char_kinds(args[0], CH_SPACE); }
+
 typedef struct { const char *name; NativeFuncPtr fn; } MethodEntry;
 
 static const MethodEntry string_methods[] = {
@@ -1095,7 +1137,8 @@ static const MethodEntry string_methods[] = {
     {"contains", native_str_contains}, {"find", native_str_find}, {"slice", native_str_slice},
     {"split", native_str_split}, {"len", native_len}, {"byte_len", s_byte_len}, {"bytes", s_bytes},
     {"pad_start", s_pad_start}, {"pad_end", s_pad_end}, {"remove_prefix", s_remove_prefix}, {"remove_suffix", s_remove_suffix},
-    {"capitalize", s_capitalize}, {"title", s_title}, {NULL, NULL}
+    {"capitalize", s_capitalize}, {"title", s_title}, {"is_digit", s_is_digit}, {"is_alpha", s_is_alpha},
+    {"is_alnum", s_is_alnum}, {"is_space", s_is_space}, {NULL, NULL}
 };
 static const MethodEntry list_methods[] = {
     {"push", native_list_append}, {"append", native_list_append}, {"add", native_list_append},
