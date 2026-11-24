@@ -114,7 +114,10 @@ end
 ### Starting a project
 `glowlang new myapi` makes the folder `myapi` with a working API: sign-up,
 login with JWT tokens, passwords stored as salted hashes, notes in SQLite,
-and `test_app.glow`, which starts the app and calls every endpoint. Run
+and `test_app.glow`, which starts the app and calls every endpoint. Its
+settings (the port, the database file and the secret that signs tokens)
+are in `.env`, with a secret made for this project; `.gitignore` keeps
+that file out of git, and variables set in the environment win over it. Run
 `glowlang run test_app.glow`, then change `app.glow` to suit;
 `glowlang watch app.glow` runs it and restarts it each time you save. `glowlang
 package app.glow` turns it into one file to copy to a server.

@@ -5,13 +5,16 @@
 #   glowlang run test_app.glow         (runs the tests)
 #   glowlang package app.glow          (one file to copy to a server)
 #
-# Settings come from environment variables: PORT (8000), DB_PATH (app.db)
-# and APP_SECRET, the key that signs login tokens. Without APP_SECRET, a
-# random one is made and kept in secret.txt; set it yourself in production.
+# Settings come from environment variables, or from the .env file next to
+# this one that glowlang new wrote: PORT (8000), DB_PATH (app.db) and
+# APP_SECRET, the key that signs login tokens. Without APP_SECRET, a random
+# one is made and kept in secret.txt; set it yourself in production.
 use "web"
 use "jwt"
 use "crypto"
+import "dotenv"
 
+dotenv.load(fs.join(fs.dirname(fs.abspath(os.script)), ".env"))
 let PORT = int(os.getenv("PORT", "8000"))
 let DB_PATH = os.getenv("DB_PATH", "app.db")
 let SECRET = os.getenv("APP_SECRET", "")

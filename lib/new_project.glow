@@ -35,6 +35,10 @@ fs.mkdirs(name)
 for each pair in files:
     fs.write(fs.join(name, pair[1]), fs.read(fs.join(templates, pair[0])).replace("__NAME__", base))
 end
+when not args["--cli"]:
+    # Each project gets its own secret; .gitignore keeps the file out of git.
+    fs.write(fs.join(name, ".env"), "# Settings for app.glow. The real environment wins over this file.\n# Keep it private: it is listed in .gitignore.\nPORT=8000\nDB_PATH=app.db\nAPP_SECRET=" + crypto.random_hex(32) + "\n")
+end
 
 let made = [p[1] for each p in files if not p[1].starts_with(".")]
 show "Made " + name + "/ with " + ", ".join(made) + ". Next:"

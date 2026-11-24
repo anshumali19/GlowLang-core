@@ -3,6 +3,9 @@
 # password hashes.
 use "lib/web.glow"
 use "lib/crypto.glow"
+use "lib/jwt.glow"
+import "dotenv"
+import "re"
 
 show "--- routes with :name parts"
 func handler(req):
@@ -47,6 +50,36 @@ try:
     show made[0], made[1].split("\n")[0]
     show sorted(fs.list(project))
     show fs.read(fs.join(project, "README.md")).split("\n")[0]
+    # Its own secret in .env, which .gitignore keeps out of git.
+    let env_path = fs.join(project, ".env")
+    let env = dotenv.parse(fs.read(env_path))
+    show env["PORT"], env["DB_PATH"], re.fullmatch("[0-9a-f]{64}", env["APP_SECRET"]) is not none
+    show fs.read(fs.join(project, ".gitignore")).contains(".env")
+    # The app reads .env from its own folder: the port and the secret that
+    # signs its tokens come from there.
+    let port = 19000 + os.pid() % 1000
+    fs.write(env_path, fs.read(env_path).replace("PORT=8000", "PORT=" + str(port)).replace("DB_PATH=app.db", "DB_PATH=" + fs.join(dir, "env.db")))
+    let server = process.start([process.executable, "run", fs.join(project, "app.glow")], {})
+    try:
+        let base = "http://127.0.0.1:" + str(port)
+        let up = false
+        let tries = 0
+        while not up and tries < 100:
+            try:
+                up = http.request("GET", base + "/health", {"timeout": 2})["status"] == 200
+            catch e:
+                os.sleep(100)
+                tries = tries + 1
+            end
+        end
+        let login = {"email": "env@example.com", "password": "correct horse"}
+        http.request("POST", base + "/signup", {"body": json.stringify(login), "timeout": 10})
+        let token = json.parse(http.request("POST", base + "/login", {"body": json.stringify(login), "timeout": 10})["body"])["token"]
+        show up, jwt.decode(token, env["APP_SECRET"])["sub"]
+    finally:
+        process.kill(server)
+        process.close(server)
+    end
     show glow(["new", project])[2]
     show glow(["new", fs.join(dir, "bad name")])[2]
     let t = glow(["run", fs.join(project, "test_app.glow")])

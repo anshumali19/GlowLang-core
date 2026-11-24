@@ -13,6 +13,9 @@ false false false
 0 Made notes-api/ with app.glow, test_app.glow, README.md. Next:
 ["README.md", "app.glow", "test_app.glow"]
 # notes-api
+8000 app.db true
+true
+true 1
 glowlang new: notes-api already exists
 glowlang new: use letters, digits, - and _ in the name, not "bad name"
 0
