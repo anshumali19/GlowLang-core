@@ -147,7 +147,18 @@ Some files are stored with CRLF line endings, among them `src/glowlang.y`,
 edit them (`sed -i` and some editors drop it), or the diff rewrites every
 line. After every edit made through a shell or a script, look at
 `git diff --stat`: a few changed lines should show as a few, and a lost
-backslash or quote shows up in `git diff` before it breaks the build.
+backslash or quote shows up in `git diff` before it breaks the build. Text
+with backslashes (C escapes, regular expressions, `"\n"` in GlowLang) passed
+from Git Bash through a heredoc into another program can lose them, or turn
+`\n` into a real line break inside a string: make such edits with an editor
+tool, or write the bytes from a script, and read the result.
+
+C code must build with clang-cl on Windows too, where the Windows headers
+define some short words as macros: do not name anything `near`, `far`,
+`small`, `interface`, `min` or `max`. A Windows check that fails before the
+build (a package feed answering 503, say) is not about the change: read the
+log, re-run the failed job (`gh run rerun <run> --failed`), and never merge
+until it passes.
 
 Tests that need a server start one on a fixed, unusual port inside the test
 (see `tests/test_tools.glow`) or run the program under test as a separate
