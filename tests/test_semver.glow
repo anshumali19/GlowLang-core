@@ -1,0 +1,77 @@
+# semver.parse, valid, compare, sort, satisfies, max_satisfying, bump
+# (lib/semver.glow).
+import "semver"
+
+show "--- parse and valid"
+show semver.parse("1.4.0-beta.2+exp.sha.5114f85")
+show semver.parse("v10.20.30"), semver.parse(" 0.0.0 ")
+for each t in ["1.2", "1.2.3.4", "01.2.3", "1.2.3-", "1.2.3-01", "1.2.3+", "a.b.c", "1.2.3-beta..1", "1.2.3-rc.1+b..2", ""]:
+    show json.stringify(t), semver.valid(t)
+end
+try:
+    semver.parse("1.2")
+catch e:
+    show e
+end
+
+show "--- compare (semver.org, 11)"
+let order = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.1.0", "2.0.0", "10.0.0"]
+let bad = 0
+let i = 0
+while i < len(order) - 1:
+    when semver.compare(order[i], order[i + 1]) != -1 or semver.compare(order[i + 1], order[i]) != 1:
+        show "wrong order", order[i], order[i + 1]
+        bad = bad + 1
+    end
+    i = i + 1
+end
+show bad, semver.compare("1.0.0+a", "1.0.0+b"), semver.compare("v2.0.0", "2.0.0")
+show semver.sort(["10.0.0", "1.0.0", "1.0.0-rc.1", "2.0.0", "1.0.0-alpha", "1.10.0", "1.2.0", "1.0.0+build"])
+show semver.sort([]), semver.sort(["1.0.0"])
+
+show "--- satisfies"
+let cases = [
+    ["1.2.3", "1.2.3", true], ["1.2.4", "=1.2.3", false],
+    ["1.5.0", "^1.2.3", true], ["2.0.0", "^1.2.3", false], ["1.2.2", "^1.2.3", false],
+    ["0.2.5", "^0.2.3", true], ["0.3.0", "^0.2.3", false], ["0.0.3", "^0.0.3", true], ["0.0.4", "^0.0.3", false],
+    ["1.9.9", "^1.x", true], ["0.1.9", "^0.x", true], ["1.0.0", "^0.x", false], ["0.0.9", "^0.0", true], ["0.1.0", "^0.0", false],
+    ["1.2.9", "~1.2.3", true], ["1.3.0", "~1.2.3", false], ["1.9.0", "~1", true], ["1.2.0", "~1.2", true],
+    ["1.2.7", "1.2.x", true], ["1.3.0", "1.2.x", false], ["1.9.9", "1", true], ["2.0.0", "1.*", false],
+    ["3.4.5", "*", true], ["3.4.5", "", true], ["3.4.5", "x", true],
+    ["1.5.0", ">=1.2.3 <2.0.0", true], ["2.0.0", ">=1.2.3 <2.0.0", false], ["1.0.0", ">1.0.0", false],
+    ["1.3.0", ">1.2", true], ["1.2.9", ">1.2", false], ["1.2.9", "<=1.2", true], ["1.3.0", "<=1.2", false], ["1.1.9", "<1.2", true],
+    ["1.5.0", "1.2.3 - 2.3.4", true], ["2.3.4", "1.2.3 - 2.3.4", true], ["2.3.5", "1.2.3 - 2.3.4", false], ["2.3.9", "1.2.3 - 2.3", true], ["2.4.0", "1.2.3 - 2.3", false],
+    ["3.1.0", "^1.0.0 || ^3.0.0", true], ["2.1.0", "^1.0.0 || ^3.0.0", false],
+    ["1.2.4", ">= 1.2.3", true], ["v1.2.4", "^v1.2.0", true],
+    ["2.0.0-rc.1", "^1.0.0", false], ["2.0.0-rc.1", ">=2.0.0-beta <3.0.0", true], ["2.0.0-rc.1", ">=1.0.0", false],
+    ["1.2.3-beta.2", "^1.2.3-beta.1", true], ["1.2.4-beta.1", "^1.2.3-beta.1", false], ["1.2.3", "^1.2.3-beta.1", true]
+]
+bad = 0
+for each c in cases:
+    when semver.satisfies(c[0], c[1]) != c[2]:
+        show "satisfies", c[0], json.stringify(c[1]), "should be", c[2]
+        bad = bad + 1
+    end
+end
+show len(cases), "cases,", bad, "wrong"
+
+show "--- max_satisfying and bump"
+let published = ["1.0.0", "1.2.0", "1.10.1", "2.0.0-rc.1", "2.0.0", "2.1.0", "3.0.0-beta"]
+show semver.max_satisfying(published, "^1.0.0"), semver.max_satisfying(published, "~1.2"), semver.max_satisfying(published, ">=2"), semver.max_satisfying(published, "^4"), semver.max_satisfying([], "*")
+show semver.bump("1.2.3", "major"), semver.bump("1.2.3", "minor"), semver.bump("1.2.3", "patch")
+show semver.bump("2.0.0-rc.1", "major"), semver.bump("1.3.0-rc.1", "minor"), semver.bump("1.2.4-rc.1", "patch"), semver.bump("1.2.4-rc.1", "minor")
+
+show "--- errors"
+for each r in ["^1.2.3.4", ">=x.y", "1.2.3 - ", "~"]:
+    try:
+        semver.satisfies("1.2.3", r)
+        show "allowed", json.stringify(r)
+    catch e:
+        show e
+    end
+end
+try:
+    semver.bump("1.2.3", "build")
+catch e:
+    show e
+end

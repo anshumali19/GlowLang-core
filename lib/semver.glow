@@ -1,0 +1,314 @@
+# semver.glow — semantic versions (semver.org 2.0) and npm-style ranges.
+#
+#   import "semver"
+#   semver.parse("1.4.0-beta.2+exp")   {"major": 1, "minor": 4, "patch": 0,
+#                                       "pre": ["beta", 2], "build": ["exp"]}
+#   semver.valid(text)                 whether text is a version
+#   semver.compare(a, b)               -1, 0 or 1 (build data is ignored)
+#   semver.sort(versions)              oldest first
+#   semver.satisfies(version, range)   whether the version is in the range
+#   semver.max_satisfying(versions, range)   the newest one in it, or none
+#   semver.bump(version, part)         "major", "minor" or "patch" + 1
+#
+# Ranges: "1.2.3" or "=1.2.3"; "<", "<=", ">", ">="; "1.2.x", "1.2", "1"
+# and "*"; "~1.2.3" (patch updates); "^1.2.3" (no new major, or for 0.x
+# no new minor); "1.2.3 - 2.0.0"; parts joined by spaces must all hold, and
+# "||" separates alternatives. As in npm, a pre-release such as 2.0.0-rc.1 is
+# only in a range that names a pre-release of the same 2.0.0.
+# A leading "v" is allowed. Bad text raises an error.
+
+import "re"
+
+let _SV_ID = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+let _SV_FULL = "[vV]?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(" + _SV_ID + "(?:\\." + _SV_ID + ")*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?"
+let _SV_PART = "(0|[1-9][0-9]*|[xX*])"
+let _SV_PARTIAL = "[vV]?" + _SV_PART + "(?:\\." + _SV_PART + ")?(?:\\." + _SV_PART + ")?(?:-(" + _SV_ID + "(?:\\." + _SV_ID + ")*))?(?:\\+[0-9A-Za-z.-]+)?"
+
+func _sv_ids(text):
+    let ids = []
+    when text is none:
+        return ids
+    end
+    for each id in text.split("."):
+        when re.fullmatch("[0-9]+", id) is not none:
+            ids.push(int(id))
+        otherwise:
+            ids.push(id)
+        end
+    end
+    return ids
+end
+
+func semver_parse(text):
+    when type(text) == "dict":
+        return text
+    end
+    let m = re.fullmatch(_SV_FULL, str(text).trim())
+    when m is none:
+        throw "semver: not a version: " + str(text)
+    end
+    let build = []
+    when m.group(5) is not none:
+        build = m.group(5).split(".")
+    end
+    return {
+        "major": int(m.group(1)), "minor": int(m.group(2)), "patch": int(m.group(3)),
+        "pre": _sv_ids(m.group(4)), "build": build
+    }
+end
+
+func semver_valid(text):
+    return re.fullmatch(_SV_FULL, str(text).trim()) is not none
+end
+
+func _sv_cmp(x, y):
+    when x < y:
+        return -1
+    eif x > y:
+        return 1
+    end
+    return 0
+end
+
+func semver_compare(a, b):
+    a = semver_parse(a)
+    b = semver_parse(b)
+    for each part in ["major", "minor", "patch"]:
+        when a[part] != b[part]:
+            return _sv_cmp(a[part], b[part])
+        end
+    end
+    let pa = a["pre"]
+    let pb = b["pre"]
+    # A version without a pre-release comes after every pre-release of it.
+    when len(pa) == 0 or len(pb) == 0:
+        return _sv_cmp(len(pb), len(pa))
+    end
+    let i = 0
+    while i < len(pa) and i < len(pb):
+        let x = pa[i]
+        let y = pb[i]
+        when x != y:
+            # Numbers come before words.
+            when type(x) == "int" and type(y) != "int":
+                return -1
+            eif type(x) != "int" and type(y) == "int":
+                return 1
+            end
+            return _sv_cmp(x, y)
+        end
+        i = i + 1
+    end
+    return _sv_cmp(len(pa), len(pb))
+end
+
+# A merge sort of [parsed, text] pairs; equal versions keep their order.
+func _sv_merge_sort(items):
+    let n = len(items)
+    when n < 2:
+        return items
+    end
+    let left = _sv_merge_sort(items[:n >> 1])
+    let right = _sv_merge_sort(items[n >> 1:])
+    let out = []
+    let i = 0
+    let j = 0
+    while i < len(left) and j < len(right):
+        when semver_compare(right[j][0], left[i][0]) < 0:
+            out.push(right[j])
+            j = j + 1
+        otherwise:
+            out.push(left[i])
+            i = i + 1
+        end
+    end
+    out.extend(left[i:])
+    out.extend(right[j:])
+    return out
+end
+
+func semver_sort(versions):
+    let keyed = []
+    for each v in versions:
+        keyed.push([semver_parse(v), v])
+    end
+    let out = []
+    for each k in _sv_merge_sort(keyed):
+        out.push(k[1])
+    end
+    return out
+end
+
+func _sv(major, minor, patch, pre):
+    return {"major": major, "minor": minor, "patch": patch, "pre": pre, "build": []}
+end
+
+# The comparators a part of a range stands for: a list of [op, version].
+func _sv_comparators(op, text):
+    let m = re.fullmatch(_SV_PARTIAL, text)
+    when m is none:
+        throw "semver: bad range part: " + op + text
+    end
+    let parts = []
+    for each g in [m.group(1), m.group(2), m.group(3)]:
+        when g is none or g == "x" or g == "X" or g == "*":
+            parts.push(none)
+        otherwise:
+            parts.push(int(g))
+        end
+    end
+    let major = parts[0]
+    let minor = parts[1]
+    let patch = parts[2]
+    let pre = _sv_ids(m.group(4))
+    when minor is none:
+        patch = none
+    end
+    when major is none:
+        when op == "<" or op == ">":
+            return [["<", _sv(0, 0, 0, [0])]]
+        end
+        return []
+    end
+    let low = _sv(major, minor ?? 0, patch ?? 0, pre)
+    # The first version past the given parts.
+    let next = none
+    when minor is none:
+        next = _sv(major + 1, 0, 0, [0])
+    eif patch is none:
+        next = _sv(major, minor + 1, 0, [0])
+    end
+    when op == "^":
+        when major > 0 or minor is none:
+            return [[">=", low], ["<", _sv(major + 1, 0, 0, [0])]]
+        eif minor > 0 or patch is none:
+            return [[">=", low], ["<", _sv(0, minor + 1, 0, [0])]]
+        end
+        return [[">=", low], ["<", _sv(0, 0, patch + 1, [0])]]
+    eif op == "~":
+        when minor is none:
+            return [[">=", low], ["<", _sv(major + 1, 0, 0, [0])]]
+        end
+        return [[">=", low], ["<", _sv(major, minor + 1, 0, [0])]]
+    eif next is none:
+        when op == "":
+            return [["=", low]]
+        end
+        return [[op, low]]
+    eif op == "" or op == "=":
+        return [[">=", low], ["<", next]]
+    eif op == ">":
+        return [[">=", next]]
+    eif op == "<=":
+        return [["<", next]]
+    end
+    return [[op, low]]
+end
+
+# The range as a list of alternatives, each a list of [op, version].
+func _sv_range(range):
+    let sets = []
+    for each alt in str(range).split("||"):
+        let text = alt.trim()
+        let comps = []
+        let hm = re.fullmatch("(\\S+)\\s+-\\s+(\\S+)", text)
+        when hm is not none:
+            comps.extend(_sv_comparators(">=", hm.group(1)))
+            comps.extend(_sv_comparators("<=", hm.group(2)))
+        otherwise:
+            # "> = 1.2" and ">=1.2" mean the same.
+            text = re.replace("(<=|>=|<|>|=|\\^|~)\\s+", text, "\\1")
+            for each piece in text.split():
+                let om = re.fullmatch("(<=|>=|<|>|=|\\^|~)?(.*)", piece)
+                comps.extend(_sv_comparators(om.group(1) ?? "", om.group(2)))
+            end
+        end
+        sets.push(comps)
+    end
+    return sets
+end
+
+func _sv_test(v, comps):
+    for each c in comps:
+        let r = semver_compare(v, c[1])
+        let op = c[0]
+        when (op == "=" and r != 0) or (op == "<" and r >= 0) or (op == "<=" and r > 0) or (op == ">" and r <= 0) or (op == ">=" and r < 0):
+            return false
+        end
+    end
+    when len(v["pre"]) > 0:
+        for each c in comps:
+            let w = c[1]
+            when len(w["pre"]) > 0 and w["pre"] != [0] and w["major"] == v["major"] and w["minor"] == v["minor"] and w["patch"] == v["patch"]:
+                return true
+            end
+        end
+        return false
+    end
+    return true
+end
+
+func semver_satisfies(version, range):
+    let v = semver_parse(version)
+    for each comps in _sv_range(range):
+        when _sv_test(v, comps):
+            return true
+        end
+    end
+    return false
+end
+
+func semver_max_satisfying(versions, range):
+    let sets = _sv_range(range)
+    let best = none
+    let best_v = none
+    for each text in versions:
+        let v = semver_parse(text)
+        let ok = false
+        for each comps in sets:
+            when _sv_test(v, comps):
+                ok = true
+                stop
+            end
+        end
+        when ok and (best_v is none or semver_compare(v, best_v) > 0):
+            best = text
+            best_v = v
+        end
+    end
+    return best
+end
+
+func semver_bump(version, part):
+    let v = semver_parse(version)
+    let major = v["major"]
+    let minor = v["minor"]
+    let patch = v["patch"]
+    let pre = len(v["pre"]) > 0
+    when part == "major":
+        # 2.0.0-rc.1 becomes 2.0.0, as npm does.
+        when not (pre and minor == 0 and patch == 0):
+            major = major + 1
+        end
+        minor = 0
+        patch = 0
+    eif part == "minor":
+        when not (pre and patch == 0):
+            minor = minor + 1
+        end
+        patch = 0
+    eif part == "patch":
+        when not pre:
+            patch = patch + 1
+        end
+    otherwise:
+        throw "semver: bump takes \"major\", \"minor\" or \"patch\", not " + str(part)
+    end
+    return str(major) + "." + str(minor) + "." + str(patch)
+end
+
+let semver = {
+    "parse": semver_parse, "valid": semver_valid, "compare": semver_compare,
+    "sort": semver_sort, "satisfies": semver_satisfies,
+    "max_satisfying": semver_max_satisfying, "bump": semver_bump
+}

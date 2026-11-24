@@ -1,0 +1,32 @@
+# Times semver.parse, semver.compare, semver.satisfies and sorting 1,000
+# versions, and prints calls per second.
+import "semver"
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<14"), format(int(n / (os.time() - start)), ",d"), "calls/s"
+end
+
+random_seed(3)
+let versions = []
+every i from 1 to 1000:
+    versions.push(str(random_int(0, 9)) + "." + str(random_int(0, 30)) + "." + str(random_int(0, 99)))
+end
+
+measure("parse", lambda():
+    semver.parse("1.4.0-beta.2+exp")
+end)
+measure("compare", lambda():
+    semver.compare("1.10.2", "1.9.12")
+end)
+measure("satisfies", lambda():
+    semver.satisfies("1.5.0", ">=1.2.3 <2.0.0")
+end)
+measure("sort 1,000", lambda():
+    semver.sort(versions)
+end)
