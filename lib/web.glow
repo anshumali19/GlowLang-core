@@ -111,8 +111,9 @@ blueprint Request:
         for each pair in pairs:
             when pair.contains("="):
                 let epos = pair.find("=")
-                let k = pair.slice(0, epos)
-                let v = pair.slice(epos + 1, len(pair))
+                # ?q=hello+world%21 gives "hello world!"
+                let k = http.url_decode(pair.slice(0, epos), true)
+                let v = http.url_decode(pair.slice(epos + 1, len(pair)), true)
                 self.query_params[k] = v
             end
         end
@@ -249,7 +250,7 @@ func _web_match(pattern, path):
     let got = {}
     for each i, w in want:
         when w.starts_with(":") and have[i] != "":
-            got[w[1:]] = have[i]
+            got[w[1:]] = http.url_decode(have[i])
         eif w != have[i]:
             return none
         end
