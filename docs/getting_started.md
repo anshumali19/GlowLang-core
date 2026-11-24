@@ -283,6 +283,22 @@ glowlang package app.glow     # one executable to copy anywhere
 See [Testing your code](testing_your_code.md) and
 [Shipping a script as one file](shell_scripting.md#shipping-a-script-as-one-file).
 
+## Standard Modules
+
+`import` a module by name to use it:
+
+```glow
+import "toml"
+import "log"
+let config = toml.parse("[server]\nport = 8080\n")
+log.info("starting", {"port": config["server"]["port"]})
+```
+
+Among them: `csv`, `toml`, `yaml` and `dotenv` for files and settings;
+`template`, `markdown`, `schema` and `url` for web apps; `log`, `lru`,
+`collections`, `semver`, `diff`, `re` and `datetime`. Each is described in
+the [language reference](language_reference.md#18-standard-library).
+
 ---
 
 ## Running Examples
