@@ -123,3 +123,22 @@ caches its last 128 results. Runs differed by under 2%. Measured 2026-11-24.
 
 Python's `quote` turns the text into bytes and maps them through a table in
 one call; `url.encode` looks at one character at a time.
+
+## semver
+
+[semver_bench.glow](semver_bench.glow) times `semver.parse`,
+`semver.compare`, `semver.satisfies` and sorting 1,000 random versions.
+[semver_bench.py](semver_bench.py) does the same with Python's `packaging`
+library (written in Python), which follows PEP 440 rather than semver but
+does the same work. Runs differed by under 3% in GlowLang and 9% in Python.
+Measured 2026-11-24.
+
+| Work | GlowLang (calls/s) | Python (calls/s) |
+|---|---|---|
+| parse | 288,078 | 686,684 |
+| compare | 222,469 | 442,339 |
+| in a range | 66,356 | 84,529 |
+| sort 1,000 | 228 | 578 |
+
+`packaging` builds a key once per version and compares the keys;
+`semver.compare` compares field by field each time.

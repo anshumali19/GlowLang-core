@@ -1655,6 +1655,26 @@ seconds since 1970), and path pieces `join(a, b, ...)`,
 `chr(code)` and `ord(text)` convert between characters and Unicode code
 points.
 
+### Versions (`import "semver"`)
+```glow
+import "semver"
+show semver.compare("1.10.0", "1.9.3")                    # 1
+show semver.satisfies("1.5.0", "^1.2.3")                  # true
+show semver.max_satisfying(["1.2.0", "1.9.1", "2.0.0"], "~1.2 || ~1.9")  # 1.9.1
+show semver.sort(["1.0.0", "1.0.0-rc.1", "0.9.0"])        # ["0.9.0", "1.0.0-rc.1", "1.0.0"]
+show semver.bump("1.4.2", "minor")                        # 1.5.0
+```
+Versions follow semver.org 2.0 (`1.4.0-beta.2+build`, a leading `v` is
+allowed). `semver.parse(text)` gives `major`, `minor`, `patch`, `pre` (a list;
+numbers as numbers) and `build`; `semver.valid(text)` says whether text is a
+version; `semver.compare(a, b)` gives -1, 0 or 1 and ignores build data.
+Ranges work as in npm: `1.2.3` or `=1.2.3`, `<` `<=` `>` `>=`, `1.2.x` / `1.2` /
+`*`, `~1.2.3` (patch updates), `^1.2.3` (no new major; for `0.x`, no new
+minor), `1.2.3 - 2.0.0`, parts separated by spaces that must all hold, and
+`||` between alternatives. A pre-release such as `2.0.0-rc.1` is only in a
+range that names a pre-release of `2.0.0`. Also `semver.sort(versions)`,
+`semver.max_satisfying(versions, range)` and `semver.bump(version, part)`.
+
 ### Crypto (`crypto.`)
 `sha256(data)`, `hmac(key, data)` / `hmac_sha256` (HMAC-SHA256), `blake3(data)`: hex digests
 of the whole string, including any zero bytes. `hmac(key, data, hash, encoding)` takes `hash`
