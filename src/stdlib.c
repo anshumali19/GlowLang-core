@@ -4871,6 +4871,42 @@ static int utf8_ok(const unsigned char *s, size_t n) {
     return 1;
 }
 
+/* http.url_decode(text, plus = false): %XX turned back into bytes, as in
+   a URL; with plus true, + is a space too (form and query encoding). A %
+   not followed by two hex digits stays as it is. If the bytes are not
+   valid UTF-8 text, the text is returned unchanged. */
+static int hex_val(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static Value http_url_decode(int argc, Value *args) {
+    if (argc < 1 || GET_TYPE(args[0]) != VAL_STRING) {
+        pending_exception = value_string_copy("http.url_decode: expected text");
+        has_exception = 1;
+        return value_none();
+    }
+    int plus = argc > 1 && GET_TYPE(args[1]) == VAL_BOOL && AS_BOOL(args[1]);
+    const unsigned char *s = (const unsigned char *)AS_STRING(args[0]);
+    size_t n = rope_length(args[0]), k = 0;
+    unsigned char *out = malloc(n + 1);
+    if (!out) return args[0];
+    for (size_t i = 0; i < n; i++) {
+        int hi, lo;
+        if (s[i] == '%' && i + 2 < n && (hi = hex_val(s[i + 1])) >= 0 && (lo = hex_val(s[i + 2])) >= 0) {
+            out[k++] = (unsigned char)(hi * 16 + lo);
+            i += 2;
+        } else if (plus && s[i] == '+') out[k++] = ' ';
+        else out[k++] = s[i];
+    }
+    out[k] = 0;
+    Value v = utf8_ok(out, k) ? value_string_copy((const char *)out) : args[0];
+    free(out);
+    return v;
+}
+
 static int str_arg(Value v, const char **s, size_t *n) {
     if (GET_TYPE(v) != VAL_STRING) return 0;
     *s = (v & MASK_PAYLOAD) ? AS_STRING(v) : "";
@@ -7742,6 +7778,7 @@ void std_init(void) {
     dict_set(http, "send", native_func_new("send", http_write));
     dict_set(http, "close", native_func_new("close", http_close));
     dict_set(http, "request", native_func_new("request", http_request_native));
+    dict_set(http, "url_decode", native_func_new("url_decode", http_url_decode));
     var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
 #endif

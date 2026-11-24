@@ -1,0 +1,15 @@
+--- http.url_decode
+hello world!
+café ✓
+a+b a b
+100% %zz%4 AJk
+%FF%FE a%00b
+
+http.url_decode: expected text
+--- query strings
+/search
+hello world! café 1=2 true
+q=hello+world%21&tag=caf%C3%A9&a%26b=1%3D2&empty=
+--- :name route parts
+/files/:name my notes.txt
+a+b/c
