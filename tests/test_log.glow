@@ -1,0 +1,103 @@
+# log levels, text and JSON lines, child loggers, files and LOG_LEVEL
+# (lib/log.glow). Times vary, so each line's time is checked and replaced.
+import "log"
+import "re"
+
+let path = "test_log_tmp.log"
+
+func lines_written():
+    let out = []
+    for each line in (fs.read(path) ?? "").split("\n"):
+        when line == "":
+            skip
+        end
+        let m = re.find("^(\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z) ", line)
+        let jm = re.find("\"time\": \"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z\"", line)
+        when m is not none:
+            out.push("<time> " + line.slice(m.stop))
+        eif jm is not none:
+            out.push(line.replace(jm.text, "\"time\": \"<time>\""))
+        otherwise:
+            out.push("bad time: " + line)
+        end
+    end
+    fs.remove(path)
+    return out
+end
+
+try:
+    log.set_output(path)
+
+    show "--- text"
+    log.info("server started", {"port": 8080, "debug": false})
+    log.debug("not shown at info")
+    log.warn("disk low", {"free": 0.5, "path": "/var/data dir", "note": "say \"hi\"", "empty": "", "eq": "a=b"})
+    log.error("two\nlines", {"list": [1, "a b"], "map": {"k": 1}, "none": none})
+    log.info("no fields")
+    for each l in lines_written():
+        show l
+    end
+
+    show "--- levels"
+    log.set_level("debug")
+    log.debug("shown at debug")
+    log.set_level("ERROR")
+    log.warn("hidden")
+    log.error("shown at error")
+    log.set_level("off")
+    log.error("hidden too")
+    log.set_level("info")
+    for each l in lines_written():
+        show l
+    end
+
+    show "--- child loggers"
+    let req = log.child({"request_id": "r1"})
+    req.info("handled", {"status": 200})
+    let user = req.child({"user": "ana", "request_id": "r2"})
+    user.warn("slow", {"ms": 950})
+    req.debug("hidden")
+    log.info("root has no fields")
+    for each l in lines_written():
+        show l
+    end
+
+    show "--- json"
+    log.set_format("json")
+    log.info("started", {"port": 8080, "tags": ["a"]})
+    req.error("failed", {"msg": "a field named msg replaces the message"})
+    log.set_format("text")
+    for each l in lines_written():
+        show l
+    end
+
+    show "--- errors"
+    for each bad in ["loud", 3]:
+        try:
+            log.set_level(bad)
+        catch e:
+            show e
+        end
+    end
+    try:
+        log.set_format("xml")
+    catch e:
+        show e
+    end
+
+    show "--- LOG_LEVEL and stderr"
+    let script = "import \"log\"\nlog.debug(\"from the child\", {\"n\": 1})\nlog.info(\"info line\")\nshow \"stdout ok\"\n"
+    fs.write("test_log_tmp.glow", script)
+    let r = process.run([process.executable, "run", "test_log_tmp.glow"], {"env": {"LOG_LEVEL": "debug"}})
+    show r["stdout"].trim(), r["stderr"].contains("DEBUG from the child n=1"), r["stderr"].contains("INFO info line")
+    r = process.run([process.executable, "run", "test_log_tmp.glow"], {"env": {"LOG_LEVEL": "warn"}})
+    show r["stdout"].trim(), r["stderr"].trim() == ""
+finally:
+    log.set_output(none)
+    when fs.exists(path):
+        fs.remove(path)
+    end
+    when fs.exists("test_log_tmp.glow"):
+        fs.remove("test_log_tmp.glow")
+    end
+end

@@ -1,0 +1,20 @@
+# Writes 100,000 info lines with two fields to a file, then times 1,000,000
+# debug calls that the level skips. Prints lines per second.
+import "log"
+
+let path = os.temp_dir() + "/glow_log_bench.log"
+when fs.exists(path):
+    fs.remove(path)
+end
+log.set_output(path)
+let start = os.time()
+every i from 1 to 100000:
+    log.info("request done", {"status": 200, "path": "/items"})
+end
+show format("log.info to a file", "<26"), format(int(100000 / (os.time() - start)), ",d"), "lines/s"
+start = os.time()
+every i from 1 to 1000000:
+    log.debug("skipped", {"i": i})
+end
+show format("log.debug, level info", "<26"), format(int(1000000 / (os.time() - start)), ",d"), "calls/s"
+fs.remove(path)

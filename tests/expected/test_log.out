@@ -1,0 +1,22 @@
+--- text
+<time> INFO server started port=8080 debug=false
+<time> WARN disk low free=0.5 path="/var/data dir" note="say \"hi\"" empty="" eq="a=b"
+<time> ERROR two\nlines list="[1, \"a b\"]" map="{\"k\": 1}" none=none
+<time> INFO no fields
+--- levels
+<time> DEBUG shown at debug
+<time> ERROR shown at error
+--- child loggers
+<time> INFO handled request_id=r1 status=200
+<time> WARN slow request_id=r2 user=ana ms=950
+<time> INFO root has no fields
+--- json
+{"time": "<time>", "level": "info", "msg": "started", "port": 8080, "tags": ["a"]}
+{"time": "<time>", "level": "error", "msg": "a field named msg replaces the message", "request_id": "r1"}
+--- errors
+log: the level must be debug, info, warn, error or off, not loud
+log: the level must be debug, info, warn, error or off, not 3
+log: the format must be text or json, not xml
+--- LOG_LEVEL and stderr
+stdout ok true true
+stdout ok true
