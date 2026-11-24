@@ -14,11 +14,12 @@
 # properties, required, additionalProperties (true, false or a schema),
 # minProperties, maxProperties; for arrays items, minItems, maxItems,
 # uniqueItems; for text minLength, maxLength (in characters), pattern (found
-# anywhere in the text, with GlowLang's regular expressions); for numbers
-# minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf; allOf,
-# anyOf, oneOf, not; $ref to "#" or "#/$defs/name" (also "#/definitions/..."),
-# and true / false as whole schemas. Other keywords (format, title, default,
-# ...) are ignored, as the standard allows.
+# anywhere in the text, with GlowLang's regular expressions), format (date,
+# time, date-time, email, hostname, ipv4, ipv6, uri, uuid; other formats
+# pass); for numbers minimum, maximum, exclusiveMinimum, exclusiveMaximum,
+# multipleOf; allOf, anyOf, oneOf, not; $ref to "#" or "#/$defs/name" (also
+# "#/definitions/..."), and true / false as whole schemas. Other keywords
+# (title, default, ...) are ignored, as the standard allows.
 #
 # Paths are JSON pointers: "/user/tags/0"; the whole value is "/".
 
@@ -273,6 +274,9 @@ blueprint _SchemaCheck:
         when s.has("pattern") and re.find(s["pattern"], value) is none:
             self.add(path, "must match the pattern " + s["pattern"])
         end
+        when s.has("format") and _SCH_FORMATS.has(s["format"]) and not _SCH_FORMATS[s["format"]](value):
+            self.add(path, "must be a valid " + s["format"])
+        end
     end
 
     func number(value, s, path):
@@ -297,6 +301,118 @@ blueprint _SchemaCheck:
         end
     end
 end
+
+# The formats that are checked. Each takes text and says whether it fits.
+
+func _sch_date(t):
+    when re.fullmatch("[0-9]{4}-[0-9]{2}-[0-9]{2}", t) is none:
+        return false
+    end
+    let y = int(t.slice(0, 4))
+    let m = int(t.slice(5, 7))
+    let d = int(t.slice(8, 10))
+    let days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    when m < 1 or m > 12:
+        return false
+    end
+    let last = days[m - 1]
+    when m == 2 and y % 4 == 0 and (y % 100 != 0 or y % 400 == 0):
+        last = 29
+    end
+    return d >= 1 and d <= last
+end
+
+func _sch_time(t):
+    when re.fullmatch("[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})", t) is none:
+        return false
+    end
+    # A leap second (:60) is allowed, as RFC 3339 allows it.
+    when int(t.slice(0, 2)) > 23 or int(t.slice(3, 5)) > 59 or int(t.slice(6, 8)) > 60:
+        return false
+    end
+    let zone = t.slice(len(t) - 6)
+    when zone[0] == "+" or zone[0] == "-":
+        return int(zone.slice(1, 3)) <= 23 and int(zone.slice(4, 6)) <= 59
+    end
+    return true
+end
+
+func _sch_date_time(t):
+    return len(t) > 11 and (t[10] == "T" or t[10] == "t") and _sch_date(t.slice(0, 10)) and _sch_time(t.slice(11))
+end
+
+func _sch_ipv4(t):
+    let parts = t.split(".")
+    when len(parts) != 4:
+        return false
+    end
+    for each p in parts:
+        when re.fullmatch("0|[1-9][0-9]{0,2}", p) is none or int(p) > 255:
+            return false
+        end
+    end
+    return true
+end
+
+func _sch_ipv6(t):
+    let groups = 8
+    let text = t
+    # An IPv4 address may stand for the last two groups.
+    when t.contains("."):
+        let parts = t.split(":")
+        let last = parts[len(parts) - 1]
+        when len(parts) < 3 or not _sch_ipv4(last):
+            return false
+        end
+        text = t.slice(0, len(t) - len(last)) + "0:0"
+    end
+    let halves = text.split("::")
+    when len(halves) > 2:
+        return false
+    end
+    let count = 0
+    for each half in halves:
+        when half != "":
+            for each g in half.split(":"):
+                when re.fullmatch("[0-9A-Fa-f]{1,4}", g) is none:
+                    return false
+                end
+                count = count + 1
+            end
+        end
+    end
+    when len(halves) == 2:
+        return count < groups
+    end
+    return count == groups
+end
+
+func _sch_hostname(t):
+    when t == "" or len(t) > 253:
+        return false
+    end
+    for each label in t.split("."):
+        when re.fullmatch("[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is none:
+            return false
+        end
+    end
+    return true
+end
+
+func _sch_email(t):
+    let parts = t.split("@")
+    return len(parts) == 2 and re.fullmatch("[^\\s]+", parts[0]) is not none and _sch_hostname(parts[1])
+end
+
+func _sch_uri(t):
+    return re.fullmatch("[A-Za-z][A-Za-z0-9+.-]*:[^\\s]*", t) is not none
+end
+
+func _sch_uuid(t):
+    return re.fullmatch("[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", t) is not none
+end
+
+let _SCH_FORMATS = {"date": _sch_date, "time": _sch_time, "date-time": _sch_date_time, "email": _sch_email, "hostname": _sch_hostname, "ipv4": _sch_ipv4, "ipv6": _sch_ipv6, "uri": _sch_uri, "uuid": _sch_uuid}
 
 func schema_validate(value, s):
     let c = _SchemaCheck(s)

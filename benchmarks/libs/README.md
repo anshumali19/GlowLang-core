@@ -217,6 +217,13 @@ error as `schema.validate` does. Runs differed by under 4%. Measured
 |---|---|---|
 | valid | 75,199 | 35,928 |
 | six problems | 88,504 | 24,881 |
+| formats | 62,374 | 109,518 |
+
+The formats row (measured 2026-11-25, runs within 2%) checks an event with
+a `uuid`, a `date-time`, an `email` and an `ipv4` text; Python uses a
+`FormatChecker`. Python does less of the work: without the
+`rfc3339-validator` package, which is not installed here, it passes
+`date-time` unchecked, and it checks `email` only for an `@`.
 
 ## diff
 
