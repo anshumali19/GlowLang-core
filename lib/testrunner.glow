@@ -120,10 +120,7 @@ try:
         let current = ""
         let printed = {"": []}
         let seen = {}
-        for each line in r["stdout"].replace("
-", "
-").split("
-"):
+        for each line in r["stdout"].replace("\r\n", "\n").split("\n"):
             when not line.starts_with(MARK + " "):
                 when line != "":
                     printed[current].push(line)
