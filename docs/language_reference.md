@@ -1525,6 +1525,27 @@ let r = http.request("GET", "https://example.com/", {"timeout": 10})
 show r["status"], len(r["body"])
 ```
 
+### URLs (`import "url"`)
+```glow
+import "url"
+let link = url.build({"scheme": "https", "host": "api.example", "path": "/search",
+                      "query": {"q": "tea & cake", "page": 2}})
+show link                                  # https://api.example/search?q=tea%20%26%20cake&page=2
+let u = url.parse(link)
+show u["host"], u["path"], u["params"]["q"]  # api.example /search tea & cake
+show url.join("https://shop.example/a/b.html", "../img/logo.png")   # https://shop.example/img/logo.png
+```
+`url.parse(text)` gives `scheme` (lower-cased), `user`, `password`, `host`,
+`port` (a number, or `none`), `path`, `query`, `fragment` (`""` when
+missing) and `params`, the query decoded into a dict. `url.build(parts)`
+puts such a dict back together; its `query` may be text or a dict.
+`url.join(base, link)` resolves a link found on the page at `base`
+(RFC 3986). `url.encode(text)` writes `%XX` for every byte except
+`A-Z a-z 0-9 - . _ ~`; `url.decode(text)` reverses it. `url.query(dict)`
+makes a query string (a list value repeats the key, `none` gives the key
+alone), and `url.parse_query(text)` reads one (`+` is a space; a repeated
+key keeps its last value).
+
 ### SQLite (`sqlite.`)
 `open(path)`, `exec(db, sql, params)` (returns the number of rows changed), `query(db, sql, params)`
 (a list of row dicts), `step_query(db, sql, params)` (rows one at a time for `for each`),

@@ -1,0 +1,255 @@
+# url.glow — take URLs apart, build them, and encode their parts.
+#
+#   import "url"
+#   url.parse(text)          {"scheme", "user", "password", "host", "port",
+#                             "path", "query", "fragment", "params"}
+#   url.build(parts)         a URL from a dict like the one parse gives;
+#                            "query" may be text or a dict
+#   url.join(base, link)     the URL a link on the page at base points to
+#   url.encode(text)         %XX for every byte but A-Z a-z 0-9 - . _ ~
+#   url.decode(text)         the reverse (http.url_decode)
+#   url.query(dict)          "a=1&b=two%20words" (a list value repeats the key)
+#   url.parse_query(text)    the reverse: a dict; + is a space, a repeated
+#                            key keeps its last value
+#
+# parse gives "" for a part that is missing and none for a missing port;
+# "params" is parse_query of the query. The scheme is lower-cased; nothing
+# else is changed, so parse does not decode the path.
+
+import "re"
+
+let _URL_PARTS = "(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?://([^/?#]*))?([^?#]*)(?:\\?([^#]*))?(?:#(.*))?"
+let _URL_SAFE = "[A-Za-z0-9._~-]*"
+
+func url_encode(text):
+    text = str(text)
+    when re.fullmatch(_URL_SAFE, text) is not none:
+        return text
+    end
+    let out = []
+    for each c in text:
+        when (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "-" or c == "." or c == "_" or c == "~":
+            out.push(c)
+        otherwise:
+            for each b in c.bytes():
+                out.push("%" + format(b, "02X"))
+            end
+        end
+    end
+    return out.join("")
+end
+
+func url_decode(text):
+    return http.url_decode(text)
+end
+
+func url_query(params):
+    let out = []
+    for each key in params.keys():
+        let value = params[key]
+        let values = [value]
+        when type(value) == "list":
+            values = value
+        end
+        for each v in values:
+            when v is none:
+                out.push(url_encode(key))
+            otherwise:
+                out.push(url_encode(key) + "=" + url_encode(v))
+            end
+        end
+    end
+    return out.join("&")
+end
+
+func url_parse_query(text):
+    let params = {}
+    when text.starts_with("?"):
+        text = text.slice(1)
+    end
+    for each pair in text.split("&"):
+        when pair == "":
+            skip
+        end
+        let eq = pair.find("=")
+        when eq < 0:
+            params[http.url_decode(pair, true)] = ""
+        otherwise:
+            params[http.url_decode(pair.slice(0, eq), true)] = http.url_decode(pair.slice(eq + 1), true)
+        end
+    end
+    return params
+end
+
+# The five parts of RFC 3986, appendix B; a part that is missing is none.
+func _url_split(text):
+    let m = re.fullmatch(_URL_PARTS, text.trim())
+    return m.groups
+end
+
+func url_parse(text):
+    let p = _url_split(text)
+    let user = ""
+    let password = ""
+    let host = ""
+    let port = none
+    let authority = p[1] ?? ""
+    let at = authority.find("@")
+    when at >= 0:
+        let info = authority.slice(0, at)
+        authority = authority.slice(at + 1)
+        let colon = info.find(":")
+        when colon >= 0:
+            user = info.slice(0, colon)
+            password = info.slice(colon + 1)
+        otherwise:
+            user = info
+        end
+    end
+    host = authority
+    let hm = re.fullmatch("(\\[[^\\]]*\\]|[^:]*)(?::([0-9]*))?", authority)
+    when hm is none:
+        throw "url: bad host or port in " + text
+    end
+    host = hm.group(1)
+    when hm.group(2) is not none and hm.group(2) != "":
+        port = int(hm.group(2))
+    end
+    let query = p[3] ?? ""
+    return {
+        "scheme": (p[0] ?? "").lower(), "user": user, "password": password,
+        "host": host, "port": port, "path": p[2], "query": query,
+        "fragment": p[4] ?? "", "params": url_parse_query(query)
+    }
+end
+
+func url_build(parts):
+    let out = []
+    let scheme = parts.get("scheme") ?? ""
+    let host = parts.get("host") ?? ""
+    when scheme != "":
+        out.push(scheme + ":")
+    end
+    when host != "" or scheme == "file":
+        out.push("//")
+        let user = parts.get("user") ?? ""
+        when user != "":
+            out.push(user)
+            when (parts.get("password") ?? "") != "":
+                out.push(":" + parts["password"])
+            end
+            out.push("@")
+        end
+        out.push(host)
+        when parts.get("port") is not none:
+            out.push(":" + str(parts["port"]))
+        end
+    end
+    let path = parts.get("path") ?? ""
+    when host != "" and path != "" and not path.starts_with("/"):
+        path = "/" + path
+    end
+    out.push(path)
+    let query = parts.get("query") ?? ""
+    when type(query) == "dict":
+        query = url_query(query)
+    end
+    when query != "":
+        out.push("?" + query)
+    end
+    when (parts.get("fragment") ?? "") != "":
+        out.push("#" + parts["fragment"])
+    end
+    return out.join("")
+end
+
+# RFC 3986, 5.2.4: take out the . and .. parts of a path.
+func _url_dots(path):
+    let segments = path.split("/")
+    let out = []
+    let last = len(segments) - 1
+    let i = 0
+    while i <= last:
+        let s = segments[i]
+        when s == "..":
+            when len(out) > 1 or (len(out) == 1 and out[0] != ""):
+                out.pop()
+            end
+            when i == last:
+                out.push("")
+            end
+        eif s == ".":
+            when i == last:
+                out.push("")
+            end
+        otherwise:
+            out.push(s)
+        end
+        i = i + 1
+    end
+    let joined = out.join("/")
+    when path.starts_with("/") and not joined.starts_with("/"):
+        joined = "/" + joined
+    end
+    return joined
+end
+
+# RFC 3986, 5.2.2.
+func url_join(base, link):
+    let b = _url_split(base)
+    let r = _url_split(link)
+    let scheme = r[0]
+    let authority = r[1]
+    let path = r[2]
+    let query = r[3]
+    when scheme is not none:
+        path = _url_dots(path)
+    eif authority is not none:
+        scheme = b[0]
+        path = _url_dots(path)
+    otherwise:
+        scheme = b[0]
+        authority = b[1]
+        when path == "":
+            path = b[2]
+            when query is none:
+                query = b[3]
+            end
+        otherwise:
+            when not path.starts_with("/"):
+                when b[1] is not none and b[2] == "":
+                    path = "/" + path
+                otherwise:
+                    let base_path = b[2]
+                    let slash = len(base_path) - 1
+                    while slash >= 0 and base_path[slash] != "/":
+                        slash = slash - 1
+                    end
+                    path = base_path.slice(0, slash + 1) + path
+                end
+            end
+            path = _url_dots(path)
+        end
+    end
+    let out = []
+    when scheme is not none:
+        out.push(scheme + ":")
+    end
+    when authority is not none:
+        out.push("//" + authority)
+    end
+    out.push(path)
+    when query is not none:
+        out.push("?" + query)
+    end
+    when r[4] is not none:
+        out.push("#" + r[4])
+    end
+    return out.join("")
+end
+
+let url = {
+    "parse": url_parse, "build": url_build, "join": url_join,
+    "encode": url_encode, "decode": url_decode,
+    "query": url_query, "parse_query": url_parse_query
+}

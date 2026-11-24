@@ -1,0 +1,35 @@
+# Times url.parse, url.encode, url.query and url.join for two seconds each
+# and prints calls per second.
+import "url"
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<14"), format(int(n / (os.time() - start)), ",d"), "calls/s"
+end
+
+# 1,000 different links, so nothing can be answered from a cache.
+let links = []
+every i from 0 to 999:
+    links.push("https://ana@shop.example:8443/cart/items/" + str(i) + "?id=" + str(i) + "&sort=price#top")
+end
+let params = {"q": "tea & cake", "page": "2", "lang": "en"}
+let k = 0
+measure("parse", lambda():
+    k = (k + 1) % 1000
+    url.parse(links[k])
+end)
+measure("encode", lambda():
+    url.encode("tea & cake / café")
+end)
+measure("query", lambda():
+    url.query(params)
+end)
+measure("join", lambda():
+    k = (k + 1) % 1000
+    url.join(links[k], "../../g?y#s")
+end)
