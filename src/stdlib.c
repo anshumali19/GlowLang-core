@@ -5639,6 +5639,20 @@ static Value http_read(int argc, Value *args) {
     char *buf = malloc(cap);
     if (!buf) return value_none();
     long long want = -1;          /* total bytes of the request, once known */
+    /* http.read(client, seconds): give up (none) when nothing arrives in time.
+       Only the receive side, so sending a large response is not cut short. */
+    if (argc > 1 && (IS_INT(args[1]) || GET_TYPE(args[1]) == VAL_FLOAT)) {
+        double secs = IS_INT(args[1]) ? (double)AS_INT(args[1]) : AS_FLOAT(args[1]);
+#ifdef _WIN32
+        DWORD ms = (DWORD)(secs * 1000);
+        setsockopt((SOCKET)fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+#else
+        struct timeval tv;
+        tv.tv_sec = (long)secs;
+        tv.tv_usec = (long)((secs - (double)tv.tv_sec) * 1e6);
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+    }
     glow_gil_release();
     for (;;) {
         if (n == cap) {

@@ -1,6 +1,7 @@
 # GlowWeb — a small web framework: router, middleware, request/response
 # objects, JSON helpers and static files (with path traversal blocked).
-# Each connection gets a thread, and threads take turns under the GIL. It
+# Each connection gets a thread, and threads take turns under the GIL; a
+# connection stays open for the client's next request (keep-alive). It
 # speaks plain HTTP: in production put it behind a reverse proxy (nginx,
 # Caddy) for TLS, compression and load balancing.
 # String methods: .split() .contains() .find() .slice()
@@ -238,6 +239,43 @@ blueprint Response:
         result = result + "\r\n" + self.body
         return result
     end
+end
+
+# Whether the connection can carry another request after this one: the
+# client asked for keep-alive (the default in HTTP/1.1) and http.read got
+# exactly this request. Extra bytes (a second request sent before the first
+# was answered) or a chunked body would be lost, so those close instead.
+func _web_keep_alive(req):
+    when req.raw is none or req.method == "":
+        return false
+    end
+    let conn = ""
+    let length = 0
+    for each k in req.headers.keys():
+        let name = k.lower()
+        when name == "connection":
+            conn = req.headers[k].lower()
+        eif name == "content-length":
+            try:
+                length = int(req.headers[k].trim())
+            catch e:
+                return false
+            end
+        eif name == "transfer-encoding":
+            return false
+        end
+    end
+    when req.body.byte_len() != length:
+        return false
+    end
+    let eol = req.raw.find("\r\n")
+    when eol < 0:
+        return false
+    end
+    when req.raw.slice(0, eol).ends_with("HTTP/1.1"):
+        return not conn.contains("close")
+    end
+    return conn.contains("keep-alive")
 end
 
 # What a route path like /notes/:id matched in path, or none.
@@ -587,8 +625,22 @@ blueprint Server:
         end
     end
 
+    # Answers requests on one connection while the client keeps it open
+    # (HTTP keep-alive), closing it after 5 idle seconds.
     action handle_client(client):
         let raw = http.read(client)
+        while raw is not none:
+            when not self._respond(client, raw):
+                return none
+            end
+            raw = http.read(client, 5)
+        end
+        http.close(client)
+    end
+
+    # Answers one request. Returns whether the connection stays open; when
+    # it does not, it has been closed or handed to a WebSocket handler.
+    action _respond(client, raw):
         let req = Request(raw)
 
         # An upgrade to a WebSocket route: the connection is the handler's.
@@ -596,7 +648,7 @@ blueprint Server:
             for each k in req.headers.keys():
                 when k.lower() == "upgrade" and req.headers[k].lower() == "websocket":
                     self._websocket(client, raw, req)
-                    return none
+                    return false
                 end
             end
         end
@@ -649,8 +701,25 @@ blueprint Server:
         self.middleware.run_after(req, res)
 
         # Send response
-        http.send(client, res.build())
-        http.close(client)
+        let keep = _web_keep_alive(req)
+        for each k in res.headers.keys():
+            when k.lower() == "connection":
+                keep = keep and res.headers[k].lower() != "close"
+                res.headers.remove(k)
+            end
+        end
+        when keep:
+            res.headers["Connection"] = "keep-alive"
+        otherwise:
+            res.headers["Connection"] = "close"
+        end
+        when http.send(client, res.build()) == -1:
+            keep = false
+        end
+        when not keep:
+            http.close(client)
+        end
+        return keep
     end
 
     action shutdown():

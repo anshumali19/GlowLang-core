@@ -1,0 +1,61 @@
+# GlowWeb keeps a connection open for the next request (HTTP keep-alive)
+# and closes it when the client asks, for HTTP/1.0, when a second request
+# arrived with the first, when the handler says so, and after 5 idle
+# seconds. tests/tools/keep_alive_check.py talks to it over raw sockets;
+# systems without python3 skip that part.
+use "lib/web.glow"
+
+let port = 29891
+let server = Server(port)
+server.route("/n/:i", lambda(req):
+    return {"n": int(req.params["i"])}
+end)
+server.post("/echo", lambda(req):
+    return "got " + req.body
+end)
+server.route("/bye", lambda(req, res):
+    res.headers["Connection"] = "close"
+    res.text("bye")
+end)
+spawn server.start()
+
+let res = none
+let tries = 0
+while res == none and tries < 100:
+    try:
+        res = http.request("GET", "http://127.0.0.1:" + str(port) + "/n/1")
+    catch e:
+        os.sleep(100)
+        tries = tries + 1
+    end
+end
+# http.request asks for Connection: close, and gets it.
+show res["status"], res["body"], res["headers"]["Connection"] ?? res["headers"]["connection"]
+
+let want = ["same connection: HTTP/1.1 200 OK keep-alive {\"n\": 0}",
+    "same connection: HTTP/1.1 200 OK keep-alive {\"n\": 1}",
+    "same connection: HTTP/1.1 200 OK keep-alive {\"n\": 2}",
+    "post on it: HTTP/1.1 200 OK got hello there",
+    "asked to close: close {\"n\": 9} then None",
+    "1.0: close None",
+    "1.0 keep-alive: keep-alive {\"n\": 11}",
+    "1.0 keep-alive: keep-alive {\"n\": 12}",
+    "pipelined: {\"n\": 20} close then None",
+    "handler closes: close bye then None",
+    "idle: None True"]
+when process.find("python3") == none:
+    os.eprint("skipped: needs python3")
+    show "ok"
+otherwise:
+    let r = process.run(["python3", "tests/tools/keep_alive_check.py", str(port)], {"timeout": 60})
+    let got = r["stdout"].replace("\r\n", "\n").strip().split("\n")
+    when got == want:
+        show "ok"
+    otherwise:
+        for each line in got:
+            show line
+        end
+        show r["stderr"]
+    end
+end
+os.exit(0)
