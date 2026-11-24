@@ -1013,7 +1013,8 @@ static inline int glow_stack_low(void) {
 
 /* Global interpreter lock. Exactly one thread runs GlowLang code at a time;
    blocking natives release it (glow_gil_release / glow_gil_acquire) and the
-   interpreter hands it over at loop back-edges when another thread waits. */
+   interpreter hands it over at calls and loop back-edges once another thread
+   has waited a switch interval (glow_gil_waiters, set by that thread). */
 void glow_gil_acquire(void);
 void glow_gil_release(void);
 void glow_gil_yield(void);
