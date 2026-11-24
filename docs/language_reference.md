@@ -1577,6 +1577,25 @@ strings with values. Errors raise `sqlite: <message>`. 64-bit integers come back
 and BLOBs come back as byte strings. `exec` without `params` may run several statements
 separated by `;`.
 
+### YAML (`import "yaml"`)
+```glow
+import "yaml"
+let ci = yaml.parse("on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n      - run: make test\n")
+show ci["jobs"]["test"]["steps"][1]["run"]   # make test
+show ci["on"]                                # push
+```
+`yaml.parse(text)` and `yaml.read(path)` give dicts, lists, text, numbers,
+`true`/`false` and `none`. They read what configuration files use: mappings
+and `- ` sequences nested by indenting, `[a, b]` and `{a: 1}` (also across
+lines), plain, `'single'` and `"double"` quoted text (with `\n`, `\t`, `\u`
+escapes), `|` and `>` blocks (with `-` or `+`), comments, and one document
+(a `---` line at the top is allowed). Plain values follow YAML 1.2: `null`,
+`~` or nothing is `none`; `true` / `false` are booleans, but `yes`, `no` and
+`on` stay text; `12`, `0x1F`, `0o17`, `1.5`, `1e3`, `.inf` and `.nan` are
+numbers. Anchors and aliases (`&`, `*`), tags (`!!str`), several documents
+and `? ` keys are not supported; they, and other mistakes, raise an error
+that names the line.
+
 ### Redis (`redis.`)
 `connect(host, port)`, `get(conn, key)`, `set(conn, key, value)`.
 

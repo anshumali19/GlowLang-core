@@ -1,0 +1,654 @@
+# yaml.glow — read YAML configuration files.
+#
+#   import "yaml"
+#   let config = yaml.parse(text)     dicts, lists, text, numbers, true /
+#   let config = yaml.read(path)      false and none, as the file says
+#
+# Covers what configuration files use: mappings (key: value) and sequences
+# (- item) nested by indenting, flow forms [a, b] and {a: 1} (also across
+# lines), plain, 'single' and "double" quoted text (with \n \t \" \\ \u
+# escapes), | and > blocks (with - or + after them), comments, and one
+# document (a --- line at the top is allowed). Plain values become none for
+# null, ~ or nothing; true or false for true / false (also True, FALSE);
+# numbers for 12, -3, 0x1F, 0o17, 1.5, 1e3, .inf, -.inf and .nan; and text
+# for anything else, such as yes, no and 1.2.3. Keys are text, as in every
+# dict.
+#
+# Not covered: anchors and aliases (& and *), tags (!!str), several
+# documents in one text, keys written with "? " and tabs used for indenting.
+# These raise an error that names the line, as do other mistakes.
+
+import "re"
+
+blueprint _YamlParser:
+    func init(text):
+        let lines = text.replace("\r\n", "\n").split("\n")
+        let start = 0
+        while start < len(lines) and (lines[start].trim() == "" or lines[start].trim().starts_with("#") or lines[start].starts_with("%")):
+            start = start + 1
+        end
+        when start < len(lines) and (lines[start] == "---" or lines[start].starts_with("--- ")):
+            let rest = lines[start].slice(3).trim()
+            when rest == "" or rest.starts_with("#"):
+                start = start + 1
+            otherwise:
+                lines[start] = rest
+            end
+        end
+        self.lines = lines
+        self.i = start
+        self.n = len(lines)
+    end
+
+    func fail(message):
+        throw "yaml: line " + str(min(self.i, self.n - 1) + 1) + ": " + message
+    end
+
+    func indent_of(line):
+        let k = 0
+        while k < len(line) and line[k] == " ":
+            k = k + 1
+        end
+        when k < len(line) and line[k] == "\t":
+            self.fail("tabs cannot be used for indenting")
+        end
+        return k
+    end
+
+    # Text with a comment (# after a space, outside quotes) removed, trimmed.
+    func strip(text):
+        when not text.contains("#"):
+            return text.trim()
+        end
+        let quote = ""
+        let k = 0
+        let n = len(text)
+        while k < n:
+            let c = text[k]
+            when quote != "":
+                when c == "\\" and quote == "\"":
+                    k = k + 1
+                eif c == quote:
+                    quote = ""
+                end
+            eif c == "\"" or c == "'":
+                quote = c
+            eif c == "#" and (k == 0 or text[k - 1] == " " or text[k - 1] == "\t"):
+                return text.slice(0, k).trim()
+            end
+            k = k + 1
+        end
+        return text.trim()
+    end
+
+    # Moves to the next line with content; false at the end or at "...".
+    func skip_blank():
+        while self.i < self.n:
+            let t = self.lines[self.i].trim()
+            when t == "..." or t == "---":
+                when t == "---":
+                    self.fail("several documents in one text are not supported")
+                end
+                self.i = self.n
+                return false
+            end
+            when t != "" and not t.starts_with("#"):
+                return true
+            end
+            self.i = self.i + 1
+        end
+        return false
+    end
+
+    func parse():
+        when not self.skip_blank():
+            return none
+        end
+        let value = self.node(self.indent_of(self.lines[self.i]))
+        when self.skip_blank():
+            self.fail("unexpected text: " + self.lines[self.i].trim())
+        end
+        return value
+    end
+
+    func is_seq_item(text):
+        return text == "-" or text.starts_with("- ")
+    end
+
+    # Where the ": " (or a ":" at the end) after a key is, outside quotes and
+    # brackets, or -1.
+    func key_end(text):
+        let k = 0
+        let n = len(text)
+        when n > 0 and (text[0] == "\"" or text[0] == "'"):
+            let q = text[0]
+            k = 1
+            while k < n and text[k] != q:
+                when text[k] == "\\" and q == "\"":
+                    k = k + 1
+                end
+                k = k + 1
+            end
+            k = k + 1
+            when k < n and text[k] == ":" and (k + 1 == n or text[k + 1] == " "):
+                return k
+            end
+            return -1
+        end
+        when n > 0 and (text[0] == "[" or text[0] == "{"):
+            return -1
+        end
+        while k < n:
+            when text[k] == ":" and (k + 1 == n or text[k + 1] == " " or text[k + 1] == "\t"):
+                return k
+            end
+            when text[k] == "#" and k > 0 and text[k - 1] == " ":
+                return -1
+            end
+            k = k + 1
+        end
+        return -1
+    end
+
+    func node(indent):
+        let text = self.strip(self.lines[self.i].slice(indent))
+        when text == "?" or text.starts_with("? "):
+            self.fail("keys written with ? are not supported")
+        end
+        when self.is_seq_item(text):
+            return self.sequence(indent)
+        end
+        when self.key_end(text) >= 0:
+            return self.mapping(indent)
+        end
+        self.i = self.i + 1
+        return self.inline_value(text, indent)
+    end
+
+    func mapping(indent):
+        let out = {}
+        while self.skip_blank():
+            let line = self.lines[self.i]
+            let ind = self.indent_of(line)
+            when ind < indent:
+                stop
+            end
+            when ind > indent:
+                self.fail("this line is indented more than the key above it")
+            end
+            let text = self.strip(line.slice(ind))
+            let colon = self.key_end(text)
+            when colon < 0:
+                when self.is_seq_item(text):
+                    stop
+                end
+                self.fail("expected key: value, found " + text)
+            end
+            let key = text.slice(0, colon).trim()
+            when key.starts_with("\"") or key.starts_with("'"):
+                key = self.quoted(key)
+            eif key.starts_with("&") or key.starts_with("*") or key.starts_with("!") or key.starts_with("?"):
+                self.fail("anchors, aliases, tags and ? keys are not supported")
+            end
+            when out.has(key):
+                self.fail("the key " + key + " appears twice")
+            end
+            let rest = text.slice(colon + 1).trim()
+            self.i = self.i + 1
+            out[key] = self.value_after(rest, indent)
+        end
+        return out
+    end
+
+    # The value of "key: rest" or "- rest" whose line was at indent.
+    func value_after(rest, indent):
+        when rest == "":
+            when not self.skip_blank():
+                return none
+            end
+            let ind = self.indent_of(self.lines[self.i])
+            let child = self.strip(self.lines[self.i].slice(ind))
+            # A sequence may sit at the same indent as its key.
+            when ind > indent or (ind == indent and self.is_seq_item(child)):
+                return self.node(ind)
+            end
+            return none
+        end
+        when rest[0] == "|" or rest[0] == ">":
+            return self.block(rest, indent)
+        end
+        when self.is_seq_item(rest):
+            self.i = self.i - 1
+            self.fail("a - list cannot start on the line of its key; put it on the next line")
+        end
+        return self.inline_value(rest, indent)
+    end
+
+    func sequence(indent):
+        let out = []
+        while self.skip_blank():
+            let line = self.lines[self.i]
+            let ind = self.indent_of(line)
+            when ind != indent:
+                when ind > indent:
+                    self.fail("this line is indented more than the - above it")
+                end
+                stop
+            end
+            let text = self.strip(line.slice(ind))
+            when not self.is_seq_item(text):
+                stop
+            end
+            let rest = text.slice(1).trim()
+            when rest != "" and (self.is_seq_item(rest) or self.key_end(rest) >= 0):
+                # "- key: value" or "- - x": the rest starts a node of its own,
+                # indented to where it begins.
+                let col = ind + 1
+                while line[col] == " ":
+                    col = col + 1
+                end
+                self.lines[self.i] = " " * col + line.slice(col)
+                out.push(self.node(col))
+            otherwise:
+                self.i = self.i + 1
+                out.push(self.value_after(rest, indent))
+            end
+        end
+        return out
+    end
+
+    # A | or > block: the more-indented lines after the current one.
+    func block(header, indent):
+        let m = re.fullmatch("([|>])([+-]?)([1-9]?)([+-]?)", self.strip(header))
+        when m is none:
+            self.i = self.i - 1
+            self.fail("bad block header " + header)
+        end
+        let folded = m.group(1) == ">"
+        let chomp = m.group(2) + m.group(4)
+        let body = []
+        let block_indent = -1
+        when m.group(3) != "":
+            block_indent = indent + int(m.group(3))
+        end
+        while self.i < self.n:
+            let line = self.lines[self.i]
+            when line.trim() == "":
+                body.push("")
+                self.i = self.i + 1
+                skip
+            end
+            let ind = self.indent_of(line)
+            when block_indent < 0:
+                block_indent = ind
+            end
+            when ind < block_indent or ind <= indent:
+                stop
+            end
+            body.push(line.slice(block_indent))
+            self.i = self.i + 1
+        end
+        # Blank lines at the end belong to the chomping, not the text.
+        let trailing = 0
+        while len(body) > 0 and body[len(body) - 1] == "":
+            body.pop()
+            trailing = trailing + 1
+        end
+        let text = ""
+        when folded:
+            let parts = []
+            let k = 0
+            while k < len(body):
+                let line = body[k]
+                when k > 0:
+                    when line == "" or body[k - 1] == "" or line.starts_with(" ") or body[k - 1].starts_with(" "):
+                        parts.push("\n")
+                    otherwise:
+                        parts.push(" ")
+                    end
+                end
+                parts.push(line)
+                k = k + 1
+            end
+            text = parts.join("").replace("\n\n", "\n")
+        otherwise:
+            text = body.join("\n")
+        end
+        when len(body) == 0:
+            return ""
+        end
+        when chomp == "-":
+            return text
+        eif chomp == "+":
+            return text + "\n" * (trailing + 1)
+        end
+        return text + "\n"
+    end
+
+    # A value that starts on the line before self.i, or a [ or { form that
+    # may go on over more lines. Errors name the last line read.
+    func inline_value(text, indent):
+        self.i = self.i - 1
+        when text.starts_with("[") or text.starts_with("{"):
+            let joined = text
+            while true:
+                let f = _YamlFlow(joined)
+                let value = f.try_parse()
+                when value[0]:
+                    when f.rest() != "":
+                        self.fail("unexpected text after " + text[0] + ": " + f.rest())
+                    end
+                    self.i = self.i + 1
+                    return value[1]
+                end
+                when value[2] != "end":
+                    self.fail(value[2])
+                end
+                self.i = self.i + 1
+                when self.i >= self.n:
+                    self.i = self.n - 1
+                    self.fail(text[0] + " is never closed")
+                end
+                joined = joined + " " + self.strip(self.lines[self.i])
+            end
+        end
+        when text.starts_with("&") or text.starts_with("*") or text.starts_with("!"):
+            self.fail("anchors, aliases and tags are not supported")
+        end
+        when text.starts_with("\"") or text.starts_with("'"):
+            let close = _yaml_quote_end(text)
+            when close < 0:
+                self.fail("a quoted value is never closed")
+            end
+            when text.slice(close + 1).trim() != "":
+                self.fail("unexpected text after the quoted value")
+            end
+            let value = self.quoted(text)
+            self.i = self.i + 1
+            return value
+        end
+        # A plain value may go on over more-indented lines.
+        let parts = [text]
+        self.i = self.i + 1
+        while self.i < self.n:
+            let line = self.lines[self.i]
+            when line.trim() == "" or line.trim().starts_with("#"):
+                stop
+            end
+            let ind = self.indent_of(line)
+            let t = self.strip(line.slice(ind))
+            when ind <= indent or self.key_end(t) >= 0 or self.is_seq_item(t):
+                stop
+            end
+            parts.push(t)
+            self.i = self.i + 1
+        end
+        return _yaml_plain(parts.join(" "))
+    end
+
+    func quoted(text):
+        let r = _yaml_unquote(text)
+        when r[1] is not none:
+            self.fail(r[1])
+        end
+        return r[0]
+    end
+end
+
+# Where the quote that closes text[0] is, or -1.
+func _yaml_quote_end(text):
+    let q = text[0]
+    let k = 1
+    let n = len(text)
+    while k < n:
+        let c = text[k]
+        when q == "\"" and c == "\\":
+            k = k + 2
+            skip
+        end
+        when c == q:
+            when q == "'" and k + 1 < n and text[k + 1] == "'":
+                k = k + 2
+                skip
+            end
+            return k
+        end
+        k = k + 1
+    end
+    return -1
+end
+
+# [text, error]: the value of a quoted scalar such as "a\tb" or 'it''s'.
+func _yaml_unquote(text):
+    let q = text[0]
+    let close = _yaml_quote_end(text)
+    when close < 0:
+        return [none, "a quoted value is never closed"]
+    end
+    let inner = text.slice(1, close)
+    when q == "'":
+        return [inner.replace("''", "'"), none]
+    end
+    when not inner.contains("\\"):
+        return [inner, none]
+    end
+    let out = []
+    let simple = {"n": "\n", "t": "\t", "r": "\r", "\"": "\"", "\\": "\\", "/": "/", "0": chr(0), " ": " ", "e": chr(27), "b": chr(8)}
+    let k = 0
+    let n = len(inner)
+    while k < n:
+        let c = inner[k]
+        when c != "\\" or k + 1 >= n:
+            out.push(c)
+            k = k + 1
+            skip
+        end
+        let e = inner[k + 1]
+        when simple.has(e):
+            out.push(simple[e])
+            k = k + 2
+        eif e == "x" or e == "u" or e == "U":
+            let size = {"x": 2, "u": 4, "U": 8}[e]
+            let hex = inner.slice(k + 2, k + 2 + size)
+            when re.fullmatch("[0-9A-Fa-f]+", hex) is none or len(hex) != size:
+                return [none, "bad escape \\" + e + hex]
+            end
+            out.push(chr(int(hex, 16)))
+            k = k + 2 + size
+        otherwise:
+            return [none, "bad escape \\" + e]
+        end
+    end
+    return [out.join(""), none]
+end
+
+let _YAML_INT = "[-+]?[0-9][0-9_]*"
+let _YAML_FLOAT = "[-+]?(?:[0-9][0-9_]*)?\\.[0-9_]+(?:[eE][-+]?[0-9]+)?|[-+]?[0-9][0-9_]*(?:\\.[0-9_]*)?[eE][-+]?[0-9]+"
+
+# The value of a plain (unquoted) scalar.
+func _yaml_plain(text):
+    when text == "" or text == "~" or text == "null" or text == "Null" or text == "NULL":
+        return none
+    end
+    let lower = text.lower()
+    when lower == "true" and (text == "true" or text == "True" or text == "TRUE"):
+        return true
+    eif lower == "false" and (text == "false" or text == "False" or text == "FALSE"):
+        return false
+    end
+    let c = text[0]
+    when not ((c >= "0" and c <= "9") or c == "-" or c == "+" or c == "."):
+        return text
+    end
+    when re.fullmatch(_YAML_INT, text) is not none:
+        return int(text.replace("_", "").trim_start("+"))
+    end
+    when re.fullmatch("0x[0-9A-Fa-f_]+", text) is not none:
+        return int(text.slice(2).replace("_", ""), 16)
+    eif re.fullmatch("0o[0-7_]+", text) is not none:
+        return int(text.slice(2).replace("_", ""), 8)
+    end
+    when re.fullmatch(_YAML_FLOAT, text) is not none:
+        return float(text.replace("_", ""))
+    end
+    when lower == ".inf" or lower == "+.inf":
+        return math.inf
+    eif lower == "-.inf":
+        return -math.inf
+    eif lower == ".nan":
+        return math.nan
+    end
+    return text
+end
+
+# The flow forms [a, b] and {k: v}.
+blueprint _YamlFlow:
+    func init(text):
+        self.s = text
+        self.k = 0
+        self.n = len(text)
+    end
+
+    func rest():
+        return self.s.slice(self.k).trim()
+    end
+
+    func spaces():
+        while self.k < self.n and (self.s[self.k] == " " or self.s[self.k] == "\t"):
+            self.k = self.k + 1
+        end
+    end
+
+    # [true, value, none], or [false, none, error]; error "end" means the
+    # text stopped before the form was closed.
+    func try_parse():
+        try:
+            return [true, self.value(), none]
+        catch e:
+            return [false, none, str(e)]
+        end
+    end
+
+    func value():
+        self.spaces()
+        when self.k >= self.n:
+            throw "end"
+        end
+        let c = self.s[self.k]
+        when c == "[":
+            self.k = self.k + 1
+            let items = []
+            while true:
+                self.spaces()
+                when self.k >= self.n:
+                    throw "end"
+                end
+                when self.s[self.k] == "]":
+                    self.k = self.k + 1
+                    return items
+                end
+                items.push(self.value())
+                self.spaces()
+                when self.k >= self.n:
+                    throw "end"
+                end
+                let d = self.s[self.k]
+                self.k = self.k + 1
+                when d == "]":
+                    return items
+                eif d != ",":
+                    throw "expected , or ] in a [ list ]"
+                end
+            end
+        end
+        when c == "{":
+            self.k = self.k + 1
+            let out = {}
+            while true:
+                self.spaces()
+                when self.k >= self.n:
+                    throw "end"
+                end
+                when self.s[self.k] == "}":
+                    self.k = self.k + 1
+                    return out
+                end
+                let key = self.scalar(true)
+                when key is not none:
+                    key = str(key)
+                end
+                self.spaces()
+                let v = none
+                when self.k < self.n and self.s[self.k] == ":":
+                    self.k = self.k + 1
+                    self.spaces()
+                    when self.k < self.n and self.s[self.k] != "," and self.s[self.k] != "}":
+                        v = self.value()
+                    end
+                end
+                when out.has(key):
+                    throw "the key " + str(key) + " appears twice"
+                end
+                out[key] = v
+                self.spaces()
+                when self.k >= self.n:
+                    throw "end"
+                end
+                let d = self.s[self.k]
+                self.k = self.k + 1
+                when d == "}":
+                    return out
+                eif d != ",":
+                    throw "expected , or } in a { mapping }"
+                end
+            end
+        end
+        return self.scalar(false)
+    end
+
+    func scalar(is_key):
+        let c = self.s[self.k]
+        when c == "\"" or c == "'":
+            let close = _yaml_quote_end(self.s.slice(self.k))
+            when close < 0:
+                throw "end"
+            end
+            let r = _yaml_unquote(self.s.slice(self.k, self.k + close + 1))
+            when r[1] is not none:
+                throw r[1]
+            end
+            self.k = self.k + close + 1
+            return r[0]
+        end
+        let start = self.k
+        while self.k < self.n:
+            let d = self.s[self.k]
+            when d == "," or d == "]" or d == "}" or d == "[" or d == "{":
+                stop
+            end
+            when d == ":" and (self.k + 1 >= self.n or " ,]}".contains(self.s[self.k + 1])):
+                stop
+            end
+            self.k = self.k + 1
+        end
+        let text = self.s.slice(start, self.k).trim()
+        when is_key:
+            return text
+        end
+        return _yaml_plain(text)
+    end
+end
+
+func yaml_parse(text):
+    return _YamlParser(text).parse()
+end
+
+func yaml_read(path):
+    let text = fs.read(path)
+    when text is none:
+        throw "yaml: cannot read " + str(path)
+    end
+    return yaml_parse(text)
+end
+
+let yaml = {"parse": yaml_parse, "read": yaml_read}
