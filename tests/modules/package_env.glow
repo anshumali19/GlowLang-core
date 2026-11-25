@@ -1,0 +1,5 @@
+# Used by test_package.glow: a packaged program that reads the .env next to
+# itself, as the app from glowlang new does, from whatever folder it runs in.
+import "dotenv"
+dotenv.load(fs.join(fs.dirname(fs.abspath(os.script)), ".env"))
+show os.getenv("GREETING") ?? "no .env found"
