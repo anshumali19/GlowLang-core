@@ -253,3 +253,18 @@ as removed and added, with a peak of 679 MB. Since then a change of more
 than 200 edits is split around its middle (Myers' linear-space search):
 it finds a 6,012-edit diff in 0.92 s with a peak of 133 MB. On the
 50-edit benchmark above the two run within 3% of each other.
+
+## cron
+
+[cron_bench.glow](cron_bench.glow) times `cron.parse` of
+`*/15 9-17 * * mon-fri`, and `next` from a Wednesday evening for that
+schedule (the next morning) and for `0 0 1 1 *` (the next New Year).
+`next` moves field by field, a month, a day or an hour at a time, rather
+than minute by minute. croniter is not installed on this machine, so there
+is no Python column. Runs differed by under 3%. Measured 2026-11-25.
+
+| Work | Calls/s |
+|---|---|
+| parse | 204,219 |
+| next, office hours | 117,127 |
+| next, once a year | 595,711 |

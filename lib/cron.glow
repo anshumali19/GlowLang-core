@@ -1,0 +1,226 @@
+# cron.glow — cron schedules: whether a time matches one, and when it next
+# runs.
+#
+#   import "cron"
+#   let s = cron.parse("*/15 9-17 * * mon-fri")   a Schedule (bad text raises)
+#   s.matches(time)            whether the DateTime's minute is in it
+#   s.next(time)               the first minute after time that is, a DateTime
+#   s.next_times(time, count)  that and the ones after it
+#   cron.next(text, time)      the same as cron.parse(text).next(time)
+#
+# Five fields: minute (0-59), hour (0-23), day of the month (1-31), month
+# (1-12 or jan-dec) and day of the week (0-7, 0 and 7 are Sunday, or
+# sun-sat). Each is *, a number, a range a-b, a list a,b,c, or any of these
+# with a step: */15, 1-30/2, 5/10 (5 and every 10th after). @yearly,
+# @annually, @monthly, @weekly, @daily, @midnight and @hourly stand for the
+# usual lines. As in cron, when both the day of the month and the day of the
+# week are given, a day that matches either one runs; a field that starts
+# with * (such as */2) counts as not given.
+#
+# Times are taken at the DateTime's own offset (a local DateTime in local
+# time), so "0 9 * * *" is 9:00 wherever the DateTime says it is.
+# shortcut: on a local time zone a 9:00 that daylight saving skips is not
+# moved; pass a DateTime with a fixed offset where that matters.
+
+import "datetime"
+
+let _CRON_MACROS = {
+    "@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
+    "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *",
+    "@hourly": "0 * * * *"
+}
+let _CRON_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+let _CRON_DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+
+# The number in a field: digits, or a name from names (counted from first).
+func _cron_number(text, names, first, line):
+    let lower = text.lower()
+    let i = 0
+    while i < len(names):
+        when names[i] == lower:
+            return i + first
+        end
+        i = i + 1
+    end
+    when text == "" or not text.is_digit():
+        throw "cron: bad value \"" + text + "\" in " + line
+    end
+    return int(text)
+end
+
+# A field as a list of booleans indexed by value: [lo, hi] is its range.
+func _cron_field(text, lo, hi, names, first, line):
+    let allowed = [false] * (hi + 1)
+    for each part in text.split(","):
+        let step = 1
+        let slash = part.find("/")
+        when slash >= 0:
+            step = _cron_number(part.slice(slash + 1), [], 0, line)
+            part = part.slice(0, slash)
+            when step < 1:
+                throw "cron: a step must be 1 or more in " + line
+            end
+        end
+        let a = lo
+        let b = hi
+        when part != "*":
+            let dash = part.find("-")
+            when dash > 0:
+                a = _cron_number(part.slice(0, dash), names, first, line)
+                b = _cron_number(part.slice(dash + 1), names, first, line)
+            otherwise:
+                a = _cron_number(part, names, first, line)
+                # 5/10 runs from 5 to the end of the range.
+                when slash < 0:
+                    b = a
+                end
+            end
+        end
+        when a < lo or b > hi:
+            throw "cron: " + part + " is outside " + str(lo) + "-" + str(hi) + " in " + line
+        end
+        when a > b:
+            throw "cron: the range " + part + " runs backwards in " + line
+        end
+        let v = a
+        while v <= b:
+            allowed[v] = true
+            v = v + step
+        end
+    end
+    return allowed
+end
+
+# The weekday of a date, Sunday 0 (Sakamoto's method).
+func _cron_weekday(y, m, d):
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    when m < 3:
+        y = y - 1
+    end
+    return (y + y // 4 - y // 100 + y // 400 + t[m - 1] + d) % 7
+end
+
+blueprint Schedule:
+    func init(text):
+        let line = text.replace("	", " ").trim()
+        let fields = (_CRON_MACROS.get(line.lower()) ?? line).split(" ")
+        let parts = []
+        for each f in fields:
+            when f != "":
+                parts.push(f)
+            end
+        end
+        when len(parts) != 5:
+            throw "cron: expected five fields (minute hour day month weekday) in " + line
+        end
+        self.minutes = _cron_field(parts[0], 0, 59, [], 0, line)
+        self.hours = _cron_field(parts[1], 0, 23, [], 0, line)
+        self.days = _cron_field(parts[2], 1, 31, [], 0, line)
+        self.months = _cron_field(parts[3], 1, 12, _CRON_MONTHS, 1, line)
+        let weekdays = _cron_field(parts[4], 0, 7, _CRON_DAYS, 0, line)
+        weekdays[0] = weekdays[0] or weekdays[7]
+        self.weekdays = weekdays
+        # cron's rule: with both day fields given, either one may match. A
+        # field starting with * (such as */2) counts as not given, as in cron.
+        self.any_day = not parts[2].starts_with("*") and not parts[4].starts_with("*")
+    end
+
+    func day_ok(y, m, d):
+        let by_day = self.days[d]
+        let by_weekday = self.weekdays[_cron_weekday(y, m, d)]
+        when self.any_day:
+            return by_day or by_weekday
+        end
+        return by_day and by_weekday
+    end
+
+    func matches(t):
+        return self.minutes[t.minute] and self.hours[t.hour] and self.months[t.month] and self.day_ok(t.year, t.month, t.day)
+    end
+
+    func next(t):
+        let y = t.year
+        let mo = t.month
+        let d = t.day
+        let h = t.hour
+        let mi = t.minute + 1
+        when mi > 59:
+            mi = 0
+            h = h + 1
+        end
+        # Field by field; a field that does not fit moves the next larger
+        # one on and starts the smaller ones from their first value.
+        let last_year = y + 8
+        while y <= last_year:
+            when h > 23:
+                h = 0
+                d = d + 1
+            end
+            when mo > 12:
+                mo = 1
+                y = y + 1
+                skip
+            end
+            when d > datetime.days_in_month(y, mo):
+                d = 1
+                mo = mo + 1
+                skip
+            end
+            when not self.months[mo]:
+                mo = mo + 1
+                d = 1
+                h = 0
+                mi = 0
+                skip
+            end
+            when not self.day_ok(y, mo, d):
+                d = d + 1
+                h = 0
+                mi = 0
+                skip
+            end
+            when not self.hours[h]:
+                h = h + 1
+                mi = 0
+                skip
+            end
+            while mi <= 59 and not self.minutes[mi]:
+                mi = mi + 1
+            end
+            when mi > 59:
+                h = h + 1
+                mi = 0
+                skip
+            end
+            let offset = t.offset
+            when t.is_local:
+                offset = none
+            end
+            return datetime.create(y, mo, d, h, mi, 0, 0, offset)
+        end
+        # Such as 30 February: no time in the next eight years.
+        return none
+    end
+
+    func next_times(t, count):
+        let out = []
+        while len(out) < count:
+            t = self.next(t)
+            when t is none:
+                stop
+            end
+            out.push(t)
+        end
+        return out
+    end
+end
+
+func cron_parse(text):
+    return Schedule(text)
+end
+
+func cron_next(text, t):
+    return Schedule(text).next(t)
+end
+
+let cron = {"parse": cron_parse, "next": cron_next}

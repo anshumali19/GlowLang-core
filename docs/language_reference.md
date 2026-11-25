@@ -1863,6 +1863,30 @@ month is Feb 28 or 29). Format codes: `%Y %y %m %d %e %H %I %p %M %S %f %B
 not supported; use offsets. Parsing and formatting are built in, so they
 behave the same on every platform.
 
+### Cron schedules (`import "cron"`)
+```glow
+import "cron"
+import "datetime"
+let t = datetime.create(2026, 11, 25, 18, 7, 0, 0, 19800)
+let s = cron.parse("*/15 9-17 * * mon-fri")
+show s.next(t).iso()                          # 2026-11-26T09:00:00+05:30
+show s.matches(t)                             # false
+show cron.next("@monthly", t).iso()           # 2026-12-01T00:00:00+05:30
+```
+`cron.parse(text)` reads the five fields of a crontab line: minute (0-59),
+hour (0-23), day of the month (1-31), month (1-12 or `jan`-`dec`) and day of
+the week (0-7, where 0 and 7 are Sunday, or `sun`-`sat`). Each is `*`, a
+number, a range `a-b`, a list `a,b,c`, or one of these with a step: `*/15`,
+`1-30/2`, `5/10`. `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`,
+`@midnight` and `@hourly` stand for the usual lines. When both day fields
+are given, a day that matches either one runs, as in cron (a field that
+starts with `*`, such as `*/2`, counts as not given). A Schedule has
+`matches(time)`, `next(time)` (the first minute after `time` that matches,
+or `none` if none comes in eight years, as for `0 0 30 2 *`) and
+`next_times(time, count)`. Times are read at the DateTime's own offset;
+`cron.next(text, time)` is `cron.parse(text).next(time)`. Bad text raises an
+error that names the field.
+
 ### Templates (`import "template"`)
 ```glow
 import "template"
