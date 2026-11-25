@@ -313,3 +313,18 @@ Runs differed by under 2%. Measured 2026-11-25.
 |---|---|---|
 | wrap 2,000 words | 3,268.6 | 762.3 |
 | shorten | 232,718.2 | 38,559.9 |
+
+## humanize
+
+[humanize_bench.glow](humanize_bench.glow) times `humanize.bytes`,
+`duration`, `ordinal` and `slug` (of a 47-character title with accents).
+Python's `humanize` and `python-slugify` are not installed on this machine,
+so there is no Python column. Runs differed by under 3%. Measured
+2026-11-25.
+
+| Function | Calls/s |
+|---|---|
+| bytes | 678,196 |
+| duration | 1,637,613 |
+| ordinal | 4,048,457 |
+| slug | 134,118 |

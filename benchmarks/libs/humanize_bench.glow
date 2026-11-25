@@ -1,0 +1,29 @@
+# Times humanize.bytes, duration, ordinal and slug for two seconds each and
+# prints calls per second.
+import "humanize"
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<12"), format(int(n / (os.time() - start)), ",d"), "calls/s"
+end
+func b():
+    humanize.bytes(123456789)
+end
+func d():
+    humanize.duration(90061)
+end
+func o():
+    humanize.ordinal(1003)
+end
+func s():
+    humanize.slug("Ünïcödé text: the 10 best café recipes of 2026!")
+end
+measure("bytes", b)
+measure("duration", d)
+measure("ordinal", o)
+measure("slug", s)
