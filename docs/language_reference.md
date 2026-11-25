@@ -1755,6 +1755,26 @@ wait. When the tries run out, the last error is raised as it was. An
 unknown option raises an error. The waits use `os.sleep`, so other threads
 run meanwhile.
 
+### Wrapping text (`import "textwrap"`)
+```glow
+import "textwrap"
+let text = "The quick brown fox jumps over the lazy dog."
+show textwrap.wrap(text, 20)        # ["The quick brown fox", "jumps over the lazy", "dog."]
+show textwrap.shorten(text, 25)     # The quick brown fox [...]
+show textwrap.dedent("    a
+      b")   # a and, on the next line,   b
+```
+`textwrap.wrap(text, width)` gives the lines of `text`, none longer than
+`width` (70 unless given); `textwrap.fill` joins them with line breaks.
+Words are split at spaces, tabs and line breaks and joined with one space;
+a word longer than a line fills the rest of the line and is then cut.
+`textwrap.shorten(text, width, placeholder)` puts the text on one line and,
+if it is too long, cuts it at a word and adds `placeholder` (` [...]`).
+`textwrap.indent(text, prefix)` puts `prefix` before every line that is not
+blank, and `textwrap.dedent(text)` removes the indentation all lines share.
+Except for spacing, which wrap tidies, the results are those of Python's
+textwrap. Widths count characters.
+
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
 `exit(code)`, `gc_info()`.

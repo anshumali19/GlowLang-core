@@ -1,0 +1,34 @@
+# Wraps a 2,000-word text to 70 columns, and shortens a 40-word sentence to
+# 60 characters, for two seconds each; prints calls per second.
+import "textwrap"
+
+random_seed(7)
+let words = []
+every i from 1 to 2000:
+    let w = []
+    every k from 1 to random_int(1, 10):
+        w.push("abcdefghij"[random_int(0, 9)])
+    end
+    words.push(w.join(""))
+end
+let text = words.join(" ")
+let sentence = words[:40].join(" ")
+assert(len(textwrap.wrap(text, 70)) > 100, "wrap gave too few lines")
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<18"), format(n / (os.time() - start), ",.1f"), "calls/s"
+end
+func wrap_once():
+    textwrap.wrap(text, 70)
+end
+func shorten_once():
+    textwrap.shorten(sentence, 60)
+end
+measure("wrap 2,000 words", wrap_once)
+measure("shorten", shorten_once)
