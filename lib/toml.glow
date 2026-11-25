@@ -13,15 +13,39 @@
 # pass them to datetime.parse to work with them. A key or table defined
 # twice, or any other mistake, raises an error that names the line.
 #
+# parse first tries a quicker reader that works on tokens (parse_tokens);
+# on anything it does not cover it gives up and the text is read character
+# by character, which also writes every error message.
+#
 # Writing gives back what parse reads. TOML has no null, so a none value
 # raises an error, as does a function or any other value TOML cannot hold.
 
 import "re"
 
+# The tokens of parse_tokens: multi-line strings, strings, comments, line
+# breaks, runs of spaces, words (keys, numbers, dates) and any other single
+# character. _TOML_B is a backslash, kept apart from this file's escapes.
+let _TOML_B = chr(92)
+let _TOML_TOKEN = "\"\"\"[" + _TOML_B + "s" + _TOML_B + "S]*?\"\"\"|'''[" + _TOML_B + "s" + _TOML_B + "S]*?'''|\"(?:[^\"" + _TOML_B + _TOML_B + _TOML_B + "n]|" + _TOML_B + _TOML_B + ".)*\"|'[^'" + _TOML_B + "n]*'|#[^" + _TOML_B + "n]*|" + _TOML_B + "r?" + _TOML_B + "n|[ " + _TOML_B + "t]+|[A-Za-z0-9_+:.-]+|."
+let _TOML_GIVE_UP = "toml: the quick reader gives up here"
+
+# The characters a word token starts with.
+func _toml_word_chars():
+    let chars = {}
+    for each c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_+:.-":
+        chars[c] = true
+    end
+    return chars
+end
+let _TOML_WORD = _toml_word_chars()
+
 blueprint _TomlParser:
     func init(text):
         self.s = text
         self.n = len(text)
+        # true while parse_tokens runs: a mistake there gives up instead of
+        # raising, and parse reads the text again.
+        self.quick = false
         self.i = 0
         self.root = {}
         # Tables made by a [header], by id, so a second [header] is an error.
@@ -37,6 +61,9 @@ blueprint _TomlParser:
     end
 
     func fail(message):
+        when self.quick:
+            throw _TOML_GIVE_UP
+        end
         let line = self.s.slice(0, self.i).count("\n") + 1
         throw "toml: line " + str(line) + ": " + message
     end
@@ -180,6 +207,13 @@ blueprint _TomlParser:
         self.i = self.i + 1
         when many:
             self.i = self.i + 1
+        end
+        self.open_table(path, many)
+    end
+
+    # [path] or [[path]] (many): the table that the next keys go in.
+    func open_table(path, many):
+        when many:
             let parent = self.walk(self.root, path[:-1], "")
             let last = path[len(path) - 1]
             let t = parent[0]
@@ -208,7 +242,10 @@ blueprint _TomlParser:
         end
         self.i = self.i + 1
         self.skip_spaces()
-        let value = self.value()
+        self.store(table, path, self.value())
+    end
+
+    func store(table, path, value):
         let t = self.walk(table, path[:-1], "")[0]
         let last = path[len(path) - 1]
         when t.has(last):
@@ -411,6 +448,11 @@ blueprint _TomlParser:
         when t == "":
             self.fail("expected a value, found " + self.found())
         end
+        return self.word_value(t)
+    end
+
+    # A number, boolean, date or time written as t.
+    func word_value(t):
         when t == "true":
             return true
         eif t == "false":
@@ -464,9 +506,224 @@ blueprint _TomlParser:
         end
         self.fail("bad value " + t)
     end
+
+    # The quick reader: the text split into tokens by one regular expression
+    # (_TOML_TOKEN), then read token by token. It covers what configuration
+    # files use; anything else (escapes, a mistake, an unusual layout) gives
+    # up, and parse reads the text character by character, which also makes
+    # every error message.
+    func parse_tokens():
+        self.quick = true
+        # Spaces matter only inside [[ ]] and between a date and its time, so
+        # they are dropped here and spaced[k] says whether token k had some
+        # before it.
+        let toks = []
+        let spaced = []
+        let gap = false
+        for each x in re.findall(_TOML_TOKEN, self.s):
+            let c = x[0]
+            when c == " " or c == "\t":
+                gap = true
+            otherwise:
+                toks.push(x)
+                spaced.push(gap)
+                gap = false
+            end
+        end
+        self.toks = toks
+        self.spaced = spaced
+        self.t = 0
+        self.nt = len(toks)
+        while true:
+            self.tblank()
+            when self.t >= self.nt:
+                return self.root
+            end
+            when self.toks[self.t] == "[":
+                self.t = self.t + 1
+                let many = self.tok() == "[" and not self.spaced[self.t]
+                when many:
+                    self.t = self.t + 1
+                end
+                let path = self.tkey()
+                when self.tok() != "]":
+                    self.fail("")
+                end
+                self.t = self.t + 1
+                when many:
+                    when self.tok() != "]" or self.spaced[self.t]:
+                        self.fail("")
+                    end
+                    self.t = self.t + 1
+                end
+                self.open_table(path, many)
+            otherwise:
+                self.tpair(self.current)
+            end
+            # Only a comment may follow on the line.
+            when self.tok().starts_with("#"):
+                self.t = self.t + 1
+            end
+            let nl = self.tok()
+            when nl == "\n" or nl == "\r\n":
+                self.t = self.t + 1
+            eif self.t < self.nt:
+                self.fail("")
+            end
+        end
+    end
+
+    func tok():
+        when self.t < self.nt:
+            return self.toks[self.t]
+        end
+        return ""
+    end
+
+    func tok_after():
+        when self.t + 1 < self.nt:
+            return self.toks[self.t + 1]
+        end
+        return ""
+    end
+
+    # Comments and line breaks.
+    func tblank():
+        while self.t < self.nt:
+            let x = self.toks[self.t]
+            when x[0] != "#" and x != "\n" and x != "\r\n":
+                return none
+            end
+            self.t = self.t + 1
+        end
+    end
+
+    # A key: bare parts (one word token may hold several, joined by dots)
+    # or one quoted part. A quoted part next to dots gives up.
+    func tkey():
+        let x = self.tok()
+        let parts = []
+        when x.starts_with("\"") or x.starts_with("'"):
+            parts.push(self.tstring(x))
+        otherwise:
+            # A word token holds only A-Z a-z 0-9 _ + : . -; a key may not
+            # hold + or :.
+            when not _TOML_WORD.has(x[0]) or x.contains("+") or x.contains(":"):
+                self.fail("")
+            end
+            for each part in x.split("."):
+                when part == "":
+                    self.fail("")
+                end
+                parts.push(part)
+            end
+        end
+        self.t = self.t + 1
+        when self.tok().starts_with("."):
+            self.fail("")
+        end
+        return parts
+    end
+
+    # The text of the string token x. A "string" with a \ escape gives up;
+    # in a 'literal string' a \ is just text.
+    func tstring(x):
+        let q = x[0]
+        when len(x) < 2 or x[len(x) - 1] != q or (q == "\"" and x.contains("\\")):
+            self.fail("")
+        end
+        when x.starts_with("\"\"\"") or x.starts_with("'''"):
+            # Quotes right after the closing three belong to the text: give up.
+            when len(x) < 6 or self.tok_after().starts_with(q):
+                self.fail("")
+            end
+            let body = x.slice(3, -3)
+            # A line break right after the opening quotes is not part of it.
+            when body.starts_with("\n"):
+                body = body.slice(1)
+            eif body.starts_with("\r\n"):
+                body = body.slice(2)
+            end
+            return body.replace("\r\n", "\n")
+        end
+        return x.slice(1, -1)
+    end
+
+    func tpair(table):
+        let path = self.tkey()
+        when self.tok() != "=":
+            self.fail("")
+        end
+        self.t = self.t + 1
+        self.store(table, path, self.tvalue())
+    end
+
+    func tvalue():
+        let x = self.tok()
+        when x == "":
+            self.fail("")
+        end
+        let c = x[0]
+        when c == "\"" or c == "'":
+            let text = self.tstring(x)
+            self.t = self.t + 1
+            return text
+        eif c == "[":
+            self.t = self.t + 1
+            let items = []
+            while true:
+                self.tblank()
+                when self.tok() == "]":
+                    self.t = self.t + 1
+                    return items
+                end
+                items.push(self.tvalue())
+                self.tblank()
+                let d = self.tok()
+                when d == ",":
+                    self.t = self.t + 1
+                eif d != "]":
+                    self.fail("")
+                end
+            end
+        eif c == "{":
+            self.t = self.t + 1
+            let table = {}
+            when self.tok() == "}":
+                self.t = self.t + 1
+                return table
+            end
+            while true:
+                self.tpair(table)
+                let d = self.tok()
+                self.t = self.t + 1
+                when d == "}":
+                    return table
+                eif d != ",":
+                    self.fail("")
+                end
+            end
+        end
+        when not _TOML_WORD.has(c):
+            self.fail("")
+        end
+        # A date and a time with a space between them: left to parse.
+        when len(x) == 10 and self.t + 1 < self.nt and self.spaced[self.t + 1] and self.toks[self.t + 1][0].is_digit():
+            self.fail("")
+        end
+        self.t = self.t + 1
+        return self.word_value(x)
+    end
 end
 
 func toml_parse(text):
+    try:
+        return _TomlParser(text).parse_tokens()
+    catch e:
+        when str(e) != _TOML_GIVE_UP:
+            throw e
+        end
+    end
     return _TomlParser(text).parse()
 end
 
