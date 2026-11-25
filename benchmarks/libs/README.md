@@ -367,3 +367,21 @@ so there is no Python column. Runs differed by under 3%. Measured
 | duration | 1,637,613 |
 | ordinal | 4,048,457 |
 | slug | 134,118 |
+
+## parallel
+
+[parallel_bench.glow](parallel_bench.glow) runs
+[parallel_work.glow](parallel_work.glow)'s `spin` on one core and with 8
+worker processes: 24 even items of about 9 ms each, 64 uneven items (the
+first 8 take 20 times as long as the rest), and 20 calls on 8 tiny items,
+which is the cost of starting and stopping the workers. Measured
+2026-11-25 on Linux under WSL 2 with the module on the Linux file system
+(loading it from /mnt/c makes every worker start slower), middle of three
+runs within 13%. The 1.14.0 column is the earlier `parallel.map`, which gave
+each worker a block of items in a row.
+
+| Work | one core | `map`, 1.14.0 | `map` | `Pool` |
+|---|---|---|---|---|
+| 24 even items | 207 ms | 40 ms | 44 ms | |
+| 64 uneven items | 63 ms | 55 ms | 16 ms | |
+| 20 calls on 8 tiny items | | 149 ms | 133 ms | 41 ms |

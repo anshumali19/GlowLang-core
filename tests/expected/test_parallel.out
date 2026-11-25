@@ -9,3 +9,12 @@ error: parallel.map: picky(7) failed: seven is not allowed
 error: parallel.map: the function name must be a plain name, not no such
 error: parallel.map: no module file tests/modules/missing.glow
 error: parallel.map: worker 1 of 1 failed (exit code 1)
+true
+[49, 64, 81] []
+true
+error: parallel.map: picky(7) failed: seven is not allowed
+[2, 3]
+working on 1
+working on 2
+[10, 20]
+error: parallel.map: the function name must be a plain name, not no such

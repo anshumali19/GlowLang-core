@@ -26,3 +26,24 @@ trial(lambda(): parallel.map(work, "picky", [5, 6, 7, 8], workers = 2))
 trial(lambda(): parallel.map(work, "no such", [1]))
 trial(lambda(): parallel.map("tests/modules/missing.glow", "square", [1]))
 trial(lambda(): parallel.map("tests/modules/parallel_recursive.glow", "twice", [1]))
+
+# A Pool keeps its workers between calls and hands out items as workers
+# become free; the results still come back in the order of the items.
+let pool = parallel.Pool(work, "square", 3)
+show pool.map(nums) == parallel.map(work, "square", nums)
+show pool.map([7, 8, 9]), pool.map([])
+let uneven = []
+for i from 1 to 40:
+    uneven.push(i % 5)
+end
+show pool.map(uneven) == parallel.map(work, "square", uneven, workers = 3)
+pool.close()
+let picky = parallel.Pool(work, "picky", 2)
+trial(lambda(): picky.map([5, 6, 7, 8, 9, 10]))
+show picky.map([1, 2])
+picky.close()
+# What the function shows is passed through.
+let talk = parallel.Pool(work, "chatty", 1)
+show talk.map([1, 2])
+talk.close()
+trial(lambda(): parallel.Pool(work, "no such", 2))

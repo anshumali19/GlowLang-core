@@ -1,0 +1,48 @@
+# parallel.map and parallel.Pool against doing the same work on one core:
+# 24 even items of about 40 ms each, 64 uneven items (the first 8 take 20
+# times as long as the rest), and 20 calls of map on 8 tiny items, which is
+# what starting the workers costs. Prints milliseconds.
+import "parallel"
+use "parallel_work.glow"
+let work = "benchmarks/libs/parallel_work.glow"
+let workers = 8
+
+func ms(start):
+    return format((os.time() - start) * 1000, ",.0f") + " ms"
+end
+
+let even = [3000000] * 24
+let uneven = [2000000] * 8 + [100000] * 56
+
+let start = os.time()
+for each n in even:
+    spin(n)
+end
+show format("even, one core", "<28"), ms(start)
+start = os.time()
+parallel.map(work, "spin", even, workers)
+show format("even, map, 8 workers", "<28"), ms(start)
+
+start = os.time()
+for each n in uneven:
+    spin(n)
+end
+show format("uneven, one core", "<28"), ms(start)
+start = os.time()
+parallel.map(work, "spin", uneven, workers)
+show format("uneven, map, 8 workers", "<28"), ms(start)
+
+start = os.time()
+every k from 1 to 20:
+    parallel.map(work, "spin", [1, 2, 3, 4, 5, 6, 7, 8], workers)
+end
+show format("20 small maps", "<28"), ms(start)
+when parallel.get("Pool") is not none:
+    let pool = parallel.Pool(work, "spin", workers)
+    start = os.time()
+    every k from 1 to 20:
+        pool.map([1, 2, 3, 4, 5, 6, 7, 8])
+    end
+    pool.close()
+    show format("20 small maps, one Pool", "<28"), ms(start)
+end
