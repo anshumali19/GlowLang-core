@@ -68,11 +68,41 @@ end
 
 # The five parts of RFC 3986, appendix B; a part that is missing is none.
 func _url_split(text):
-    let m = re.fullmatch(_URL_PARTS, text.trim())
-    return m.groups
+    text = text.trim()
+    when text.contains(":"):
+        return re.fullmatch(_URL_PARTS, text).groups
+    end
+    # No scheme, as in most relative links: the parts are found by searching
+    # for # and ?, which is quicker than the regular expression.
+    let fragment = none
+    let hash = text.find("#")
+    when hash >= 0:
+        fragment = text.slice(hash + 1)
+        text = text.slice(0, hash)
+    end
+    let query = none
+    let mark = text.find("?")
+    when mark >= 0:
+        query = text.slice(mark + 1)
+        text = text.slice(0, mark)
+    end
+    let authority = none
+    when text.starts_with("//"):
+        let rest = text.slice(2)
+        let slash = rest.find("/")
+        when slash < 0:
+            slash = len(rest)
+        end
+        authority = rest.slice(0, slash)
+        text = rest.slice(slash)
+    end
+    return [none, authority, text, query, fragment]
 end
 
-func url_parse(text):
+# The URLs that _URL_FULL leaves text in the path for (host:abc, [::1]x,
+# [a]]): the authority split off first and its host read on its own, as
+# before _URL_FULL, which also raises the error for a bad host or port.
+func _url_parse_parts(text):
     let p = _url_split(text)
     let user = ""
     let password = ""
@@ -105,6 +135,41 @@ func url_parse(text):
         "scheme": (p[0] ?? "").lower(), "user": user, "password": password,
         "host": host, "port": port, "path": p[2], "query": query,
         "fragment": p[4] ?? "", "params": url_parse_query(query)
+    }
+end
+
+# A URL in one match: scheme, user info, host (a name or [IPv6]), port,
+# path, query and fragment. Group 3 (the host) is none when there is no //.
+let _URL_FULL = "(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?://(?:([^/?#@]*)@)?(\\[[^\\]/?#]*\\]|[^:/?#]*)(?::([0-9]*))?)?([^?#]*)(?:\\?([^#]*))?(?:#(.*))?"
+
+func url_parse(text):
+    let g = re.fullmatch(_URL_FULL, text.trim()).groups
+    let path = g[4]
+    # After a host the path starts with /; text left there goes the slow way.
+    when g[2] is not none and path != "" and not path.starts_with("/"):
+        return _url_parse_parts(text)
+    end
+    let user = ""
+    let password = ""
+    let info = g[1]
+    when info is not none:
+        let colon = info.find(":")
+        when colon >= 0:
+            user = info.slice(0, colon)
+            password = info.slice(colon + 1)
+        otherwise:
+            user = info
+        end
+    end
+    let port = none
+    when g[3] is not none and g[3] != "":
+        port = int(g[3])
+    end
+    let query = g[5] ?? ""
+    return {
+        "scheme": (g[0] ?? "").lower(), "user": user, "password": password,
+        "host": g[2] ?? "", "port": port, "path": path, "query": query,
+        "fragment": g[6] ?? "", "params": url_parse_query(query)
     }
 end
 

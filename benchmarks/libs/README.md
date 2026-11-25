@@ -132,15 +132,21 @@ caches its last 128 results. Runs differed by under 2%. Measured 2026-11-24.
 
 | Work | GlowLang (calls/s) | Python (calls/s) |
 |---|---|---|
-| parse | 235,248 | 330,629 |
+| parse | 352,284 | 330,629 |
 | encode | 8,274,786 | 1,446,273 |
 | query string from a dict | 955,402 | 435,761 |
-| join | 253,020 | 406,728 |
+| join | 300,545 | 406,728 |
 
 Since 2026-11-25 (measured that day, runs within 8%) `url.encode` calls
 `http.url_encode`, which encodes the bytes in C as `http.url_decode`
 decodes them; before, a loop over the characters in GlowLang gave encode
 475,246 calls/s and query 180,761.
+
+Parse and join were measured again on 2026-11-25 (runs within 2%). `url.parse`
+now reads the whole URL, user and port included, with one regular
+expression instead of two (it was 235,248), and `url.join` splits a link
+without a `:` by searching for `#` and `?` (it was 253,020). On 60,000
+random strings `url.parse` gives what it gave before, errors included.
 
 ## semver
 
