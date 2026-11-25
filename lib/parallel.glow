@@ -1,23 +1,36 @@
 # parallel.glow: use several CPU cores, one GlowLang process per worker.
 #
 #   parallel.map(module, name, items, workers = 0)
+#   let pool = parallel.Pool(module, name, workers = 0)
+#   pool.map(items)          as often as needed: the workers keep running
+#   pool.close()             stop them
 #
 # Calls name(item) for every item and returns the results in the order of
 # items. module is the path of a .glow file that defines the function name;
-# each worker loads it and works through its share of the items, so work
-# that keeps one core busy finishes up to `workers` times sooner. workers = 0
-# means one per CPU core (os.cpu_count()); never more than there are items.
+# each worker loads it once. workers = 0 means one per CPU core
+# (os.cpu_count()); map never uses more workers than there are items.
+#
+# parallel.map starts the workers, gives worker k items k, k + n, k + 2n,
+# ... (so slow items that sit together are spread out) and stops them. A Pool
+# keeps its workers between calls of pool.map, which saves starting them
+# again (about 20 ms on Linux, more on Windows), and gives a worker the next
+# few items whenever it is free, so slow items anywhere in the list do not
+# keep the others waiting; the batches get smaller as the list runs out.
 #
 # Items and results travel between processes as JSON: none, true/false,
 # numbers, strings, and lists and dicts of those. The first error raised by
-# the function is raised here, with the item it was called on. What the
-# function shows is printed as usual, by whichever worker ran it.
+# the function, in the order of items, is raised here with the item it was
+# called on. What the function shows is printed as usual.
 #
 # Keep the function in a module of its own: a module that calls
 # parallel.map itself (at its top level) is refused, since every worker
-# would start workers of its own.
+# would start workers of its own. The function must not read standard input.
 #
 # After import "parallel", call it as parallel.map(...) or parallel_map(...).
+
+# What starts a worker's reply line, so that lines the function shows are
+# told apart from replies.
+let __PARALLEL_TAG = chr(1) + "glow-parallel "
 
 func __parallel_identifier(name):
     let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
@@ -32,7 +45,8 @@ func __parallel_identifier(name):
     return true
 end
 
-func parallel_map(module, name, items, workers = 0):
+# The checks map and Pool make; gives the module's full path.
+func __parallel_check(module, name):
     when os.getenv("GLOW_PARALLEL_WORKER"):
         throw "parallel.map: a worker's module calls parallel.map itself; keep the function in a module of its own"
     end
@@ -46,6 +60,186 @@ func parallel_map(module, name, items, workers = 0):
     when path.contains("\""):
         throw "parallel.map: the module's path must not contain a double quote"
     end
+    return path
+end
+
+# The thread for worker k: whatever happens, it says it has finished, so
+# map does not wait for it forever.
+func __parallel_feed(job, k):
+    try:
+        __parallel_feed_loop(job, k)
+    catch e:
+        job["failed"].push("worker " + str(k + 1) + ": " + str(e))
+        job["stop"] = true
+    finally:
+        job["finished"].push(k)
+    end
+end
+
+# Takes the next batch of item numbers, sends the items, and reads the
+# replies (other lines are what the function showed).
+func __parallel_feed_loop(job, k):
+    let p = job["procs"][k]
+    let n = len(job["procs"])
+    while not job["stop"]:
+        # pop is one step that no other thread can split.
+        let size = len(job["queue"]) // (n * 4)
+        when size < 1:
+            size = 1
+        end
+        let batch = []
+        while len(batch) < size:
+            let i = job["queue"].pop()
+            when i is none:
+                stop
+            end
+            batch.push(i)
+        end
+        when len(batch) == 0:
+            stop
+        end
+        let items = []
+        for each i in batch:
+            items.push(job["items"][i])
+        end
+        process.send(p, json.stringify(items) + "\n")
+        let replies = none
+        while replies is none:
+            let line = process.read_line(p)
+            when line is none:
+                let code = process.wait(p, 5)
+                job["failed"].push("worker " + str(k + 1) + " of " + str(n) + " failed (exit code " + str(code) + ")")
+                job["stop"] = true
+                stop
+            eif line.starts_with(__PARALLEL_TAG):
+                replies = json.parse(line.slice(len(__PARALLEL_TAG)))
+            otherwise:
+                show line
+            end
+        end
+        when replies is none:
+            stop
+        end
+        # A worker stops a batch at the first error, so replies may be short.
+        let j = 0
+        while j < len(replies):
+            let r = replies[j]
+            when r[0]:
+                job["results"][batch[j]] = r[1]
+            otherwise:
+                job["errors"].push([batch[j], r[1]])
+                job["stop"] = true
+            end
+            j = j + 1
+        end
+    end
+end
+
+blueprint Pool:
+    func init(module, name, workers = 0):
+        let path = __parallel_check(module, name)
+        self.name = name
+        self.workers = workers
+        when self.workers <= 0:
+            self.workers = os.cpu_count()
+        end
+        self.procs = []
+        # input("") writes out the reply before waiting for the next batch.
+        self.script = fs.join(os.temp_dir(), "glow_parallel_" + str(os.pid()) + "_" + str(int(os.time() * 1000000)) + "_worker.glow")
+        fs.write(self.script, "use \"" + path + "\"\n" +
+            "let __tag = chr(1) + \"glow-parallel \"\n" +
+            "while true:\n" +
+            "    let __line = input(\"\")\n" +
+            "    when __line is none:\n" +
+            "        stop\n" +
+            "    end\n" +
+            "    let __out = []\n" +
+            "    for each __item in json.parse(__line):\n" +
+            "        try:\n" +
+            "            __out.push([true, " + name + "(__item)])\n" +
+            "        catch __e:\n" +
+            "            __out.push([false, str(__e)])\n" +
+            "            stop\n" +
+            "        end\n" +
+            "    end\n" +
+            "    show __tag + json.stringify(__out)\n" +
+            "end\n")
+    end
+
+    # Start workers until there are n of them.
+    func _start(n):
+        while len(self.procs) < n:
+            self.procs.push(process.start([process.executable, "run", self.script],
+                {"env": {"GLOW_PARALLEL_WORKER": "1"}, "stderr": "inherit"}))
+        end
+    end
+
+    func map(items):
+        let count = len(items)
+        when count == 0:
+            return []
+        end
+        let n = self.workers
+        when n > count:
+            n = count
+        end
+        self._start(n)
+        let queue = []
+        let i = count - 1
+        while i >= 0:
+            queue.push(i)
+            i = i - 1
+        end
+        let job = {"procs": self.procs[:n], "items": items, "queue": queue, "results": [none] * count,
+            "errors": [], "failed": [], "finished": [], "stop": false}
+        every k from 0 to n - 1:
+            spawn __parallel_feed(job, k)
+        end
+        # The threads wait on the workers' pipes, which lets this one run.
+        while len(job["finished"]) < n:
+            os.sleep(1)
+        end
+        when len(job["errors"]) > 0:
+            let first = job["errors"][0]
+            for each e in job["errors"]:
+                when e[0] < first[0]:
+                    first = e
+                end
+            end
+            throw "parallel.map: " + self.name + "(" + json.stringify(items[first[0]]) + ") failed: " + first[1]
+        end
+        when len(job["failed"]) > 0:
+            self.close()
+            throw "parallel.map: " + job["failed"][0]
+        end
+        return job["results"]
+    end
+
+    func close():
+        # Every worker is told to stop before waiting for any, so they end
+        # at the same time.
+        for each p in self.procs:
+            process.close_input(p)
+        end
+        for each p in self.procs:
+            when process.wait(p, 5) is none:
+                process.kill(p)
+            end
+            process.close(p)
+        end
+        self.procs = []
+        when fs.exists(self.script):
+            fs.remove(self.script)
+        end
+    end
+end
+
+# One call: each worker is given all of its items at the start, in a file,
+# which costs less than a Pool's round trips when the workers run once.
+# Worker k takes items k, k + n, k + 2n, ..., so slow items that sit
+# together in the list are spread over all the workers.
+func parallel_map(module, name, items, workers = 0):
+    let path = __parallel_check(module, name)
     let count = len(items)
     when count == 0:
         return []
@@ -57,8 +251,6 @@ func parallel_map(module, name, items, workers = 0):
     when n > count:
         n = count
     end
-
-    # Contiguous shares, so the results join back in order.
     let base = fs.join(os.temp_dir(), "glow_parallel_" + str(os.pid()) + "_" + str(int(os.time() * 1000000)))
     let script = base + "_worker.glow"
     fs.write(script, "use \"" + path + "\"\n" +
@@ -75,37 +267,34 @@ func parallel_map(module, name, items, workers = 0):
         "fs.write(os.args[1], json.stringify(__out))\n")
     let procs = []
     let files = []
-    let starts = []
-    let start = 0
     try:
         for k from 0 to n - 1:
-            let size = int(count / n)
-            when k < count % n:
-                size = size + 1
-            end
             let input = base + "_" + str(k) + "_in.json"
             let output = base + "_" + str(k) + "_out.json"
-            fs.write(input, json.stringify(items[start:start + size]))
+            fs.write(input, json.stringify(items[k::n]))
             files.push([input, output])
-            starts.push(start)
             procs.push(process.start([process.executable, "run", script, input, output],
                 {"env": {"GLOW_PARALLEL_WORKER": "1"}, "stdout": "inherit", "stderr": "inherit"}))
-            start = start + size
         end
-        let results = []
+        let results = [none] * count
+        let first_error = none
         for k from 0 to n - 1:
             let code = process.wait(procs[k])
             when code != 0 or not fs.is_file(files[k][1]):
                 throw "parallel.map: worker " + str(k + 1) + " of " + str(n) + " failed (exit code " + str(code) + ")"
             end
-            let i = starts[k]
+            let i = k
             for each r in json.parse(fs.read(files[k][1])):
-                when not r[0]:
-                    throw "parallel.map: " + name + "(" + json.stringify(items[i]) + ") failed: " + r[1]
+                when r[0]:
+                    results[i] = r[1]
+                eif first_error is none or i < first_error[0]:
+                    first_error = [i, r[1]]
                 end
-                results.push(r[1])
-                i = i + 1
+                i = i + n
             end
+        end
+        when first_error is not none:
+            throw "parallel.map: " + name + "(" + json.stringify(items[first_error[0]]) + ") failed: " + first_error[1]
         end
         return results
     finally:
@@ -128,4 +317,4 @@ func parallel_map(module, name, items, workers = 0):
     end
 end
 
-let parallel = {"map": parallel_map}
+let parallel = {"map": parallel_map, "Pool": Pool}

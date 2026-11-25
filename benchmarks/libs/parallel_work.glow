@@ -1,0 +1,8 @@
+# Used by parallel_bench.glow: work that keeps one core busy.
+func spin(n):
+    let t = 0
+    every i from 1 to n:
+        t = t + i % 7
+    end
+    return t
+end

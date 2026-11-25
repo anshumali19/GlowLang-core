@@ -20,3 +20,8 @@ func picky(x):
     end
     return x + 1
 end
+
+func chatty(x):
+    show "working on " + str(x)
+    return x * 10
+end

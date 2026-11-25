@@ -125,18 +125,39 @@ let sizes = parallel.map("work.glow", "count_words", files)
 
 It calls `count_words(f)` for every item of `files` and returns the results
 in the same order. `work.glow` is a module that defines `count_words`; each
-worker loads it and runs its share of the items. By default there is one
-worker per CPU core (`os.cpu_count()`); `workers = 4` sets the number.
+worker loads it and runs its share of the items: worker k takes items k,
+k + n, k + 2n, ..., so slow items that sit together in the list are spread
+over all the workers. By default there is one worker per CPU core
+(`os.cpu_count()`); `workers = 4` sets the number.
 
 - Items and results travel as JSON: `none`, booleans, numbers, strings, and
   lists and dicts of those.
 - The first error the function raises is raised by `parallel.map`, naming the
   item: `parallel.map: count_words("a.txt") failed: ...`.
 - Each worker is a new process, which takes a few milliseconds to start, so
-  it pays off when the whole job takes more than about a tenth of a second.
-  24 calls of a function taking 43 ms ran 7.8x faster with 24 workers.
+  it pays off when the whole job takes more than a few tens of milliseconds.
+  In [benchmarks/libs](../benchmarks/libs/README.md), 24 calls of a function
+  taking 9 ms finish in 44 ms with 8 workers, against 207 ms on one core.
 - Keep the function in a module of its own: a module that calls
   `parallel.map` at its top level is refused inside a worker.
+
+A program that calls `map` many times can keep its workers with a `Pool`:
+
+```glow
+import "parallel"
+let pool = parallel.Pool("work.glow", "count_words", 8)
+for each folder in folders:
+    show pool.map(fs.list(folder))
+end
+pool.close()
+```
+
+The workers start once and stay until `pool.close()`. Each one is given the
+next few items as soon as it is free, so slow items anywhere in the list
+do not keep the others waiting; the batches get smaller as the list runs
+out. Twenty calls on 8 small items take 41 ms with one Pool and 133 ms with
+`parallel.map`, which starts and stops the workers each time. The function
+must not read standard input, which carries the items to the worker.
 
 ## Working with other languages
 
