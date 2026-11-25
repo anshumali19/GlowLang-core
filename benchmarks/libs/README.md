@@ -55,8 +55,15 @@ GlowLang and 13% in Python. Measured 2026-11-24.
 
 | Work | GlowLang (rows/s) | Python (rows/s) |
 |---|---|---|
-| writing | 1,129,701 | 3,978,096 |
-| reading | 1,267,392 | 2,962,192 |
+| writing | 2,395,933 | 4,007,056 |
+| reading | 2,347,117 | 2,975,705 |
+
+Measured again on 2026-11-25 (runs within 5% in GlowLang, 4% in Python)
+after two changes. `stringify` joins a whole row and looks at its cells one
+by one only when the line has a quote or line break, or more separators
+than cells; `parse` splits a line with quotes at the quotes instead of
+reading it a character at a time. Before, on the same machine that day,
+writing ran at 1,217,149 rows/s and reading at 1,278,179.
 
 ## toml
 

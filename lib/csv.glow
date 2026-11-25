@@ -73,6 +73,47 @@ func _csv_quoted(lines, i, sep):
     end
 end
 
+# The cells of a line with quotes, from the pieces between its quotes: even
+# pieces are outside quotes, odd ones inside, and an empty piece between two
+# quoted ones is an escaped "". Returns none when a cell goes on to the next
+# line, or when a quote is not at the edge of a cell, which _csv_quoted reads.
+func _csv_quick(line, sep):
+    let pieces = line.split("\"")
+    let last = len(pieces) - 1
+    when last % 2 != 0:
+        return none
+    end
+    let cells = []
+    let cell = []
+    let k = 0
+    while k <= last:
+        let piece = pieces[k]
+        when k % 2 == 1:
+            cell.push(piece)
+        eif piece == "" and k > 0 and k < last:
+            cell.push("\"")
+        otherwise:
+            when k > 0 and piece != "" and not piece.starts_with(sep):
+                return none
+            end
+            when k < last and piece != "" and not piece.ends_with(sep):
+                return none
+            end
+            let parts = piece.split(sep)
+            cell.push(parts[0])
+            let p = 1
+            while p < len(parts):
+                cells.push(cell.join(""))
+                cell = [parts[p]]
+                p = p + 1
+            end
+        end
+        k = k + 1
+    end
+    cells.push(cell.join(""))
+    return cells
+end
+
 func csv_parse(text, sep = ","):
     _csv_sep(sep)
     let lines = text.split("\n")
@@ -88,9 +129,15 @@ func csv_parse(text, sep = ","):
         when line == "":
             i = i + 1
         eif line.contains("\""):
-            let r = _csv_quoted(lines, i, sep)
-            rows.push(r[0])
-            i = r[1]
+            let quick = _csv_quick(line, sep)
+            when quick is not none:
+                rows.push(quick)
+                i = i + 1
+            otherwise:
+                let r = _csv_quoted(lines, i, sep)
+                rows.push(r[0])
+                i = r[1]
+            end
         otherwise:
             rows.push(line.split(sep))
             i = i + 1
@@ -141,11 +188,25 @@ func csv_stringify(rows, sep = ","):
     _csv_sep(sep)
     let out = []
     for each row in rows:
-        let cells = []
-        for each value in row:
-            cells.push(_csv_cell(value, sep))
+        # join turns each value into text itself, but writes none as "none".
+        let cells = row
+        when none in row:
+            cells = []
+            for each value in row:
+                cells.push(value ?? "")
+            end
         end
-        out.push(cells.join(sep))
+        let line = cells.join(sep)
+        # Most rows need no quotes: no quote or line break, and no cell holds
+        # the separator. Only the others are looked at cell by cell.
+        when line.contains("\"") or line.contains("\n") or line.contains("\r") or line.count(sep) != len(cells) - 1:
+            let quoted = []
+            for each cell in cells:
+                quoted.push(_csv_cell(cell, sep))
+            end
+            line = quoted.join(sep)
+        end
+        out.push(line)
         out.push("\n")
     end
     return out.join("")

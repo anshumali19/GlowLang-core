@@ -12,6 +12,16 @@ show csv.parse("a;b;\"c;d\"", ";")
 show csv.parse("a\tb\tc", "\t")
 show csv.parse("é,ü\n\"ñ,ö\",x")
 show csv.parse(""), csv.parse("only")
+# Lines with quotes are split at the quotes; a quote that is not at the
+# edge of a cell sends the line to the character-by-character reader.
+show csv.parse("\"a\"\"b\",c
+\"\",\"\"
+\"\"\"\"
+,\"x\",
+\"a\"b,c
+x\"y\",z
+\"q;r\";\"s\"", ",")
+show csv.parse("\"q;r\";\"s\"\"t\";u", ";")
 
 show "--- parse_dicts"
 show csv.parse_dicts("id,name,city\n1,Ana\n2,Bo,Pune,extra\n")
