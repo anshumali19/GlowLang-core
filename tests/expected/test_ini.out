@@ -1,0 +1,33 @@
+--- parse
+{"": {"name": "shop"}, "server": {"host": "0.0.0.0", "port": "8080", "url": "http://x.example/a=b"}, "database": {"url": "postgres://db", "description": "first line\nsecond line\nthird line", "flag": "", "Empty": ""}, "spaced name": {"Key": "Value with spaces"}}
+8081 ["first line", "second line", "third line"]
+{} {}
+--- write and read back
+name = shop
+
+[server]
+host = 0.0.0.0
+port = 8080
+url = http://x.example/a=b
+
+[database]
+url = postgres://db
+description = first line
+    second line
+    third line
+flag =
+Empty =
+
+[spaced name]
+Key = Value with spaces
+
+true
+""
+{"app": {"debug": "false", "workers": "4"}}
+ini: cannot read no_such_file.ini
+--- errors
+ini: line 2: the section [a] appears twice
+ini: line 3: the key k appears twice in [a]
+ini: line 1: a section header must end with ]
+ini: line 1: a key is missing before =
+ini: line 2: a key is missing before :

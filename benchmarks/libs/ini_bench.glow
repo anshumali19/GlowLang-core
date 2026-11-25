@@ -1,0 +1,14 @@
+# Parses ini_config.ini (about 70 lines in six sections) again and again for
+# two seconds and prints parses per second.
+import "ini"
+
+let text = fs.read("benchmarks/libs/ini_config.ini")
+let config = ini.parse(text)
+assert(config["mail"]["note_3"] == "first line of a longer note\ncontinued on a second line", "parsed wrong")
+let n = 0
+let start = os.time()
+while os.time() - start < 2:
+    ini.parse(text)
+    n = n + 1
+end
+show format("ini.parse", "<20"), format(int(n / (os.time() - start)), ",d"), "parses/s"

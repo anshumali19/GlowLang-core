@@ -1,0 +1,131 @@
+# ini.glow — read and write INI files, the format of Python's configparser.
+#
+#   import "ini"
+#   let config = ini.parse(text)       {"section": {"key": "value", ...}, ...}
+#   let config = ini.read(path)
+#   let text = ini.stringify(config)
+#   ini.write(path, config)
+#
+# A line [name] starts a section; key = value or key: value sets a key in
+# it. Keys and values are text, with their outer spaces removed; a key with
+# no = or : gets "". Lines starting with # or ; are comments, and a line
+# indented more than its key continues the value (joined with "\n").
+# Keys before the first [section] go in the section "". A section or a key
+# given twice raises an error that names the line, as configparser does.
+# Values stay text: int(config["server"]["port"]) makes a number. Unlike
+# configparser, keys keep their case and there is no %(name)s interpolation.
+
+func _ini_fail(n, message):
+    throw "ini: line " + str(n) + ": " + message
+end
+
+func ini_parse(text):
+    let out = {}
+    let section = none
+    let name = ""
+    let last_key = none
+    let last_indent = 0
+    let n = 0
+    for each raw in text.replace("\r\n", "\n").split("\n"):
+        n = n + 1
+        let line = raw.trim()
+        when line == "" or line.starts_with("#") or line.starts_with(";"):
+            skip
+        end
+        let indent = len(raw) - len(raw.trim_start(" \t"))
+        when indent > last_indent and last_key is not none:
+            section[last_key] = section[last_key] + "\n" + line
+            skip
+        end
+        when line.starts_with("["):
+            when not line.ends_with("]"):
+                _ini_fail(n, "a section header must end with ]")
+            end
+            name = line.slice(1, -1).trim()
+            when out.has(name):
+                _ini_fail(n, "the section [" + name + "] appears twice")
+            end
+            section = {}
+            out[name] = section
+            last_key = none
+            skip
+        end
+        when section is none:
+            section = {}
+            out[""] = section
+        end
+        # The key ends at the first = or :, whichever comes first.
+        let cut = -1
+        let eq = line.find("=")
+        let colon = line.find(":")
+        when eq >= 0 and (colon < 0 or eq < colon):
+            cut = eq
+        eif colon >= 0:
+            cut = colon
+        end
+        let key = line
+        let value = ""
+        when cut >= 0:
+            key = line.slice(0, cut).trim()
+            value = line.slice(cut + 1).trim()
+        end
+        when key == "":
+            _ini_fail(n, "a key is missing before " + line[cut])
+        end
+        when section.has(key):
+            _ini_fail(n, "the key " + key + " appears twice in [" + name + "]")
+        end
+        section[key] = value
+        last_key = key
+        last_indent = indent
+    end
+    return out
+end
+
+func ini_read(path):
+    let text = fs.read(path)
+    when text is none:
+        throw "ini: cannot read " + str(path)
+    end
+    return ini_parse(text)
+end
+
+# key = value, with the lines after the first indented so they read back.
+func _ini_line(key, value):
+    let text = str(value)
+    when text == "":
+        return key + " ="
+    end
+    return key + " = " + text.replace("\n", "\n    ")
+end
+
+func ini_stringify(config):
+    let out = []
+    when config.has(""):
+        for each key in config[""].keys():
+            out.push(_ini_line(key, config[""][key]))
+        end
+    end
+    for each name in config.keys():
+        when name == "":
+            skip
+        end
+        when len(out) > 0:
+            out.push("")
+        end
+        out.push("[" + name + "]")
+        for each key in config[name].keys():
+            out.push(_ini_line(key, config[name][key]))
+        end
+    end
+    when len(out) == 0:
+        return ""
+    end
+    return out.join("\n") + "\n"
+end
+
+func ini_write(path, config):
+    fs.write(path, ini_stringify(config))
+end
+
+let ini = {"parse": ini_parse, "read": ini_read, "stringify": ini_stringify, "write": ini_write}
