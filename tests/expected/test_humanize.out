@@ -1,0 +1,49 @@
+--- bytes
+0 0 bytes 0 bytes
+1 1 byte 1 byte
+999 999 bytes 999 bytes
+1000 1.0 kB 1000 bytes
+1536000 1.5 MB 1.5 MiB
+999950 1.0 MB 976.5 KiB
+1000000000 1.0 GB 953.7 MiB
+123456789012345 123.5 TB 112.3 TiB
+-2048 -2.0 kB -2.0 KiB
+1000000000000.0 EB
+--- duration
+0 0 seconds
+0.4 0 seconds
+1 1 second
+59 59 seconds
+60 1 minute
+61 1 minute 1 second
+3600 1 hour
+3725 1 hour 2 minutes
+3605 1 hour
+86399 23 hours 59 minutes
+90061 1 day 1 hour
+31536000 1 year
+40000000 1 year 97 days
+-90 1 minute 30 seconds
+1 day 1 hour 1 minute 1 day
+--- ago
+just now
+just now
+45 seconds ago
+5 minutes ago
+1 day ago
+1 year ago
+in 3 days
+in 30 seconds
+just now
+--- ordinal
+["0th", "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th", "112th", "1003rd", "-1st", "-12th"]
+--- slug
+"hello-world"
+"hello-world"
+"strasse-oeuvre"
+"c-c-2026"
+"already-a-slug"
+""
+""
+""
+"unicode-text-here"

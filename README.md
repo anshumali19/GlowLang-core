@@ -294,7 +294,7 @@ memory from 138 MB to 76 MB compared with 1.7.0
 | **Concurrency** | `spawn` on OS threads with a global interpreter lock; `parallel.map` over worker processes for every core; channels, tasks and timers in `lib/async.glow` |
 | **Text** | Unicode strings (lengths and slices count characters), f-strings, regular expressions, JSON, CSV with quoted cells, TOML, YAML and INI config files, line diffs in `diff -u` form (`diff`), wrapping and shortening (`textwrap`) |
 | **Tooling** | `check`, `trace`, `debug`, `profile` and `package` subcommands; a language server (errors, completion, hover, go-to-definition); the `gdu` package manager |
-| **Apps** | Log lines with levels and fields, as text or JSON (`log`); settings from `.env` files (`dotenv`); semantic versions and npm-style ranges (`semver`); cron schedules and their next run (`cron`); calls retried with growing waits (`retry`) |
+| **Apps** | Log lines with levels and fields, as text or JSON (`log`); settings from `.env` files (`dotenv`); semantic versions and npm-style ranges (`semver`); cron schedules and their next run (`cron`); calls retried with growing waits (`retry`); sizes, durations and URL slugs as people write them (`humanize`) |
 | **Editors** | VS Code, Neovim, Sublime Text, Helix, JetBrains |
 
 ## 📖 Documentation

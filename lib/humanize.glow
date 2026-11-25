@@ -1,0 +1,134 @@
+# humanize.glow — numbers, sizes and times as people write them.
+#
+#   import "humanize"
+#   humanize.bytes(1536000)            "1.5 MB" (1000s; binary = true: MiB)
+#   humanize.duration(3725)            "1 hour 2 minutes": the two largest
+#                                      units, rounded down; duration(s, 3)
+#                                      gives up to three
+#   humanize.ago(time, now)            "5 minutes ago", "in 3 days", "just now"
+#   humanize.ordinal(22)               "22nd"
+#   humanize.slug("Héllo, World!")     "hello-world", for URLs and file names
+#
+# ago takes DateTimes (now is datetime.now() unless given) and gives the
+# largest unit only. slug keeps a-z and 0-9, turns common accented Latin
+# letters into plain ones (é is e, ß is ss) and everything else into -;
+# text in other scripts gives "".
+
+import "datetime"
+
+func _hz_plural(n, word):
+    when n == 1:
+        return "1 " + word
+    end
+    return str(n) + " " + word + "s"
+end
+
+func humanize_bytes(n, binary = false):
+    let base = 1000
+    let units = ["kB", "MB", "GB", "TB", "PB", "EB"]
+    when binary:
+        base = 1024
+        units = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]
+    end
+    let size = abs(n)
+    let sign = ""
+    when n < 0:
+        sign = "-"
+    end
+    when size < base:
+        return sign + _hz_plural(int(size), "byte")
+    end
+    let i = -1
+    while size >= base and i < len(units) - 1:
+        size = size / base
+        i = i + 1
+    end
+    # 999.95 kB would show as 1000.0 kB: move up a unit instead.
+    when format(size, ".1f") == format(base, ".1f") and i < len(units) - 1:
+        size = size / base
+        i = i + 1
+    end
+    return sign + format(size, ".1f") + " " + units[i]
+end
+
+let _HZ_UNITS = [["year", 31536000], ["day", 86400], ["hour", 3600], ["minute", 60], ["second", 1]]
+
+func humanize_duration(seconds, parts = 2):
+    let left = int(abs(seconds))
+    let out = []
+    for each u in _HZ_UNITS:
+        let count = left // u[1]
+        when count > 0 and len(out) < parts:
+            out.push(_hz_plural(count, u[0]))
+            left = left - count * u[1]
+        eif len(out) > 0:
+            # Units after the first stop at the first gap: "1 hour 5 seconds"
+            # would read as precise when the minutes were dropped.
+            stop
+        end
+    end
+    when len(out) == 0:
+        return "0 seconds"
+    end
+    return out.join(" ")
+end
+
+func humanize_ago(t, now = none):
+    let seconds = (now ?? datetime.now()).diff(t)
+    when abs(seconds) < 10:
+        return "just now"
+    end
+    let words = humanize_duration(seconds, 1)
+    when seconds > 0:
+        return words + " ago"
+    end
+    return "in " + words
+end
+
+func humanize_ordinal(n):
+    let last_two = abs(n) % 100
+    let suffix = "th"
+    when last_two < 11 or last_two > 13:
+        let last = abs(n) % 10
+        when last == 1:
+            suffix = "st"
+        eif last == 2:
+            suffix = "nd"
+        eif last == 3:
+            suffix = "rd"
+        end
+    end
+    return str(n) + suffix
+end
+
+let _HZ_PLAIN = {
+    "à": "a", "á": "a", "â": "a", "ä": "a", "ã": "a", "å": "a", "ā": "a", "æ": "ae",
+    "ç": "c", "č": "c", "ď": "d", "è": "e", "é": "e", "ê": "e", "ë": "e", "ē": "e", "ě": "e",
+    "ì": "i", "í": "i", "î": "i", "ï": "i", "ī": "i", "ł": "l", "ñ": "n", "ň": "n",
+    "ò": "o", "ó": "o", "ô": "o", "ö": "o", "õ": "o", "ø": "o", "ō": "o", "œ": "oe",
+    "ř": "r", "š": "s", "ś": "s", "ß": "ss", "ť": "t", "ù": "u", "ú": "u", "û": "u",
+    "ü": "u", "ū": "u", "ů": "u", "ý": "y", "ÿ": "y", "ž": "z", "ź": "z", "ż": "z"
+}
+
+func humanize_slug(text):
+    let out = []
+    let dash = false
+    for each c in text.lower():
+        let plain = _HZ_PLAIN.get(c) ?? c
+        when (plain >= "a" and plain <= "z") or (plain >= "0" and plain <= "9") or len(plain) > 1:
+            when dash and len(out) > 0:
+                out.push("-")
+            end
+            dash = false
+            out.push(plain)
+        otherwise:
+            dash = true
+        end
+    end
+    return out.join("")
+end
+
+let humanize = {
+    "bytes": humanize_bytes, "duration": humanize_duration, "ago": humanize_ago,
+    "ordinal": humanize_ordinal, "slug": humanize_slug
+}

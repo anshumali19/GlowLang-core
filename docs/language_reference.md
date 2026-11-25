@@ -1775,6 +1775,25 @@ blank, and `textwrap.dedent(text)` removes the indentation all lines share.
 Except for spacing, which wrap tidies, the results are those of Python's
 textwrap. Widths count characters.
 
+### Sizes, durations and slugs (`import "humanize"`)
+```glow
+import "humanize"
+show humanize.bytes(1536000), humanize.bytes(1536000, true)   # 1.5 MB 1.5 MiB
+show humanize.duration(3725)                # 1 hour 2 minutes
+show humanize.ordinal(22)                   # 22nd
+show humanize.slug("Héllo, World!")         # hello-world
+```
+`humanize.bytes(n, binary)` gives a size with one decimal in kB, MB, GB...
+(powers of 1000), or KiB, MiB... with `binary` true; under 1000 it counts
+bytes. `humanize.duration(seconds, parts)` gives the `parts` (2) largest
+units of years, days, hours, minutes and seconds, rounded down, stopping at
+the first unit that is zero. `humanize.ago(time, now)` compares two
+DateTimes (`now` is the current time unless given): `"5 minutes ago"`,
+`"in 3 days"`, or `"just now"` within ten seconds. `humanize.ordinal(n)`
+gives `"1st"`, `"12th"`, `"23rd"`. `humanize.slug(text)` gives lower-case
+`a-z` and `0-9` joined by `-`, with common accented Latin letters made
+plain (`é` is `e`, `ß` is `ss`); text in other scripts gives `""`.
+
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
 `exit(code)`, `gc_info()`.
