@@ -98,7 +98,7 @@ show double(21)            # 42
 `action` and `can` mean the same as `func`. Hot functions are compiled to
 machine code automatically, with nothing for you to switch on: on the
 [benchmarks in the README](../README.md#-performance) GlowLang finishes 1.4x to
-6.7x sooner than CPython 3.14.
+7.9x sooner than CPython 3.14.
 
 ## 6. Classes
 
@@ -218,9 +218,10 @@ show most_common(tokenize("the cat and the hat and the bat"), 2)
 save, `glowlang fmt` re-indents your files and `glowlang package app.glow`
 makes one executable to copy anywhere.
 
-`import "name"` loads a standard module: `csv`, `toml`, `yaml`, `dotenv`,
-`template`, `markdown`, `schema`, `url`, `log`, `lru`, `collections`,
-`semver`, `diff`, `re`, `datetime` and more, each in the
+`import "name"` loads a standard module: `csv`, `toml`, `yaml`, `ini`,
+`dotenv`, `template`, `markdown`, `schema`, `url`, `log`, `lru`,
+`collections`, `semver`, `diff`, `cron`, `retry`, `textwrap`, `humanize`,
+`re`, `datetime` and more, each in the
 [language reference](language_reference.md#18-standard-library).
 
 ```glow
