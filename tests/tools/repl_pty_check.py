@@ -37,6 +37,19 @@ send(b"dropped\x03")                                     # Ctrl+C drops the line
 send(b"junk\x15show 99\r")                               # Ctrl+U clears to the start
 send(b'when x > 1:\r    show "in block"\rend\r')          # typed ahead: nothing lost
 send(b"exit\r", 1.0)
+# Read what the REPL still writes until it closes the terminal, rather than
+# only for the fixed second above: a slow machine may print later.
+while True:
+    r, _, _ = select.select([fd], [], [], 10)
+    if not r:
+        break
+    try:
+        chunk = os.read(fd, 65536)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
 os.waitpid(pid, 0)
 
 text = re.sub(rb"\x1b\[[0-9;]*[A-Za-z]", b"", out).replace(b"\r", b"").decode("utf-8", "replace")

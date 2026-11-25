@@ -15,6 +15,9 @@ otherwise:
     when got == want:
         show "ok"
     otherwise:
+        # The test runner shows the first line of stderr when a test fails:
+        # all of what was got, on one line, so a CI log keeps it.
+        os.eprint("got " + json.stringify(got) + "; stderr " + json.stringify(r["stderr"]))
         show "got:"
         for each line in got:
             show line
