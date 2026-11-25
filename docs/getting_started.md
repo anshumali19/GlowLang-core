@@ -294,9 +294,10 @@ let config = toml.parse("[server]\nport = 8080\n")
 log.info("starting", {"port": config["server"]["port"]})
 ```
 
-Among them: `csv`, `toml`, `yaml` and `dotenv` for files and settings;
-`template`, `markdown`, `schema` and `url` for web apps; `log`, `lru`,
-`collections`, `semver`, `diff`, `re` and `datetime`. Each is described in
+Among them: `csv`, `toml`, `yaml`, `ini` and `dotenv` for files and
+settings; `template`, `markdown`, `schema`, `url` and `retry` for web apps;
+`cron` and `datetime` for times; `textwrap` and `humanize` for text; `log`,
+`lru`, `collections`, `semver`, `diff` and `re`. Each is described in
 the [language reference](language_reference.md#18-standard-library).
 
 ---

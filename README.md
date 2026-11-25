@@ -16,13 +16,14 @@
 **GlowLang** is a general-purpose programming language with a syntax close to Python and English
 (`show`, `when` / `otherwise`, `every`, `blueprint`), written in C. Programs run on a register
 bytecode virtual machine with JIT compilers for x86-64 and ARM64 and a generational garbage
-collector, and on the benchmarks below they finish 1.4× to 6.7× faster than CPython.
+collector, and on the benchmarks below they finish 1.4× to 7.9× faster than CPython.
 It ships with what web and data programs need: an HTTP server and client, PostgreSQL and SQLite,
 WebSockets, JSON, JWT / OAuth logins, SIMD tensors and its own package manager, `gdu`.
 
-The current version is **1.13.0** ([what's new](docs/release_notes_1.13.0.md): thirteen standard
-modules written in GlowLang, among them YAML, TOML, CSV, templates, Markdown, JSON Schema, URLs and
-logging; GlowWeb keep-alive, cookies and `PATCH` routes; and regular expressions compiled once).
+The current version is **1.14.0** ([what's new](docs/release_notes_1.14.0.md): five more
+standard modules written in GlowLang (`cron`, `ini`, `retry`, `textwrap` and `humanize`), writing
+TOML and YAML, YAML anchors, `format` checks in `schema`, shortest diffs for large changes, `.env`
+files from `glowlang new`, and faster `toml`, `csv`, `url` and `semver`).
 
 ## 📥 Install
 
@@ -243,23 +244,27 @@ PostgreSQL is built in too: see [postgres.md](docs/postgres.md).
 GlowLang against CPython on the same programs, measured with
 [`benchmarks/run-benchmarks.sh`](benchmarks/run-benchmarks.sh): whole-process wall time
 (startup included), median of 7 runs, and both languages must print the same answer.
-GlowLang 1.13.0 and Python 3.14.4 on Linux (WSL 2), Intel Core i7-14650HX.
+GlowLang 1.14.0 and Python 3.14.4 on Linux (WSL 2), Intel Core i7-14650HX.
 
-| Benchmark | GlowLang 1.13.0 | CPython 3.14 | GlowLang is faster by |
+| Benchmark | GlowLang 1.14.0 | CPython 3.14 | GlowLang is faster by |
 |---|---:|---:|---:|
-| Fibonacci (sum fib 0..29) | 32 ms | 85 ms | 2.67× |
-| Loop (1M additions) | 9 ms | 60 ms | 6.73× |
-| Ackermann(3, 8) | 39 ms | 137 ms | 3.52× |
-| N-Queens (N=10, objects) | 26 ms | 60 ms | 2.33× |
-| Dijkstra (1000 nodes) | 41 ms | 116 ms | 2.81× |
-| Lists + dict (1M push, 200k keys) | 69 ms | 181 ms | 2.64× |
-| Strings (200k concat + split) | 35 ms | 48 ms | 1.38× |
+| Fibonacci (sum fib 0..29) | 31 ms | 85 ms | 2.79× |
+| Loop (1M additions) | 8 ms | 65 ms | 7.93× |
+| Ackermann(3, 8) | 39 ms | 137 ms | 3.56× |
+| N-Queens (N=10, objects) | 27 ms | 61 ms | 2.28× |
+| Dijkstra (1000 nodes) | 40 ms | 115 ms | 2.90× |
+| Lists + dict (1M push, 200k keys) | 64 ms | 186 ms | 2.89× |
+| Strings (200k concat + split) | 34 ms | 48 ms | 1.40× |
 
 The report with the machine details is [benchmarks/RESULTS-linux.md](benchmarks/RESULTS-linux.md);
 [benchmarks/RESULTS.md](benchmarks/RESULTS.md) has an older run on Windows
 (`benchmarks/run-benchmarks.ps1`). GlowLang is far slower than compiled languages such as C, Go
-or Rust.
+or Rust. The loop takes 8 or 9 ms from run to run, which moves its row between 6.7× and 8×.
 
+In 1.14.0, `toml.parse` reads 1.7× as fast as before (now level with Python's `tomllib`),
+`url.encode` 31× (5.7× as fast as Python's `quote`), `csv` about twice and sorting versions 2.4×;
+`ini` parses 5.1× as fast as `configparser` and `textwrap` wraps 4.3× as fast as Python's
+([benchmarks/libs](benchmarks/libs/README.md)).
 In 1.13.0, GlowWeb keeps connections open (21,988 requests a second from 8 clients that reuse
 their connection), patterns are compiled once (`re.find` 52% faster), and the new modules are
 timed against Python in [benchmarks/libs](benchmarks/libs/README.md): `yaml` parses 6.6× as fast as
@@ -304,7 +309,7 @@ memory from 138 MB to 76 MB compared with 1.7.0
 - [GlowLang in 10 Minutes](docs/glowlang_in_10_minutes.md): the language by example ([examples/tour.glow](examples/tour.glow))
 - [Tools you can ship as one file](examples/tools/README.md): a log summarizer, CSV cleaner, folder backup, API checker and bulk renamer, each a single executable with `glowlang package`
 - [Language Reference](docs/language_reference.md): every statement, operator and built-in
-- [Release notes 1.13.0](docs/release_notes_1.13.0.md) (and [1.12.0](docs/release_notes_1.12.0.md), [1.11.0](docs/release_notes_1.11.0.md), [1.10.0](docs/release_notes_1.10.0.md), [1.9.0](docs/release_notes_1.9.0.md), [1.8.0](docs/release_notes_1.8.0.md))
+- [Release notes 1.14.0](docs/release_notes_1.14.0.md) (and [1.13.0](docs/release_notes_1.13.0.md), [1.12.0](docs/release_notes_1.12.0.md), [1.11.0](docs/release_notes_1.11.0.md), [1.10.0](docs/release_notes_1.10.0.md), [1.9.0](docs/release_notes_1.9.0.md), [1.8.0](docs/release_notes_1.8.0.md))
 
 **Building things**
 - Web: [web guide](docs/web_guide.md), [GlowWeb tutorial](docs/glowweb_tutorial.md), [WebSockets](docs/websocket.md)
@@ -335,7 +340,7 @@ under [Install](#-install).
 `glowlang run file.glow`. With no file, `glowlang` opens an interactive REPL.
 
 **Is GlowLang faster than Python?**
-On the benchmarks above it finishes 1.4× to 6.7× sooner than CPython 3.14, startup included. It
+On the benchmarks above it finishes 1.4× to 7.9× sooner than CPython 3.14, startup included. It
 is not as fast as compiled languages like C, Go or Rust.
 
 **Is GlowLang like Python?**
