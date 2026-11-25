@@ -1,0 +1,36 @@
+# textwrap.wrap, fill, shorten, indent and dedent (lib/textwrap.glow). The
+# expected lines are what Python's textwrap gives for the same calls, except
+# the line with tabs: here words are joined with one space.
+import "textwrap"
+
+show "--- wrap and fill"
+let text = "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs."
+show textwrap.wrap(text, 20)
+show textwrap.fill(text, 30)
+show textwrap.wrap("  spaces\tand\ttabs\n  and   lines  ", 12)
+show textwrap.wrap("ab abcdefghijklmnopqrstuvwxyz", 10)
+show textwrap.wrap("supercalifragilistic", 6)
+show textwrap.wrap("", 10), textwrap.wrap("   ", 10), textwrap.wrap("one", 1)
+show textwrap.wrap("café naïve résumé", 11)
+
+show "--- shorten"
+show textwrap.shorten(text, 40)
+show textwrap.shorten("Hello  world!", 12), textwrap.shorten("Hello world!", 11)
+show textwrap.shorten("Hello world!", 10, "..."), textwrap.shorten("extraordinary", 8)
+
+show "--- indent and dedent"
+show json.stringify(textwrap.indent("a\n\n  b\n", "> "))
+show json.stringify(textwrap.dedent("    def f():\n        return 1\n\n    f()\n"))
+show json.stringify(textwrap.dedent("\ta\n\t\tb")), json.stringify(textwrap.dedent("a\n  b")), json.stringify(textwrap.dedent("   \n   "))
+
+show "--- errors"
+try:
+    textwrap.wrap("x", 0)
+catch e:
+    show e
+end
+try:
+    textwrap.shorten("extraordinary", 3)
+catch e:
+    show e
+end

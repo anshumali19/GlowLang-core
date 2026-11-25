@@ -299,3 +299,17 @@ Runs differed by under 4%. Measured 2026-11-25.
 
 `retry.call` adds about 0.9 microseconds to a call, most of it checking the
 options.
+
+## textwrap
+
+[textwrap_bench.glow](textwrap_bench.glow) wraps a 2,000-word text to 70
+columns and shortens a 40-word sentence to 60 characters.
+[textwrap_bench.py](textwrap_bench.py) does the same with Python's
+`textwrap` (written in Python); its words come from Python's random numbers
+but have the same lengths. On 300 random texts both give the same lines.
+Runs differed by under 2%. Measured 2026-11-25.
+
+| Work | GlowLang (calls/s) | Python (calls/s) |
+|---|---|---|
+| wrap 2,000 words | 3,268.6 | 762.3 |
+| shorten | 232,718.2 | 38,559.9 |

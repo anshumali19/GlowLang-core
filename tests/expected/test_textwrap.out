@@ -1,0 +1,21 @@
+--- wrap and fill
+["The quick brown fox", "jumps over the lazy", "dog. Pack my box", "with five dozen", "liquor jugs."]
+The quick brown fox jumps over
+the lazy dog. Pack my box with
+five dozen liquor jugs.
+["spaces and", "tabs and", "lines"]
+["ab abcdefg", "hijklmnopq", "rstuvwxyz"]
+["superc", "alifra", "gilist", "ic"]
+[] [] ["o", "n", "e"]
+["café naïve", "résumé"]
+--- shorten
+The quick brown fox jumps over the [...]
+Hello world! Hello [...]
+Hello... [...]
+--- indent and dedent
+"> a\n\n>   b\n"
+"def f():\n    return 1\n\nf()\n"
+"a\n\tb" "a\n  b" "\n"
+--- errors
+textwrap: width must be 1 or more
+textwrap: the placeholder is too long for the width

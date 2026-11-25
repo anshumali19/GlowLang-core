@@ -1,0 +1,139 @@
+# textwrap.glow — wrap, shorten, indent and dedent text.
+#
+#   import "textwrap"
+#   textwrap.wrap(text, width = 70)      the lines of text, none longer than
+#                                        width
+#   textwrap.fill(text, width = 70)      the same lines joined with "\n"
+#   textwrap.shorten(text, width, placeholder = " [...]")
+#                                        text on one line, cut at a word so
+#                                        that it fits in width
+#   textwrap.indent(text, prefix)        prefix put before every line that
+#                                        is not blank
+#   textwrap.dedent(text)                the indentation all lines share
+#                                        removed
+#
+# Words are split at spaces, tabs and line breaks and joined with one space,
+# so wrap and fill also tidy the spacing. A word longer than width is broken
+# into pieces of width characters. Widths count characters, not bytes.
+
+func _tw_words(text):
+    let words = []
+    for each w in text.replace("\t", " ").replace("\r", " ").replace("\n", " ").split(" "):
+        when w != "":
+            words.push(w)
+        end
+    end
+    return words
+end
+
+func textwrap_wrap(text, width = 70):
+    when width < 1:
+        throw "textwrap: width must be 1 or more"
+    end
+    let lines = []
+    let line = ""
+    for each word in _tw_words(text):
+        when line != "" and len(line) + 1 + len(word) <= width:
+            line = line + " " + word
+            skip
+        end
+        # A word longer than a line first fills what is left of the line,
+        # as Python's textwrap does, then is cut into pieces of width.
+        when len(word) > width and line != "" and width - len(line) - 1 > 0:
+            let room = width - len(line) - 1
+            line = line + " " + word.slice(0, room)
+            word = word.slice(room)
+        end
+        when line != "":
+            lines.push(line)
+        end
+        while len(word) > width:
+            lines.push(word.slice(0, width))
+            word = word.slice(width)
+        end
+        line = word
+    end
+    when line != "":
+        lines.push(line)
+    end
+    return lines
+end
+
+func textwrap_fill(text, width = 70):
+    return textwrap_wrap(text, width).join("\n")
+end
+
+func textwrap_shorten(text, width, placeholder = " [...]"):
+    let words = _tw_words(text)
+    let whole = words.join(" ")
+    when len(whole) <= width:
+        return whole
+    end
+    let room = width - len(placeholder)
+    let out = ""
+    for each word in words:
+        let next = word
+        when out != "":
+            next = out + " " + word
+        end
+        when len(next) > room:
+            stop
+        end
+        out = next
+    end
+    when out == "":
+        # Not even the first word fits: only the placeholder is left.
+        let alone = placeholder.trim_start(" ")
+        when len(alone) > width:
+            throw "textwrap: the placeholder is too long for the width"
+        end
+        return alone
+    end
+    return out + placeholder
+end
+
+func textwrap_indent(text, prefix):
+    let out = []
+    for each line in text.split("\n"):
+        when line.trim() == "":
+            out.push(line)
+        otherwise:
+            out.push(prefix + line)
+        end
+    end
+    return out.join("\n")
+end
+
+func textwrap_dedent(text):
+    let lines = text.split("\n")
+    let common = none
+    for each line in lines:
+        when line.trim() == "":
+            skip
+        end
+        let lead = line.slice(0, len(line) - len(line.trim_start(" \t")))
+        when common is none:
+            common = lead
+        otherwise:
+            # The longest start the two share.
+            let k = 0
+            while k < len(common) and k < len(lead) and common[k] == lead[k]:
+                k = k + 1
+            end
+            common = common.slice(0, k)
+        end
+    end
+    common = common ?? ""
+    let out = []
+    for each line in lines:
+        # Lines of only spaces become empty, as in Python's textwrap.
+        when line.trim() == "":
+            out.push("")
+        otherwise:
+            out.push(line.slice(len(common)))
+        end
+    end
+    return out.join("\n")
+end
+
+let textwrap = {"wrap": textwrap_wrap, "fill": textwrap_fill, "shorten": textwrap_shorten, "indent": textwrap_indent, "dedent": textwrap_dedent}
