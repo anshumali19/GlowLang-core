@@ -48,13 +48,19 @@ blueprint Cache:
     end
 
     func get(key, fallback = none):
-        let entry = self._entry(key)
-        when entry is none:
-            self.misses = self.misses + 1
-            return fallback
+        # _entry written out here: get is the call a cache makes most.
+        let items = self.items
+        let entry = items.get(key)
+        when entry is not none:
+            items.remove(key)
+            when entry[1] is none or os.time() < entry[1]:
+                items[key] = entry
+                self.hits = self.hits + 1
+                return entry[0]
+            end
         end
-        self.hits = self.hits + 1
-        return entry[0]
+        self.misses = self.misses + 1
+        return fallback
     end
 
     func has(key):
