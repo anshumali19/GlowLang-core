@@ -380,12 +380,16 @@ void call_stack_push(FuncEntry *fe, Instruction *pc) {
     if (call_stack_ptr < MAX_CALL_STACK) {
         call_stack[call_stack_ptr].fe = fe;
         call_stack[call_stack_ptr].pc = pc;
+        if (__builtin_expect(profiling_active, 0)) glow_prof_enter(fe, call_stack_ptr);
         call_stack_ptr++;
     }
 }
 
 void call_stack_pop(void) {
-    if (call_stack_ptr > 0) call_stack_ptr--;
+    if (call_stack_ptr > 0) {
+        call_stack_ptr--;
+        if (__builtin_expect(profiling_active, 0)) glow_prof_leave(call_stack[call_stack_ptr].fe, call_stack_ptr);
+    }
 }
 
 static int string_equal_simd(const char *s1, size_t l1, const char *s2, size_t l2) {

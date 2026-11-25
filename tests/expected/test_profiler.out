@@ -10,3 +10,10 @@
            2 | tests/test_profiler.glow:11
            2 | tests/test_profiler.glow:12
 ------------------------------
+
+--- Time by Function ---
+       Calls |    Self ms |   Total ms | Function
+  -----------+------------+------------+---------
+           2 | {{ANY}} | heavy_work
+  Profiling turns the JIT off: compare these times with each other.
+------------------------------

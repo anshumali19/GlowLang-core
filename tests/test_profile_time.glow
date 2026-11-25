@@ -1,0 +1,23 @@
+# glowlang profile: the "Time by Function" table counts each call once,
+# counts a recursive function's total time once, and a caller's total time
+# includes its callees'. Times vary from run to run, so only their order is
+# checked, not their values.
+let r = process.run([process.executable, "profile", "tests/modules/profile_demo.glow"], {})
+# Windows ends the child's lines with \r\n.
+let out = r["stdout"].replace("\r\n", "\n")
+show r["code"], out.split("\n")[0]
+let rows = {}
+let seen = false
+for each line in out.split("\n"):
+    when line.contains("--- Time by Function ---"):
+        seen = true
+    eif seen and line.count("|") == 3 and not line.contains("Calls") and not line.contains("---") and line.split("|")[0].trim() != "":
+        let cells = line.split("|")
+        rows[cells[3].trim()] = [cells[0].trim(), float(cells[1].trim()), float(cells[2].trim())]
+    end
+end
+show seen
+show rows["fib"][0], rows["outer"][0], rows["inner"][0]
+# Total is at least self; outer's total holds inner's.
+show rows["fib"][2] >= rows["fib"][1], rows["outer"][2] >= rows["outer"][1], rows["outer"][2] >= rows["inner"][2]
+show out.contains("Profiling turns the JIT off")

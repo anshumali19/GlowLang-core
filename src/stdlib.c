@@ -6176,11 +6176,110 @@ static Value native_stacktrace(int argc, Value *args) {
 /* Compiled code does not count instructions, so profiling runs everything
    in the interpreter (the counts are then exact and repeatable). */
 static int profile_saved_nojit = 0;
+/* Time per function while profiling: call_stack_push and call_stack_pop
+   call glow_prof_enter and glow_prof_leave. A function's self time leaves
+   out the GlowLang functions it calls (native calls count as its own); its
+   total time is counted once per outermost call, so recursion does not
+   count the same time twice. The tables exist only while profiling. */
+typedef struct { FuncEntry *fe; uint64_t calls, self_ns, total_ns; int active; } ProfTime;
+#define PROF_SLOTS 4096
+#define PROF_DEPTH 65536
+static ProfTime *prof_times;
+static uint64_t *prof_start, *prof_child;   /* by call-stack depth */
+static uint64_t prof_began;
+
+static uint64_t prof_now_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (uint64_t)((double)c.QuadPart * 1e9 / (double)freq.QuadPart);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
+}
+
+/* The entry for fe, made on first use; NULL once the table is full. */
+static ProfTime *prof_slot(FuncEntry *fe) {
+    size_t h = ((uintptr_t)fe >> 4) & (PROF_SLOTS - 1);
+    for (int n = 0; n < PROF_SLOTS; n++, h = (h + 1) & (PROF_SLOTS - 1)) {
+        if (prof_times[h].fe == fe) return &prof_times[h];
+        if (!prof_times[h].fe) { prof_times[h].fe = fe; return &prof_times[h]; }
+    }
+    return NULL;
+}
+
+void glow_prof_enter(FuncEntry *fe, int depth) {
+    if (!prof_start || depth < 0 || depth >= PROF_DEPTH) return;
+    prof_start[depth] = prof_now_ns();
+    prof_child[depth] = 0;
+    ProfTime *t = fe ? prof_slot(fe) : NULL;
+    if (t) t->active++;
+}
+
+void glow_prof_leave(FuncEntry *fe, int depth) {
+    /* A frame entered before profiling began has no start time. */
+    if (!prof_start || depth < 0 || depth >= PROF_DEPTH || !prof_start[depth]) return;
+    uint64_t elapsed = prof_now_ns() - prof_start[depth];
+    prof_start[depth] = 0;
+    if (depth > 0) prof_child[depth - 1] += elapsed;
+    ProfTime *t = fe ? prof_slot(fe) : NULL;
+    if (!t) return;
+    t->calls++;
+    t->self_ns += elapsed - (prof_child[depth] < elapsed ? prof_child[depth] : elapsed);
+    if (t->active > 0 && --t->active == 0) t->total_ns += elapsed;
+}
+
+static int prof_time_compare(const void *a, const void *b) {
+    const ProfTime *x = a, *y = b;
+    if (x->self_ns != y->self_ns) return x->self_ns < y->self_ns ? 1 : -1;
+    return strcmp(x->fe && x->fe->name ? x->fe->name : "", y->fe && y->fe->name ? y->fe->name : "");
+}
+
+/* The second table of the report: the functions that took the most time. */
+static void prof_time_report(uint64_t stopped) {
+    if (!prof_times) return;
+    uint64_t run = stopped - prof_began, counted = 0;
+    int n = 0;
+    for (int i = 0; i < PROF_SLOTS; i++)
+        if (prof_times[i].fe && prof_times[i].calls > 0) prof_times[n++] = prof_times[i];
+    /* With no function calls seen, the line counts above say it all. */
+    if (n == 0) return;
+    for (int i = 0; i < n; i++) counted += prof_times[i].self_ns;
+    qsort(prof_times, n, sizeof(ProfTime), prof_time_compare);
+    printf("\n--- Time by Function ---\n");
+    printf("  %10s | %10s | %10s | %s\n", "Calls", "Self ms", "Total ms", "Function");
+    printf("  -----------+------------+------------+---------\n");
+    for (int i = 0; i < n && i < 15; i++) {
+        const char *name = prof_times[i].fe->name ? prof_times[i].fe->name : "(anonymous)";
+        printf("  %10llu | %10.2f | %10.2f | %s\n", (unsigned long long)prof_times[i].calls,
+               prof_times[i].self_ns / 1e6, prof_times[i].total_ns / 1e6, name);
+    }
+    /* Time in no call the profile saw start (the top-level code around
+       debug.profile_start and debug.profile_stop), when it is 1% or more. */
+    if (run > counted && (run - counted) * 100 >= run) printf("  %10s | %10.2f | %10s | %s\n", "", (run - counted) / 1e6, "", "(outside these functions)");
+    printf("  Profiling turns the JIT off: compare these times with each other.\n");
+    printf("------------------------------\n");
+}
+
 static Value native_profile_start(int argc, Value *args) {
     (void)argc; (void)args;
     if (!profiling_active) profile_saved_nojit = glow_nojitexec;
     profiling_active = 1;
     glow_nojitexec = 1;
+    if (!prof_times) {
+        prof_times = calloc(PROF_SLOTS, sizeof(ProfTime));
+        prof_start = calloc(PROF_DEPTH, sizeof(uint64_t));
+        prof_child = calloc(PROF_DEPTH, sizeof(uint64_t));
+        if (!prof_times || !prof_start || !prof_child) {
+            free(prof_times); free(prof_start); free(prof_child);
+            prof_times = NULL; prof_start = prof_child = NULL;
+        }
+    }
+    prof_began = prof_now_ns();
     return value_none();
 }
 
@@ -6197,6 +6296,7 @@ static int profile_compare(const void *a, const void *b) {
 
 static Value native_profile_stop(int argc, Value *args) {
     (void)argc; (void)args;
+    uint64_t stopped = prof_now_ns();
     if (profiling_active) glow_nojitexec = profile_saved_nojit;
     profiling_active = 0;
     typedef struct { const char *file; int line; long count; } ProfileEntry;
@@ -6263,6 +6363,9 @@ static Value native_profile_stop(int argc, Value *args) {
     printf("------------------------------\n");
 
     free(entries);
+    prof_time_report(stopped);
+    free(prof_times); free(prof_start); free(prof_child);
+    prof_times = NULL; prof_start = prof_child = NULL;
     return value_none();
 }
 

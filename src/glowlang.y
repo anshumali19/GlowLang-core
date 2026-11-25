@@ -1297,7 +1297,7 @@ int glow_main(int argc, char **argv) {
         printf("  repl              Launch the interactive development shell\n");
         printf("  check <file.glow> Perform syntax and static analysis only\n");
         printf("  trace <file.glow> Execute with frame-by-frame VM tracing\n");
-        printf("  profile <file.glow> Execute, then list the lines that ran most often\n");
+        printf("  profile <file.glow> Execute, then list the busiest lines and the time per function\n");
         printf("  debug <file.glow> Execute with interactive step-by-step debugger\n");
         printf("  package <src>     Create a standalone executable binary\n");
         printf("  new <name>        Start a web API project (login, database, tests)\n");

@@ -28,7 +28,8 @@ profiler.report()
 
 ## Line Profiling from the Command Line
 
-`glowlang profile` runs a program and then lists the lines that ran most often:
+`glowlang profile` runs a program and then lists the lines that ran most often
+and the time each function took:
 
 ```bash
 glowlang profile program.glow
@@ -42,8 +43,29 @@ glowlang profile program.glow
        27900 | program.glow:2
 ```
 
+```
+--- Time by Function ---
+       Calls |    Self ms |   Total ms | Function
+  -----------+------------+------------+---------
+        8361 |       0.55 |       0.55 | fib
+           1 |       0.34 |       1.13 | <main>
+         200 |       0.15 |       0.15 | re_findall
+           1 |       0.05 |       0.77 | work
+         200 |       0.02 |       0.17 | words
+```
+
+The second table lists the 15 functions that took the most time of their
+own. **Self** is the time spent in the function itself, without the GlowLang
+functions it calls; time in built-in calls (a regular expression, a file
+read) counts as the caller's own. **Total** includes what it calls, and a
+recursive function's time is counted once, not once per level. `<main>` is
+the program's top-level code. The table is left out when no function was
+called; `debug.profile_start()` and `debug.profile_stop()` print the same
+report for just the code between them.
+
 Profiling runs the program in the interpreter (compiled code does not count
-lines), so it is slower than `glowlang run`. In VS Code, **GlowLang: Profile
+lines), so it is slower than `glowlang run`, and the times are best compared
+with each other, not with a normal run. In VS Code, **GlowLang: Profile
 Current File** runs the same command.
 
 ## Trace Mode
