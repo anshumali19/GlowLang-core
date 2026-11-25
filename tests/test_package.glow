@@ -17,6 +17,17 @@ try:
     let ran = process.run([exe, "one", "two words"], {"cwd": dir})
     show ran["code"]
     show ran["stdout"].replace("\r\n", "\n").strip()
+    # A packaged program finds the .env next to the executable, not in the
+    # folder it is started from.
+    let env_exe = fs.join(dir, "envtool")
+    when os.platform == "windows":
+        env_exe = env_exe + ".exe"
+    end
+    show process.run([process.executable, "package", "tests/modules/package_env.glow", "-o", env_exe], {})["code"]
+    fs.write(fs.join(dir, ".env"), "GREETING=hello from the .env\n")
+    let elsewhere = fs.join(dir, "elsewhere")
+    fs.mkdirs(elsewhere)
+    show process.run([env_exe], {"cwd": elsewhere})["stdout"].replace("\r\n", "\n").strip()
 finally:
     fs.remove_all(dir)
 end
