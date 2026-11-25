@@ -392,6 +392,25 @@ void call_stack_pop(void) {
     }
 }
 
+/* A string's bytes and length. A flat string is read in place; only a rope
+   goes through rope_flatten, which is a call. */
+static inline const char *str_bytes(Value v, size_t *len) {
+    GCObject *o = (GCObject*)(uintptr_t)(v & MASK_PAYLOAD);
+    if (!o) { *len = 0; return ""; }
+    if (o->type == OBJ_STRING) { *len = (size_t)((GCString*)o)->size; return ((GCString*)o)->chars; }
+    *len = rope_length(v);
+    return rope_flatten(v);
+}
+
+/* Two strings in byte order, which is code point order for UTF-8: -1, 0, 1. */
+static inline int str_cmp(Value a, Value b) {
+    size_t la, lb;
+    const char *sa = str_bytes(a, &la), *sb = str_bytes(b, &lb);
+    int c = memcmp(sa, sb, la < lb ? la : lb);
+    if (c) return c < 0 ? -1 : 1;
+    return (la > lb) - (la < lb);
+}
+
 static int string_equal_simd(const char *s1, size_t l1, const char *s2, size_t l2) {
     if (s1 == s2) return 1;
     if (!s1 || !s2) return 0;
@@ -475,9 +494,9 @@ int val_eq(Value a, Value b) {
     if (ta == VAL_INT && tb == VAL_FLOAT) return (double)AS_INT(a) == AS_FLOAT(b);
     if (ta == VAL_FLOAT && tb == VAL_INT) return AS_FLOAT(a) == (double)AS_INT(b);
     if (ta == VAL_STRING && tb == VAL_STRING) {
-        size_t l1 = rope_length(a);
-        size_t l2 = rope_length(b);
-        return string_equal_simd(AS_STRING(a), l1, AS_STRING(b), l2);
+        size_t l1, l2;
+        const char *s1 = str_bytes(a, &l1), *s2 = str_bytes(b, &l2);
+        return string_equal_simd(s1, l1, s2, l2);
     }
     /* Lists and dicts compare by contents ([1, 2] == [1, 2]); the depth
        limit stops self-referencing structures from recursing forever. */
@@ -594,12 +613,7 @@ static int values_comparable(Value a, Value b) {
 int glow_values_comparable(Value a, Value b) { return values_comparable(a, b); }
 static inline int value_cmp(Value a, Value b) {
     int64_t ia, ib;
-    if (GET_TYPE(a) == VAL_STRING && GET_TYPE(b) == VAL_STRING) {
-        size_t la = rope_length(a), lb = rope_length(b);
-        int c = memcmp(AS_STRING(a), AS_STRING(b), la < lb ? la : lb);
-        if (c) return c < 0 ? -1 : 1;
-        return (la > lb) - (la < lb);
-    }
+    if (GET_TYPE(a) == VAL_STRING && GET_TYPE(b) == VAL_STRING) return str_cmp(a, b);
     if (GET_TYPE(a) == VAL_LIST && GET_TYPE(b) == VAL_LIST) {
         List *x = AS_LIST(a), *y = AS_LIST(b);
         int n = x->size < y->size ? x->size : y->size;
@@ -994,17 +1008,20 @@ Value jit_int_mul(Value a, Value b) {
     if (!is_numeric(a) || !is_numeric(b)) return VAL_DEOPT_SENTINEL;
     return num_mul(a, b);
 }
-Value jit_int_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
-Value jit_int_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
-Value jit_int_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
-Value jit_int_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
+/* Compiled code calls these when its inline number compare does not apply.
+   Two strings, the common case there, are compared before anything else. */
+#define BOTH_STRINGS(a, b) (GET_TYPE(a) == VAL_STRING && GET_TYPE(b) == VAL_STRING)
+Value jit_int_lt(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) < 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
+Value jit_int_gt(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) > 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
+Value jit_int_lte(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) <= 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
+Value jit_int_gte(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) >= 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
 Value jit_int_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 
 /* Generic value comparison helpers for JIT (non-specialized paths). */
-Value jit_val_lt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
-Value jit_val_gt(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
-Value jit_val_lte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
-Value jit_val_gte(Value a, Value b) { if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
+Value jit_val_lt(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) < 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) < 0); }
+Value jit_val_gt(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) > 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(value_cmp(a, b) > 0); }
+Value jit_val_lte(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) <= 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) <= 0); }
+Value jit_val_gte(Value a, Value b) { if (BOTH_STRINGS(a, b)) return value_bool(str_cmp(a, b) >= 0); if (!values_comparable(a, b)) return VAL_DEOPT_SENTINEL; return value_bool(!either_nan(a, b) && value_cmp(a, b) >= 0); }
 Value jit_val_eq(Value a, Value b)  { return value_bool(val_eq(a, b)); }
 Value jit_val_neq(Value a, Value b) { return value_bool(!val_eq(a, b)); }
 

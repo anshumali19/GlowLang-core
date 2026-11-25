@@ -1,0 +1,27 @@
+# Comparing texts: <, <=, >, >=, == and != on empty texts, prefixes, texts
+# built with + (ropes) and UTF-8, at the top level (interpreted) and in a
+# loop hot enough to be compiled, which must agree.
+let rope = "ab" + "c"
+let pairs = [["", ""], ["", "a"], ["a", ""], ["abc", "abd"], ["ab", "abc"], ["abc", rope],
+    [rope, "abd"], ["Z", "a"], ["é", "z"], ["日本", "日"], ["a\u0000", "a"]]
+func ops(a, b):
+    return [a < b, a <= b, a > b, a >= b, a == b, a != b]
+end
+let direct = []
+for each p in pairs:
+    direct.push(ops(p[0], p[1]))
+end
+show direct
+func hot(a, b):
+    let r = none
+    every i from 1 to 2000:
+        r = ops(a, b)
+    end
+    return r
+end
+let compiled = []
+for each p in pairs:
+    compiled.push(hot(p[0], p[1]))
+end
+show compiled == direct
+show sorted(["b", "", "ab", rope, "a", "é", "Z"])
