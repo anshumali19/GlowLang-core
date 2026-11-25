@@ -1,0 +1,72 @@
+# retry.glow — call a function again when it fails, waiting longer each
+# time: for network calls and services that are briefly away.
+#
+#   import "retry"
+#   let page = retry.call(fetch_page)              3 tries, waits 0.1 s, 0.2 s
+#   let page = retry.call(fetch_page, {"tries": 5, "delay": 0.5})
+#
+# Options (all optional):
+#   tries      how many calls in all (3)
+#   delay      seconds to wait after the first failure (0.1)
+#   backoff    each wait is this many times the last (2)
+#   max_delay  no wait is longer than this many seconds (30)
+#   jitter     true (the default) waits a random time between half the wait
+#              and the whole of it, so many clients do not retry together
+#   when       func(error): retry only when it gives true
+#   on_retry   func(error, attempt, seconds): called before each wait
+#
+# call gives what the function gives. When every try fails, or `when` says
+# not to retry, the last error is raised as it was. An unknown option, or
+# one out of range, raises an error. os.sleep does the waiting, which lets
+# other threads run.
+
+let _RETRY_DEFAULTS = {"tries": 3, "delay": 0.1, "backoff": 2, "max_delay": 30, "jitter": true, "when": none, "on_retry": none}
+
+func _retry_options(options):
+    let o = _RETRY_DEFAULTS.copy()
+    for each key in (options ?? {}).keys():
+        when not o.has(key):
+            throw "retry: unknown option " + key
+        end
+        o[key] = options[key]
+    end
+    when type(o["tries"]) != "int" or o["tries"] < 1:
+        throw "retry: tries must be a whole number of 1 or more"
+    end
+    for each key in ["delay", "backoff", "max_delay"]:
+        let t = type(o[key])
+        when (t != "int" and t != "float") or o[key] < 0:
+            throw "retry: " + key + " must be a number of 0 or more"
+        end
+    end
+    return o
+end
+
+func retry_call(work, options = none):
+    let o = _retry_options(options)
+    let wait = o["delay"]
+    let attempt = 1
+    while true:
+        try:
+            return work()
+        catch e:
+            when attempt >= o["tries"] or (o["when"] is not none and not o["when"](e)):
+                throw e
+            end
+            let pause = min(wait, o["max_delay"])
+            when o["jitter"]:
+                pause = pause / 2 + random() * pause / 2
+            end
+            when o["on_retry"] is not none:
+                o["on_retry"](e, attempt, pause)
+            end
+            when pause > 0:
+                os.sleep(pause * 1000)
+            end
+            wait = wait * o["backoff"]
+            attempt = attempt + 1
+        end
+    end
+end
+
+let retry = {"call": retry_call}

@@ -1731,6 +1731,30 @@ with one and is marked `\ No newline at end of file`. Past about 10,000
 changes in one stretch, that stretch is shown as removed and added whole,
 which keeps two unrelated 20,000-line texts to about a second.
 
+### Retrying (`import "retry"`)
+```glow
+import "retry"
+let tries = 0
+func connect():
+    tries = tries + 1
+    when tries < 3:
+        throw "connection refused"
+    end
+    return "connected"
+end
+show retry.call(connect, {"tries": 5, "delay": 0.05}), tries   # connected 3
+```
+`retry.call(work, options)` calls `work()` and gives what it gives. When it
+throws, it waits and calls again, up to `tries` calls in all (3); the first
+wait is `delay` seconds (0.1), each one `backoff` times the last (2), none
+longer than `max_delay` (30). With `jitter` (on unless false) each wait is a
+random time between half of it and all of it, so many clients do not retry
+at the same moment. `when` is a function of the error that says whether to
+retry it, and `on_retry(error, attempt, seconds)` is called before each
+wait. When the tries run out, the last error is raised as it was. An
+unknown option raises an error. The waits use `os.sleep`, so other threads
+run meanwhile.
+
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
 `exit(code)`, `gc_info()`.

@@ -1,0 +1,41 @@
+# What retry.call adds to a call: a function that works at once, called
+# directly and through retry.call, and one that fails twice before working
+# (no waits), for two seconds each. Prints calls per second.
+import "retry"
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<20"), format(int(n / (os.time() - start)), ",d"), "calls/s"
+end
+
+func works():
+    return 42
+end
+let left = 0
+func fails_twice():
+    left = left - 1
+    when left >= 0:
+        throw "not yet"
+    end
+    return 42
+end
+let quick = {"delay": 0, "jitter": false}
+
+func direct():
+    works()
+end
+func wrapped():
+    retry.call(works)
+end
+func third_try():
+    left = 2
+    retry.call(fails_twice, quick)
+end
+measure("direct", direct)
+measure("retry.call", wrapped)
+measure("works on try 3", third_try)
