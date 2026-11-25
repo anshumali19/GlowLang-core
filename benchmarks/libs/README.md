@@ -186,8 +186,13 @@ and `popitem`. Runs differed by under 4% in both. Measured 2026-11-24.
 
 | Cache | Lookups/s |
 |---|---|
-| GlowLang `lru.Cache` | 3,147,929 |
+| GlowLang `lru.Cache` | 3,362,701 |
 | Python, `OrderedDict` | 6,092,838 |
+
+The GlowLang row was measured again on 2026-11-25 (runs within 2%), after
+`get` stopped calling a helper method; before, it ran at 3,093,130 on the
+same machine that day. A hit is still one remove and one re-insert in a
+dict, as `OrderedDict` does in C.
 
 ## yaml
 
