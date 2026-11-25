@@ -1,0 +1,61 @@
+# cron.parse, matches, next and next_times (lib/cron.glow).
+import "cron"
+import "datetime"
+
+show "--- next"
+let t = datetime.create(2026, 11, 25, 7, 23, 41, 0, 19800)
+for each line in ["*/15 9-17 * * mon-fri", "0 0 1 1 *", "@hourly", "@WEEKLY", "30 2 29 2 *", "0 12 13 * fri", "5/20 * * * *", "0 0 * * 7", "59 23 31 dec *", "  0   6 * * *  ", "0 0 30 2 *"]:
+    let n = cron.next(line, t)
+    when n is none:
+        show line, "none"
+    otherwise:
+        show line, n.iso(), n.weekday_name()
+    end
+end
+let s = cron.parse("0 9 * * mon,wed")
+for each n in s.next_times(t, 4):
+    show n.iso(), n.weekday_name()
+end
+show s.matches(datetime.create(2026, 11, 30, 9, 0, 59, 0, 0)), s.matches(datetime.create(2026, 11, 30, 9, 1, 0, 0, 0)), s.matches(datetime.create(2026, 11, 29, 9, 0, 0, 0, 0))
+# */10 in the day of the month counts as not given, so both must hold (a
+# Friday that is the 1st, 11th, 21st or 31st); 1-31/10 is given, so either.
+show cron.next("0 0 */10 * fri", t).iso(), cron.next("0 0 1-31/10 * fri", t).iso()
+show cron.next("0	0	*	*	fri", t).iso()
+# A local time stays local.
+let local = cron.next("0 0 * * *", datetime.create(2026, 6, 1, 12, 0))
+show local.is_local, local.hour, local.day
+
+show "--- the same as checking minute by minute"
+random_seed(3)
+let fields = [["*", "0", "*/7", "5-10", "1,30,59", "10-50/20"], ["*", "0", "9-17", "*/5", "23"], ["*", "1", "15", "28-31", "*/10"], ["*", "2", "jan,jun", "11-12", "*/3"], ["*", "0", "mon-fri", "6", "7"]]
+let wrong = 0
+every k from 1 to 25:
+    let parts = []
+    for each f in fields:
+        parts.push(f[random_int(0, len(f) - 1)])
+    end
+    let one = cron.parse(" ".join(parts))
+    let start = datetime.create(2026, random_int(1, 12), random_int(1, 28), random_int(0, 23), random_int(0, 59), 0, 0, 0)
+    let got = one.next(start)
+    let probe = start.add_minutes(1)
+    let steps = 0
+    while not one.matches(probe) and steps < 100000:
+        probe = probe.add_minutes(1)
+        steps = steps + 1
+    end
+    when steps < 100000 and (got is none or got.iso() != probe.iso()):
+        wrong = wrong + 1
+        show " ".join(parts), start.iso(), got, probe.iso()
+    end
+end
+show "wrong", wrong
+
+show "--- errors"
+for each bad in ["", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 8", "5-1 * * * *", "*/0 * * * *", "a * * * *", "* * * foo *", "1,,2 * * * *", "@sometimes"]:
+    try:
+        cron.parse(bad)
+        show "allowed", json.stringify(bad)
+    catch e:
+        show e
+    end
+end

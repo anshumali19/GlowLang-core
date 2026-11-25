@@ -1,0 +1,34 @@
+# Times cron.parse and Schedule.next for two seconds each and prints calls
+# per second. next is timed on a schedule that runs every 15 minutes in
+# office hours and on one that runs once a year.
+import "cron"
+import "datetime"
+
+func measure(label, f):
+    let n = 0
+    let start = os.time()
+    while os.time() - start < 2:
+        f()
+        n = n + 1
+    end
+    show format(label, "<16"), format(int(n / (os.time() - start)), ",d"), "calls/s"
+end
+
+let t = datetime.create(2026, 11, 25, 18, 7, 0, 0, 0)
+let office = cron.parse("*/15 9-17 * * mon-fri")
+let yearly = cron.parse("0 0 1 1 *")
+assert(office.next(t).iso() == "2026-11-26T09:00:00Z", "office next is wrong")
+assert(yearly.next(t).iso() == "2027-01-01T00:00:00Z", "yearly next is wrong")
+
+func parse_once():
+    cron.parse("*/15 9-17 * * mon-fri")
+end
+func office_next():
+    office.next(t)
+end
+func yearly_next():
+    yearly.next(t)
+end
+measure("parse", parse_once)
+measure("next (office)", office_next)
+measure("next (yearly)", yearly_next)

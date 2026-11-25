@@ -1,0 +1,37 @@
+--- next
+*/15 9-17 * * mon-fri 2026-11-25T09:00:00+05:30 Wednesday
+0 0 1 1 * 2027-01-01T00:00:00+05:30 Friday
+@hourly 2026-11-25T08:00:00+05:30 Wednesday
+@WEEKLY 2026-11-29T00:00:00+05:30 Sunday
+30 2 29 2 * 2028-02-29T02:30:00+05:30 Tuesday
+0 12 13 * fri 2026-11-27T12:00:00+05:30 Friday
+5/20 * * * * 2026-11-25T07:25:00+05:30 Wednesday
+0 0 * * 7 2026-11-29T00:00:00+05:30 Sunday
+59 23 31 dec * 2026-12-31T23:59:00+05:30 Thursday
+  0   6 * * *   2026-11-26T06:00:00+05:30 Thursday
+0 0 30 2 * none
+2026-11-25T09:00:00+05:30 Wednesday
+2026-11-30T09:00:00+05:30 Monday
+2026-12-02T09:00:00+05:30 Wednesday
+2026-12-07T09:00:00+05:30 Monday
+true false false
+2026-12-11T00:00:00+05:30 2026-11-27T00:00:00+05:30
+2026-11-27T00:00:00+05:30
+true 0 2
+--- the same as checking minute by minute
+wrong 0
+--- errors
+cron: expected five fields (minute hour day month weekday) in 
+cron: expected five fields (minute hour day month weekday) in * * * *
+cron: expected five fields (minute hour day month weekday) in * * * * * *
+cron: 60 is outside 0-59 in 60 * * * *
+cron: 24 is outside 0-23 in * 24 * * *
+cron: 0 is outside 1-31 in * * 0 * *
+cron: 13 is outside 1-12 in * * * 13 *
+cron: 8 is outside 0-7 in * * * * 8
+cron: the range 5-1 runs backwards in 5-1 * * * *
+cron: a step must be 1 or more in */0 * * * *
+cron: bad value "a" in a * * * *
+cron: bad value "foo" in * * * foo *
+cron: bad value "" in 1,,2 * * * *
+cron: expected five fields (minute hour day month weekday) in @sometimes
