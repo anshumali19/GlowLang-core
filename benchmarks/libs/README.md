@@ -268,3 +268,17 @@ is no Python column. Runs differed by under 3%. Measured 2026-11-25.
 | parse | 204,219 |
 | next, office hours | 117,127 |
 | next, once a year | 595,711 |
+
+## ini
+
+[ini_bench.glow](ini_bench.glow) parses
+[ini_config.ini](ini_config.ini), 74 lines in six sections with comments
+and a value that goes on over two lines. [ini_bench.py](ini_bench.py)
+parses it with Python's `configparser` (written in Python), keys kept in
+their case and interpolation off, as `ini.parse` does. Both give the same
+values. Runs differed by under 2%. Measured 2026-11-25.
+
+| Parser | Parses/s |
+|---|---|
+| GlowLang `ini.parse` | 26,717 |
+| Python `configparser` | 5,228 |

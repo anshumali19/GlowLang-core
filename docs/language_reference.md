@@ -1989,6 +1989,26 @@ show toml.stringify({"name": "shop", "server": {"port": 8080}})
 # port = 8080
 ```
 
+### INI files (`import "ini"`)
+```glow
+import "ini"
+let config = ini.parse("[server]
+host = 0.0.0.0
+port: 8080
+")
+show int(config["server"]["port"]) + 1          # 8081
+show ini.stringify({"app": {"debug": "false"}})  # [app] and debug = false
+```
+`ini.parse(text)` and `ini.read(path)` give a dict of sections, each a dict
+of keys to text. `[name]` starts a section; `key = value` and `key: value`
+set a key (outer spaces removed, a key alone gets `""`); lines starting with
+`#` or `;` are comments; a line indented more than its key continues the
+value, joined with a line break. Keys before the first section go in the
+section `""`. A section or key given twice raises an error that names the
+line. Unlike Python's configparser, keys keep their case and there is no
+`%(name)s` interpolation. `ini.stringify(config)` and
+`ini.write(path, config)` write it back.
+
 ### WebSockets (`use "websocket"`)
 `websocket.connect(url, options)` opens a `ws://` or `wss://` connection;
 `websocket.serve(port, handler)` runs `handler(ws)` for each connection
