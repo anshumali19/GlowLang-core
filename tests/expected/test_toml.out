@@ -40,6 +40,14 @@ p 9223372036854775807 int
 --- files
 {"server": {"port": 9000}}
 toml: cannot read no_such_file.toml
+--- the quick reader and the full parser agree
+true
+{"title": "T", "a": {"b": {"x": 1, "y": {"z": [1, 2.5, "s", "lit", [true], {"p": 1, "q": "r"}]}}}, "arr": [{"k": "1979-05-27T07:32:00Z"}, {"m": "line\none", "n": "raw \\ text", "quoted key": 31}]}
+{"a": "tab\there", "d": "1979-05-27 07:32:00"}
+toml: the quick reader gives up here
+toml: the quick reader gives up here
+toml: the quick reader gives up here
+toml: the quick reader gives up here
 --- errors
 toml: line 2: key a is defined twice
 toml: line 2: table [t] is defined twice

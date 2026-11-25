@@ -76,11 +76,15 @@ also written in Python. Runs differed by under 2% in both. Measured
 
 | Parser | Parses/s |
 |---|---|
-| GlowLang `toml.parse` | 4,646 |
-| Python `tomllib.loads` | 7,454 |
+| GlowLang `toml.parse` | 7,749 |
+| Python `tomllib.loads` | 7,479 |
 
-Most of the time goes to reading the text one character at a time; one
-parse of this file takes 0.22 ms.
+Measured again on 2026-11-25 (runs within 3%). `toml.parse` first splits
+the text into tokens with one regular expression and reads the tokens;
+it gives up on anything that reader does not cover (an escape, a mistake)
+and reads the text character by character instead, as it did for every
+file before, when it ran at 4,488 parses/s on the same machine that day.
+One parse of this file now takes 0.13 ms.
 
 The same benchmark then writes the parsed dict back with `toml.stringify`:
 13,105 times a second, 0.08 ms each (runs differed by under 4%, measured

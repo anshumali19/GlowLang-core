@@ -48,6 +48,23 @@ finally:
     fs.remove(path)
 end
 
+show "--- the quick reader and the full parser agree"
+# toml.parse reads with parse_tokens first and gives up to parse on
+# anything it does not cover; both must give the same dict.
+let doc = "# c\ntitle = \"T\" # c\n[a.b]\nx = 1\ny.z = [1, 2.5, \"s\", 'lit', [true], {p = 1, q = \"r\"}]\n[[arr]]\nk = 1979-05-27T07:32:00Z\n[[arr]]\nm = \"\"\"\nline\none\"\"\"\nn = '''raw \\ text'''\n\"quoted key\" = 0x1F\n"
+show json.stringify(_TomlParser(doc).parse_tokens()) == json.stringify(_TomlParser(doc).parse())
+show toml.parse(doc)
+# Left to the full parser: an escape, and a date and time with a space.
+show toml.parse("a = \"tab\\there\"\nd = 1979-05-27 07:32:00\n")
+for each give_up in ["[ [a]]", "[[a] ]", "a = \"x\\ty\"", "\"q\".k = 1"]:
+    try:
+        _TomlParser(give_up).parse_tokens()
+        show "read", json.stringify(give_up)
+    catch e:
+        show e
+    end
+end
+
 show "--- errors"
 for each bad in ["a = 1\na = 2", "[t]\n[t]", "a = 1\n[a]", "a = 1\na.b = 2", "a = \"open", "a = \"x\ny\"", "a = 'open", "a = \"\"\"open", "a = 01", "a = 1__0", "a = _1", "a = [1 2]", "a = {x = 1", "a = 1 b = 2", "= 1", "a 1", "a = ", "a = \"\\q\"", "a = \"\\uD800\"", "[t", "[[t]\n", "x = 1\n[[x]]", "[a]\n[[a]]", "a = truth", "a = 1.2.3"]:
     try:
