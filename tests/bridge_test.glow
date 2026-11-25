@@ -1,9 +1,14 @@
 # lib/bridge.glow against real Python 3 and Node.js (both are installed on
 # the CI runners). User modules come from tests/modules (the cwd option).
 import "bridge"
-let opts = {"cwd": "tests/modules", "timeout": 60}
+# start_timeout stays under the test runner's 60 seconds, so a worker that
+# is slow to start fails with the bridge's own message instead of the whole
+# test being killed; each start time goes to stderr for the same reason.
+let opts = {"cwd": "tests/modules", "timeout": 60, "start_timeout": 40}
+let began = os.time()
 
 let py = bridge.python(opts)
+os.eprint("python started in " + format(os.time() - began, ".1f") + " s")
 show "python started:", py.version is not none
 show py.call("math.sqrt", [16]), py.get("math.pi") > 3.14
 show py.call("json.dumps", [{"b": [1, 2], "a": none}], {"sort_keys": true})
@@ -57,7 +62,9 @@ catch e:
 end
 show "alive after timeout:", slow.alive()
 
+began = os.time()
 let js = bridge.node(opts)
+os.eprint("node started in " + format(os.time() - began, ".1f") + " s")
 show "node started:", js.version is not none
 show js.call("path.basename", ["/a/b/c.txt"]), js.call("Math.max", [1, 7, 3])
 show js.call("bridge_mod.double", [21]), js.call("bridge_mod.later", [41])
