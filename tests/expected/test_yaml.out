@@ -36,9 +36,13 @@ yaml: line 2: this line is indented more than the - above it
 yaml: line 1: [ is never closed
 yaml: line 1: { is never closed
 yaml: line 1: a quoted value is never closed
-yaml: line 1: anchors, aliases and tags are not supported
-yaml: line 1: anchors, aliases and tags are not supported
-yaml: line 1: anchors, aliases and tags are not supported
+yaml: line 1: an anchor needs a name: & 1
+yaml: line 1: unknown alias *alias
+yaml: line 1: tags are not supported
+yaml: line 1: anchors inside [ ] or { } are not supported
+yaml: line 1: anchors on keys are not supported; put &x on a line of its own
+yaml: line 1: << needs a mapping or a list of mappings
+yaml: line 2: << needs a mapping or a list of mappings
 yaml: line 1: keys written with ? are not supported
 yaml: line 2: tabs cannot be used for indenting
 yaml: line 2: several documents in one text are not supported
@@ -47,6 +51,11 @@ yaml: line 1: unexpected text after [: 2
 yaml: line 1: bad escape \q
 yaml: line 1: bad block header |x
 yaml: line 2: [ is never closed
+--- anchors, aliases and merge keys
+{"database": "dev", "adapter": "postgres", "pool": 5} {"database": "test", "pool": 2, "adapter": "postgres"}
+{"ports": [80, 443], "name": "web-1", "again": "web-1"} ["web-1", [80, 443], {"x": "web-1"}]
+[{"a": 1}, {"b": 2}, {"a": 1}, "plain", "plain"] {"a": 9, "b": 2}
+5
 --- writing
 name: shop
 version: 1.2.3

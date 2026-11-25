@@ -1592,9 +1592,15 @@ escapes), `|` and `>` blocks (with `-` or `+`), comments, and one document
 (a `---` line at the top is allowed). Plain values follow YAML 1.2: `null`,
 `~` or nothing is `none`; `true` / `false` are booleans, but `yes`, `no` and
 `on` stay text; `12`, `0x1F`, `0o17`, `1.5`, `1e3`, `.inf` and `.nan` are
-numbers. Anchors and aliases (`&`, `*`), tags (`!!str`), several documents
-and `? ` keys are not supported; they, and other mistakes, raise an error
-that names the line.
+numbers. An anchor `&name` names a value and an alias `*name` gives that
+same value again (not a copy); a `<<` key merges a mapping, or a list of
+them, into its own, and the mapping's own keys win. Anchors inside `[ ]` or
+`{ }` and on keys, tags (`!!str`), several documents and `? ` keys are not
+supported; they, and other mistakes, raise an error that names the line.
+```glow
+let cfg = yaml.parse("base: &base\n  pool: 5\n  host: db\nprod:\n  <<: *base\n  pool: 20\n")
+show cfg["prod"]                              # {"pool": 20, "host": "db"}
+```
 
 `yaml.stringify(value)` gives YAML text and `yaml.write(path, value)` saves
 it, in block style with two spaces per level. Text is written plain when it

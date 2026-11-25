@@ -14,11 +14,13 @@
 # null, ~ or nothing; true or false for true / false (also True, FALSE);
 # numbers for 12, -3, 0x1F, 0o17, 1.5, 1e3, .inf, -.inf and .nan; and text
 # for anything else, such as yes, no and 1.2.3. Keys are text, as in every
-# dict.
+# dict. An anchor (&name) names a value and an alias (*name) gives it again,
+# the same value, not a copy; a "<<" key merges a mapping (or a list of them)
+# into its own, and the mapping's own keys win.
 #
-# Not covered: anchors and aliases (& and *), tags (!!str), several
-# documents in one text, keys written with "? " and tabs used for indenting.
-# These raise an error that names the line, as do other mistakes.
+# Not covered: anchors inside [ ] or { } (aliases work there), tags (!!str),
+# several documents in one text, keys written with "? " and tabs used for
+# indenting. These raise an error that names the line, as do other mistakes.
 
 import "re"
 
@@ -40,6 +42,23 @@ blueprint _YamlParser:
         self.lines = lines
         self.i = start
         self.n = len(lines)
+        self.anchors = {}
+    end
+
+    # [name, the text after it] for text that starts with &name.
+    func split_anchor(text):
+        let m = re.fullmatch("&([^\s,\[\]{}]+)\s*(.*)", text)
+        when m is none:
+            self.fail("an anchor needs a name: " + text)
+        end
+        return m.groups
+    end
+
+    func alias(text):
+        when not self.anchors.has(text.slice(1)):
+            self.fail("unknown alias " + text)
+        end
+        return self.anchors[text.slice(1)]
     end
 
     func fail(message):
@@ -169,6 +188,7 @@ blueprint _YamlParser:
 
     func mapping(indent):
         let out = {}
+        let merges = []
         while self.skip_blank():
             let line = self.lines[self.i]
             let ind = self.indent_of(line)
@@ -187,23 +207,64 @@ blueprint _YamlParser:
                 self.fail("expected key: value, found " + text)
             end
             let key = text.slice(0, colon).trim()
-            when key.starts_with("\"") or key.starts_with("'"):
+            let quoted_key = key.starts_with("\"") or key.starts_with("'")
+            when quoted_key:
                 key = self.quoted(key)
             eif key.starts_with("&") or key.starts_with("*") or key.starts_with("!") or key.starts_with("?"):
-                self.fail("anchors, aliases, tags and ? keys are not supported")
+                self.fail("anchors, aliases and tags on keys, and ? keys, are not supported")
+            end
+            let rest = text.slice(colon + 1).trim()
+            when key == "<<" and not quoted_key:
+                self.i = self.i + 1
+                let merge = self.value_after(rest, indent)
+                when type(merge) == "dict":
+                    merge = [merge]
+                end
+                when type(merge) != "list":
+                    self.i = self.i - 1
+                    self.fail("<< needs a mapping or a list of mappings")
+                end
+                for each m in merge:
+                    when type(m) != "dict":
+                        self.i = self.i - 1
+                        self.fail("<< needs a mapping or a list of mappings")
+                    end
+                    merges.push(m)
+                end
+                skip
             end
             when out.has(key):
                 self.fail("the key " + key + " appears twice")
             end
-            let rest = text.slice(colon + 1).trim()
             self.i = self.i + 1
             out[key] = self.value_after(rest, indent)
+        end
+        # Merged keys fill in what the mapping does not set; the first
+        # mapping merged wins over later ones.
+        for each m in merges:
+            for each k in m.keys():
+                when not out.has(k):
+                    out[k] = m[k]
+                end
+            end
         end
         return out
     end
 
     # The value of "key: rest" or "- rest" whose line was at indent.
     func value_after(rest, indent):
+        when rest.starts_with("&"):
+            # The anchor is on the line before self.i, which errors name.
+            self.i = self.i - 1
+            let a = self.split_anchor(rest)
+            when self.key_end(a[1]) >= 0:
+                self.fail("anchors on keys are not supported; put &" + a[0] + " on a line of its own")
+            end
+            self.i = self.i + 1
+            let value = self.value_after(a[1], indent)
+            self.anchors[a[0]] = value
+            return value
+        end
         when rest == "":
             when not self.skip_blank():
                 return none
@@ -334,7 +395,7 @@ blueprint _YamlParser:
         when text.starts_with("[") or text.starts_with("{"):
             let joined = text
             while true:
-                let f = _YamlFlow(joined)
+                let f = _YamlFlow(joined, self.anchors)
                 let value = f.try_parse()
                 when value[0]:
                     when f.rest() != "":
@@ -354,8 +415,24 @@ blueprint _YamlParser:
                 joined = joined + " " + self.strip(self.lines[self.i])
             end
         end
-        when text.starts_with("&") or text.starts_with("*") or text.starts_with("!"):
-            self.fail("anchors, aliases and tags are not supported")
+        when text.starts_with("*"):
+            let value = self.alias(text)
+            self.i = self.i + 1
+            return value
+        end
+        when text.starts_with("&"):
+            let a = self.split_anchor(text)
+            when a[1] == "":
+                self.fail("an anchor here needs its value on the same line")
+            end
+            # inline_value starts by stepping back to the line it is given.
+            self.i = self.i + 1
+            let value = self.inline_value(a[1], indent)
+            self.anchors[a[0]] = value
+            return value
+        end
+        when text.starts_with("!"):
+            self.fail("tags are not supported")
         end
         when text.starts_with("\"") or text.starts_with("'"):
             let close = _yaml_quote_end(text)
@@ -505,7 +582,8 @@ end
 
 # The flow forms [a, b] and {k: v}.
 blueprint _YamlFlow:
-    func init(text):
+    func init(text, anchors):
+        self.anchors = anchors
         self.s = text
         self.k = 0
         self.n = len(text)
@@ -636,6 +714,14 @@ blueprint _YamlFlow:
         let text = self.s.slice(start, self.k).trim()
         when is_key:
             return text
+        end
+        when text.starts_with("*"):
+            when not self.anchors.has(text.slice(1)):
+                throw "unknown alias " + text
+            end
+            return self.anchors[text.slice(1)]
+        eif text.starts_with("&"):
+            throw "anchors inside [ ] or { } are not supported"
         end
         return _yaml_plain(text)
     end
