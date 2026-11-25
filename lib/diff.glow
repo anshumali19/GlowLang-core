@@ -8,11 +8,12 @@
 #                          git diff, or "" when there are none
 #
 # a and b are texts, or lists of lines. The diff is a shortest one (Myers'
-# algorithm), as GNU diff finds; a line that lacks a final line break differs
-# from the same line with one, and diff.unified marks it with "\ No newline
-# at end of file", as diff -u does.
+# algorithm, in linear space for large changes), as GNU diff finds; a line
+# that lacks a final line break differs from the same line with one, and
+# diff.unified marks it with "\ No newline at end of file", as diff -u does.
 
-let _DIFF_MAX_EDITS = 2000
+let _DIFF_MAX_EDITS = 5000
+let _DIFF_QUICK_EDITS = 200
 
 # The lines of a text, each with its line break; a list of lines gets one.
 func _diff_split(value):
@@ -35,8 +36,10 @@ func _diff_split(value):
     return lines
 end
 
-# Myers' algorithm on a[sa:ea] against b[sb:eb]: the ops, as [op, line].
-func _diff_myers(a, sa, ea, b, sb, eb):
+# Myers' algorithm on a[sa:ea] against b[sb:eb], keeping every round: the
+# ops, as [op, line], or none past _DIFF_QUICK_EDITS edits. Its memory grows
+# with the square of the edits, so past that _diff_middle splits the work.
+func _diff_rounds(a, sa, ea, b, sb, eb):
     let n = ea - sa
     let m = eb - sb
     let v = {"1": 0}
@@ -44,17 +47,8 @@ func _diff_myers(a, sa, ea, b, sb, eb):
     let found = false
     let d = 0
     while d <= n + m and not found:
-        when d > _DIFF_MAX_EDITS:
-            # shortcut: past this many edits the middle is reported as all
-            # removed and all added; a linear-space search would be needed.
-            let ops = []
-            every i from sa to ea - 1:
-                ops.push(["-", a[i]])
-            end
-            every i from sb to eb - 1:
-                ops.push(["+", b[i]])
-            end
-            return ops
+        when d > _DIFF_QUICK_EDITS:
+            return none
         end
         trace.push(v.copy())
         let k = -d
@@ -115,31 +109,147 @@ func _diff_myers(a, sa, ea, b, sb, eb):
     return ops
 end
 
-# The ops with each line still holding its line break.
-func _diff_ops(a, b):
-    let n = len(a)
-    let m = len(b)
-    let start = 0
-    while start < n and start < m and a[start] == b[start]:
-        start = start + 1
+# Myers' linear-space search on a[sa:ea] against b[sb:eb], which differ at
+# their first and last lines: the middle snake of a shortest diff, as
+# [x, y, u, v] (the diagonal run from a[x], b[y] to a[u], b[v]), or none
+# past _DIFF_MAX_EDITS rounds from each end (twice as many edits), which
+# keeps the worst case, two unrelated 20,000-line texts, near a second. Two lists of size n + m hold the furthest
+# points reached from the front and from the back.
+func _diff_middle(a, sa, ea, b, sb, eb):
+    let n = ea - sa
+    let m = eb - sb
+    let delta = n - m
+    let odd = delta % 2 != 0
+    let limit = (n + m + 1) // 2 + 1
+    let off = limit + 1
+    let vf = [0] * (2 * off + 1)
+    let vb = [0] * (2 * off + 1)
+    let d = 0
+    while d < limit:
+        when d > _DIFF_MAX_EDITS:
+            return none
+        end
+        # From the front: x counts lines of a taken, k = x - y.
+        let k = -d
+        while k <= d:
+            let x = 0
+            when k == -d or (k != d and vf[off + k - 1] < vf[off + k + 1]):
+                x = vf[off + k + 1]
+            otherwise:
+                x = vf[off + k - 1] + 1
+            end
+            let y = x - k
+            let x0 = x
+            let y0 = y
+            while x < n and y < m and a[sa + x] == b[sb + y]:
+                x = x + 1
+                y = y + 1
+            end
+            vf[off + k] = x
+            let r = delta - k
+            when odd and r >= 1 - d and r <= d - 1 and x + vb[off + r] >= n:
+                return [sa + x0, sb + y0, sa + x, sb + y]
+            end
+            k = k + 2
+        end
+        # From the back: x counts lines of a taken from the end.
+        k = -d
+        while k <= d:
+            let x = 0
+            when k == -d or (k != d and vb[off + k - 1] < vb[off + k + 1]):
+                x = vb[off + k + 1]
+            otherwise:
+                x = vb[off + k - 1] + 1
+            end
+            let y = x - k
+            let x0 = x
+            let y0 = y
+            while x < n and y < m and a[ea - x - 1] == b[eb - y - 1]:
+                x = x + 1
+                y = y + 1
+            end
+            vb[off + k] = x
+            let f = delta - k
+            when not odd and f >= -d and f <= d and x + vf[off + f] >= n:
+                return [ea - x, eb - y, ea - x0, eb - y0]
+            end
+            k = k + 2
+        end
+        d = d + 1
     end
-    let ea = n
-    let eb = m
-    while ea > start and eb > start and a[ea - 1] == b[eb - 1]:
+    return none
+end
+
+# The ops of a[sa:ea] against b[sb:eb], added to ops; true when the work
+# was split, which can put additions before removals.
+func _diff_into(ops, a, sa, ea, b, sb, eb):
+    while sa < ea and sb < eb and a[sa] == b[sb]:
+        ops.push([" ", a[sa]])
+        sa = sa + 1
+        sb = sb + 1
+    end
+    let tail = 0
+    while ea > sa and eb > sb and a[ea - 1] == b[eb - 1]:
         ea = ea - 1
         eb = eb - 1
+        tail = tail + 1
     end
+    let quick = none
+    let snake = none
+    let split = false
+    when sa < ea and sb < eb:
+        quick = _diff_rounds(a, sa, ea, b, sb, eb)
+        when quick is none:
+            snake = _diff_middle(a, sa, ea, b, sb, eb)
+        end
+    end
+    when quick is not none:
+        ops.extend(quick)
+    eif snake is not none:
+        split = true
+        _diff_into(ops, a, sa, snake[0], b, sb, snake[1])
+        every i from snake[0] to snake[2] - 1:
+            ops.push([" ", a[i]])
+        end
+        _diff_into(ops, a, snake[2], ea, b, snake[3], eb)
+    otherwise:
+        # Only removals or only additions are left, or, past the edit limit,
+        # the middle is reported as all removed and all added.
+        every i from sa to ea - 1:
+            ops.push(["-", a[i]])
+        end
+        every i from sb to eb - 1:
+            ops.push(["+", b[i]])
+        end
+    end
+    every i from ea to ea + tail - 1:
+        ops.push([" ", a[i]])
+    end
+    return split
+end
+
+# The ops with each line still holding its line break.
+func _diff_ops(a, b):
     let ops = []
-    every i from 0 to start - 1:
-        ops.push([" ", a[i]])
+    when not _diff_into(ops, a, 0, len(a), b, 0, len(b)):
+        return ops
     end
-    when ea > start or eb > start:
-        ops.extend(_diff_myers(a, start, ea, b, start, eb))
+    # In each run of changes the removals come first, as diff -u prints them.
+    let out = []
+    let added = []
+    for each op in ops:
+        when op[0] == "+":
+            added.push(op)
+        otherwise:
+            when op[0] == " " and len(added) > 0:
+                out.extend(added)
+                added = []
+            end
+            out.push(op)
+        end
     end
-    every i from ea to n - 1:
-        ops.push([" ", a[i]])
-    end
-    return ops
+    out.extend(added)
+    return out
 end
 
 func _diff_text(line):

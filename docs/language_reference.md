@@ -1719,10 +1719,11 @@ show diff.unified("a\nb\nc\n", "a\nB\nc\n", "old.txt", "new.txt")
 `diff.unified(a, b, from_name, to_name, context)` gives the text `diff -u`
 and `git diff` print (3 lines of context unless given), or `""` when the
 texts are the same. `a` and `b` are texts or lists of lines. The diff is a
-shortest one (Myers' algorithm); a last line without a line break differs
-from the same line with one and is marked `\ No newline at end of file`.
-Past 2,000 changed lines the middle of the texts is shown as removed and
-added whole.
+shortest one (Myers' algorithm, in linear space when there are more than
+200 changes); a last line without a line break differs from the same line
+with one and is marked `\ No newline at end of file`. Past about 10,000
+changes in one stretch, that stretch is shown as removed and added whole,
+which keeps two unrelated 20,000-line texts to about a second.
 
 ### OS (`os.`)
 `time()`, `format_time(t)`, `sleep(ms)` (fractions allowed; releases the GIL), `system(cmd)`,
