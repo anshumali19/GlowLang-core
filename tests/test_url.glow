@@ -10,6 +10,8 @@ show url.parse("http://[::1]:8080/x")["host"], url.parse("http://[::1]:8080/x")[
 show url.parse("/just/a/path?x=1")
 show url.parse("mailto:ana@glow.example")
 show url.parse("")
+# An IPv6 host with a port, and an odd host that is read the slow way.
+show url.parse("http://[::1]:8080/x")["host"], url.parse("//[a]]/p")["host"], url.parse("//u:p@h:9/")["password"]
 try:
     url.parse("http://host:80x/")
 catch e:

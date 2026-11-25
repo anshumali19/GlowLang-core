@@ -12,6 +12,7 @@ params {"q": "tea cake", "n": "2", "flag": ""}
 {"scheme": "", "user": "", "password": "", "host": "", "port": none, "path": "/just/a/path", "query": "x=1", "fragment": "", "params": {"x": "1"}}
 {"scheme": "mailto", "user": "", "password": "", "host": "", "port": none, "path": "ana@glow.example", "query": "", "fragment": "", "params": {}}
 {"scheme": "", "user": "", "password": "", "host": "", "port": none, "path": "", "query": "", "fragment": "", "params": {}}
+[::1] [a]] p
 url: bad host or port in http://host:80x/
 --- build
 https://ana:s3cret@shop.example:8443/a/b%20c?q=tea+cake&n=1&n=2&flag#top
