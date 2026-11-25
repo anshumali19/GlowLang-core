@@ -1,0 +1,74 @@
+# retry.call (lib/retry.glow).
+import "retry"
+
+let calls = 0
+let fail_until = 0
+func flaky():
+    calls = calls + 1
+    when calls <= fail_until:
+        throw "down " + str(calls)
+    end
+    return "up after " + str(calls)
+end
+
+let waits = []
+func note(e, attempt, seconds):
+    waits.push([str(e), attempt, seconds])
+end
+
+show "--- succeeds"
+fail_until = 2
+show retry.call(flaky, {"delay": 0, "jitter": false}), calls
+calls = 0
+fail_until = 0
+show retry.call(flaky), calls
+
+show "--- waits grow and stop at max_delay"
+calls = 0
+fail_until = 4
+show retry.call(flaky, {"tries": 5, "delay": 0.001, "backoff": 3, "max_delay": 0.005, "jitter": false, "on_retry": note})
+show waits
+
+show "--- jitter waits between half the wait and all of it"
+calls = 0
+fail_until = 2
+waits = []
+random_seed(1)
+retry.call(flaky, {"delay": 0.004, "on_retry": note})
+show len(waits), waits[0][2] >= 0.002 and waits[0][2] <= 0.004, waits[1][2] >= 0.004 and waits[1][2] <= 0.008
+
+show "--- gives up"
+calls = 0
+fail_until = 10
+try:
+    retry.call(flaky, {"tries": 3, "delay": 0})
+catch e:
+    show e, calls
+end
+func only_timeouts(e):
+    return str(e).contains("timeout")
+end
+calls = 0
+try:
+    retry.call(flaky, {"when": only_timeouts, "delay": 0})
+catch e:
+    show e, calls
+end
+func boom():
+    throw {"code": 503}
+end
+try:
+    retry.call(boom, {"tries": 2, "delay": 0})
+catch e:
+    show e
+end
+
+show "--- bad options"
+for each bad in [{"tries": 0}, {"tries": 1.5}, {"delay": -1}, {"backoff": "2"}, {"retries": 3}]:
+    try:
+        retry.call(flaky, bad)
+        show "allowed", bad
+    catch e:
+        show e
+    end
+end

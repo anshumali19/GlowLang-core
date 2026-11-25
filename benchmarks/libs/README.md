@@ -282,3 +282,20 @@ values. Runs differed by under 2%. Measured 2026-11-25.
 |---|---|
 | GlowLang `ini.parse` | 26,717 |
 | Python `configparser` | 5,228 |
+
+## retry
+
+[retry_bench.glow](retry_bench.glow) measures what `retry.call` adds to a
+call: a function that works at once, called directly and through
+`retry.call`, and one that fails twice before it works, with no waits.
+`tenacity` is not installed on this machine, so there is no Python column.
+Runs differed by under 4%. Measured 2026-11-25.
+
+| Call | Calls/s |
+|---|---|
+| directly | 17,773,049 |
+| through `retry.call` | 1,041,001 |
+| works on the third try | 278,904 |
+
+`retry.call` adds about 0.9 microseconds to a call, most of it checking the
+options.
