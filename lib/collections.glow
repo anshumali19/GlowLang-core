@@ -64,24 +64,33 @@ blueprint Heap:
             return top
         end
         let desc = self.descending
+        # As Python's heapq: move the better child up all the way to a leaf
+        # (one comparison a level), then move the last item up from there,
+        # which is usually a short way since it came from the bottom.
         let i = 0
         while true:
             let c = 2 * i + 1
             when c >= n:
                 stop
             end
-            let ck = keys[c]
             when c + 1 < n:
+                let ck = keys[c]
                 let rk = keys[c + 1]
                 when (desc and rk > ck) or (not desc and rk < ck):
                     c = c + 1
-                    ck = rk
                 end
             end
-            when (desc and ck > k) or (not desc and ck < k):
-                keys[i] = ck
-                items[i] = items[c]
-                i = c
+            keys[i] = keys[c]
+            items[i] = items[c]
+            i = c
+        end
+        while i > 0:
+            let parent = (i - 1) >> 1
+            let pk = keys[parent]
+            when (desc and k > pk) or (not desc and k < pk):
+                keys[i] = pk
+                items[i] = items[parent]
+                i = parent
             otherwise:
                 stop
             end

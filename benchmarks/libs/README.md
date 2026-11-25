@@ -45,6 +45,13 @@ numbers varied by up to 25% between runs. Measured 2026-11-24.
 | deque push and pop | 24,047,426 | 46,670,012 |
 | counting words | 17,965,297 | 39,983,451 |
 
+Since 2026-11-25 `Heap.pop` moves the better child up to a leaf and then
+the last item up from there, as `heapq` does: about half the comparisons.
+Measured that day, back to back with the code before (six runs each, the
+machine idle), push and pop of numbers went from about 4.1 to 4.3 million
+a second and of text from 1.84 to 1.93 million; `heapq` does 6.1 million
+on the same text, as GlowLang's compiled code compares text more slowly
+than numbers.
 ## csv
 
 [csv_bench.glow](csv_bench.glow) writes 100,000 rows of 5 cells with
