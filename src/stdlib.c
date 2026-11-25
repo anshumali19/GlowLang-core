@@ -4914,6 +4914,35 @@ static int str_arg(Value v, const char **s, size_t *n) {
     return 1;
 }
 
+/* http.url_encode(text): every byte but A-Z a-z 0-9 - . _ ~ as %XX, the
+   reverse of url_decode (lib/url.glow's url.encode). */
+static Value http_url_encode(int argc, Value *args) {
+    const unsigned char *s; size_t n;
+    if (argc < 1 || !str_arg(args[0], (const char **)&s, &n)) {
+        pending_exception = value_string_copy("http.url_encode: expected text");
+        has_exception = 1;
+        return value_none();
+    }
+    static const char hex[] = "0123456789ABCDEF";
+    char *out = malloc(n * 3 + 1);
+    if (!out) return args[0];
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = s[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~') {
+            out[k++] = (char)c;
+        } else {
+            out[k++] = '%';
+            out[k++] = hex[c >> 4];
+            out[k++] = hex[c & 15];
+        }
+    }
+    out[k] = 0;
+    Value v = value_string_copy(out);
+    free(out);
+    return v;
+}
+
 static Value crypto_base64_native(int argc, Value *args) {
     const char *s; size_t n;
     if (argc < 1 || !str_arg(args[0], &s, &n)) return jws_fail("base64", "needs text");
@@ -7791,6 +7820,7 @@ void std_init(void) {
     dict_set(http, "close", native_func_new("close", http_close));
     dict_set(http, "request", native_func_new("request", http_request_native));
     dict_set(http, "url_decode", native_func_new("url_decode", http_url_decode));
+    dict_set(http, "url_encode", native_func_new("url_encode", http_url_encode));
     var_set("http", value_dict(http));
     Dict *ssl = dict_new(4); dict_set(ssl, "listen", native_func_new("listen", ssl_listen)); dict_set(ssl, "accept", native_func_new("accept", ssl_accept)); var_set("ssl", value_dict(ssl));
 #endif

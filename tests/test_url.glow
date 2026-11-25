@@ -32,6 +32,12 @@ every i from 1 to 127:
     ascii.push(chr(i))
 end
 show url.encode(ascii.join(""))
+show json.stringify(http.url_encode("")), http.url_decode(http.url_encode("a b/é 😀"))
+try:
+    http.url_encode(5)
+catch e:
+    show e
+end
 show url.query({"q": "tea & cake", "tag": ["a", "b c"], "empty": "", "flag": none})
 show url.parse_query("?q=tea+%26+cake&tag=a&tag=b%20c&empty=&flag&&=x")
 show url.query({})

@@ -7,7 +7,8 @@
 #                            "query" may be text or a dict
 #   url.join(base, link)     the URL a link on the page at base points to
 #   url.encode(text)         %XX for every byte but A-Z a-z 0-9 - . _ ~
-#   url.decode(text)         the reverse (http.url_decode)
+#   url.decode(text)         the reverse (http.url_encode and url_decode
+#                            do the work)
 #   url.query(dict)          "a=1&b=two%20words" (a list value repeats the key)
 #   url.parse_query(text)    the reverse: a dict; + is a space, a repeated
 #                            key keeps its last value
@@ -19,41 +20,8 @@
 import "re"
 
 let _URL_PARTS = "(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?://([^/?#]*))?([^?#]*)(?:\\?([^#]*))?(?:#(.*))?"
-let _URL_SAFE = "[A-Za-z0-9._~-]*"
-
-# What url.encode writes for each ASCII character; one lookup is about twice
-# as fast as testing the character's ranges.
-func _url_ascii_table():
-    let table = {}
-    every i from 0 to 127:
-        let c = chr(i)
-        when re.fullmatch(_URL_SAFE, c) is not none:
-            table[c] = c
-        otherwise:
-            table[c] = "%" + format(i, "02X")
-        end
-    end
-    return table
-end
-let _URL_ASCII = _url_ascii_table()
-
 func url_encode(text):
-    text = str(text)
-    when re.fullmatch(_URL_SAFE, text) is not none:
-        return text
-    end
-    let out = []
-    for each c in text:
-        let e = _URL_ASCII.get(c)
-        when e is none:
-            for each b in c.bytes():
-                out.push("%" + format(b, "02X"))
-            end
-        otherwise:
-            out.push(e)
-        end
-    end
-    return out.join("")
+    return http.url_encode(str(text))
 end
 
 func url_decode(text):

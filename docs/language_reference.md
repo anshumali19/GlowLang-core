@@ -1533,6 +1533,8 @@ that off for test servers. Chunked responses are decoded. A failure raises an
 error that says what went wrong (cannot resolve host, timed out, certificate
 not trusted, ...). `lib/http_client.glow` builds on this.
 
+`url_encode(text)` writes every byte but `A-Z a-z 0-9 - . _ ~` as `%XX`
+(`"café"` is `"caf%C3%A9"`); `url.encode` uses it.
 `url_decode(text, plus)` turns `%XX` back into the bytes they stand for
 (`"caf%C3%A9"` is `"café"`); with `plus` true, `+` becomes a space as in
 query strings. A `%` without two hex digits stays as it is, and text that
