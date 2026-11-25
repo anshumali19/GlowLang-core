@@ -159,10 +159,10 @@ Measured 2026-11-24.
 
 | Work | GlowLang (calls/s) | Python (calls/s) |
 |---|---|---|
-| parse | 357,673 | 686,684 |
-| compare | 303,950 | 442,339 |
-| in a range | 67,593 | 84,529 |
-| sort 1,000 | 558 | 578 |
+| parse | 511,401 | 670,716 |
+| compare | 563,488 | 437,527 |
+| in a range | 143,616 | 86,152 |
+| sort 1,000 | 980 | 580 |
 
 The GlowLang column was measured again on 2026-11-25 (runs within 3%),
 after two changes: parse takes the regular expression's groups as one list
@@ -170,6 +170,13 @@ instead of calling `group()` five times (parse was 288,078, compare
 222,469), and `semver.sort`, like `packaging`, builds a key once per
 version and sorts by the keys with the built-in `sorted` instead of
 comparing field by field in a merge sort (it was 228).
+
+Both columns were measured again later that day (runs within 7%), after
+three more changes: a plain `1.2.3` is read with a split instead of the
+regular expression, pre-release numbers are told from words without one,
+and a range is read without regular expressions unless it has a ` - `
+range or a space after an operator. Before them, on the same machine, the
+GlowLang column was 365,854, 310,259, 67,692 and 561.
 
 ## log
 

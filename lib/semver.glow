@@ -29,8 +29,9 @@ func _sv_ids(text):
     when text is none:
         return ids
     end
+    # The ids were matched by _SV_ID already, so they are ASCII.
     for each id in text.split("."):
-        when re.fullmatch("[0-9]+", id) is not none:
+        when id.is_digit():
             ids.push(int(id))
         otherwise:
             ids.push(id)
@@ -39,11 +40,22 @@ func _sv_ids(text):
     return ids
 end
 
+# Whether p is a number as semver writes it: ASCII digits, no leading zero.
+func _sv_plain(p):
+    return p != "" and p.is_digit() and p.byte_len() == len(p) and (p == "0" or p[0] != "0")
+end
+
 func semver_parse(text):
     when type(text) == "dict":
         return text
     end
-    let m = re.fullmatch(_SV_FULL, str(text).trim())
+    let t = str(text).trim()
+    # Most versions are plain 1.2.3: three numbers need no regular expression.
+    let parts = t.split(".")
+    when len(parts) == 3 and _sv_plain(parts[0]) and _sv_plain(parts[1]) and _sv_plain(parts[2]):
+        return {"major": int(parts[0]), "minor": int(parts[1]), "patch": int(parts[2]), "pre": [], "build": []}
+    end
+    let m = re.fullmatch(_SV_FULL, t)
     when m is none:
         throw "semver: not a version: " + str(text)
     end
@@ -75,10 +87,12 @@ end
 func semver_compare(a, b):
     a = semver_parse(a)
     b = semver_parse(b)
-    for each part in ["major", "minor", "patch"]:
-        when a[part] != b[part]:
-            return _sv_cmp(a[part], b[part])
-        end
+    when a["major"] != b["major"]:
+        return _sv_cmp(a["major"], b["major"])
+    eif a["minor"] != b["minor"]:
+        return _sv_cmp(a["minor"], b["minor"])
+    eif a["patch"] != b["patch"]:
+        return _sv_cmp(a["patch"], b["patch"])
     end
     let pa = a["pre"]
     let pb = b["pre"]
@@ -201,16 +215,27 @@ func _sv_range(range):
     for each alt in str(range).split("||"):
         let text = alt.trim()
         let comps = []
-        let hm = re.fullmatch("(\\S+)\\s+-\\s+(\\S+)", text)
+        let hm = none
+        when text.contains(" -"):
+            hm = re.fullmatch("(\\S+)\\s+-\\s+(\\S+)", text)
+        end
         when hm is not none:
             comps.extend(_sv_comparators(">=", hm.group(1)))
             comps.extend(_sv_comparators("<=", hm.group(2)))
         otherwise:
             # "> = 1.2" and ">=1.2" mean the same.
-            text = re.replace("(<=|>=|<|>|=|\\^|~)\\s+", text, "\\1")
+            when re.find("[<>=^~]\\s", text) is not none:
+                text = re.replace("(<=|>=|<|>|=|\\^|~)\\s+", text, "\\1")
+            end
             for each piece in text.split():
-                let om = re.fullmatch("(<=|>=|<|>|=|\\^|~)?(.*)", piece)
-                comps.extend(_sv_comparators(om.group(1) ?? "", om.group(2)))
+                let op = ""
+                let two = piece.slice(0, 2)
+                when two == "<=" or two == ">=":
+                    op = two
+                eif piece != "" and "<>=^~".contains(piece[0]):
+                    op = piece[0]
+                end
+                comps.extend(_sv_comparators(op, piece.slice(len(op))))
             end
         end
         sets.push(comps)
