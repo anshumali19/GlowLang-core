@@ -97,7 +97,7 @@ without running anything, and `gdu install <package>` adds a package to the proj
 | `glowlang test` | Runs the `test_` functions in every `test_*.glow` file ([guide](docs/testing_your_code.md)) |
 | `glowlang fmt` | Re-indents every `.glow` file the same way (`--check` for CI) |
 | `glowlang package app.glow` | One executable to copy anywhere; `--target linux-x64` and friends build for another system |
-| `glowlang profile app.glow` | Runs it, then lists the lines that ran most |
+| `glowlang profile app.glow` | Runs it, then lists the lines that ran most and the time each function took |
 
 ## 🏗️ The language at a glance
 

@@ -1,0 +1,19 @@
+# Profiled by tests/test_profile_time.glow: a recursive function, a function
+# calling another, and a native call inside a function.
+func fib(n):
+    when n < 2:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+func inner(text):
+    return text.split(" ")
+end
+func outer():
+    let count = 0
+    every i from 1 to 50:
+        count = count + len(inner("a b c d"))
+    end
+    return count
+end
+show outer(), fib(10)

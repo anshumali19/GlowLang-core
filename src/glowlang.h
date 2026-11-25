@@ -1126,6 +1126,9 @@ const char *glow_closest(const char *word, const char *const *cands, int n);
 const char *glow_suggest_method(Value v, const char *name);
 void glow_profile_begin(void);
 void glow_profile_report(void);
+/* Called by call_stack_push and call_stack_pop while profiling (stdlib.c). */
+void glow_prof_enter(struct FuncEntry *fe, int depth);
+void glow_prof_leave(struct FuncEntry *fe, int depth);
 Value native_len(int argc, Value *args);
 Value list_pop(List *l);
 void list_insert(List *l, int idx, Value val);
